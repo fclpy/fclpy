@@ -42,6 +42,11 @@ Development is being managed on Azure DevOps
 
 * https://dev.azure.com/rritoch/fclpy
 
+
+Artifacts are hosted at Pypi
+
+https://pypi.org/project/fclpy/
+
 # License
 
 MIT License
