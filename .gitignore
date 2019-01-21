@@ -1,0 +1,7 @@
+# Ignores
+
+.project
+.pydevproject
+.settings
+*.egg-info
+__pycache__
