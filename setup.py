@@ -1,11 +1,19 @@
 from distutils.core import setup
 
+# from setuptools import find_packages, setup
+
+
 setup(
   name = 'fclpy',
   packages = ['fclpy'],
-  version = '0.0.1',
+  version = '0.0.2',
   license='MIT',
   description = 'Fusion Common Lisp for Python',
+  long_description="""
+      Fusion Common Lisp for Python
+      
+      https://github.com/fclpy/fclpy
+  """,
   author = 'Ralph Ritoch',
   author_email = 'rritoch@outlook.com',
   url = 'https://github.com/fclpy/fclpy',
