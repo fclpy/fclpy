@@ -2,7 +2,7 @@
 
 import sys
 import re as _re
-from common_lisp.lisptype import LispSymbol
+from fclpy.lisptype import LispSymbol
 
 class LispStream():
     def __init__(self, fh):

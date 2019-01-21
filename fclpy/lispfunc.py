@@ -2,9 +2,9 @@ import functools
 from operator import abs
 import math
 import re as _re
-from common_lisp.lispenv import current_environment
-import common_lisp.lisptype as lisptype
-import common_lisp.lispreader as lispreader
+from fclpy.lispenv import current_environment
+import fclpy.lisptype as lisptype
+import fclpy.lispreader as lispreader
 
 
 __reader_macros = {}
@@ -824,8 +824,8 @@ def eval(form):
 # write-line
 # pprint-linear
 # *print-lines*
-# def common_lisp-implementation-type
-# def common_lisp-implementation-version
+# def fclpy-implementation-type
+# def fclpy-implementation-version
 # apropos-list
 # copy-list
 
@@ -1598,7 +1598,7 @@ def rplacd(cons,obj):
 # def vectorp
 # *compile-verbose*
 # *load-verbose*
-# common_lisp-implementation-version
+# fclpy-implementation-version
 # machine-version
 # pathname-version
 # software-version

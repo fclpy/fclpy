@@ -2,13 +2,13 @@
 
 import importlib
 
-import common_lisp.lispfunc
+import fclpy.lispfunc
 
-from common_lisp.lispenv import *
-from common_lisp.lispfunc import *
+from fclpy.lispenv import *
+from fclpy.lispfunc import *
 import random
 
-current_environment.read_module(common_lisp.lispfunc)
+current_environment.read_module(fclpy.lispfunc)
 
 def parenthesis(char,stream):
     if char == "(":
@@ -32,8 +32,8 @@ set_dispatch_macro_character(")",parenthesis)
 
 
 def __reload():
-    importlib.reload(common_lisp.lisptype)
-    importlib.reload(common_lisp.lispenv)
-    importlib.reload(common_lisp.lispfunc)
+    importlib.reload(fclpy.lisptype)
+    importlib.reload(fclpy.lispenv)
+    importlib.reload(fclpy.lispfunc)
 
     
