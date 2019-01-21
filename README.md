@@ -34,7 +34,13 @@ Order from most important to least concern
 
 This project is too important, and too big, to be handled by any one developer.
 
-This project is hosted at Github http://www.github.com/fclpy/fclpy
+This project is hosted at Github 
+
+* http://www.github.com/fclpy/fclpy
+
+Development is being managed on Azure DevOps
+
+* https://dev.azure.com/rritoch/fclpy
 
 # License
 
