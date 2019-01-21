@@ -11,7 +11,7 @@ pip install fclpy
 # Usage
 
 ```
-import common_lisp as lisp
+import fclpy as common_lisp
 ```
 
 
