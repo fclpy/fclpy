@@ -5,3 +5,5 @@
 .settings
 *.egg-info
 __pycache__
+MANIFEST
+dist/
