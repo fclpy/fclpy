@@ -1,7 +1,8 @@
 import functools
 from operator import abs
 import math
-import re as _re
+import re as _re
+
 from fclpy.lispenv import current_environment
 import fclpy.lisptype as lisptype
 import fclpy.lispreader as lispreader
@@ -568,9 +569,15 @@ def cos(a):
 # def etypecase
 
 def eval(form):
+    if (type(form) in [int,float, str]):
+        return form
+    if (type(form) is lisptype.LispSymbol):
+        return current_environment.find_variable(form)
     symbol = car(form)
     args = tuple(cdr(form))
     f = current_environment.find_func(symbol)
+    if (type(f) is type):
+        f = f()
     return f(*args)
 
 # def eval-when
@@ -1309,7 +1316,23 @@ def rplacd(cons,obj):
 # define-setf-expander
 # get-setf-expansion
 # multiple-value-setq
-# def setq
+class setq(lisptype.SpecialForm):
+    def __init(self, *args):
+        pass
+    def __call__(self, *args):
+        todo = []
+        job = []
+        v = None
+        for j in args:
+            job.append(j)
+            if (len(job) == 2):
+                todo.append(job)
+                job = []
+        for j in todo:
+            v = eval(j[1])
+            current_environment.add_variable(j[0],v)
+        return v
+
 # def seventh
 # def shadow
 # def shadowing-import

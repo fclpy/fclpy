@@ -21,7 +21,7 @@ py_str_map = [
 ]
 
 
-class SpecialForm:
+class SpecialForm(object):
     pass
 
 class FunctionBinding:
@@ -51,12 +51,24 @@ class Environment:
     def add_function(self, symbol, value):
         self.function_bindings = FunctionBinding(symbol,value, self.function_bindings)
     
+    
     def find_func(self,sym):
         b = self.function_bindings
         while b != None:
             if b.symbol.name == sym.name:
                 return b.value
             b = b.next
+
+    def find_variable(self, sym):
+        b = self.variable_bindings
+        while b != None:
+            if b.symbol.name == sym.name:
+                return b.value
+            b = b.next
+        raise Exception("Unbound variable")
+
+    def add_variable(self, sym, value):
+        self.variable_bindings = Binding(sym,value,self.variable_bindings)
 
     def read_module(self, mod):
         for k,v in mod.__dict__.items():
@@ -85,7 +97,7 @@ NIL = lispNull()
 
 class LispSymbol(lispT):
     def __init__(self, name):
-        self.name = name
+        self.name = name.upper()
     def __repr__(self):
         return self.name
 
