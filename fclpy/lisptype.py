@@ -104,6 +104,8 @@ class LispSymbol(lispT):
 class lispKeyword(LispSymbol):
     pass
 
+
+
 class lispConsIterator:    
     def __init__(self, cons):
         self.cons = cons
@@ -172,11 +174,44 @@ class lispCons(lispList):
     def __iter__(self):
         return lispConsIterator(self)
 
+
+class lispPackage(lispT):
+    def __init__(self, name):
+        self.name = name
+
+
+class lispPackages():
+    
+    _packages = {}
+    
+    @staticmethod
+    def find_package(name):
+        if name in lispPackages._pacckages:
+            return lispPackages._pacckages[name]
+        return NIL
+    
+    @staticmethod
+    def make_package(name):
+        if name in lispPackages._packages:
+            raise Exception("Package exists")
+        pkg = lispPackage(name)
+        lispPackages._packages[name] = pkg
+        return pkg
+    
+    @staticmethod
+    def get_packages():
+        result = NIL
+        for pkg in lispPackages._packages.values():
+            result = lispCons(pkg,result)
+        return result
+        
+
+
 def py_str_to_sym(s):
-  s = s.upper()
-  for p in py_str_map:
-      s = s.replace(*p)
-  return LispSymbol(s)
+    s = s.upper()
+    for p in py_str_map:
+        s = s.replace(*p)
+    return LispSymbol(s)
 
             
 

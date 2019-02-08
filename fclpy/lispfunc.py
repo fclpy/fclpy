@@ -754,7 +754,16 @@ def eval(form):
 # def ignore-errors
 # def imagpart
 # def import
-# def in-package
+
+
+def in_package(name):
+    pkg = lisptype.lispPackages.find_package(str(name))
+    if pkg == lisptype.NIL:
+        raise Exception("No such package")
+    setq(lisptype.LispSymbol("*package*"),pkg)
+    return pkg
+
+
 # def incf
 # def initialize-instance
 # def inline
@@ -877,7 +886,10 @@ def list_s_star_(*args):
         cur.cdr = args[-1]
     return lst
 
-# def list-all-packages
+
+def list_all_packages():
+    return lisptype.lispPackages.get_packages()
+
 # pprint-exit-if-list-exhausted
 # def lambda-list-keywords
 # def list-length
@@ -963,7 +975,12 @@ def listp(x):
 # def make-load-form
 # def make-load-form-saving-slots
 # def make-method
-# def make-package
+
+
+def make_package(name):
+    lisptype.lispPackages.make_package(str(name))
+
+
 # def make-pathname
 # def make-random-state
 # def make-sequence
