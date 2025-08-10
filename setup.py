@@ -18,7 +18,7 @@ def get_version():
         for line in f:
             if line.startswith('__version__'):
                 return line.split('=')[1].strip().strip('"\'')
-    return "1.0.0"  # fallback version
+    return "0.1.0"  # fallback version
 
 setup(
     name="fclpy",

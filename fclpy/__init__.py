@@ -12,7 +12,7 @@ Basic usage:
     >>> runtime.repl()
 """
 
-__version__ = "1.0.0"
+__version__ = "0.1.0"
 __author__ = "FCLPY Development Team"
 __email__ = "fclpy@example.com"
 __license__ = "MIT"
