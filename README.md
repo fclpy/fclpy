@@ -37,14 +37,14 @@ FCLPY is a Common Lisp interpreter implemented in Python. It provides a complete
 
 ### From Source
 ```bash
-git clone https://github.com/your-username/fclpy.git
+git clone https://github.com/fclpy/fclpy.git
 cd fclpy
 pip install -e .
 ```
 
 ### Using Pipenv (Development)
 ```bash
-git clone https://github.com/your-username/fclpy.git
+git clone https://github.com/fclpy/fclpy.git
 cd fclpy
 pipenv install
 pipenv shell
@@ -338,9 +338,9 @@ FCLPY is perfect for:
 
 ## Support
 
-- **Issues**: [GitHub Issues](https://github.com/your-username/fclpy/issues)
-- **Documentation**: [Wiki](https://github.com/your-username/fclpy/wiki)
-- **Source**: [GitHub Repository](https://github.com/your-username/fclpy)
+- **Issues**: [GitHub Issues](https://github.com/fclpy/fclpy/issues)
+- **Documentation**: [Wiki](https://github.com/fclpy/fclpy/wiki)
+- **Source**: [GitHub Repository](https://github.com/fclpy/fclpy)
 
 ---
 
