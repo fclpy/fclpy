@@ -21,7 +21,7 @@ py_str_map = [
 ]
 
 
-class SpecialForm(object):
+class SpecialForm:
     pass
 
 class FunctionBinding:
@@ -51,31 +51,48 @@ class Environment:
     def add_function(self, symbol, value):
         self.function_bindings = FunctionBinding(symbol,value, self.function_bindings)
     
-    
     def find_func(self,sym):
         b = self.function_bindings
         while b != None:
             if b.symbol.name == sym.name:
                 return b.value
             b = b.next
-
+        return None
+    
+    def add_variable(self, symbol, value):
+        self.variable_bindings = Binding(symbol, value, self.variable_bindings, self)
+    
     def find_variable(self, sym):
         b = self.variable_bindings
         while b != None:
             if b.symbol.name == sym.name:
                 return b.value
             b = b.next
-        raise Exception("Unbound variable")
-
-    def add_variable(self, sym, value):
-        self.variable_bindings = Binding(sym,value,self.variable_bindings)
+        # If not found in current environment, check parent
+        if self.parent:
+            return self.parent.find_variable(sym)
+        return None
+    
+    def set_variable(self, sym, value):
+        b = self.variable_bindings
+        while b != None:
+            if b.symbol.name == sym.name:
+                b.value = value
+                return value
+            b = b.next
+        # If not found in current environment, check parent
+        if self.parent:
+            return self.parent.set_variable(sym, value)
+        # If not found anywhere, create new binding
+        self.add_variable(sym, value)
+        return value
 
     def read_module(self, mod):
         for k,v in mod.__dict__.items():
             if callable(v) and not k.startswith("__"):
                 self.add_function(py_str_to_sym(k),v)
     def __repr__(self):
-        return "Environment(function_bindings="+repr(self.function_bindings)+")"
+        return "Environment(function_bindings="+repr(self.function_bindings)+", variable_bindings="+repr(self.variable_bindings)+")"
 
 
 class lispT:
@@ -97,14 +114,12 @@ NIL = lispNull()
 
 class LispSymbol(lispT):
     def __init__(self, name):
-        self.name = name.upper()
+        self.name = name
     def __repr__(self):
         return self.name
 
 class lispKeyword(LispSymbol):
     pass
-
-
 
 class lispConsIterator:    
     def __init__(self, cons):
@@ -174,44 +189,11 @@ class lispCons(lispList):
     def __iter__(self):
         return lispConsIterator(self)
 
-
-class lispPackage(lispT):
-    def __init__(self, name):
-        self.name = name
-
-
-class lispPackages():
-    
-    _packages = {}
-    
-    @staticmethod
-    def find_package(name):
-        if name in lispPackages._pacckages:
-            return lispPackages._pacckages[name]
-        return NIL
-    
-    @staticmethod
-    def make_package(name):
-        if name in lispPackages._packages:
-            raise Exception("Package exists")
-        pkg = lispPackage(name)
-        lispPackages._packages[name] = pkg
-        return pkg
-    
-    @staticmethod
-    def get_packages():
-        result = NIL
-        for pkg in lispPackages._packages.values():
-            result = lispCons(pkg,result)
-        return result
-        
-
-
 def py_str_to_sym(s):
-    s = s.upper()
-    for p in py_str_map:
-        s = s.replace(*p)
-    return LispSymbol(s)
+  s = s.upper()
+  for p in py_str_map:
+      s = s.replace(*p)
+  return LispSymbol(s)
 
             
 

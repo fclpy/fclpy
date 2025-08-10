@@ -1,3 +1,17 @@
-include *.txt
-recursive-include examples *.txt *.py *.md
-prune examples/sample?/build
+include README.md
+include LICENSE
+include MANIFEST.in
+include *.py
+include *.lisp
+recursive-include fclpy *.py
+recursive-include fclpy *.lisp
+recursive-include tests *.py
+include test_comprehensive.py
+include test_script.lisp
+include example_integration.py
+global-exclude *.pyc
+global-exclude __pycache__
+global-exclude .git*
+global-exclude *.so
+global-exclude *.dylib
+global-exclude *.dll

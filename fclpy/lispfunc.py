@@ -562,23 +562,277 @@ def cos(a):
 # def ensure-directories-exist
 # def ensure-generic-function
 # def eq
+def eq(a, b):
+    """Test if two objects are the same object (identity)."""
+    return a is b
+
 # def eql
+def eql(a, b):
+    """Test if two objects are equal (value equality)."""
+    return a == b
+
 # def equal
+def equal(a, b):
+    """Test if two objects are structurally equal."""
+    if type(a) != type(b):
+        return False
+    if isinstance(a, lisptype.lispCons) and isinstance(b, lisptype.lispCons):
+        return equal(a.car, b.car) and equal(a.cdr, b.cdr)
+    return a == b
+
 # def equalp
 # def error
+def error(msg):
+    """Signal an error."""
+    raise Exception(str(msg))
+
 # def etypecase
 
-def eval(form):
-    if (type(form) in [int,float, str]):
+def eval(form, env=None):
+    """Evaluate a Lisp form in the given environment."""
+    if env is None:
+        env = current_environment
+    
+    # Self-evaluating forms (numbers, strings, etc.)
+    if form is None or isinstance(form, (int, float, str)):
         return form
-    if (type(form) is lisptype.LispSymbol):
-        return current_environment.find_variable(form)
-    symbol = car(form)
-    args = tuple(cdr(form))
-    f = current_environment.find_func(symbol)
-    if (type(f) is type):
-        f = f()
-    return f(*args)
+    
+    # NIL evaluates to itself
+    if form is lisptype.NIL or type(form) is lisptype.lispNull:
+        return lisptype.NIL
+    
+    # Symbols - look up in environment
+    if isinstance(form, lisptype.LispSymbol):
+        value = env.find_variable(form)
+        if value is not None:
+            return value
+        # If not found as variable, might be a function
+        func = env.find_func(form)
+        if func is not None:
+            return func
+        raise Exception(f"Unbound variable: {form.name}")
+    
+    # Lists - function calls or special forms
+    if isinstance(form, lisptype.lispCons):
+        operator = car(form)
+        
+        # Handle special forms
+        if isinstance(operator, lisptype.LispSymbol):
+            if operator.name == 'QUOTE':
+                return cadr(form)
+            elif operator.name == 'IF':
+                return eval_if(form, env)
+            elif operator.name == 'SETQ':
+                return eval_setq(form, env)
+            elif operator.name == 'LET':
+                return eval_let(form, env)
+            elif operator.name == 'DEFUN':
+                return eval_defun(form, env)
+            elif operator.name == 'DEFVAR':
+                return eval_defvar(form, env)
+            elif operator.name == 'LAMBDA':
+                return eval_lambda(form, env)
+        
+        # Regular function call
+        func = eval(operator, env)
+        if callable(func):
+            # Evaluate all arguments
+            args = []
+            arg_list = cdr(form)
+            while arg_list != lisptype.NIL and arg_list is not None:
+                if isinstance(arg_list, lisptype.lispCons):
+                    args.append(eval(car(arg_list), env))
+                    arg_list = cdr(arg_list)
+                else:
+                    # Improper list
+                    args.append(eval(arg_list, env))
+                    break
+            return func(*args)
+        else:
+            raise Exception(f"Not a function: {operator}")
+    
+    # Default case
+    return form
+
+def eval_if(form, env):
+    """Evaluate IF special form: (if test then else)"""
+    if_args = cdr(form)
+    if if_args == lisptype.NIL:
+        raise Exception("IF requires at least 2 arguments")
+    
+    test = car(if_args)
+    then_part = cadr(if_args)
+    else_part = caddr(if_args) if cdr(cdr(if_args)) != lisptype.NIL else lisptype.NIL
+    
+    test_result = eval(test, env)
+    if test_result != lisptype.NIL and test_result is not None and test_result is not False:
+        return eval(then_part, env)
+    else:
+        return eval(else_part, env)
+
+def eval_setq(form, env):
+    """Evaluate SETQ special form: (setq var value)"""
+    args = cdr(form)
+    if args == lisptype.NIL or cdr(args) == lisptype.NIL:
+        raise Exception("SETQ requires 2 arguments")
+    
+    var = car(args)
+    value_form = cadr(args)
+    
+    if not isinstance(var, lisptype.LispSymbol):
+        raise Exception("SETQ first argument must be a symbol")
+    
+    value = eval(value_form, env)
+    env.set_variable(var, value)
+    return value
+
+def eval_defvar(form, env):
+    """Evaluate DEFVAR special form: (defvar var [value])"""
+    args = cdr(form)
+    if args == lisptype.NIL:
+        raise Exception("DEFVAR requires at least 1 argument")
+    
+    var = car(args)
+    if not isinstance(var, lisptype.LispSymbol):
+        raise Exception("DEFVAR first argument must be a symbol")
+    
+    # Only set if not already bound
+    if env.find_variable(var) is None:
+        if cdr(args) != lisptype.NIL:
+            value = eval(cadr(args), env)
+            env.add_variable(var, value)
+        else:
+            env.add_variable(var, lisptype.NIL)
+    
+    return var
+
+def eval_let(form, env):
+    """Evaluate LET special form: (let ((var value) ...) body...)"""
+    args = cdr(form)
+    if args == lisptype.NIL:
+        raise Exception("LET requires at least 1 argument")
+    
+    bindings = car(args)
+    body = cdr(args)
+    
+    # Create new environment
+    new_env = lisptype.Environment(env)
+    
+    # Process bindings
+    while bindings != lisptype.NIL and bindings is not None:
+        if isinstance(bindings, lisptype.lispCons):
+            binding = car(bindings)
+            if isinstance(binding, lisptype.lispCons):
+                var = car(binding)
+                value_form = cadr(binding)
+                if isinstance(var, lisptype.LispSymbol):
+                    value = eval(value_form, env)  # Evaluate in original environment
+                    new_env.add_variable(var, value)
+            bindings = cdr(bindings)
+        else:
+            break
+    
+    # Evaluate body in new environment
+    result = lisptype.NIL
+    while body != lisptype.NIL and body is not None:
+        if isinstance(body, lisptype.lispCons):
+            result = eval(car(body), new_env)
+            body = cdr(body)
+        else:
+            result = eval(body, new_env)
+            break
+    
+    return result
+
+def eval_defun(form, env):
+    """Evaluate DEFUN special form: (defun name (params...) body...)"""
+    args = cdr(form)
+    if args == lisptype.NIL or cdr(args) == lisptype.NIL:
+        raise Exception("DEFUN requires at least 2 arguments")
+    
+    name = car(args)
+    params = cadr(args)
+    body = cddr(args)
+    
+    if not isinstance(name, lisptype.LispSymbol):
+        raise Exception("DEFUN name must be a symbol")
+    
+    # Create a closure
+    def user_function(*call_args):
+        # Create new environment for function execution
+        func_env = lisptype.Environment(env)
+        
+        # Bind parameters
+        param_list = params
+        arg_index = 0
+        while param_list != lisptype.NIL and param_list is not None and arg_index < len(call_args):
+            if isinstance(param_list, lisptype.lispCons):
+                param = car(param_list)
+                if isinstance(param, lisptype.LispSymbol):
+                    func_env.add_variable(param, call_args[arg_index])
+                    arg_index += 1
+                param_list = cdr(param_list)
+            else:
+                break
+        
+        # Execute body
+        result = lisptype.NIL
+        body_forms = body
+        while body_forms != lisptype.NIL and body_forms is not None:
+            if isinstance(body_forms, lisptype.lispCons):
+                result = eval(car(body_forms), func_env)
+                body_forms = cdr(body_forms)
+            else:
+                result = eval(body_forms, func_env)
+                break
+        
+        return result
+    
+    # Add function to environment
+    env.add_function(name, user_function)
+    return name
+
+def eval_lambda(form, env):
+    """Evaluate LAMBDA special form: (lambda (params...) body...)"""
+    args = cdr(form)
+    if args == lisptype.NIL:
+        raise Exception("LAMBDA requires at least 1 argument")
+    
+    params = car(args)
+    body = cdr(args)
+    
+    # Create a closure
+    def lambda_function(*call_args):
+        # Create new environment for function execution
+        func_env = lisptype.Environment(env)
+        
+        # Bind parameters
+        param_list = params
+        arg_index = 0
+        while param_list != lisptype.NIL and param_list is not None and arg_index < len(call_args):
+            if isinstance(param_list, lisptype.lispCons):
+                param = car(param_list)
+                if isinstance(param, lisptype.LispSymbol):
+                    func_env.add_variable(param, call_args[arg_index])
+                    arg_index += 1
+                param_list = cdr(param_list)
+            else:
+                break
+        
+        # Execute body
+        result = lisptype.NIL
+        body_forms = body
+        while body_forms != lisptype.NIL and body_forms is not None:
+            if isinstance(body_forms, lisptype.lispCons):
+                result = eval(car(body_forms), func_env)
+                body_forms = cdr(body_forms)
+            else:
+                result = eval(body_forms, func_env)
+                break
+        
+        return result
+    
+    return lambda_function
 
 # def eval-when
 # def evenp
@@ -629,6 +883,22 @@ def eval(form):
 #loop-finish
 # def finish-output
 # def first
+def first(seq):
+    """Get first element of sequence (same as CAR)."""
+    return car(seq)
+
+def second(seq):
+    """Get second element of sequence."""
+    return cadr(seq)
+
+def third(seq):
+    """Get third element of sequence."""
+    return caddr(seq)
+
+def fourth(seq):
+    """Get fourth element of sequence."""
+    return car(cdr(cdr(cdr(seq))))
+
 # def fixnum
 #most-negative-fixnum
 #most-positive-fixnum
@@ -722,6 +992,14 @@ def eval(form):
 # def # def gcd
 # def generic-function
 # def gensym
+_gensym_counter = 0
+
+def gensym(prefix="G"):
+    """Generate a unique symbol."""
+    global _gensym_counter
+    _gensym_counter += 1
+    return lisptype.LispSymbol(f"{prefix}{_gensym_counter}")
+
 # def gentemp
 # def get
 # def get-decoded-time
@@ -754,16 +1032,7 @@ def eval(form):
 # def ignore-errors
 # def imagpart
 # def import
-
-
-def in_package(name):
-    pkg = lisptype.lispPackages.find_package(str(name))
-    if pkg == lisptype.NIL:
-        raise Exception("No such package")
-    setq(lisptype.LispSymbol("*package*"),pkg)
-    return pkg
-
-
+# def in-package
 # def incf
 # def initialize-instance
 # def inline
@@ -793,7 +1062,16 @@ def in_package(name):
 # function-lambda-expression
 # def lambda-list-keywords
 # def lambda-parameters-limit
-# def last
+def last(lst):
+    """Return the last element of a list."""
+    if not listp(lst):
+        raise TypeError("last: expected a list")
+    while lst is not None:
+        if lst.cdr is None:
+            return lst.car
+        lst = lst.cdr
+    return None
+
 # def lcm
 # def ldb
 # def ldb-test
@@ -818,7 +1096,16 @@ def in_package(name):
 # file-length
 # file-string-length
 # integer-length
-# def length
+def length(x):
+    """Return the length of a list."""
+    if not listp(x):
+        raise TypeError("length: expected a list")
+    count = 0
+    while x is not None:
+        count += 1
+        x = x.cdr
+    return count
+
 # def list-length
 # *print-length*
 # char-lessp
@@ -886,10 +1173,7 @@ def list_s_star_(*args):
         cur.cdr = args[-1]
     return lst
 
-
-def list_all_packages():
-    return lisptype.lispPackages.get_packages()
-
+# def list-all-packages
 # pprint-exit-if-list-exhausted
 # def lambda-list-keywords
 # def list-length
@@ -975,12 +1259,7 @@ def listp(x):
 # def make-load-form
 # def make-load-form-saving-slots
 # def make-method
-
-
-def make_package(name):
-    lisptype.lispPackages.make_package(str(name))
-
-
+# def make-package
 # def make-pathname
 # def make-random-state
 # def make-sequence
@@ -1063,6 +1342,13 @@ def make_package(name):
 # def no-applicable-method
 # def no-next-method
 # def not
+def not_fn(x):
+    """Logical NOT - returns T if x is NIL, otherwise NIL."""
+    if x == lisptype.NIL or x is None or x is False:
+        return lisptype.LispSymbol("T")
+    else:
+        return lisptype.NIL
+
 # def notany
 # def notevery
 # def notinline
@@ -1083,7 +1369,12 @@ def make_package(name):
 # def nth
 # def nth-value
 # def nthcdr
-# def null
+def null(lst):
+    """Return T if the list is empty, otherwise NIL."""
+    if not listp(lst):
+        raise TypeError("null: expected a list")
+    return lisptype.LispSymbol("T") if lst is None else lisptype.NIL
+
 # def number
 # def numberp
 # def numerator
@@ -1288,7 +1579,16 @@ def rest(seq):
 # def return
 # def return-from
 # def revappend
-# def reverse
+def reverse(x):
+    """Return a new list that is the reverse of the input list."""
+    if not listp(x):
+        raise TypeError("reverse: expected a list")
+    reversed_list = lisptype.NIL
+    while x is not None:
+        reversed_list = lisptype.lispCons(x.car, reversed_list)
+        x = x.cdr
+    return reversed_list
+
 # *print-right-margin*
 # string-right-trim
 # def room
@@ -1333,23 +1633,7 @@ def rplacd(cons,obj):
 # define-setf-expander
 # get-setf-expansion
 # multiple-value-setq
-class setq(lisptype.SpecialForm):
-    def __init(self, *args):
-        pass
-    def __call__(self, *args):
-        todo = []
-        job = []
-        v = None
-        for j in args:
-            job.append(j)
-            if (len(job) == 2):
-                todo.append(job)
-                job = []
-        for j in todo:
-            v = eval(j[1])
-            current_environment.add_variable(j[0],v)
-        return v
-
+# def setq
 # def seventh
 # def shadow
 # def shadowing-import
@@ -1548,6 +1832,18 @@ class setq(lisptype.SpecialForm):
 # def symbol-plist
 # def symbol-value
 # def symbolp
+def symbolp(x):
+    """Test if x is a symbol."""
+    return isinstance(x, lisptype.LispSymbol)
+
+def stringp(x):
+    """Test if x is a string."""
+    return isinstance(x, str)
+
+def numberp(x):
+    """Test if x is a number."""
+    return isinstance(x, (int, float))
+
 # do-all-symbols
 # do-external-symbols
 # do-symbols
@@ -1745,8 +2041,58 @@ class setq(lisptype.SpecialForm):
 # def _s_star_terminal-io_s_star_
 # def _s_star_trace-output_s_star_
 
-def _s_plus_(a,b):
-    return a + b
+def _s_plus_(*args):
+    """Addition operator (+) - variadic"""
+    return sum(args)
+
+def _s_minus_(*args):
+    """Subtraction operator (-) - variadic"""
+    if len(args) == 0:
+        raise ValueError("- requires at least one argument")
+    if len(args) == 1:
+        return -args[0]
+    result = args[0]
+    for arg in args[1:]:
+        result -= arg
+    return result
+
+def _s_star_(*args):
+    """Multiplication operator (*) - variadic"""
+    result = 1
+    for arg in args:
+        result *= arg
+    return result
+
+def _s_slash_(*args):
+    """Division operator (/) - variadic"""
+    if len(args) == 0:
+        raise ValueError("/ requires at least one argument")
+    if len(args) == 1:
+        return 1.0 / args[0]
+    result = args[0]
+    for arg in args[1:]:
+        result /= arg
+    return result
+
+def _s_eq_(x, y):
+    """Numeric equality (=)"""
+    return x == y
+
+def _s_lt_(x, y):
+    """Less than (<)"""
+    return x < y
+
+def _s_gt_(x, y):
+    """Greater than (>)"""
+    return x > y
+
+def _s_le_(x, y):
+    """Less than or equal (<=)"""
+    return x <= y
+
+def _s_ge_(x, y):
+    """Greater than or equal (>=)"""
+    return x >= y
 
 # def _s_plus__s_plus_
 # def _s_plus__s_plus__s_plus_
@@ -1761,11 +2107,4 @@ def _s_plus_(a,b):
 # def _s_lt__s_eq_
 # def _s_eq_
 # def _s_gt_
-# def _s_gt__s_eq_ 
-
-
-
-
-  
-
-
+# def _s_gt__s_eq_

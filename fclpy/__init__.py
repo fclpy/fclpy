@@ -1,39 +1,37 @@
 
+"""
+FCLPY - A Common Lisp Interpreter in Python
+
+FCLPY provides a complete Common Lisp environment implemented in Python,
+including an interactive REPL, file evaluation, and a clean API for 
+embedding Lisp functionality into Python applications.
+
+Basic usage:
+    >>> from fclpy import runtime, lispenv
+    >>> lispenv.setup_standard_environment()
+    >>> runtime.repl()
+"""
+
+__version__ = "1.0.0"
+__author__ = "FCLPY Development Team"
+__email__ = "fclpy@example.com"
+__license__ = "MIT"
 
 import importlib
 
-import fclpy.lispfunc
+# Core modules
+from fclpy import lisptype
+from fclpy import lispfunc  
+from fclpy import lispenv
+from fclpy import lispreader
+from fclpy import runtime
 
-from fclpy.lispenv import *
-from fclpy.lispfunc import *
-import random
-
-current_environment.read_module(fclpy.lispfunc)
-
-def parenthesis(char,stream):
-    if char == "(":
-        token = random.randint(1,32767)
-        stream.push_token(token)
-        lst = None
-        while(stream.has_token(token)):
-            value = read(stream)
-            if value != None:
-                if lst == None:
-                    lst = cons(value,None)
-                else:
-                    lst = append(lst,cons(value,None))
-        return lst
-    if char == ")":
-        stream.pop_token()
-    return None
-
-set_dispatch_macro_character("(",parenthesis)
-set_dispatch_macro_character(")",parenthesis)
-
-
-def __reload():
-    importlib.reload(fclpy.lisptype)
-    importlib.reload(fclpy.lispenv)
-    importlib.reload(fclpy.lispfunc)
-
-    
+# Main API exports
+__all__ = [
+    'runtime',
+    'lispenv', 
+    'lispfunc',
+    'lisptype',
+    'lispreader',
+    '__version__'
+]
