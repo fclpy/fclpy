@@ -306,7 +306,10 @@ def cdr(seq):
     return seq[1:]
  return seq
 
-# def ceiling
+def ceiling(x, divisor=1):
+    """Return ceiling as integer"""
+    return math.ceil(x / divisor)
+
 # def cell-error
 # def cell-error-name
 # def cerror
@@ -834,54 +837,197 @@ def eval_lambda(form, env):
     
     return lambda_function
 
-# def eval-when
-# def evenp
-# def every
-# def exp
-# def export
-# def expt
-# def extended-char 
-# def # def fboundp
-# def fceiling
-# def fdefinition
+def eval_when(situations, *forms):
+    """Evaluate WHEN special form"""
+    raise(Exception("Not implemented"))
+
+def evenp(x):
+    """Return T if x is an even integer, NIL otherwise"""
+    if not isinstance(x, int):
+        raise TypeError("evenp: expected an integer")
+    return lisptype.LispSymbol("T") if x % 2 == 0 else lisptype.NIL
+
+def every(predicate, *sequences):
+    """Return T if predicate returns true for every element"""
+    raise(Exception("Not implemented"))
+
+def exp(x):
+    """Return e raised to the power x"""
+    return math.exp(x)
+
+def export_symbol(symbols, package=None):
+    """Export symbols from package"""
+    raise(Exception("Not implemented"))
+
+def expt(base, power):
+    """Return base raised to the power"""
+    return base ** power
+
+def extended_char():
+    """Extended character type"""
+    raise(Exception("Not implemented"))
+
+def fboundp(symbol):
+    """Return T if symbol has a function binding"""
+    raise(Exception("Not implemented"))
+
+def fceiling(x, divisor=1):
+    """Return ceiling as float"""
+    return float(math.ceil(x / divisor))
+
+def fdefinition(function_name):
+    """Return function definition"""
+    raise(Exception("Not implemented"))
+
+def ffloor(x, divisor=1):
+    """Return floor as float"""
+    return float(math.floor(x / divisor))
+
 #*features*
-# def ffloor
-#deposit-field
-#mask-field
-# def fifth
+def deposit_field(newbyte, bytespec, integer):
+    """Deposit field in integer"""
+    raise(Exception("Not implemented"))
+
+def mask_field(bytespec, integer):
+    """Mask field in integer"""
+    raise(Exception("Not implemented"))
+
+def fifth(seq):
+    """Get fifth element of sequence"""
+    return car(cdr(cdr(cdr(cdr(seq)))))
+
+def compile_file(input_file, output_file=None, **kwargs):
+    """Compile file"""
+    raise(Exception("Not implemented"))
+
+def delete_file(filespec):
+    """Delete file"""
+    raise(Exception("Not implemented"))
+
+def end_of_file():
+    """End of file condition"""
+    raise(Exception("Not implemented"))
+
+def probe_file(pathspec):
+    """Probe file existence"""
+    raise(Exception("Not implemented"))
+
+def rename_file(filespec, new_name):
+    """Rename file"""
+    raise(Exception("Not implemented"))
+
+def with_open_file(*args):
+    """With open file macro"""
+    raise(Exception("Not implemented"))
+
+def file_author(pathspec):
+    """Get file author"""
+    raise(Exception("Not implemented"))
+
+def file_error():
+    """File error condition"""
+    raise(Exception("Not implemented"))
+
+def file_error_pathname(condition):
+    """Get pathname from file error"""
+    raise(Exception("Not implemented"))
+
+def file_length(stream):
+    """Get file length"""
+    raise(Exception("Not implemented"))
+
+def file_namestring(pathspec):
+    """Get file namestring"""
+    raise(Exception("Not implemented"))
+
+def compile_file_pathname(input_file, **kwargs):
+    """Get compile file pathname"""
+    raise(Exception("Not implemented"))
+
+def file_position(stream, position=None):
+    """Get or set file position"""
+    raise(Exception("Not implemented"))
+
+def file_stream():
+    """File stream type"""
+    raise(Exception("Not implemented"))
+
+def file_string_length(stream, string):
+    """Get file string length"""
+    raise(Exception("Not implemented"))
+
+def file_write_date(pathspec):
+    """Get file write date"""
+    raise(Exception("Not implemented"))
+
+def fill(sequence, item, **kwargs):
+    """Fill sequence with item"""
+    raise(Exception("Not implemented"))
+
+def pprint_fill(*args):
+    """Pretty print fill"""
+    raise(Exception("Not implemented"))
+
+def fill_pointer(vector):
+    """Get fill pointer"""
+    raise(Exception("Not implemented"))
+
+def array_has_fill_pointer_p(array):
+    """Test if array has fill pointer"""
+    raise(Exception("Not implemented"))
+
+def find(item, sequence, **kwargs):
+    """Find item in sequence"""
+    raise(Exception("Not implemented"))
+
 #compile-file
 #delete-file
 #end-of-file
 #probe-file
 #rename-file
 #with-open-file
-# def file-author
-# def file-error
-# def file-error-pathname
-# def file-length
-# def file-namestring
 #compile-file-pathname
 #*compile-file-pathname*
-# def file-position
-# def file-stream
-# def file-string-length
 #*compile-file-truename*
-# def file-write-date
-# def fill
-#pprint-fill
-# def fill-pointer
-#array-has-fill-pointer-p
-# def find
-# def find-all-symbols
-# def find-class
-# def find-if
-# def find-if-not
-# def find-method
-# def find-package
-# def find-restart
-# def find-symbol
-#loop-finish
-# def finish-output
+def find_all_symbols(symbol):
+    """Find all symbols"""
+    raise(Exception("Not implemented"))
+
+def find_class(symbol, errorp=True, environment=None):
+    """Find class"""
+    raise(Exception("Not implemented"))
+
+def find_if(predicate, sequence, **kwargs):
+    """Find if predicate is true"""
+    raise(Exception("Not implemented"))
+
+def find_if_not(predicate, sequence, **kwargs):
+    """Find if predicate is not true"""
+    raise(Exception("Not implemented"))
+
+def find_method(generic_function, qualifiers, specializers, errorp=True):
+    """Find method"""
+    raise(Exception("Not implemented"))
+
+def find_package(name):
+    """Find package"""
+    raise(Exception("Not implemented"))
+
+def find_restart(identifier, condition=None):
+    """Find restart"""
+    raise(Exception("Not implemented"))
+
+def find_symbol(string, package=None):
+    """Find symbol"""
+    raise(Exception("Not implemented"))
+
+def loop_finish():
+    """Loop finish"""
+    raise(Exception("Not implemented"))
+
+def finish_output(stream=None):
+    """Finish output"""
+    raise(Exception("Not implemented"))
 # def first
 def first(seq):
     """Get first element of sequence (same as CAR)."""
@@ -899,13 +1045,133 @@ def fourth(seq):
     """Get fourth element of sequence."""
     return car(cdr(cdr(cdr(seq))))
 
-# def fixnum
-#most-negative-fixnum
-#most-positive-fixnum
-# def flet
-#decode-float
-#double-float
-# def float
+def fixnum():
+    """Fixnum type"""
+    raise(Exception("Not implemented"))
+
+def most_negative_fixnum():
+    """Most negative fixnum constant"""
+    raise(Exception("Not implemented"))
+
+def most_positive_fixnum():
+    """Most positive fixnum constant"""
+    raise(Exception("Not implemented"))
+
+def flet(*args):
+    """FLET special form"""
+    raise(Exception("Not implemented"))
+
+def decode_float(float_num):
+    """Decode float"""
+    raise(Exception("Not implemented"))
+
+def double_float():
+    """Double float type"""
+    raise(Exception("Not implemented"))
+
+def float_fn(number, prototype=None):
+    """Convert to float"""
+    return float(number)
+
+def integer_decode_float(float_num):
+    """Integer decode float"""
+    raise(Exception("Not implemented"))
+
+def scale_float(float_num, integer):
+    """Scale float"""
+    raise(Exception("Not implemented"))
+
+def short_float():
+    """Short float type"""
+    raise(Exception("Not implemented"))
+
+def single_float():
+    """Single float type"""
+    raise(Exception("Not implemented"))
+
+def float_digits(float_num):
+    """Get float digits"""
+    raise(Exception("Not implemented"))
+
+def float_precision(float_num):
+    """Get float precision"""
+    raise(Exception("Not implemented"))
+
+def float_radix(float_num):
+    """Get float radix"""
+    raise(Exception("Not implemented"))
+
+def float_sign(float1, float2=None):
+    """Get float sign"""
+    raise(Exception("Not implemented"))
+
+def floating_point_inexact():
+    """Floating point inexact condition"""
+    raise(Exception("Not implemented"))
+
+def floating_point_invalid_operation():
+    """Floating point invalid operation condition"""
+    raise(Exception("Not implemented"))
+
+def floating_point_overflow():
+    """Floating point overflow condition"""
+    raise(Exception("Not implemented"))
+
+def floating_point_underflow():
+    """Floating point underflow condition"""
+    raise(Exception("Not implemented"))
+
+def floatp(x):
+    """Test if x is a float"""
+    return isinstance(x, float)
+
+def floor(x, divisor=1):
+    """Return floor of x/divisor"""
+    return math.floor(x / divisor)
+
+def fmakunbound(function_name):
+    """Make function unbound"""
+    raise(Exception("Not implemented"))
+
+def update_instance_for_different_class(previous, current, **kwargs):
+    """Update instance for different class"""
+    raise(Exception("Not implemented"))
+
+def update_instance_for_redefined_class(instance, **kwargs):
+    """Update instance for redefined class"""
+    raise(Exception("Not implemented"))
+
+def force_output(stream=None):
+    """Force output"""
+    raise(Exception("Not implemented"))
+
+def make_load_form(object, environment=None):
+    """Make load form"""
+    raise(Exception("Not implemented"))
+
+def make_load_form_saving_slots(object, **kwargs):
+    """Make load form saving slots"""
+    raise(Exception("Not implemented"))
+
+def format_fn(destination, control_string, *args):
+    """Format function"""
+    raise(Exception("Not implemented"))
+
+def stream_external_format(stream):
+    """Get stream external format"""
+    raise(Exception("Not implemented"))
+
+def simple_condition_format_arguments(condition):
+    """Get simple condition format arguments"""
+    raise(Exception("Not implemented"))
+
+def simple_condition_format_control(condition):
+    """Get simple condition format control"""
+    raise(Exception("Not implemented"))
+
+def formatter(control_string):
+    """Create formatter function"""
+    raise(Exception("Not implemented"))
 #integer-decode-float
 #least-negative-double-float
 #least-negative-long-float
@@ -972,8 +1238,16 @@ def fourth(seq):
 #set-syntax-from-char
 #read-from-string
 #with-input-from-string
-# def fround
-# def ftruncate
+
+def fround(x, divisor=1):
+    """Return rounded value as float"""
+    import builtins
+    return float(builtins.round(x / divisor))
+
+def ftruncate(x, divisor=1):
+    """Return truncated value as float"""
+    return float(int(x / divisor))
+
 # def ftype
 # def funcall
 #compiled-function
@@ -987,11 +1261,63 @@ def fourth(seq):
 #undefined-function
 # def function-keywords
 # def function-lambda-expression
-#compiled-function-p
-# def functionp
-# def # def gcd
-# def generic-function
-# def gensym
+def compiled_function_p(object):
+    """Test if object is a compiled function"""
+    raise(Exception("Not implemented"))
+
+def functionp(object):
+    """Test if object is a function"""
+    return callable(object)
+
+def gcd(*integers):
+    """Greatest common divisor"""
+    if len(integers) == 0:
+        return 0
+    result = integers[0]
+    for i in integers[1:]:
+        result = math.gcd(result, i)
+    return result
+
+def generic_function():
+    """Generic function type"""
+    raise(Exception("Not implemented"))
+
+def gentemp(prefix="T", package=None):
+    """Generate temporary symbol"""
+    raise(Exception("Not implemented"))
+
+def get(symbol, indicator, default=None):
+    """Get property"""
+    raise(Exception("Not implemented"))
+
+def get_decoded_time():
+    """Get decoded time"""
+    raise(Exception("Not implemented"))
+
+def get_dispatch_macro_character(disp_char, sub_char, readtable=None):
+    """Get dispatch macro character"""
+    raise(Exception("Not implemented"))
+
+def get_internal_real_time():
+    """Get internal real time"""
+    raise(Exception("Not implemented"))
+
+def get_internal_run_time():
+    """Get internal run time"""
+    raise(Exception("Not implemented"))
+
+def get_output_stream_string(stream):
+    """Get output stream string"""
+    raise(Exception("Not implemented"))
+
+# def gentemp
+# def get
+# def get-decoded-time
+# def get-dispatch-macro-character
+# def get-internal-real-time
+# def get-internal-run-time
+# def get-macro-character
+# def get-output-stream-string
 _gensym_counter = 0
 
 def gensym(prefix="G"):
@@ -1014,54 +1340,191 @@ def gensym(prefix="G"):
 # def getf
 # def gethash
 # def go
-# def graphic-char-p 
-# def handler-bind
-# def handler-case
-# def hash-table
-# def hash-table-count
-# def hash-table-p
-# def hash-table-rehash-size
-# def hash-table-rehash-threshold
-# def hash-table-size
-# def hash-table-test
-# def host-namestring 
-# def identity
-# def if
-# def ignorable
-# def ignore
-# def ignore-errors
-# def imagpart
-# def import
-# def in-package
-# def incf
-# def initialize-instance
-# def inline
-# def input-stream-p
-# def inspect
-# def integer
-# def integer-decode-float
-# def integer-length
-# def integerp
-# def interactive-stream-p
-# def intern
-# def internal-time-units-per-second
-# def intersection
-# def invalid-method-error
-# def invoke-debugger
-# def invoke-restart
-# def invoke-restart-interactively
-# def isqrt 
-# def # &key
-# &allow-other-keys
-# def keyword
-# def keywordp
-# function-keywords
-# lambda-list-keywords
-# def # def labels
-# def lambda
-# function-lambda-expression
-# def lambda-list-keywords
-# def lambda-parameters-limit
+def graphic_char_p(character):
+    """Test if character is graphic"""
+    raise(Exception("Not implemented"))
+
+def handler_bind(*args):
+    """Handler bind special form"""
+    raise(Exception("Not implemented"))
+
+def handler_case(*args):
+    """Handler case special form"""
+    raise(Exception("Not implemented"))
+
+def hash_table():
+    """Hash table type"""
+    raise(Exception("Not implemented"))
+
+def hash_table_count(hash_table):
+    """Get hash table count"""
+    raise(Exception("Not implemented"))
+
+def hash_table_p(object):
+    """Test if object is hash table"""
+    raise(Exception("Not implemented"))
+
+def hash_table_rehash_size(hash_table):
+    """Get hash table rehash size"""
+    raise(Exception("Not implemented"))
+
+def hash_table_rehash_threshold(hash_table):
+    """Get hash table rehash threshold"""
+    raise(Exception("Not implemented"))
+
+def hash_table_size(hash_table):
+    """Get hash table size"""
+    raise(Exception("Not implemented"))
+
+def hash_table_test(hash_table):
+    """Get hash table test"""
+    raise(Exception("Not implemented"))
+
+def host_namestring(pathname):
+    """Get host namestring"""
+    raise(Exception("Not implemented"))
+
+def identity(object):
+    """Return object unchanged"""
+    return object
+
+def if_fn(*args):
+    """IF special form"""
+    raise(Exception("Not implemented"))
+
+def ignorable(*vars):
+    """Ignorable declaration"""
+    raise(Exception("Not implemented"))
+
+def ignore(*vars):
+    """Ignore declaration"""
+    raise(Exception("Not implemented"))
+
+def ignore_errors(*forms):
+    """Ignore errors macro"""
+    raise(Exception("Not implemented"))
+
+def imagpart(number):
+    """Get imaginary part"""
+    if isinstance(number, complex):
+        return number.imag
+    return 0
+
+def import_symbol(symbols, package=None):
+    """Import symbols"""
+    raise(Exception("Not implemented"))
+
+def in_package(name):
+    """In package macro"""
+    raise(Exception("Not implemented"))
+
+def incf(place, delta=1):
+    """Increment macro"""
+    raise(Exception("Not implemented"))
+
+def initialize_instance(instance, **kwargs):
+    """Initialize instance"""
+    raise(Exception("Not implemented"))
+
+def inline_decl(*functions):
+    """Inline declaration"""
+    raise(Exception("Not implemented"))
+
+def input_stream_p(stream):
+    """Test if stream is input stream"""
+    raise(Exception("Not implemented"))
+
+def inspect(object):
+    """Inspect object"""
+    raise(Exception("Not implemented"))
+
+def integer():
+    """Integer type"""
+    raise(Exception("Not implemented"))
+
+def integer_length(integer):
+    """Get integer length"""
+    return integer.bit_length()
+
+def integerp(object):
+    """Test if object is integer"""
+    return isinstance(object, int)
+
+def interactive_stream_p(stream):
+    """Test if stream is interactive"""
+    raise(Exception("Not implemented"))
+
+def intern(string, package=None):
+    """Intern symbol"""
+    raise(Exception("Not implemented"))
+
+def internal_time_units_per_second():
+    """Internal time units per second constant"""
+    raise(Exception("Not implemented"))
+def intersection(list1, list2, **kwargs):
+    """Set intersection"""
+    raise(Exception("Not implemented"))
+
+def invalid_method_error(method, format_control, *args):
+    """Invalid method error"""
+    raise(Exception("Not implemented"))
+
+def invoke_debugger(condition):
+    """Invoke debugger"""
+    raise(Exception("Not implemented"))
+
+def invoke_restart(restart, *args):
+    """Invoke restart"""
+    raise(Exception("Not implemented"))
+
+def invoke_restart_interactively(restart):
+    """Invoke restart interactively"""
+    raise(Exception("Not implemented"))
+
+def isqrt(natural):
+    """Integer square root"""
+    return int(math.sqrt(natural))
+
+def keyword():
+    """Keyword type"""
+    raise(Exception("Not implemented"))
+
+def keywordp(object):
+    """Test if object is keyword"""
+    raise(Exception("Not implemented"))
+
+def function_keywords(function):
+    """Get function keywords"""
+    raise(Exception("Not implemented"))
+
+def lambda_list_keywords():
+    """Lambda list keywords constant"""
+    raise(Exception("Not implemented"))
+
+def labels(*args):
+    """LABELS special form"""
+    raise(Exception("Not implemented"))
+
+def lambda_fn(*args):
+    """LAMBDA special form"""
+    raise(Exception("Not implemented"))
+
+def function_lambda_expression(function):
+    """Get function lambda expression"""
+    raise(Exception("Not implemented"))
+
+def lambda_parameters_limit():
+    """Lambda parameters limit constant"""
+    raise(Exception("Not implemented"))
+
+def lcm(*integers):
+    """Least common multiple"""
+    if len(integers) == 0:
+        return 1
+    result = integers[0]
+    for i in integers[1:]:
+        result = abs(result * i) // math.gcd(result, i)
+    return result
 def last(lst):
     """Return the last element of a list."""
     if not listp(lst):
@@ -1283,12 +1746,65 @@ def listp(x):
 #   *print-right-margin*
 # def mask-field
 # 	  pathname-match-p
-# def max
-# def member
-# def member-if
-# def member-if-not
-# def merge
-# def merge-pathnames
+def max_fn(*numbers):
+    """Return maximum of numbers"""
+    return max(numbers)
+
+def member(item, list, **kwargs):
+    """Find member in list"""
+    raise(Exception("Not implemented"))
+
+def member_if(predicate, list, **kwargs):
+    """Find member if predicate is true"""
+    raise(Exception("Not implemented"))
+
+def member_if_not(predicate, list, **kwargs):
+    """Find member if predicate is not true"""
+    raise(Exception("Not implemented"))
+
+def merge(result_type, sequence1, sequence2, predicate, **kwargs):
+    """Merge sequences"""
+    raise(Exception("Not implemented"))
+
+def merge_pathnames(pathname, default_pathname=None, **kwargs):
+    """Merge pathnames"""
+    raise(Exception("Not implemented"))
+
+def min_fn(*numbers):
+    """Return minimum of numbers"""
+    return min(numbers)
+
+def minusp(number):
+    """Test if number is negative"""
+    return number < 0
+
+def mismatch(sequence1, sequence2, **kwargs):
+    """Find mismatch between sequences"""
+    raise(Exception("Not implemented"))
+
+def slot_missing(class_, object, slot_name, operation, **kwargs):
+    """Slot missing method"""
+    raise(Exception("Not implemented"))
+
+def mod(number, divisor):
+    """Modulo operation"""
+    return number % divisor
+
+def define_modify_macro(*args):
+    """Define modify macro"""
+    raise(Exception("Not implemented"))
+
+def most_negative_double_float():
+    """Most negative double float constant"""
+    raise(Exception("Not implemented"))
+
+def most_negative_long_float():
+    """Most negative long float constant"""
+    raise(Exception("Not implemented"))
+
+def most_negative_short_float():
+    """Most negative short float constant"""
+    raise(Exception("Not implemented"))
 # 		   add-method
 # 		  call-method
 # 	 call-next-method
@@ -1386,7 +1902,11 @@ def null(lst):
 # standard-object
 # structure-object
 # make-instances-obsolete
-# def oddp
+def oddp(integer):
+    """Test if integer is odd"""
+    if not isinstance(integer, int):
+        raise TypeError("oddp: expected an integer")
+    return integer % 2 == 1
 # class-of
 # type-of
 # end-of-file
@@ -1450,7 +1970,9 @@ def null(lst):
 # def peek-char
 # def phase
 # def pi
-# def plusp
+def plusp(number):
+    """Test if number is positive"""
+    return number > 0
 # def pop
 # def position
 # def position-if
@@ -1593,7 +2115,12 @@ def reverse(x):
 # string-right-trim
 # def room
 # def rotatef
-# def round
+
+def round(number, divisor=1):
+    """Return rounded value as integer"""
+    import builtins
+    return int(builtins.round(number / divisor))
+
 # def row-major-aref
 # array-row-major-index
 
@@ -1870,7 +2397,11 @@ def numberp(x):
 # def translate-pathname
 # def tree-equal
 # def truename
-# def truncate
+
+def truncate(number, divisor=1):
+    """Return truncated value as integer"""
+    return int(number / divisor)
+
 # def two-way-stream
 # def two-way-stream-input-stream
 # def two-way-stream-output-stream
@@ -1982,6 +2513,10 @@ def numberp(x):
 # def y-or-n-p
 # def yes-or-no-p 
     
+def zerop(number):
+    """Test if number is zero"""
+    return number == 0
+
 # def zerop
     
 
@@ -2107,4 +2642,38 @@ def _s_ge_(x, y):
 # def _s_lt__s_eq_
 # def _s_eq_
 # def _s_gt_
-# def _s_gt__s_eq_
+def _s_plus__s_plus_():
+    """++ increment operator"""
+    raise(Exception("Not implemented"))
+
+def _s_plus__s_plus__s_plus_():
+    """+++"""
+    raise(Exception("Not implemented"))
+
+def _s_slash__s_slash_(x, y):
+    """Integer division operator (//)"""
+    return x // y
+
+def _s_slash__s_slash__s_slash_():
+    """/// operator"""
+    raise(Exception("Not implemented"))
+
+def _s_slash__s_eq_(x, y):
+    """Not equal (/=)"""
+    return x != y
+
+def _s_one_s_plus_(x):
+    """1+ increment by one"""
+    return x + 1
+
+def _s_one_s_minus_(x):
+    """1- decrement by one"""
+    return x - 1
+
+def _s_lt__s_eq_(x, y):
+    """Less than or equal (<=)"""
+    return x <= y
+
+def _s_gt__s_eq_(x, y):
+    """Greater than or equal (>=)"""
+    return x >= y

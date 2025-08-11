@@ -64,6 +64,22 @@ def setup_standard_environment():
         '<=': lispfunc._s_le_,
         '>=': lispfunc._s_ge_,
         
+        # Mathematical functions
+        'FLOOR': lispfunc.floor,
+        'CEILING': lispfunc.ceiling,
+        'ROUND': lispfunc.round,
+        'TRUNCATE': lispfunc.truncate,
+        'EXP': lispfunc.exp,
+        'EXPT': lispfunc.expt,
+        'GCD': lispfunc.gcd,
+        'LCM': lispfunc.lcm,
+        'MAX': lispfunc.max_fn,
+        'MIN': lispfunc.min_fn,
+        'PLUSP': lispfunc.plusp,
+        'MINUSP': lispfunc.minusp,
+        'EVENP': lispfunc.evenp,
+        'ODDP': lispfunc.oddp,
+        
         # I/O and utilities
         'PRINT': lispfunc._s_print_,
         'READ': lispfunc.read,
