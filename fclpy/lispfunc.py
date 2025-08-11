@@ -11,7 +11,7 @@ import fclpy.lispreader as lispreader
 __reader_macros = {}
 
 def abort(cond=True):
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 # abs() : provided
 
@@ -28,7 +28,7 @@ def acosh(x):
     return math.acosh(x)
 
 def add_method(s,package=None):
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def adjoin(x,seq,test=lambda x,y: x is y):
     """Tests whether item is the same as an existing element of list. If the 
@@ -38,13 +38,13 @@ def adjoin(x,seq,test=lambda x,y: x is y):
     return seq if any(map(functools.partial(test,x),seq)) else cons(x,seq)
 
 def adjust_array(*args):
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def adjustable_array_p():
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def allocate_instance(s,package=None):
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def alpha_char_p(c):
     return type(c) is str and c.isalpha()
@@ -74,26 +74,26 @@ def apply(f, *args):
     return f(*args)
 
 def apropos(s,package=None):
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def apropos_list(s,package=None):
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def aref(s,package=None):
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 # def # arithmetic_error
 
 def arithmetic_error_operands(s,package=None):
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def arithmetic_error_operation(s,package=None):
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 # def # array
 
 def array_dimension(arr):
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 # def # array-dimension-limit
 # def # array-dimensions
@@ -108,7 +108,7 @@ def array_dimension(arr):
 # def # array-total-size-limit
 
 def arrayp(arr):
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def ash(i,count):
     return i << count if count >= 0 else i >> -count
@@ -125,10 +125,10 @@ def assoc(item,alist):
     return next(filter(lambda x: car(x) == item,map(tuple,alist)),None)
 
 def assoc_if(arr):
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def assoc_if_not(arr):
- raise(Exception("Not implemented"))
+ raise lisptype.LispNotImplementedError()
 
 def atan(x):
     return math.atan(x)
@@ -839,7 +839,7 @@ def eval_lambda(form, env):
 
 def eval_when(situations, *forms):
     """Evaluate WHEN special form"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def evenp(x):
     """Return T if x is an even integer, NIL otherwise"""
@@ -849,7 +849,7 @@ def evenp(x):
 
 def every(predicate, *sequences):
     """Return T if predicate returns true for every element"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def exp(x):
     """Return e raised to the power x"""
@@ -857,7 +857,7 @@ def exp(x):
 
 def export_symbol(symbols, package=None):
     """Export symbols from package"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def expt(base, power):
     """Return base raised to the power"""
@@ -865,11 +865,11 @@ def expt(base, power):
 
 def extended_char():
     """Extended character type"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def fboundp(symbol):
     """Return T if symbol has a function binding"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def fceiling(x, divisor=1):
     """Return ceiling as float"""
@@ -877,7 +877,7 @@ def fceiling(x, divisor=1):
 
 def fdefinition(function_name):
     """Return function definition"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def ffloor(x, divisor=1):
     """Return floor as float"""
@@ -886,11 +886,11 @@ def ffloor(x, divisor=1):
 #*features*
 def deposit_field(newbyte, bytespec, integer):
     """Deposit field in integer"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def mask_field(bytespec, integer):
     """Mask field in integer"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def fifth(seq):
     """Get fifth element of sequence"""
@@ -898,87 +898,87 @@ def fifth(seq):
 
 def compile_file(input_file, output_file=None, **kwargs):
     """Compile file"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def delete_file(filespec):
     """Delete file"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def end_of_file():
     """End of file condition"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def probe_file(pathspec):
     """Probe file existence"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def rename_file(filespec, new_name):
     """Rename file"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def with_open_file(*args):
     """With open file macro"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def file_author(pathspec):
     """Get file author"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def file_error():
     """File error condition"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def file_error_pathname(condition):
     """Get pathname from file error"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def file_length(stream):
     """Get file length"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def file_namestring(pathspec):
     """Get file namestring"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def compile_file_pathname(input_file, **kwargs):
     """Get compile file pathname"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def file_position(stream, position=None):
     """Get or set file position"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def file_stream():
     """File stream type"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def file_string_length(stream, string):
     """Get file string length"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def file_write_date(pathspec):
     """Get file write date"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def fill(sequence, item, **kwargs):
     """Fill sequence with item"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def pprint_fill(*args):
     """Pretty print fill"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def fill_pointer(vector):
     """Get fill pointer"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def array_has_fill_pointer_p(array):
     """Test if array has fill pointer"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def find(item, sequence, **kwargs):
     """Find item in sequence"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 #compile-file
 #delete-file
@@ -991,43 +991,43 @@ def find(item, sequence, **kwargs):
 #*compile-file-truename*
 def find_all_symbols(symbol):
     """Find all symbols"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def find_class(symbol, errorp=True, environment=None):
     """Find class"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def find_if(predicate, sequence, **kwargs):
     """Find if predicate is true"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def find_if_not(predicate, sequence, **kwargs):
     """Find if predicate is not true"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def find_method(generic_function, qualifiers, specializers, errorp=True):
     """Find method"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def find_package(name):
     """Find package"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def find_restart(identifier, condition=None):
     """Find restart"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def find_symbol(string, package=None):
     """Find symbol"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def loop_finish():
     """Loop finish"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def finish_output(stream=None):
     """Finish output"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 # def first
 def first(seq):
     """Get first element of sequence (same as CAR)."""
@@ -1047,27 +1047,27 @@ def fourth(seq):
 
 def fixnum():
     """Fixnum type"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def most_negative_fixnum():
     """Most negative fixnum constant"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def most_positive_fixnum():
     """Most positive fixnum constant"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def flet(*args):
     """FLET special form"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def decode_float(float_num):
     """Decode float"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def double_float():
     """Double float type"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def float_fn(number, prototype=None):
     """Convert to float"""
@@ -1075,51 +1075,51 @@ def float_fn(number, prototype=None):
 
 def integer_decode_float(float_num):
     """Integer decode float"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def scale_float(float_num, integer):
     """Scale float"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def short_float():
     """Short float type"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def single_float():
     """Single float type"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def float_digits(float_num):
     """Get float digits"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def float_precision(float_num):
     """Get float precision"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def float_radix(float_num):
     """Get float radix"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def float_sign(float1, float2=None):
     """Get float sign"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def floating_point_inexact():
     """Floating point inexact condition"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def floating_point_invalid_operation():
     """Floating point invalid operation condition"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def floating_point_overflow():
     """Floating point overflow condition"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def floating_point_underflow():
     """Floating point underflow condition"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def floatp(x):
     """Test if x is a float"""
@@ -1131,47 +1131,47 @@ def floor(x, divisor=1):
 
 def fmakunbound(function_name):
     """Make function unbound"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def update_instance_for_different_class(previous, current, **kwargs):
     """Update instance for different class"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def update_instance_for_redefined_class(instance, **kwargs):
     """Update instance for redefined class"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def force_output(stream=None):
     """Force output"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def make_load_form(object, environment=None):
     """Make load form"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def make_load_form_saving_slots(object, **kwargs):
     """Make load form saving slots"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def format_fn(destination, control_string, *args):
     """Format function"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def stream_external_format(stream):
     """Get stream external format"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def simple_condition_format_arguments(condition):
     """Get simple condition format arguments"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def simple_condition_format_control(condition):
     """Get simple condition format control"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def formatter(control_string):
     """Create formatter function"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 #integer-decode-float
 #least-negative-double-float
 #least-negative-long-float
@@ -1263,7 +1263,7 @@ def ftruncate(x, divisor=1):
 # def function-lambda-expression
 def compiled_function_p(object):
     """Test if object is a compiled function"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def functionp(object):
     """Test if object is a function"""
@@ -1280,35 +1280,35 @@ def gcd(*integers):
 
 def generic_function():
     """Generic function type"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def gentemp(prefix="T", package=None):
     """Generate temporary symbol"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def get(symbol, indicator, default=None):
     """Get property"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def get_decoded_time():
     """Get decoded time"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def get_dispatch_macro_character(disp_char, sub_char, readtable=None):
     """Get dispatch macro character"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def get_internal_real_time():
     """Get internal real time"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def get_internal_run_time():
     """Get internal run time"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def get_output_stream_string(stream):
     """Get output stream string"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 # def gentemp
 # def get
@@ -1342,47 +1342,47 @@ def gensym(prefix="G"):
 # def go
 def graphic_char_p(character):
     """Test if character is graphic"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def handler_bind(*args):
     """Handler bind special form"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def handler_case(*args):
     """Handler case special form"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def hash_table():
     """Hash table type"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def hash_table_count(hash_table):
     """Get hash table count"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def hash_table_p(object):
     """Test if object is hash table"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def hash_table_rehash_size(hash_table):
     """Get hash table rehash size"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def hash_table_rehash_threshold(hash_table):
     """Get hash table rehash threshold"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def hash_table_size(hash_table):
     """Get hash table size"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def hash_table_test(hash_table):
     """Get hash table test"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def host_namestring(pathname):
     """Get host namestring"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def identity(object):
     """Return object unchanged"""
@@ -1390,19 +1390,19 @@ def identity(object):
 
 def if_fn(*args):
     """IF special form"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def ignorable(*vars):
     """Ignorable declaration"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def ignore(*vars):
     """Ignore declaration"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def ignore_errors(*forms):
     """Ignore errors macro"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def imagpart(number):
     """Get imaginary part"""
@@ -1412,35 +1412,35 @@ def imagpart(number):
 
 def import_symbol(symbols, package=None):
     """Import symbols"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def in_package(name):
     """In package macro"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def incf(place, delta=1):
     """Increment macro"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def initialize_instance(instance, **kwargs):
     """Initialize instance"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def inline_decl(*functions):
     """Inline declaration"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def input_stream_p(stream):
     """Test if stream is input stream"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def inspect(object):
     """Inspect object"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def integer():
     """Integer type"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def integer_length(integer):
     """Get integer length"""
@@ -1452,34 +1452,34 @@ def integerp(object):
 
 def interactive_stream_p(stream):
     """Test if stream is interactive"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def intern(string, package=None):
     """Intern symbol"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def internal_time_units_per_second():
     """Internal time units per second constant"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 def intersection(list1, list2, **kwargs):
     """Set intersection"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def invalid_method_error(method, format_control, *args):
     """Invalid method error"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def invoke_debugger(condition):
     """Invoke debugger"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def invoke_restart(restart, *args):
     """Invoke restart"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def invoke_restart_interactively(restart):
     """Invoke restart interactively"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def isqrt(natural):
     """Integer square root"""
@@ -1487,35 +1487,35 @@ def isqrt(natural):
 
 def keyword():
     """Keyword type"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def keywordp(object):
     """Test if object is keyword"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def function_keywords(function):
     """Get function keywords"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def lambda_list_keywords():
     """Lambda list keywords constant"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def labels(*args):
     """LABELS special form"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def lambda_fn(*args):
     """LAMBDA special form"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def function_lambda_expression(function):
     """Get function lambda expression"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def lambda_parameters_limit():
     """Lambda parameters limit constant"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def lcm(*integers):
     """Least common multiple"""
@@ -1752,23 +1752,23 @@ def max_fn(*numbers):
 
 def member(item, list, **kwargs):
     """Find member in list"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def member_if(predicate, list, **kwargs):
     """Find member if predicate is true"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def member_if_not(predicate, list, **kwargs):
     """Find member if predicate is not true"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def merge(result_type, sequence1, sequence2, predicate, **kwargs):
     """Merge sequences"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def merge_pathnames(pathname, default_pathname=None, **kwargs):
     """Merge pathnames"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def min_fn(*numbers):
     """Return minimum of numbers"""
@@ -1780,11 +1780,11 @@ def minusp(number):
 
 def mismatch(sequence1, sequence2, **kwargs):
     """Find mismatch between sequences"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def slot_missing(class_, object, slot_name, operation, **kwargs):
     """Slot missing method"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def mod(number, divisor):
     """Modulo operation"""
@@ -1792,19 +1792,19 @@ def mod(number, divisor):
 
 def define_modify_macro(*args):
     """Define modify macro"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def most_negative_double_float():
     """Most negative double float constant"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def most_negative_long_float():
     """Most negative long float constant"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def most_negative_short_float():
     """Most negative short float constant"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 # 		   add-method
 # 		  call-method
 # 	 call-next-method
@@ -2644,11 +2644,11 @@ def _s_ge_(x, y):
 # def _s_gt_
 def _s_plus__s_plus_():
     """++ increment operator"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def _s_plus__s_plus__s_plus_():
     """+++"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def _s_slash__s_slash_(x, y):
     """Integer division operator (//)"""
@@ -2656,7 +2656,7 @@ def _s_slash__s_slash_(x, y):
 
 def _s_slash__s_slash__s_slash_():
     """/// operator"""
-    raise(Exception("Not implemented"))
+    raise lisptype.LispNotImplementedError()
 
 def _s_slash__s_eq_(x, y):
     """Not equal (/=)"""

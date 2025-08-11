@@ -1,5 +1,15 @@
 
 
+class LispNotImplementedError(Exception):
+    """Custom exception for ANSI Common Lisp functions that are not yet implemented."""
+    def __init__(self, function_name=None, message="Not implemented"):
+        if function_name:
+            super().__init__(f"{function_name}: {message}")
+        else:
+            super().__init__(message)
+        self.function_name = function_name
+
+
 class Binding:
     def __init__(self,symbol,value,next,env=None):
         self.symbol = symbol
