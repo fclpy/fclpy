@@ -72,22 +72,22 @@ def floor(x, divisor=1):
 
 def fceiling(x, divisor=1):
     """Return ceiling as float."""
-    raise lisptype.LispNotImplementedError("FCEILING")
+    return float(math.ceil(x / divisor))
 
 
 def ffloor(x, divisor=1):
     """Return floor as float."""
-    raise lisptype.LispNotImplementedError("FFLOOR")
+    return float(math.floor(x / divisor))
 
 
 def fround(x, divisor=1):
     """Round to nearest float."""
-    raise lisptype.LispNotImplementedError("FROUND")
+    return float(round(x / divisor))
 
 
 def ftruncate(x, divisor=1):
     """Truncate to float."""
-    raise lisptype.LispNotImplementedError("FTRUNCATE")
+    return float(int(x / divisor))
 
 
 def ash(i, count):
@@ -297,17 +297,39 @@ def most_negative_fixnum():
 # Float operations
 def decode_float(float_num):
     """Decode float into significand, exponent, sign."""
-    raise lisptype.LispNotImplementedError("DECODE-FLOAT")
+    import struct
+    if float_num == 0.0:
+        return 0.0, 0, 1.0
+    
+    sign = 1.0 if float_num >= 0 else -1.0
+    abs_float = abs(float_num)
+    
+    # Use frexp to get mantissa and exponent
+    mantissa, exponent = math.frexp(abs_float)
+    
+    return mantissa, exponent, sign
 
 
 def integer_decode_float(float_num):
     """Integer decode of float."""
-    raise lisptype.LispNotImplementedError("INTEGER-DECODE-FLOAT")
+    if float_num == 0.0:
+        return 0, 0, 1
+    
+    sign = 1 if float_num >= 0 else -1
+    abs_float = abs(float_num)
+    
+    # Convert to integer representation
+    mantissa, exponent = math.frexp(abs_float)
+    # Scale mantissa to integer (assuming 53-bit precision for double)
+    int_mantissa = int(mantissa * (2 ** 53))
+    int_exponent = exponent - 53
+    
+    return int_mantissa, int_exponent, sign
 
 
 def scale_float(float_num, integer):
     """Scale float by power of radix."""
-    raise lisptype.LispNotImplementedError("SCALE-FLOAT")
+    return float_num * (2.0 ** integer)
 
 
 def float_fn(number, prototype=None):
@@ -317,12 +339,18 @@ def float_fn(number, prototype=None):
 
 def float_digits(float_num):
     """Number of digits in float."""
-    raise lisptype.LispNotImplementedError("FLOAT-DIGITS")
+    import sys
+    if isinstance(float_num, float):
+        return sys.float_info.mant_dig  # 53 for IEEE 754 double
+    return 24  # Default for single precision
 
 
 def float_precision(float_num):
     """Precision of float."""
-    raise lisptype.LispNotImplementedError("FLOAT-PRECISION")
+    import sys
+    if isinstance(float_num, float):
+        return sys.float_info.mant_dig  # Same as float_digits for most cases
+    return 24  # Default for single precision
 
 
 def float_radix(float_num):
@@ -405,42 +433,50 @@ def logtest(integer1, integer2):
 
 def deposit_field(newbyte, bytespec, integer):
     """Deposit field in integer."""
-    raise lisptype.LispNotImplementedError("DEPOSIT-FIELD")
+    size, position = bytespec
+    mask = (1 << size) - 1
+    # Clear the field and insert new value
+    cleared = integer & ~(mask << position)
+    return cleared | ((newbyte & mask) << position)
 
 
 def mask_field(bytespec, integer):
     """Mask field in integer."""
-    raise lisptype.LispNotImplementedError("MASK-FIELD")
+    size, position = bytespec
+    mask = (1 << size) - 1
+    return integer & (mask << position)
 
 
 def byte_fn(size, position):
     """Create byte specifier."""
-    raise lisptype.LispNotImplementedError("BYTE")
+    return (size, position)
 
 
 def byte_size(bytespec):
     """Size of byte specifier."""
-    raise lisptype.LispNotImplementedError("BYTE-SIZE")
+    return bytespec[0]
 
 
 def byte_position(bytespec):
     """Position of byte specifier."""
-    raise lisptype.LispNotImplementedError("BYTE-POSITION")
+    return bytespec[1]
 
 
 def ldb(bytespec, integer):
     """Load byte."""
-    raise lisptype.LispNotImplementedError("LDB")
+    size, position = bytespec
+    mask = (1 << size) - 1
+    return (integer >> position) & mask
 
 
 def ldb_test(bytespec, integer):
     """Test byte."""
-    raise lisptype.LispNotImplementedError("LDB-TEST")
+    return ldb(bytespec, integer) != 0
 
 
 def dpb(newbyte, bytespec, integer):
     """Deposit byte."""
-    raise lisptype.LispNotImplementedError("DPB")
+    return deposit_field(newbyte, bytespec, integer)
 
 
 # Special operator functions (with symbol-safe names)
