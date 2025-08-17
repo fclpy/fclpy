@@ -24,7 +24,9 @@ def char_code(character):
     """Get character code."""
     if isinstance(character, str) and len(character) == 1:
         return ord(character)
-    raise lisptype.LispNotImplementedError("CHAR-CODE: invalid character")
+    raise lisptype.LispTypeError("CHAR-CODE: argument must be a character", 
+                                expected_type="CHARACTER", 
+                                actual_value=character)
 
 
 def char_downcase(character):
@@ -214,7 +216,9 @@ def character(designator):
     elif isinstance(designator, int):
         return chr(designator)
     
-    raise lisptype.LispNotImplementedError(f"CHARACTER: cannot convert {designator}")
+    raise lisptype.LispTypeError(f"CHARACTER: cannot convert {designator} to character",
+                                expected_type="CHARACTER-DESIGNATOR",
+                                actual_value=designator)
 
 
 def characterp(object):
@@ -304,7 +308,13 @@ def char(string, index):
     """Get character at index in string."""
     if isinstance(string, str) and 0 <= index < len(string):
         return string[index]
-    raise lisptype.LispNotImplementedError("CHAR: invalid string or index")
+    
+    if not isinstance(string, str):
+        raise lisptype.LispTypeError("CHAR: first argument must be a string",
+                                    expected_type="STRING",
+                                    actual_value=string)
+    else:
+        raise lisptype.LispError(f"CHAR: index {index} out of bounds for string of length {len(string)}")
 
 
 def schar(string, index):

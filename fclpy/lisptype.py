@@ -10,6 +10,20 @@ class LispNotImplementedError(Exception):
         self.function_name = function_name
 
 
+class LispTypeError(Exception):
+    """Exception for Common Lisp type errors."""
+    def __init__(self, message, expected_type=None, actual_value=None):
+        super().__init__(message)
+        self.expected_type = expected_type
+        self.actual_value = actual_value
+
+
+class LispError(Exception):
+    """Base class for Common Lisp runtime errors."""
+    def __init__(self, message):
+        super().__init__(message)
+
+
 class Binding:
     def __init__(self,symbol,value,next,env=None):
         self.symbol = symbol
