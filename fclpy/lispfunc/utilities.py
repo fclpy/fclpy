@@ -912,11 +912,6 @@ def special_operator_p(symbol):
     return False
 
 
-def macro_function(symbol, environment=None):
-    """Get macro function."""
-    return None  # No macros for now
-
-
 # Essential predicates and comparisons
 def equalp(x, y):
     """Test equalp (case-insensitive equality)."""

@@ -200,7 +200,7 @@ def cdddar(x):
 
 
 def cddddr(x):
-    return cdr(cdr(cdr(cdr)))
+    return cdr(cdr(cdr(cdr(x))))
 
 
 # List element accessors

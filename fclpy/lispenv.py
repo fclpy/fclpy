@@ -89,9 +89,7 @@ def setup_standard_environment():
         
         # Equality and comparison
         'EQ': lispfunc.eq,
-        'EQL': lispfunc.eql,
         'EQUAL': lispfunc.equal,
-        'NOT': lispfunc.not_fn,
         
         # Arithmetic operations
         '+': lispfunc._s_plus_,
@@ -123,8 +121,6 @@ def setup_standard_environment():
         'EVENP': lispfunc.evenp,
         'ODDP': lispfunc.oddp,
         'MOD': lispfunc.mod,
-        'ASH': lispfunc.ash,
-        'INTEGER-LENGTH': lispfunc.integer_length,
         'ISQRT': lispfunc.isqrt,
         
         # Trigonometric functions
@@ -146,9 +142,6 @@ def setup_standard_environment():
         'FLOAT-RADIX': lispfunc.float_radix,
         'FLOAT-SIGN': lispfunc.float_sign,
         
-        # Complex numbers
-        'IMAGPART': lispfunc.imagpart,
-        
         # Sequence operations
         'FIND': lispfunc.find,
         'FIND-IF': lispfunc.find_if,
@@ -160,21 +153,11 @@ def setup_standard_environment():
         'MERGE': lispfunc.merge,
         'MISMATCH': lispfunc.mismatch,
         'FILL': lispfunc.fill,
-        'EVERY': lispfunc.every,
         'BUTLAST': lispfunc.butlast,
         
-        # Association lists
-        'ASSOC': lispfunc.assoc,
-        'ASSOC-IF': lispfunc.assoc_if,
-        'ASSOC-IF-NOT': lispfunc.assoc_if_not,
-        'ACONS': lispfunc.acons,
-        'ADJOIN': lispfunc.adjoin,
-        
         # Array operations
-        'AREF': lispfunc.aref,
         'ARRAY-DIMENSION': lispfunc.array_dimension,
         'ADJUST-ARRAY': lispfunc.adjust_array,
-        'FILL-POINTER': lispfunc.fill_pointer,
         
         # Hash table operations
         'HASH-TABLE-COUNT': lispfunc.hash_table_count,
@@ -212,20 +195,15 @@ def setup_standard_environment():
         'FUNCTION-LAMBDA-EXPRESSION': lispfunc.function_lambda_expression,
         
         # File operations
-        'COMPILE-FILE': lispfunc.compile_file,
         'COMPILE-FILE-PATHNAME': lispfunc.compile_file_pathname,
         'DELETE-FILE': lispfunc.delete_file,
         'FILE-AUTHOR': lispfunc.file_author,
-        'FILE-LENGTH': lispfunc.file_length,
-        'FILE-POSITION': lispfunc.file_position,
         'FILE-STRING-LENGTH': lispfunc.file_string_length,
         'FILE-WRITE-DATE': lispfunc.file_write_date,
         'PROBE-FILE': lispfunc.probe_file,
         'RENAME-FILE': lispfunc.rename_file,
         
         # Stream operations
-        'FINISH-OUTPUT': lispfunc.finish_output,
-        'FORCE-OUTPUT': lispfunc.force_output,
         'GET-OUTPUT-STREAM-STRING': lispfunc.get_output_stream_string,
         'STREAM-EXTERNAL-FORMAT': lispfunc.stream_external_format,
         
@@ -261,17 +239,11 @@ def setup_standard_environment():
         'INVOKE-DEBUGGER': lispfunc.invoke_debugger,
         'INVOKE-RESTART': lispfunc.invoke_restart,
         'INVOKE-RESTART-INTERACTIVELY': lispfunc.invoke_restart_interactively,
-        'FIND-RESTART': lispfunc.find_restart,
         'ABORT': lispfunc.abort,
-        
-        # Bit operations
-        'DEPOSIT-FIELD': lispfunc.deposit_field,
-        'MASK-FIELD': lispfunc.mask_field,
         
         # Constants and type operations
         'MOST-POSITIVE-FIXNUM': lispfunc.most_positive_fixnum,
         'MOST-NEGATIVE-FIXNUM': lispfunc.most_negative_fixnum,
-        'MOST-NEGATIVE-DOUBLE-FLOAT': lispfunc.most_negative_double_float,
         'MOST-NEGATIVE-LONG-FLOAT': lispfunc.most_negative_long_float,
         'MOST-NEGATIVE-SHORT-FLOAT': lispfunc.most_negative_short_float,
         'LAMBDA-LIST-KEYWORDS': lispfunc.lambda_list_keywords,
@@ -327,7 +299,6 @@ def setup_standard_environment():
         # Special forms (these are handled specially in eval)
         'IF': lambda *args: "SPECIAL_FORM_IF",
         'COND': lambda *args: "SPECIAL_FORM_COND", 
-        'LAMBDA': lispfunc.lambda_fn,
         'DEFUN': lambda *args: "SPECIAL_FORM_DEFUN",
         'SETQ': lambda *args: "SPECIAL_FORM_SETQ",
         'DEFVAR': lambda *args: "SPECIAL_FORM_DEFVAR",
@@ -337,17 +308,14 @@ def setup_standard_environment():
         'LABELS': lispfunc.labels,
         'HANDLER-BIND': lispfunc.handler_bind,
         'HANDLER-CASE': lispfunc.handler_case,
-        'IGNORE-ERRORS': lispfunc.ignore_errors,
         'WITH-OPEN-FILE': lispfunc.with_open_file,
         'LOOP-FINISH': lispfunc.loop_finish,
         'INLINE': lispfunc.inline_decl,
         'IGNORE': lispfunc.ignore,
         'IGNORABLE': lispfunc.ignorable,
-        'DEFINE-MODIFY-MACRO': lispfunc.define_modify_macro,
         
         # Essential ANSI Lisp functions
         'ABS': lispfunc.abs_fn,
-        'SIGNUM': lispfunc.signum,
         'REM': lispfunc.rem,
         'NUMERATOR': lispfunc.numerator,
         'DENOMINATOR': lispfunc.denominator,
@@ -359,9 +327,6 @@ def setup_standard_environment():
         'COSH': lispfunc.cosh,
         'TANH': lispfunc.tanh,
         'CONJUGATE': lispfunc.conjugate,
-        'REALPART': lispfunc.realpart,
-        'PHASE': lispfunc.phase,
-        'CIS': lispfunc.cis,
         'LOGAND': lispfunc.logand,
         'LOGIOR': lispfunc.logior,
         'LOGXOR': lispfunc.logxor,
@@ -394,9 +359,6 @@ def setup_standard_environment():
         'SUBSTITUTE': lispfunc.substitute,
         'SUBSTITUTE-IF': lispfunc.substitute_if,
         'SUBSTITUTE-IF-NOT': lispfunc.substitute_if_not,
-        'SOME': lispfunc.some,
-        'NOTANY': lispfunc.notany,
-        'NOTEVERY': lispfunc.notevery,
         'CHAR': lispfunc.char,
         'CHAR-CODE': lispfunc.char_code,
         'CODE-CHAR': lispfunc.code_char,
@@ -414,7 +376,6 @@ def setup_standard_environment():
         'UNLESS': lispfunc.unless,
         'PROG1': lispfunc.prog1,
         'PROG2': lispfunc.prog2,
-        'SVREF': lispfunc.svref,
         'VECTOR': lispfunc.vector,
         'VECTORP': lispfunc.vectorp,
         'UNION': lispfunc.union,
@@ -424,11 +385,7 @@ def setup_standard_environment():
         'SET-EXCLUSIVE-OR': lispfunc.set_exclusive_or,
         'NSET-EXCLUSIVE-OR': lispfunc.nset_exclusive_or,
         'SUBSETP': lispfunc.subsetp,
-        'RASSOC': lispfunc.rassoc,
-        'RASSOC-IF': lispfunc.rassoc_if,
-        'RASSOC-IF-NOT': lispfunc.rassoc_if_not,
         'COPY-ALIST': lispfunc.copy_alist,
-        'PAIRLIS': lispfunc.pairlis,
         'TREE-EQUAL': lispfunc.tree_equal,
         'SUBST': lispfunc.subst,
         'SUBST-IF': lispfunc.subst_if,
@@ -445,11 +402,9 @@ def setup_standard_environment():
         'PATHNAMEP': lispfunc.pathnamep,
         'READTABLEP': lispfunc.readtablep,
         'STREAMP': lispfunc.streamp,
-        'RANDOM-STATE-P': lispfunc.random_state_p,
         'PRINC': lispfunc.princ,
         'PRIN1': lispfunc.prin1,
         'TERPRI': lispfunc.terpri,
-        'FRESH-LINE': lispfunc.fresh_line,
         'SET': lispfunc.set,
         'BOUNDP': lispfunc.boundp,
         'MAKUNBOUND': lispfunc.makunbound,
@@ -767,17 +722,11 @@ def setup_standard_environment():
         'VECTOR-PUSH-EXTEND': lispfunc.vector_push_extend,
         'FILL-POINTER': lispfunc.fill_pointer,
         
-        # Function operations
-        'FBOUNDP': lispfunc.fboundp,
-        'FMAKUNBOUND': lispfunc.fmakunbound,
-        
         # More type predicates
         'SIMPLE-STRING-P': lispfunc.simple_string_p,
         'RANDOM-STATE-P': lispfunc.random_state_p,
         
         # Essential arithmetic operations
-        'MAX': lispfunc.max_fn,
-        'MIN': lispfunc.min_fn,
         'SIGNUM': lispfunc.signum,
         'CIS': lispfunc.cis,
         'CONJUGATE': lispfunc.conjugate_fn,
