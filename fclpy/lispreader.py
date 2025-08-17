@@ -50,7 +50,11 @@ class LispReader():
             elif self.whitespace_char(x):
                 toss = True
             elif self.macro_character(x):
-                return self.get_macro_character(x)(x,self.stream)
+                macro_func = self.get_macro_character(x)
+                # get_macro_character returns (function, non_terminating_p)
+                if isinstance(macro_func, tuple):
+                    macro_func = macro_func[0]
+                return macro_func(x, self.stream)
             elif self.single_escape_character(x):
                 y = self.stream.read_char()
                 if y is None or self.stream.eof():

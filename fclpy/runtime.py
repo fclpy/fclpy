@@ -18,65 +18,13 @@ import fclpy.lisptype as lisptype
 import fclpy.lispfunc as lispfunc
 import fclpy.lispreader as lispreader
 from fclpy import lispenv
+from fclpy.readtable import get_current_readtable
 
 def setup_reader_macros():
     """Set up basic reader macros for parsing."""
-    def left_paren_reader(char, stream):
-        """Read a list starting with ("""
-        result = []
-        reader = lispreader.LispReader(lispfunc.get_macro_character, stream)
-        
-        while True:
-            # Skip whitespace
-            c = stream.read_char()
-            while c and c in [' ', '\t', '\n', '\r']:
-                c = stream.read_char()
-            
-            if not c:
-                raise Exception("Unexpected EOF in list")
-            elif c == ')':
-                break
-            else:
-                stream.unread_char(c)
-                item = reader.read_1()
-                if item is not None:
-                    result.append(item)
-        
-        # Convert Python list to Lisp cons structure
-        lisp_list = lisptype.NIL
-        for item in reversed(result):
-            lisp_list = lisptype.lispCons(item, lisp_list)
-        
-        return lisp_list
-    
-    def right_paren_reader(char, stream):
-        """Handle right paren - should not be called directly"""
-        raise Exception("Unexpected )")
-    
-    def quote_reader(char, stream):
-        """Read a quoted expression"""
-        reader = lispreader.LispReader(lispfunc.get_macro_character, stream)
-        expr = reader.read_1()
-        # Create proper cons structure for (quote expr)
-        quote_symbol = lisptype.LispSymbol("QUOTE")
-        quoted_list = lisptype.lispCons(expr, lisptype.NIL)
-        return lisptype.lispCons(quote_symbol, quoted_list)
-    
-    def semicolon_reader(char, stream):
-        """Read a comment - skip to end of line"""
-        while True:
-            c = stream.read_char()
-            if not c or c == '\n':
-                break
-        # Return nothing, effectively skipping the comment
-        reader = lispreader.LispReader(lispfunc.get_macro_character, stream)
-        return reader.read_1()
-    
-    # Set up the reader macros
-    lispfunc.set_dispatch_macro_character('(', left_paren_reader)
-    lispfunc.set_dispatch_macro_character(')', right_paren_reader)
-    lispfunc.set_dispatch_macro_character("'", quote_reader)
-    lispfunc.set_dispatch_macro_character(';', semicolon_reader)
+    # Reader macros are now handled by the centralized readtable
+    # This function is kept for backward compatibility but is no longer needed
+    pass
 
 def load_and_evaluate_file(filename, environment=None, verbose=False):
     """Load and evaluate a Lisp file."""
@@ -100,8 +48,9 @@ def load_and_evaluate_file(filename, environment=None, verbose=False):
         # Set up basic reader macros
         setup_reader_macros()
         
-        # Create reader
-        reader = lispreader.LispReader(lispfunc.get_macro_character, stream)
+        # Create reader using centralized readtable
+        readtable = get_current_readtable()
+        reader = lispreader.LispReader(readtable.get_macro_character, stream)
         
         results = []
         expr_count = 0
@@ -203,7 +152,8 @@ class FclpyREPL:
         try:
             string_io = io.StringIO(text)
             stream = lispreader.LispStream(string_io)
-            reader = lispreader.LispReader(lispfunc.get_macro_character, stream)
+            readtable = get_current_readtable()
+            reader = lispreader.LispReader(readtable.get_macro_character, stream)
             return reader.read_1()
         except Exception as e:
             raise Exception(f"Parse error: {e}")

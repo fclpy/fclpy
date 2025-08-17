@@ -655,30 +655,62 @@ def _s_print_(object, stream=None):
     return object
 
 
-# Macro character operations  
+# Macro character operations - use centralized readtable
+from ..readtable import get_current_readtable
+
 def get_macro_character(char, readtable=None):
     """Get macro character function."""
-    return None, False  # Simplified
+    if readtable is None:
+        readtable = get_current_readtable()
+    return readtable.get_macro_character(char)
 
 
 def set_macro_character(char, function, non_terminating_p=None, readtable=None):
     """Set macro character function."""
-    return True  # Simplified
+    if readtable is None:
+        readtable = get_current_readtable()
+    return readtable.set_macro_character(char, function, non_terminating_p or False)
 
 
 def set_dispatch_macro_character(disp_char, sub_char, function, readtable=None):
     """Set dispatch macro character."""
-    return True  # Simplified
+    if readtable is None:
+        readtable = get_current_readtable()
+    return readtable.set_dispatch_macro_character(disp_char, sub_char, function)
 
 
 def get_dispatch_macro_character(disp_char, sub_char, readtable=None):
     """Get dispatch macro character function."""
-    return None  # Simplified
+    if readtable is None:
+        readtable = get_current_readtable()
+    return readtable.get_dispatch_macro_character(disp_char, sub_char)
 
 
-def make_dispatch_macro_character(char, non_terminating_p=None, readtable=None):
-    """Make dispatch macro character."""
-    return True  # Simplified
+def make_dispatch_macro_character(char, non_terminating_p=False, readtable=None):
+    """Make character into dispatch macro character."""
+    if readtable is None:
+        readtable = get_current_readtable()
+    return readtable.make_dispatch_macro_character(char, non_terminating_p)
+
+
+def copy_readtable(from_readtable=None, to_readtable=None):
+    """Copy readtable."""
+    if from_readtable is None:
+        from_readtable = get_current_readtable()
+    return from_readtable.copy_readtable()
+
+
+def readtable_case(readtable=None):
+    """Get readtable case."""
+    if readtable is None:
+        readtable = get_current_readtable()
+    return readtable.readtable_case()
+
+
+def set_syntax_from_char(to_char, from_char, to_readtable=None, from_readtable=None):
+    """Set syntax from another character."""
+    # Placeholder implementation
+    return True
 
 
 # WITH- macros (simplified implementations)

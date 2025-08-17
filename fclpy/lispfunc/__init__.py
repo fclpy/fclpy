@@ -42,20 +42,8 @@ conjugate_fn = conjugate
 byte = byte_fn
 # vector_fn = vector  # Commented out - vector not defined yet
 
-# Reader macro support (originally in main module)
-__reader_macros = {}
-
-def get_macro_character(char):
-    """Get reader macro for character."""
-    return __reader_macros.get(char)
-
-def set_dispatch_macro_character(char, func):
-    """Set dispatch reader macro for character."""
-    __reader_macros[char] = func
-
-def set_macro_character(char, func, non_terminating_p=False):
-    """Set reader macro for character."""
-    __reader_macros[char] = func
+# Import centralized readtable functions
+from ..readtable import get_macro_character, set_macro_character, set_dispatch_macro_character
 
 # Additional functions that need to be implemented
 def adjust_array(*args):
