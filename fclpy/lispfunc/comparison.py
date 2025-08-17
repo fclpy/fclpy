@@ -6,81 +6,95 @@ from .core import atom, car, cdr, consp
 
 def eq(obj1, obj2):
     """Test for object identity."""
-    return obj1 is obj2
+    return lisptype.lisp_bool(obj1 is obj2)
 
 
 def eql(obj1, obj2):
     """Test for object equality (numbers and characters)."""
     if obj1 is obj2:
-        return True
+        return lisptype.T
     
     # Numbers are eql if they are the same type and value
     if isinstance(obj1, (int, float, complex)) and isinstance(obj2, (int, float, complex)):
-        return type(obj1) == type(obj2) and obj1 == obj2
+        return lisptype.lisp_bool(type(obj1) == type(obj2) and obj1 == obj2)
     
     # Characters are eql if they are the same character
     if isinstance(obj1, str) and isinstance(obj2, str) and len(obj1) == 1 and len(obj2) == 1:
-        return obj1 == obj2
+        return lisptype.lisp_bool(obj1 == obj2)
     
-    return False
+    return lisptype.NIL
 
 
 def equal(obj1, obj2):
     """Test for structural equality."""
-    if eql(obj1, obj2):
-        return True
+    if eql(obj1, obj2) == lisptype.T:
+        return lisptype.T
     
     # Cons cells
     if consp(obj1) and consp(obj2):
-        return equal(car(obj1), car(obj2)) and equal(cdr(obj1), cdr(obj2))
+        car_equal = equal(car(obj1), car(obj2))
+        cdr_equal = equal(cdr(obj1), cdr(obj2))
+        return lisptype.lisp_bool(car_equal == lisptype.T and cdr_equal == lisptype.T)
     
     # Strings
     if isinstance(obj1, str) and isinstance(obj2, str):
-        return obj1 == obj2
+        return lisptype.lisp_bool(obj1 == obj2)
     
     # Lists and tuples
     if isinstance(obj1, (list, tuple)) and isinstance(obj2, (list, tuple)):
         if len(obj1) != len(obj2):
-            return False
-        return all(equal(x, y) for x, y in zip(obj1, obj2))
+            return lisptype.NIL
+        for x, y in zip(obj1, obj2):
+            if equal(x, y) != lisptype.T:
+                return lisptype.NIL
+        return lisptype.T
     
-    return False
+    return lisptype.NIL
 
 
 def equalp(obj1, obj2):
     """Test for liberal equality."""
-    if equal(obj1, obj2):
-        return True
+    if equal(obj1, obj2) == lisptype.T:
+        return lisptype.T
     
     # Numbers - allow type coercion
     if isinstance(obj1, (int, float, complex)) and isinstance(obj2, (int, float, complex)):
-        return obj1 == obj2
+        return lisptype.lisp_bool(obj1 == obj2)
     
     # Characters - case insensitive
     if isinstance(obj1, str) and isinstance(obj2, str) and len(obj1) == 1 and len(obj2) == 1:
-        return obj1.upper() == obj2.upper()
+        return lisptype.lisp_bool(obj1.upper() == obj2.upper())
     
     # Strings - case insensitive
     if isinstance(obj1, str) and isinstance(obj2, str):
-        return obj1.upper() == obj2.upper()
+        return lisptype.lisp_bool(obj1.upper() == obj2.upper())
     
     # Arrays/vectors
     if isinstance(obj1, (list, tuple)) and isinstance(obj2, (list, tuple)):
         if len(obj1) != len(obj2):
-            return False
-        return all(equalp(x, y) for x, y in zip(obj1, obj2))
+            return lisptype.NIL
+        for x, y in zip(obj1, obj2):
+            if equalp(x, y) != lisptype.T:
+                return lisptype.NIL
+        return lisptype.T
     
-    return False
+    return lisptype.NIL
 
 
 def not_fn(obj):
     """Logical NOT."""
-    return obj is None or obj == lisptype.NIL
+    if obj is None or obj == lisptype.NIL:
+        return lisptype.T
+    else:
+        return lisptype.NIL
 
 
 def null(obj):
     """Test for null/nil."""
-    return obj is None or obj == lisptype.NIL
+    if obj is None or obj == lisptype.NIL:
+        return lisptype.T
+    else:
+        return lisptype.NIL
 
 
 def typep(object, type_specifier):
@@ -93,7 +107,7 @@ def typep(object, type_specifier):
         type_name = str(type_specifier).upper()
     
     if type_name == 'T':
-        return True
+        return lisptype.T
     elif type_name == 'NULL':
         return null(object)
     elif type_name == 'ATOM':
@@ -101,31 +115,31 @@ def typep(object, type_specifier):
     elif type_name == 'CONS':
         return consp(object)
     elif type_name == 'LIST':
-        return null(object) or consp(object)
+        return lisptype.lisp_bool(null(object) == lisptype.T or consp(object) == lisptype.T)
     elif type_name == 'NUMBER':
-        return isinstance(object, (int, float, complex))
+        return lisptype.lisp_bool(isinstance(object, (int, float, complex)))
     elif type_name == 'INTEGER':
-        return isinstance(object, int)
+        return lisptype.lisp_bool(isinstance(object, int))
     elif type_name == 'FLOAT' or type_name == 'SINGLE-FLOAT' or type_name == 'DOUBLE-FLOAT':
-        return isinstance(object, float)
+        return lisptype.lisp_bool(isinstance(object, float))
     elif type_name == 'COMPLEX':
-        return isinstance(object, complex)
+        return lisptype.lisp_bool(isinstance(object, complex))
     elif type_name == 'REAL':
-        return isinstance(object, (int, float))
+        return lisptype.lisp_bool(isinstance(object, (int, float)))
     elif type_name == 'RATIONAL':
-        return isinstance(object, (int, float))  # Python doesn't have rationals
+        return lisptype.lisp_bool(isinstance(object, (int, float)))  # Python doesn't have rationals
     elif type_name == 'CHARACTER':
-        return isinstance(object, str) and len(object) == 1
+        return lisptype.lisp_bool(isinstance(object, str) and len(object) == 1)
     elif type_name == 'STRING':
-        return isinstance(object, str)
+        return lisptype.lisp_bool(isinstance(object, str))
     elif type_name == 'SYMBOL':
-        return isinstance(object, lisptype.LispSymbol)
+        return lisptype.lisp_bool(isinstance(object, lisptype.LispSymbol))
     elif type_name == 'KEYWORD':
-        return isinstance(object, lisptype.lispKeyword)
+        return lisptype.lisp_bool(isinstance(object, lisptype.lispKeyword))
     elif type_name == 'FUNCTION':
-        return callable(object)
+        return lisptype.lisp_bool(callable(object))
     else:
-        return False
+        return lisptype.NIL
 
 
 def type_of(object):

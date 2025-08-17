@@ -3,7 +3,7 @@
 from fclpy.lispenv import current_environment
 import fclpy.lisptype as lisptype
 import fclpy.lispreader as lispreader
-from .core import car, cdr, cons, consp
+from .core import car, cdr, cons, _consp_internal, _atom_internal
 
 
 def eval(form, env=None):
@@ -29,7 +29,7 @@ def eval(form, env=None):
         raise lisptype.LispNotImplementedError(f"Unbound variable: {form.name}")
     
     # Lists - function calls or special forms
-    if consp(form):
+    if _consp_internal(form):
         operator = car(form)
         args = cdr(form)
         
@@ -57,7 +57,7 @@ def eval(form, env=None):
         if callable(func):
             eval_args = []
             current = args
-            while consp(current):
+            while _consp_internal(current):
                 eval_args.append(eval(car(current), env))
                 current = cdr(current)
             return func(*eval_args)
@@ -70,12 +70,12 @@ def eval(form, env=None):
 def eval_if(form, env):
     """Evaluate IF special form."""
     args = cdr(form)
-    if not consp(args):
+    if not _consp_internal(args):
         raise lisptype.LispNotImplementedError("IF requires at least 2 arguments")
     
     test_form = car(args)
     then_form = car(cdr(args))
-    else_form = car(cdr(cdr(args))) if consp(cdr(cdr(args))) else None
+    else_form = car(cdr(cdr(args))) if _consp_internal(cdr(cdr(args))) else None
     
     test_result = eval(test_form, env)
     if test_result is not None and test_result != lisptype.NIL:
@@ -91,7 +91,7 @@ def eval_setq(form, env):
     args = cdr(form)
     result = None
     
-    while consp(args) and consp(cdr(args)):
+    while _consp_internal(args) and _consp_internal(cdr(args)):
         var = car(args)
         value_form = car(cdr(args))
         
@@ -109,7 +109,7 @@ def eval_setq(form, env):
 def eval_defvar(form, env):
     """Evaluate DEFVAR special form."""
     args = cdr(form)
-    if not consp(args):
+    if not _consp_internal(args):
         raise lisptype.LispNotImplementedError("DEFVAR requires at least 1 argument")
     
     var = car(args)
@@ -120,7 +120,7 @@ def eval_defvar(form, env):
     existing = env.find_variable(var)
     if existing is None:
         # Only set if not already defined
-        if consp(cdr(args)):
+        if _consp_internal(cdr(args)):
             value = eval(car(cdr(args)), env)
             env.add_variable(var, value)
         else:
@@ -132,7 +132,7 @@ def eval_defvar(form, env):
 def eval_let(form, env):
     """Evaluate LET special form."""
     args = cdr(form)
-    if not consp(args):
+    if not _consp_internal(args):
         raise lisptype.LispNotImplementedError("LET requires at least 1 argument")
     
     bindings = car(args)
@@ -143,14 +143,14 @@ def eval_let(form, env):
     
     # Process bindings
     current_binding = bindings
-    while consp(current_binding):
+    while _consp_internal(current_binding):
         binding = car(current_binding)
         if isinstance(binding, lisptype.LispSymbol):
             # Simple variable binding with NIL
             new_env.add_variable(binding, None)
-        elif consp(binding):
+        elif _consp_internal(binding):
             var = car(binding)
-            value_form = car(cdr(binding)) if consp(cdr(binding)) else None
+            value_form = car(cdr(binding)) if _consp_internal(cdr(binding)) else None
             
             if not isinstance(var, lisptype.LispSymbol):
                 raise lisptype.LispNotImplementedError("LET: binding variable must be a symbol")
@@ -163,7 +163,7 @@ def eval_let(form, env):
     # Evaluate body
     result = None
     current_body = body
-    while consp(current_body):
+    while _consp_internal(current_body):
         result = eval(car(current_body), new_env)
         current_body = cdr(current_body)
     
@@ -173,7 +173,7 @@ def eval_let(form, env):
 def eval_defun(form, env):
     """Evaluate DEFUN special form."""
     args = cdr(form)
-    if not consp(args) or not consp(cdr(args)):
+    if not _consp_internal(args) or not _consp_internal(cdr(args)):
         raise lisptype.LispNotImplementedError("DEFUN requires at least 2 arguments")
     
     func_name = car(args)
@@ -191,7 +191,7 @@ def eval_defun(form, env):
         # Bind parameters
         params = param_list
         for i, arg in enumerate(call_args):
-            if consp(params):
+            if _consp_internal(params):
                 param = car(params)
                 if isinstance(param, lisptype.LispSymbol):
                     func_env.add_variable(param, arg)
@@ -200,7 +200,7 @@ def eval_defun(form, env):
         # Execute body
         result = None
         current_body = body
-        while consp(current_body):
+        while _consp_internal(current_body):
             result = eval(car(current_body), func_env)
             current_body = cdr(current_body)
         
@@ -214,7 +214,7 @@ def eval_defun(form, env):
 def eval_lambda(form, env):
     """Evaluate LAMBDA special form."""
     args = cdr(form)
-    if not consp(args):
+    if not _consp_internal(args):
         raise lisptype.LispNotImplementedError("LAMBDA requires at least 1 argument")
     
     param_list = car(args)
@@ -228,7 +228,7 @@ def eval_lambda(form, env):
         # Bind parameters
         params = param_list
         for i, arg in enumerate(call_args):
-            if consp(params):
+            if _consp_internal(params):
                 param = car(params)
                 if isinstance(param, lisptype.LispSymbol):
                     func_env.add_variable(param, arg)
@@ -237,7 +237,7 @@ def eval_lambda(form, env):
         # Execute body
         result = None
         current_body = body
-        while consp(current_body):
+        while _consp_internal(current_body):
             result = eval(car(current_body), func_env)
             current_body = cdr(current_body)
         
@@ -249,7 +249,7 @@ def eval_lambda(form, env):
 def eval_when(form, env):
     """Evaluate WHEN special form."""
     args = cdr(form)
-    if not consp(args):
+    if not _consp_internal(args):
         return None
     
     test_form = car(args)
@@ -259,7 +259,7 @@ def eval_when(form, env):
     if test_result is not None and test_result != lisptype.NIL:
         result = None
         current_body = body
-        while consp(current_body):
+        while _consp_internal(current_body):
             result = eval(car(current_body), env)
             current_body = cdr(current_body)
         return result
@@ -270,7 +270,7 @@ def eval_when(form, env):
 def eval_unless(form, env):
     """Evaluate UNLESS special form."""
     args = cdr(form)
-    if not consp(args):
+    if not _consp_internal(args):
         return None
     
     test_form = car(args)
@@ -280,7 +280,7 @@ def eval_unless(form, env):
     if test_result is None or test_result == lisptype.NIL:
         result = None
         current_body = body
-        while consp(current_body):
+        while _consp_internal(current_body):
             result = eval(car(current_body), env)
             current_body = cdr(current_body)
         return result
@@ -292,17 +292,17 @@ def eval_cond(form, env):
     """Evaluate COND special form."""
     clauses = cdr(form)
     
-    while consp(clauses):
+    while _consp_internal(clauses):
         clause = car(clauses)
-        if consp(clause):
+        if _consp_internal(clause):
             test = car(clause)
             
             # Special case for T
             if (isinstance(test, lisptype.LispSymbol) and test.name == 'T') or eval(test, env):
                 # Execute forms in clause
-                result = test if not consp(cdr(clause)) else None
+                result = test if not _consp_internal(cdr(clause)) else None
                 forms = cdr(clause)
-                while consp(forms):
+                while _consp_internal(forms):
                     result = eval(car(forms), env)
                     forms = cdr(forms)
                 return result
@@ -317,7 +317,7 @@ def eval_and(form, env):
     args = cdr(form)
     result = True  # AND with no arguments is T
     
-    while consp(args):
+    while _consp_internal(args):
         result = eval(car(args), env)
         if result is None or result == lisptype.NIL:
             return None
@@ -330,7 +330,7 @@ def eval_or(form, env):
     """Evaluate OR special form."""
     args = cdr(form)
     
-    while consp(args):
+    while _consp_internal(args):
         result = eval(car(args), env)
         if result is not None and result != lisptype.NIL:
             return result
@@ -344,7 +344,7 @@ def eval_progn(form, env):
     args = cdr(form)
     result = None
     
-    while consp(args):
+    while _consp_internal(args):
         result = eval(car(args), env)
         args = cdr(args)
     
@@ -354,14 +354,14 @@ def eval_progn(form, env):
 def eval_prog1(form, env):
     """Evaluate PROG1 special form."""
     args = cdr(form)
-    if not consp(args):
+    if not _consp_internal(args):
         return None
     
     result = eval(car(args), env)
     args = cdr(args)
     
     # Evaluate remaining forms for side effects
-    while consp(args):
+    while _consp_internal(args):
         eval(car(args), env)
         args = cdr(args)
     
@@ -371,7 +371,7 @@ def eval_prog1(form, env):
 def eval_prog2(form, env):
     """Evaluate PROG2 special form."""
     args = cdr(form)
-    if not consp(args) or not consp(cdr(args)):
+    if not _consp_internal(args) or not _consp_internal(cdr(args)):
         return None
     
     # Evaluate first form for side effects
@@ -382,7 +382,7 @@ def eval_prog2(form, env):
     args = cdr(cdr(args))
     
     # Evaluate remaining forms for side effects
-    while consp(args):
+    while _consp_internal(args):
         eval(car(args), env)
         args = cdr(args)
     
@@ -530,8 +530,8 @@ def values(*args):
 def values_list(lst):
     """Return multiple values from a list."""
     # For now, return first element or None - proper implementation later
-    from .core import consp, car
-    return car(lst) if consp(lst) else None
+    from .core import _consp_internal, car
+    return car(lst) if _consp_internal(lst) else None
 
 
 # Aliases for functions that may have different names in lispenv.py

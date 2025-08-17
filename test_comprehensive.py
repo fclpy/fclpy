@@ -112,13 +112,14 @@ def test_arithmetic_functions(results):
         results.test("Subtraction (- 10 3 2)", result2 == 5, f"Expected 5, got {result2}")
     
     # Test comparison
+    from fclpy.lisptype import T, NIL
     le_func = env.find_func(LispSymbol('<='))
     if le_func:
         result1 = le_func(3, 5)
-        results.test("Comparison (<= 3 5)", result1 == True, f"Expected True, got {result1}")
+        results.test("Comparison (<= 3 5)", result1 == T, f"Expected T, got {result1}")
         
         result2 = le_func(5, 3)
-        results.test("Comparison (<= 5 3)", result2 == False, f"Expected False, got {result2}")
+        results.test("Comparison (<= 5 3)", result2 == NIL, f"Expected NIL, got {result2}")
 
 def test_basic_evaluation(results):
     """Test basic evaluation functionality."""

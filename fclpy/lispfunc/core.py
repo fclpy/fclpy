@@ -28,11 +28,19 @@ def cons(x, seq):
 
 def consp(obj):
     """Test if object is a cons cell."""
+    return lisptype.lisp_bool(type(obj) is lisptype.lispCons)
+
+def _consp_internal(obj):
+    """Internal version for Python code - returns Python boolean."""
     return type(obj) is lisptype.lispCons
 
 
 def atom(obj):
     """Test if object is an atom (not a cons cell)."""
+    return lisptype.lisp_bool(type(obj) is not lisptype.lispCons)
+
+def _atom_internal(obj):
+    """Internal version for Python code - returns Python boolean."""
     return type(obj) is not lisptype.lispCons
 
 
@@ -45,27 +53,27 @@ def acons(x, v, seq):
 
 def listp(obj):
     """Test if object is a list (either nil or a cons cell)."""
-    return obj is None or type(obj) is lisptype.lispCons
+    return lisptype.lisp_bool(obj is None or type(obj) is lisptype.lispCons)
 
 
 def symbolp(obj):
     """Test if object is a symbol."""
-    return type(obj) is lisptype.LispSymbol
+    return lisptype.lisp_bool(type(obj) is lisptype.LispSymbol)
 
 
 def keywordp(obj):
     """Test if object is a keyword."""
-    return type(obj) is lisptype.lispKeyword
+    return lisptype.lisp_bool(type(obj) is lisptype.lispKeyword)
 
 
 def hash_table_p(obj):
     """Test if object is a hash table."""
-    return isinstance(obj, dict)
+    return lisptype.lisp_bool(isinstance(obj, dict))
 
 
 def packagep(obj):
     """Test if object is a package."""
-    return isinstance(obj, lisptype.Package)
+    return lisptype.lisp_bool(isinstance(obj, lisptype.Package))
 
 
 def find_package_fn(name):

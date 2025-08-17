@@ -113,41 +113,42 @@ def lcm(*integers):
 
 def evenp(x):
     """Test if number is even."""
-    return x % 2 == 0
+    return lisptype.lisp_bool(x % 2 == 0)
 
 
 def oddp(x):
     """Test if number is odd."""
-    return x % 2 == 1
+    return lisptype.lisp_bool(x % 2 == 1)
 
 
 def zerop(x):
     """Test if number is zero."""
-    return x == 0
+    return lisptype.lisp_bool(x == 0)
 
 
 def plusp(x):
     """Test if number is positive."""
-    return x > 0
+    return lisptype.lisp_bool(x > 0)
 
 
 def minusp(x):
     """Test if number is negative."""
-    return x < 0
+    return lisptype.lisp_bool(x < 0)
 
 
 def numberp(obj):
     """Test if object is a number."""
-    return isinstance(obj, (int, float, complex))
+    return lisptype.lisp_bool(isinstance(obj, (int, float, complex)))
 
 
 def integerp(obj):
     """Test if object is an integer."""
-    return isinstance(obj, int)
+    return lisptype.lisp_bool(isinstance(obj, int))
 
 
 def floatp(obj):
     """Test if object is a float."""
+    return lisptype.lisp_bool(isinstance(obj, float))
     return isinstance(obj, float)
 
 
@@ -524,60 +525,60 @@ def _s_slash_(*args):
 def _s_eq_(*args):
     """Numeric equality operator (=)."""
     if len(args) < 2:
-        return True
+        return lisptype.T
     first = args[0]
-    return all(x == first for x in args[1:])
+    return lisptype.lisp_bool(all(x == first for x in args[1:]))
 
 
 def _s_lt_(*args):
     """Less than operator (<)."""
     if len(args) < 2:
-        return True
+        return lisptype.T
     for i in range(len(args) - 1):
         if not (args[i] < args[i + 1]):
-            return False
-    return True
+            return lisptype.NIL
+    return lisptype.T
 
 
 def _s_gt_(*args):
     """Greater than operator (>)."""
     if len(args) < 2:
-        return True
+        return lisptype.T
     for i in range(len(args) - 1):
         if not (args[i] > args[i + 1]):
-            return False
-    return True
+            return lisptype.NIL
+    return lisptype.T
 
 
 def _s_lt__s_eq_(*args):
     """Less than or equal operator (<=)."""
     if len(args) < 2:
-        return True
+        return lisptype.T
     for i in range(len(args) - 1):
         if not (args[i] <= args[i + 1]):
-            return False
-    return True
+            return lisptype.NIL
+    return lisptype.T
 
 
 def _s_gt__s_eq_(*args):
     """Greater than or equal operator (>=)."""
     if len(args) < 2:
-        return True
+        return lisptype.T
     for i in range(len(args) - 1):
         if not (args[i] >= args[i + 1]):
-            return False
-    return True
+            return lisptype.NIL
+    return lisptype.T
 
 
 def _s_slash__s_eq_(*args):
     """Not equal operator (/=)."""
     if len(args) < 2:
-        return True
+        return lisptype.T
     for i in range(len(args)):
         for j in range(i + 1, len(args)):
             if args[i] == args[j]:
-                return False
-    return True
+                return lisptype.NIL
+    return lisptype.T
 
 
 def _s_one_s_plus_(x):

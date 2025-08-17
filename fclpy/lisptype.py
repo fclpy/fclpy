@@ -150,6 +150,20 @@ class LispSymbol(lispT):
     def __repr__(self):
         return self.name
 
+# Global T symbol for consistent boolean returns
+T = LispSymbol('T')
+
+def lisp_bool(value):
+    """Convert a Python truthiness value to Lisp T or NIL."""
+    if value is None or value is False or value == NIL:
+        return NIL
+    else:
+        return T
+
+def is_truthy(value):
+    """Test if a value is truthy in Lisp (anything except NIL and None)."""
+    return value is not NIL and value is not None
+
 class lispKeyword(LispSymbol):
     pass
 
