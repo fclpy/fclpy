@@ -18,7 +18,7 @@ def read_line(stream=None, eof_error_p=True, eof_value=None, recursive_p=None):
         return line
     except EOFError:
         if eof_error_p:
-            raise lisptype.LispNotImplementedError("READ-LINE: EOF")
+            raise lisptype.LispEndOfFileError(stream, "READ-LINE: encountered end of file")
         return eof_value
 
 
@@ -30,7 +30,7 @@ def read_char(stream=None, eof_error_p=True, eof_value=None, recursive_p=None):
         return char if char else (eof_value if not eof_error_p else None)
     except:
         if eof_error_p:
-            raise lisptype.LispNotImplementedError("READ-CHAR: EOF")
+            raise lisptype.LispEndOfFileError(stream, "READ-CHAR: encountered end of file")
         return eof_value
 
 
@@ -41,7 +41,7 @@ def read_byte(stream, eof_error_p=True, eof_value=None):
         return 0
     except:
         if eof_error_p:
-            raise lisptype.LispNotImplementedError("READ-BYTE: EOF")
+            raise lisptype.LispEndOfFileError(stream, "READ-BYTE: encountered end of file")
         return eof_value
 
 
@@ -531,7 +531,7 @@ def read(stream=None, eof_error_p=True, eof_value=None, recursive_p=None):
         return input()  # Simplified
     except EOFError:
         if eof_error_p:
-            raise lisptype.LispNotImplementedError("READ: EOF")
+            raise lisptype.LispEndOfFileError(stream, "READ: encountered end of file")
         return eof_value
 
 
@@ -558,7 +558,7 @@ def read_preserving_whitespace(stream=None, eof_error_p=True, eof_value=None, re
         return input()  # Simplified
     except EOFError:
         if eof_error_p:
-            raise lisptype.LispNotImplementedError("READ-PRESERVING-WHITESPACE: EOF")
+            raise lisptype.LispEndOfFileError(stream, "READ-PRESERVING-WHITESPACE: encountered end of file")
         return eof_value
 
 

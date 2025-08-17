@@ -24,6 +24,13 @@ class LispError(Exception):
         super().__init__(message)
 
 
+class LispEndOfFileError(LispError):
+    """Exception for Common Lisp END-OF-FILE condition."""
+    def __init__(self, stream=None, message="End of file"):
+        super().__init__(message)
+        self.stream = stream
+
+
 class Binding:
     def __init__(self,symbol,value,next,env=None):
         self.symbol = symbol
