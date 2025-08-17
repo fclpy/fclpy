@@ -159,7 +159,126 @@ def type_of(object):
 
 def subtypep(type1, type2):
     """Test if type1 is a subtype of type2."""
-    raise lisptype.LispNotImplementedError("SUBTYPEP")
+    # Convert to string representation for comparison
+    if isinstance(type1, lisptype.LispSymbol):
+        t1 = type1.name.upper()
+    elif isinstance(type1, str):
+        t1 = type1.upper()
+    else:
+        t1 = str(type1).upper()
+    
+    if isinstance(type2, lisptype.LispSymbol):
+        t2 = type2.name.upper()
+    elif isinstance(type2, str):
+        t2 = type2.upper()
+    else:
+        t2 = str(type2).upper()
+    
+    # T is the supertype of everything
+    if t2 == 'T':
+        return True, True
+    
+    # Everything is a subtype of itself
+    if t1 == t2:
+        return True, True
+    
+    # Numeric type hierarchy
+    if t1 == 'INTEGER':
+        if t2 in ['RATIONAL', 'REAL', 'NUMBER']:
+            return True, True
+    elif t1 == 'RATIONAL':
+        if t2 in ['REAL', 'NUMBER']:
+            return True, True
+    elif t1 in ['SINGLE-FLOAT', 'DOUBLE-FLOAT', 'FLOAT']:
+        if t2 in ['REAL', 'NUMBER']:
+            return True, True
+    elif t1 == 'REAL':
+        if t2 == 'NUMBER':
+            return True, True
+    elif t1 == 'COMPLEX':
+        if t2 == 'NUMBER':
+            return True, True
+    
+    # List type hierarchy
+    if t1 == 'NULL':
+        if t2 in ['LIST', 'ATOM']:
+            return True, True
+    elif t1 == 'CONS':
+        if t2 == 'LIST':
+            return True, True
+    
+    # Character and string hierarchy
+    if t1 == 'CHARACTER':
+        if t2 == 'BASE-CHAR':
+            return True, True
+    elif t1 == 'BASE-CHAR':
+        if t2 == 'CHARACTER':
+            return True, True
+    
+    # Symbol hierarchy
+    if t1 == 'KEYWORD':
+        if t2 == 'SYMBOL':
+            return True, True
+    
+    # Everything is an atom except cons cells
+    if t2 == 'ATOM':
+        if t1 not in ['CONS', 'LIST']:
+            return True, True
+        elif t1 == 'NULL':  # NULL is both a list and an atom
+            return True, True
+    
+    # Function types
+    if t1 in ['COMPILED-FUNCTION', 'INTERPRETED-FUNCTION']:
+        if t2 == 'FUNCTION':
+            return True, True
+    
+    # Array and vector types
+    if t1 == 'SIMPLE-VECTOR':
+        if t2 in ['VECTOR', 'SIMPLE-ARRAY', 'ARRAY']:
+            return True, True
+    elif t1 == 'VECTOR':
+        if t2 in ['ARRAY']:
+            return True, True
+    elif t1 == 'SIMPLE-ARRAY':
+        if t2 == 'ARRAY':
+            return True, True
+    
+    # Stream types
+    if t1 in ['INPUT-STREAM', 'OUTPUT-STREAM']:
+        if t2 == 'STREAM':
+            return True, True
+    elif t1 in ['FILE-STREAM', 'STRING-STREAM']:
+        if t2 in ['STREAM', 'INPUT-STREAM', 'OUTPUT-STREAM']:
+            return True, True
+    
+    # Hash table types
+    if t1 == 'HASH-TABLE':
+        if t2 == 'T':
+            return True, True
+    
+    # Pathname types
+    if t1 == 'LOGICAL-PATHNAME':
+        if t2 == 'PATHNAME':
+            return True, True
+    
+    # Package type
+    if t1 == 'PACKAGE':
+        if t2 == 'T':
+            return True, True
+    
+    # Condition types (simplified hierarchy)
+    if t1 in ['SIMPLE-ERROR', 'TYPE-ERROR', 'ARITHMETIC-ERROR']:
+        if t2 in ['ERROR', 'SERIOUS-CONDITION', 'CONDITION']:
+            return True, True
+    elif t1 == 'ERROR':
+        if t2 in ['SERIOUS-CONDITION', 'CONDITION']:
+            return True, True
+    elif t1 in ['WARNING', 'STYLE-WARNING']:
+        if t2 == 'CONDITION':
+            return True, True
+    
+    # No subtype relationship found
+    return False, True
 
 
 def identity(object):
