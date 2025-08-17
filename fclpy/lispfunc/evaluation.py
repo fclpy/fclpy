@@ -17,10 +17,16 @@ def eval(form, env=None):
     
     # Symbols - look up in environment
     if isinstance(form, lisptype.LispSymbol):
+        # Check variable bindings first
         value = env.find_variable(form)
-        if value is None:
-            raise lisptype.LispNotImplementedError(f"Unbound variable: {form.name}")
-        return value
+        if value is not None:
+            return value
+        # If not found as variable, check function bindings
+        value = env.find_func(form)
+        if value is not None:
+            return value
+        # If not found in either, raise error
+        raise lisptype.LispNotImplementedError(f"Unbound variable: {form.name}")
     
     # Lists - function calls or special forms
     if consp(form):

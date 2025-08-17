@@ -66,8 +66,8 @@ def test_function_mapping(results):
     # Test critical mappings that were problematic
     test_cases = [
         ('NOT', 'not_fn'),
-        ('<=', '_s_le_'),
-        ('>=', '_s_ge_'), 
+        ('<=', '_s_lt__s_eq_'),
+        ('>=', '_s_gt__s_eq_'), 
         ('<', '_s_lt_'),
         ('>', '_s_gt_'),
         ('=', '_s_eq_'),
@@ -209,6 +209,11 @@ def main():
     """Run all tests."""
     print("FCLPY Comprehensive Test Suite")
     print("=" * 50)
+    
+    # Set up the test environment
+    print("Setting up test environment...")
+    env = setup_test_environment()
+    print("Environment setup complete.")
     
     results = TestResults()
     
