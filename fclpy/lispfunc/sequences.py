@@ -440,7 +440,9 @@ def concatenate(result_type, *sequences):
             result.extend(seq)
         return result
     else:
-        raise lisptype.LispNotImplementedError(f"CONCATENATE with type {result_type}")
+        raise lisptype.LispTypeError(f"CONCATENATE: unsupported result type {result_type}",
+                                    expected_type="LIST, STRING, or VECTOR",
+                                    actual_value=result_type)
 
 
 def fill(sequence, item, start=0, end=None):
@@ -452,7 +454,9 @@ def fill(sequence, item, start=0, end=None):
             sequence[i] = item
         return sequence
     else:
-        raise lisptype.LispNotImplementedError("FILL for non-list sequences")
+        raise lisptype.LispTypeError("FILL: unsupported sequence type",
+                                    expected_type="LIST or MUTABLE-SEQUENCE",
+                                    actual_value=type(sequence).__name__)
 
 
 def replace(sequence1, sequence2, **kwargs):
