@@ -123,13 +123,92 @@ class lispNull(lispList):
 NIL = lispNull()
 
 class LispSymbol(lispT):
-    def __init__(self, name):
+    def __init__(self, name, package=None):
         self.name = name
+        self.package = package
     def __repr__(self):
         return self.name
 
 class lispKeyword(LispSymbol):
     pass
+
+
+class Package(lispT):
+    """Common Lisp package object."""
+    
+    def __init__(self, name, nicknames=None, use_list=None):
+        self.name = name.upper()
+        self.nicknames = [nick.upper() for nick in (nicknames or [])]
+        self.use_list = use_list or []
+        self.symbols = {}  # symbol name -> symbol mapping
+        self.external_symbols = set()  # names of exported symbols
+        self.shadowing_symbols = set()  # names of shadowing symbols
+        
+    def __str__(self):
+        return f"#<PACKAGE {self.name}>"
+        
+    def __repr__(self):
+        return f"Package(name='{self.name}', nicknames={self.nicknames})"
+        
+    def intern_symbol(self, name, external=False):
+        """Intern a symbol in this package."""
+        name = name.upper()
+        if name not in self.symbols:
+            symbol = LispSymbol(name)
+            symbol.package = self
+            self.symbols[name] = symbol
+        if external:
+            self.external_symbols.add(name)
+        return self.symbols[name]
+        
+    def find_symbol(self, name):
+        """Find symbol in package, return (symbol, status) tuple."""
+        name = name.upper()
+        if name in self.symbols:
+            if name in self.external_symbols:
+                return self.symbols[name], ':EXTERNAL'
+            else:
+                return self.symbols[name], ':INTERNAL'
+        return None, None
+        
+    def export_symbol(self, name):
+        """Export a symbol from this package."""
+        name = name.upper()
+        if name in self.symbols:
+            self.external_symbols.add(name)
+            
+    def unexport_symbol(self, name):
+        """Unexport a symbol from this package.""" 
+        name = name.upper()
+        self.external_symbols.discard(name)
+
+
+# Standard packages
+_packages = {}
+
+def make_package(name, nicknames=None, use_list=None):
+    """Create a new package."""
+    name = name.upper()
+    if name in _packages:
+        return _packages[name]
+    package = Package(name, nicknames, use_list)
+    _packages[name] = package
+    # Also register by nicknames
+    for nick in package.nicknames:
+        _packages[nick] = package
+    return package
+
+def find_package(name):
+    """Find package by name or nickname."""
+    if isinstance(name, Package):
+        return name
+    name = name.upper()
+    return _packages.get(name)
+
+# Create standard packages
+KEYWORD_PACKAGE = make_package("KEYWORD")
+COMMON_LISP_PACKAGE = make_package("COMMON-LISP", ["CL"])  
+COMMON_LISP_USER_PACKAGE = make_package("COMMON-LISP-USER", ["CL-USER"], [COMMON_LISP_PACKAGE])
 
 class lispConsIterator:    
     def __init__(self, cons):

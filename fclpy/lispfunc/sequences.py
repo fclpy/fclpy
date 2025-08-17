@@ -1,0 +1,1043 @@
+"""Sequence operations - lists, vectors, and other sequence manipulation."""
+
+import functools
+from .core import cons, car, cdr, atom
+import fclpy.lisptype as lisptype
+
+
+def endp(x):
+    """Test if object is end of list (nil or empty)."""
+    return x is None or x == lisptype.NIL
+
+
+def nbutlast(seq, n=1):
+    """Destructively remove last n elements."""
+    if isinstance(seq, list):
+        for _ in range(n):
+            if seq:
+                seq.pop()
+        return seq
+    else:
+        # For other sequence types, return a new sequence
+        return seq[:-n] if len(seq) > n else []
+
+
+def append(*args):
+    """Append sequences together."""
+    if len(args) < 1:
+        return None
+    val = functools.reduce(lambda l1, l2: l1 if l2 == None or type(l2) is lisptype.lispNull else l1 + tuple(l2), args[:-1], ())
+    if len(val) < 1:
+        return args[-1]
+    val = lisptype.lispCons(val[0], val[1:])  
+    c = val  
+    while isinstance(c, lisptype.lispCons) and c.cdr != None and c.cdr != lisptype.NIL:
+        c = c.cdr     
+    if isinstance(c, lisptype.lispCons):
+        c.cdr = args[-1]
+        if type(c.cdr) == tuple and len(c.cdr) > 0:
+            c.cdr = lisptype.lispCons(c.cdr[0], c.cdr[1:])
+    return val
+
+
+def adjoin(x, seq, test=lambda x, y: x is y):
+    """Tests whether item is the same as an existing element of list."""
+    return seq if any(map(functools.partial(test, x), seq)) else cons(x, seq)
+
+
+def assoc(item, alist):
+    """Find association with key equal to item."""
+    for pair in alist:
+        if pair and pair[0] == item:
+            return pair
+    return None
+
+
+def assoc_if(predicate, alist):
+    """Find association whose key satisfies predicate."""
+    for pair in alist:
+        if pair and predicate(pair[0]):
+            return pair
+    return None
+
+
+def assoc_if_not(predicate, alist):
+    """Find association whose key does not satisfy predicate."""
+    for pair in alist:
+        if pair and not predicate(pair[0]):
+            return pair
+    return None
+
+
+def rassoc(item, alist, test=None, test_not=None, key=None):
+    """Reverse association - find by value."""
+    for pair in alist:
+        if pair and len(pair) > 1 and pair[1] == item:
+            return pair
+    return None
+
+
+def rassoc_if(predicate, alist, key=None):
+    """Reverse association with predicate."""
+    for pair in alist:
+        if pair and len(pair) > 1 and predicate(pair[1]):
+            return pair
+    return None
+
+
+def rassoc_if_not(predicate, alist, key=None):
+    """Reverse association with negated predicate."""
+    for pair in alist:
+        if pair and len(pair) > 1 and not predicate(pair[1]):
+            return pair
+    return None
+
+
+def pairlis(keys, data, alist=None):
+    """Create alist from keys and data."""
+    result = []
+    for key, datum in zip(keys, data):
+        result.append((key, datum))
+    if alist:
+        result.extend(alist)
+    return result
+
+
+def acons(key, datum, alist):
+    """Add key-datum pair to alist."""
+    return [(key, datum)] + list(alist) if alist else [(key, datum)]
+
+
+def subst(new, old, tree, test=None):
+    """Substitute old with new in tree."""
+    if test is None:
+        test = lambda x, y: x == y
+    
+    if test(tree, old):
+        return new
+    elif atom(tree):
+        return tree
+    else:
+        return cons(subst(new, old, car(tree), test),
+                   subst(new, old, cdr(tree), test))
+
+
+def subst_if(new, predicate, tree):
+    """Substitute with predicate."""
+    if predicate(tree):
+        return new
+    elif atom(tree):
+        return tree
+    else:
+        return cons(subst_if(new, predicate, car(tree)),
+                   subst_if(new, predicate, cdr(tree)))
+
+
+def subst_if_not(new, predicate, tree):
+    """Substitute with negated predicate."""
+    return subst_if(new, lambda x: not predicate(x), tree)
+
+
+def sublis(alist, tree, test=None):
+    """Substitute using association list."""
+    if test is None:
+        test = lambda x, y: x == y
+    
+    if atom(tree):
+        for pair in alist:
+            if pair and len(pair) > 1 and test(tree, pair[0]):
+                return pair[1]
+        return tree
+    else:
+        return cons(sublis(alist, car(tree), test),
+                   sublis(alist, cdr(tree), test))
+
+
+def member(item, list_seq, test=None, test_not=None, key=None):
+    """Find member in list."""
+    for x in list_seq:
+        if (key(x) if key else x) == item:
+            return list_seq[list_seq.index(x):]
+    return None
+
+
+def member_if(predicate, list_seq, key=None):
+    """Find member satisfying predicate."""
+    for x in list_seq:
+        if predicate(key(x) if key else x):
+            return list_seq[list_seq.index(x):]
+    return None
+
+
+def member_if_not(predicate, list_seq, key=None):
+    """Find member not satisfying predicate."""
+    for x in list_seq:
+        if not predicate(key(x) if key else x):
+            return list_seq[list_seq.index(x):]
+    return None
+
+
+def find(item, sequence, **kwargs):
+    """Find item in sequence."""
+    for x in sequence:
+        if x == item:
+            return x
+    return None
+
+
+def find_if(predicate, sequence, **kwargs):
+    """Find item satisfying predicate."""
+    for x in sequence:
+        if predicate(x):
+            return x
+    return None
+
+
+def find_if_not(predicate, sequence, **kwargs):
+    """Find item not satisfying predicate."""
+    for x in sequence:
+        if not predicate(x):
+            return x
+    return None
+
+
+def position(item, sequence, **kwargs):
+    """Find position of item."""
+    try:
+        return sequence.index(item)
+    except ValueError:
+        return None
+
+
+def position_if(predicate, sequence, **kwargs):
+    """Find position of item satisfying predicate."""
+    for i, x in enumerate(sequence):
+        if predicate(x):
+            return i
+    return None
+
+
+def position_if_not(predicate, sequence, **kwargs):
+    """Find position of item not satisfying predicate."""
+    for i, x in enumerate(sequence):
+        if not predicate(x):
+            return i
+    return None
+
+
+def count(item, sequence, **kwargs):
+    """Count occurrences of item."""
+    return sum(1 for x in sequence if x == item)
+
+
+def count_if(predicate, sequence, **kwargs):
+    """Count items satisfying predicate."""
+    return sum(1 for x in sequence if predicate(x))
+
+
+def count_if_not(predicate, sequence, **kwargs):
+    """Count items not satisfying predicate."""
+    return sum(1 for x in sequence if not predicate(x))
+
+
+def length(sequence):
+    """Get sequence length."""
+    if sequence is None or sequence == lisptype.NIL:
+        return 0
+    elif isinstance(sequence, lisptype.lispCons):
+        count = 0
+        current = sequence
+        while current is not None and current != lisptype.NIL:
+            if not isinstance(current, lisptype.lispCons):
+                break
+            count += 1
+            current = current.cdr
+        return count
+    else:
+        return len(sequence)
+
+
+def reverse(sequence):
+    """Reverse sequence."""
+    if sequence is None or sequence == lisptype.NIL:
+        return lisptype.NIL
+    elif isinstance(sequence, lisptype.lispCons):
+        result = lisptype.NIL
+        current = sequence
+        while current is not None and current != lisptype.NIL:
+            if not isinstance(current, lisptype.lispCons):
+                break
+            result = lisptype.lispCons(current.car, result)
+            current = current.cdr
+        return result
+    else:
+        return list(reversed(sequence))
+
+
+def nreverse(sequence):
+    """Destructively reverse sequence."""
+    return reverse(sequence)  # Non-destructive for now
+
+
+def subseq(sequence, start, end=None):
+    """Get subsequence."""
+    if end is None:
+        return sequence[start:]
+    else:
+        return sequence[start:end]
+
+
+def copy_seq(sequence):
+    """Copy sequence."""
+    if isinstance(sequence, list):
+        return list(sequence)
+    elif isinstance(sequence, tuple):
+        return tuple(sequence)
+    elif isinstance(sequence, str):
+        return str(sequence)
+    else:
+        return sequence
+
+
+def copy_list(list_seq):
+    """Copy list."""
+    return list(list_seq) if list_seq else []
+
+
+def copy_alist(alist):
+    """Copy association list."""
+    return [list(pair) if isinstance(pair, (list, tuple)) else pair for pair in alist]
+
+
+def tree_equal(tree1, tree2, test=None):
+    """Test tree equality."""
+    if test is None:
+        test = lambda x, y: x == y
+    
+    if atom(tree1) and atom(tree2):
+        return test(tree1, tree2)
+    elif atom(tree1) or atom(tree2):
+        return False
+    else:
+        return (tree_equal(car(tree1), car(tree2), test) and
+                tree_equal(cdr(tree1), cdr(tree2), test))
+
+
+def list_length(list_seq):
+    """Get list length (proper or dotted)."""
+    if list_seq is None or list_seq == lisptype.NIL:
+        return 0
+    
+    count = 0
+    current = list_seq
+    seen = set()
+    
+    while current is not None and current != lisptype.NIL:
+        if id(current) in seen:
+            # Circular list
+            return None
+        
+        if not isinstance(current, lisptype.lispCons):
+            # Dotted list
+            break
+        
+        seen.add(id(current))
+        count += 1
+        current = current.cdr
+    
+    return count
+
+
+def last(list_seq, n=1):
+    """Get last n elements."""
+    if not list_seq:
+        return None
+    
+    if isinstance(list_seq, list):
+        if n == 1:
+            return list_seq[-1:]
+        else:
+            return list_seq[-n:] if len(list_seq) >= n else list_seq
+    else:
+        # For other sequences
+        return list_seq[-n:] if len(list_seq) >= n else list_seq
+
+
+def nthcdr(n, list_seq):
+    """Get nth cdr."""
+    current = list_seq
+    for _ in range(n):
+        if current is None or current == lisptype.NIL:
+            break
+        if isinstance(current, lisptype.lispCons):
+            current = current.cdr
+        else:
+            break
+    return current
+
+
+def nth(n, list_seq):
+    """Get nth element (0-indexed)."""
+    current = nthcdr(n, list_seq)
+    if current and isinstance(current, lisptype.lispCons):
+        return current.car
+    elif isinstance(list_seq, (list, tuple)) and n < len(list_seq):
+        return list_seq[n]
+    return None
+
+
+def elt(sequence, index):
+    """Get element at index."""
+    try:
+        return sequence[index]
+    except (IndexError, TypeError):
+        return None
+
+
+def make_list(size, initial_element=None):
+    """Make list of given size."""
+    return [initial_element] * size
+
+
+def list_fn(*args):
+    """Create list from arguments."""
+    result = lisptype.NIL
+    for arg in reversed(args):
+        result = lisptype.lispCons(arg, result)
+    return result
+
+
+def lisp_list(*args):
+    """Create Lisp list from arguments."""
+    return list(args)
+
+
+def list_star(*args):
+    """Create dotted list."""
+    if not args:
+        return lisptype.NIL
+    if len(args) == 1:
+        return args[0]
+    
+    result = args[-1]
+    for arg in reversed(args[:-1]):
+        result = lisptype.lispCons(arg, result)
+    return result
+
+
+def concatenate(result_type, *sequences):
+    """Concatenate sequences."""
+    if result_type == 'LIST' or result_type == list:
+        result = []
+        for seq in sequences:
+            result.extend(seq)
+        return result
+    elif result_type == 'STRING' or result_type == str:
+        return ''.join(str(seq) for seq in sequences)
+    elif result_type == 'VECTOR' or result_type == 'SIMPLE-VECTOR':
+        result = []
+        for seq in sequences:
+            result.extend(seq)
+        return result
+    else:
+        raise lisptype.LispNotImplementedError(f"CONCATENATE with type {result_type}")
+
+
+def fill(sequence, item, start=0, end=None):
+    """Fill sequence with item."""
+    if isinstance(sequence, list):
+        if end is None:
+            end = len(sequence)
+        for i in range(start, min(end, len(sequence))):
+            sequence[i] = item
+        return sequence
+    else:
+        raise lisptype.LispNotImplementedError("FILL for non-list sequences")
+
+
+def replace(sequence1, sequence2, **kwargs):
+    """Replace elements of sequence1 with elements of sequence2."""
+    start1 = kwargs.get('start1', 0)
+    end1 = kwargs.get('end1', len(sequence1))
+    start2 = kwargs.get('start2', 0)
+    end2 = kwargs.get('end2', len(sequence2))
+    
+    for i, j in zip(range(start1, end1), range(start2, end2)):
+        if i < len(sequence1) and j < len(sequence2):
+            sequence1[i] = sequence2[j]
+    
+    return sequence1
+
+
+def remove(item, sequence, **kwargs):
+    """Remove item from sequence."""
+    return [x for x in sequence if x != item]
+
+
+def remove_if(test, sequence, **kwargs):
+    """Remove elements satisfying test."""
+    return [x for x in sequence if not test(x)]
+
+
+def remove_if_not(test, sequence, **kwargs):
+    """Remove elements not satisfying test."""
+    return [x for x in sequence if test(x)]
+
+
+def delete_fn(item, sequence, **kwargs):
+    """Delete item from sequence."""
+    return [x for x in sequence if x != item]
+
+
+def delete_if(predicate, sequence, **kwargs):
+    """Delete if predicate true."""
+    return [x for x in sequence if not predicate(x)]
+
+
+def delete_if_not(predicate, sequence, **kwargs):
+    """Delete if predicate false."""
+    return [x for x in sequence if predicate(x)]
+
+
+def remove_duplicates(sequence, **kwargs):
+    """Remove duplicate elements."""
+    seen = set()
+    result = []
+    for item in sequence:
+        if item not in seen:
+            seen.add(item)
+            result.append(item)
+    return result
+
+
+def delete_duplicates(sequence, **kwargs):
+    """Delete duplicate elements."""
+    return remove_duplicates(sequence, **kwargs)
+
+
+def substitute(newitem, olditem, sequence, **kwargs):
+    """Substitute elements in sequence."""
+    return [newitem if x == olditem else x for x in sequence]
+
+
+def substitute_if(newitem, test, sequence, **kwargs):
+    """Substitute using predicate."""
+    return [newitem if test(x) else x for x in sequence]
+
+
+def substitute_if_not(newitem, test, sequence, **kwargs):
+    """Substitute using negated predicate."""
+    return [newitem if not test(x) else x for x in sequence]
+
+
+def nsubstitute(newitem, olditem, sequence, **kwargs):
+    """Destructively substitute."""
+    return substitute(newitem, olditem, sequence, **kwargs)  # Non-destructive for now
+
+
+def nsubstitute_if(newitem, test, sequence, **kwargs):
+    """Destructively substitute using predicate."""
+    return substitute_if(newitem, test, sequence, **kwargs)  # Non-destructive for now
+
+
+def nsubstitute_if_not(newitem, test, sequence, **kwargs):
+    """Destructively substitute using negated predicate."""
+    return substitute_if_not(newitem, test, sequence, **kwargs)  # Non-destructive for now
+
+
+def sort(sequence, predicate, key=None):
+    """Sort sequence."""
+    if key:
+        return sorted(sequence, key=key, cmp=lambda x, y: -1 if predicate(x, y) else 1)
+    else:
+        return sorted(sequence, key=lambda x: x, reverse=False)
+
+
+def stable_sort(sequence, predicate, key=None):
+    """Stable sort sequence."""
+    return sort(sequence, predicate, key)  # Python's sort is stable
+
+
+def merge(result_type, sequence1, sequence2, predicate, **kwargs):
+    """Merge two sorted sequences."""
+    result = []
+    i, j = 0, 0
+    
+    while i < len(sequence1) and j < len(sequence2):
+        if predicate(sequence1[i], sequence2[j]):
+            result.append(sequence1[i])
+            i += 1
+        else:
+            result.append(sequence2[j])
+            j += 1
+    
+    # Add remaining elements
+    result.extend(sequence1[i:])
+    result.extend(sequence2[j:])
+    
+    return result
+
+
+def search(sequence1, sequence2, **kwargs):
+    """Search for sequence1 in sequence2."""
+    for i in range(len(sequence2) - len(sequence1) + 1):
+        if sequence2[i:i+len(sequence1)] == sequence1:
+            return i
+    return None
+
+
+def mismatch(sequence1, sequence2, **kwargs):
+    """Find first mismatch between sequences."""
+    for i, (x, y) in enumerate(zip(sequence1, sequence2)):
+        if x != y:
+            return i
+    if len(sequence1) != len(sequence2):
+        return min(len(sequence1), len(sequence2))
+    return None
+
+
+def every(predicate, *sequences):
+    """Test if predicate is true for every element."""
+    if not sequences:
+        return True
+    min_len = min(len(seq) for seq in sequences)
+    for i in range(min_len):
+        args = [seq[i] for seq in sequences]
+        if not predicate(*args):
+            return False
+    return True
+
+
+def some(predicate, *sequences):
+    """Test if predicate is true for some element."""
+    if not sequences:
+        return False
+    min_len = min(len(seq) for seq in sequences)
+    for i in range(min_len):
+        args = [seq[i] for seq in sequences]
+        if predicate(*args):
+            return True
+    return False
+
+
+def notevery(predicate, *sequences):
+    """Test if predicate is false for some element."""
+    return not every(predicate, *sequences)
+
+
+def notany(predicate, *sequences):
+    """Test if predicate is false for all elements."""
+    return not some(predicate, *sequences)
+
+
+def map_fn(result_type, function, *sequences):
+    """Map function over sequences."""
+    if not sequences:
+        return []
+    
+    min_len = min(len(seq) for seq in sequences)
+    results = []
+    
+    for i in range(min_len):
+        args = [seq[i] for seq in sequences]
+        results.append(function(*args))
+    
+    if result_type is None:
+        return None
+    elif result_type == 'LIST':
+        return results
+    else:
+        return results
+
+
+def mapcar(function, *lists):
+    """Map function over lists."""
+    return map_fn('LIST', function, *lists)
+
+
+def mapcan(function, *lists):
+    """Map and concatenate results."""
+    results = mapcar(function, *lists)
+    flattened = []
+    for result in results:
+        if isinstance(result, list):
+            flattened.extend(result)
+        else:
+            flattened.append(result)
+    return flattened
+
+
+def mapc(function, *lists):
+    """Map for side effects."""
+    map_fn(None, function, *lists)
+    return lists[0] if lists else None
+
+
+def mapcon(function, *lists):
+    """Map over cdrs and concatenate."""
+    return mapcan(function, *lists)  # Simplified
+
+
+def maplist(function, *lists):
+    """Map over lists as lists."""
+    return mapcar(function, *lists)  # Simplified
+
+
+def mapl(function, *lists):
+    """Map over lists for side effects."""
+    return mapc(function, *lists)
+
+
+# Set operations
+def intersection(list1, list2, **kwargs):
+    """Set intersection."""
+    return [x for x in list1 if x in list2]
+
+
+def union(list1, list2, **kwargs):
+    """Set union."""
+    result = list(list1)
+    for item in list2:
+        if item not in result:
+            result.append(item)
+    return result
+
+
+def nunion(list1, list2, **kwargs):
+    """Destructive set union."""
+    for item in list2:
+        if item not in list1:
+            list1.append(item)
+    return list1
+
+
+def set_difference(list1, list2, **kwargs):
+    """Set difference."""
+    return [x for x in list1 if x not in list2]
+
+
+def nset_difference(list1, list2, **kwargs):
+    """Destructive set difference."""
+    for item in list2:
+        while item in list1:
+            list1.remove(item)
+    return list1
+
+
+def set_exclusive_or(list1, list2, **kwargs):
+    """Set exclusive or."""
+    return [x for x in list1 if x not in list2] + [x for x in list2 if x not in list1]
+
+
+def nset_exclusive_or(list1, list2, **kwargs):
+    """Destructive set exclusive or."""
+    # Remove items from list1 that are in list2
+    for item in list2:
+        while item in list1:
+            list1.remove(item)
+    # Add items from list2 that are not already in list1
+    for item in list2:
+        if item not in list1:
+            list1.append(item)
+    return list1
+
+
+def subsetp(subset, set_arg, **kwargs):
+    """Test if subset is a subset of set_arg."""
+    for item in subset:
+        if item not in set_arg:
+            return False
+    return True
+
+
+def list_s_star_(*args):
+    """LIST* function - creates a dotted list."""
+    if not args:
+        return None
+    if len(args) == 1:
+        return args[0]
+    return cons(args[0], list_s_star_(*args[1:]))
+
+
+# Array operations
+def make_array(dimensions, **kwargs):
+    """Create array."""
+    if isinstance(dimensions, int):
+        return [None] * dimensions
+    # Multi-dimensional array - for now, nested lists
+    def make_nested(dims):
+        if len(dims) == 1:
+            return [None] * dims[0]
+        return [make_nested(dims[1:]) for _ in range(dims[0])]
+    return make_nested(dimensions)
+
+
+def array_dimensions(array):
+    """Get array dimensions."""
+    if isinstance(array, list):
+        dims = [len(array)]
+        if array and isinstance(array[0], list):
+            dims.extend(array_dimensions(array[0]))
+        return dims
+    return [1]
+
+
+def arrayp(object):
+    """Test if object is array."""
+    return isinstance(object, list)
+
+
+def array_in_bounds_p(array, *subscripts):
+    """Test if subscripts are valid for array."""
+    try:
+        dims = array_dimensions(array)
+        if len(subscripts) != len(dims):
+            return False
+        for i, sub in enumerate(subscripts):
+            if sub < 0 or sub >= dims[i]:
+                return False
+        return True
+    except:
+        return False
+
+
+def array_displacement(array):
+    """Return array displacement info."""
+    # In Python, arrays are not displaced, so return None and 0
+    return None, 0
+
+
+def vectorp(object):
+    """Test if object is vector."""
+    return isinstance(object, list)
+
+
+def simple_vector_p(object):
+    """Test if object is simple vector."""
+    return isinstance(object, list)
+
+
+def bit_vector_p(object):
+    """Test if object is bit vector."""
+    return isinstance(object, list) and all(x in (0, 1) for x in object)
+
+
+def simple_bit_vector_p(object):
+    """Test if object is simple bit vector."""
+    return bit_vector_p(object)
+
+
+def aref(array, *subscripts):
+    """Array reference."""
+    result = array
+    for subscript in subscripts:
+        result = result[subscript]
+    return result
+
+
+def svref(vector, index):
+    """Simple vector reference."""
+    return vector[index]
+
+
+def vector_fn(*elements):
+    """Create vector from elements."""
+    return list(elements)
+
+
+def vector_pop(vector):
+    """Pop from end of vector."""
+    if vector:
+        return vector.pop()
+    return None
+
+
+def vector_push(new_element, vector):
+    """Push to end of vector."""
+    vector.append(new_element)
+    return len(vector) - 1
+
+
+def vector_push_extend(new_element, vector, extension=None):
+    """Push with possible extension."""
+    vector.append(new_element)
+    return len(vector) - 1
+
+
+# Additional destructive operations
+def nintersection(list1, list2, **kwargs):
+    """Destructive intersection."""
+    return [x for x in list1 if x in list2]
+
+
+def nsubst(new, old, tree, **kwargs):
+    """Destructive substitute in tree."""
+    return subst(new, old, tree)  # Non-destructive for now
+
+
+def nsubst_if(new, predicate, tree, **kwargs):
+    """Destructive substitute if in tree."""
+    return subst_if(new, predicate, tree)  # Non-destructive for now
+
+
+def nsubst_if_not(new, predicate, tree, **kwargs):
+    """Destructive substitute if not in tree."""
+    return subst_if_not(new, predicate, tree)  # Non-destructive for now
+
+
+def nsublis(alist, tree, **kwargs):
+    """Destructive substitute using alist."""
+    return sublis(alist, tree)  # Non-destructive for now
+
+
+# Aliased functions for compatibility
+def every_fn(predicate, *sequences):
+    """Test if predicate is true for every element."""
+    return every(predicate, *sequences)
+
+
+def some_fn(predicate, *sequences):
+    """Test if predicate is true for some element."""
+    return some(predicate, *sequences)
+
+
+# === BATCH: Missing Functions for Complete lispenv.py Integration ===
+
+def make_sequence(sequence_type, size, **kwargs):
+    """Create a sequence of the specified type and size."""
+    initial_element = kwargs.get('initial_element', None)
+    if sequence_type == 'list' or sequence_type == list:
+        return [initial_element] * size
+    elif sequence_type == 'vector' or sequence_type == 'string':
+        if initial_element is None:
+            return [None] * size
+        return [initial_element] * size
+    else:
+        return [initial_element] * size
+
+
+def nconc(*lists):
+    """Destructive concatenation of lists."""
+    if not lists:
+        return []
+    result = lists[0]
+    for lst in lists[1:]:
+        if lst:
+            result.extend(lst)
+    return result
+
+
+def nreconc(list1, list2):
+    """Destructively reverse list1 and concatenate with list2."""
+    if isinstance(list1, list):
+        list1.reverse()
+        list1.extend(list2)
+        return list1
+    return list2
+
+
+def pop_fn(place):
+    """Remove and return first element of list."""
+    if isinstance(place, list) and place:
+        return place.pop(0)
+    return None
+
+
+def push_fn(item, place):
+    """Add item to front of list."""
+    if isinstance(place, list):
+        place.insert(0, item)
+        return place
+    return [item]
+
+
+def pushnew(item, place, **kwargs):
+    """Add item to front of list if not already present."""
+    if isinstance(place, list):
+        if item not in place:
+            place.insert(0, item)
+        return place
+    return [item]
+
+
+def reduce_fn(function, sequence, **kwargs):
+    """Reduce sequence using function."""
+    if not sequence:
+        if 'initial_value' in kwargs:
+            return kwargs['initial_value']
+        return function()
+    
+    result = sequence[0] if 'initial_value' not in kwargs else kwargs['initial_value']
+    start_idx = 1 if 'initial_value' not in kwargs else 0
+    
+    for item in sequence[start_idx:]:
+        result = function(result, item)
+    return result
+
+
+def replace_fn(sequence1, sequence2, **kwargs):
+    """Replace elements of sequence1 with elements from sequence2."""
+    start1 = kwargs.get('start1', 0)
+    end1 = kwargs.get('end1', len(sequence1))
+    start2 = kwargs.get('start2', 0)
+    end2 = kwargs.get('end2', len(sequence2))
+    
+    result = list(sequence1)
+    src_slice = sequence2[start2:end2]
+    
+    for i, item in enumerate(src_slice):
+        if start1 + i < end1 and start1 + i < len(result):
+            result[start1 + i] = item
+    
+    return result
+
+
+def revappend(list1, list2):
+    """Append reversed list1 to list2."""
+    if isinstance(list1, list):
+        return list(reversed(list1)) + list(list2)
+    return list(list2)
+
+
+def search_fn(sequence1, sequence2, **kwargs):
+    """Search for subsequence in sequence."""
+    test = kwargs.get('test', lambda x, y: x == y)
+    start2 = kwargs.get('start2', 0)
+    end2 = kwargs.get('end2', len(sequence2))
+    
+    seq1_len = len(sequence1)
+    if seq1_len == 0:
+        return start2
+    
+    for i in range(start2, end2 - seq1_len + 1):
+        match = True
+        for j in range(seq1_len):
+            if not test(sequence1[j], sequence2[i + j]):
+                match = False
+                break
+        if match:
+            return i
+    
+    return None
+
+
+def sort_fn(sequence, predicate=None, **kwargs):
+    """Sort sequence using predicate."""
+    key_func = kwargs.get('key')
+    if predicate is None:
+        predicate = lambda x, y: x < y
+    
+    def compare_func(x, y):
+        kx = key_func(x) if key_func else x
+        ky = key_func(y) if key_func else y
+        if predicate(kx, ky):
+            return -1
+        elif predicate(ky, kx):
+            return 1
+        else:
+            return 0
+    
+    from functools import cmp_to_key
+    result = list(sequence)
+    result.sort(key=cmp_to_key(compare_func))
+    return result
