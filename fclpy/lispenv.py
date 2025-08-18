@@ -1,15 +1,21 @@
 
 import fclpy.lisptype
+import fclpy.state as state
 
 
-current_environment = fclpy.lisptype.Environment()
-_functions_loaded = False
+# Initialize the central environment object in state if not present
+if state.current_environment is None:
+    state.current_environment = fclpy.lisptype.Environment()
+
+# Backward-compatible module-level name used across the codebase
+current_environment = state.current_environment
+
 
 def setup_standard_environment():
     """Set up the standard environment with proper Lisp function name mappings."""
-    global _functions_loaded
-    if _functions_loaded:
-        return current_environment
+    # Use centralized state flags and environment
+    if state.functions_loaded:
+        return state.current_environment
         
     # Import here to avoid circular imports
     import fclpy.lispfunc as lispfunc
@@ -177,13 +183,13 @@ def setup_standard_environment():
         'RPLACD': lispfunc.rplacd,
         
         # Package and symbol operations
-        'INTERN': lispfunc.intern,
-        'FIND-SYMBOL': lispfunc.find_symbol,
-        'FIND-PACKAGE': lispfunc.find_package,
-        'FIND-ALL-SYMBOLS': lispfunc.find_all_symbols,
-        'EXPORT': lispfunc.export_symbol,
-        'IMPORT': lispfunc.import_symbol,
-        'IN-PACKAGE': lispfunc.in_package,
+    'INTERN': lispfunc.intern,
+    'FIND-SYMBOL': lispfunc.find_symbol,
+    'FIND-PACKAGE': lispfunc.find_package,
+    'FIND-ALL-SYMBOLS': lispfunc.find_all_symbols,
+    'EXPORT': lispfunc.export_symbol,
+    'IMPORT': lispfunc.import_symbol,
+    'IN-PACKAGE': lispfunc.in_package,
         'GENTEMP': lispfunc.gentemp,
         'APROPOS': lispfunc.apropos,
         'APROPOS-LIST': lispfunc.apropos_list,
@@ -1000,7 +1006,7 @@ def setup_standard_environment():
     # Add all the mapped functions to the environment
     for lisp_name, python_func in function_mappings.items():
         symbol = fclpy.lisptype.LispSymbol(lisp_name)
-        current_environment.add_function(symbol, python_func)
+        state.current_environment.add_function(symbol, python_func)
     
-    _functions_loaded = True
-    return current_environment
+    state.functions_loaded = True
+    return state.current_environment

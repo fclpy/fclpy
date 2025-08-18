@@ -2,6 +2,7 @@
 
 import time
 import fclpy.lisptype as lisptype
+import fclpy.state as state
 
 
 def abort(condition=True):
@@ -425,37 +426,104 @@ def rplacd(cons, new_cdr):
 # Package and symbol operations
 def intern(string, package=None):
     """Intern symbol in package."""
-    return lisptype.LispSymbol(string)
+    # Support keyword syntax ":FOO" -> intern into KEYWORD package
+    name = string if isinstance(string, str) else str(string)
+    if name.startswith(":"):
+        name = name[1:]
+        pkg = lisptype.KEYWORD_PACKAGE
+        sym = pkg.intern_symbol(name, external=True)
+        # Prefer LispKeyword for keyword package symbols
+        kw = lisptype.lispKeyword(sym.name)
+        kw.package = pkg
+        pkg.symbols[sym.name] = kw
+        return kw
+
+    # Resolve package
+    if package is None:
+        pkg = lisptype.COMMON_LISP_USER_PACKAGE
+    elif isinstance(package, lisptype.Package):
+        pkg = package
+    else:
+        pkg = lisptype.find_package(str(package)) or lisptype.make_package(str(package))
+
+    return pkg.intern_symbol(name, external=False)
 
 
 def find_symbol(string, package=None):
     """Find symbol in package."""
-    return lisptype.LispSymbol(string), True
+    name = string if isinstance(string, str) else str(string)
+    if package is None:
+        # search all known packages
+        results = []
+        for p in set(state.packages.values()):
+            sym, status = p.find_symbol(name)
+            if sym is not None:
+                results.append((sym, status))
+        return results[0] if results else (None, None)
+    if isinstance(package, lisptype.Package):
+        return package.find_symbol(name)
+    pkg = lisptype.find_package(str(package))
+    if pkg is None:
+        return None, None
+    return pkg.find_symbol(name)
 
 
 def find_package(name):
     """Find package by name."""
-    raise lisptype.LispNotImplementedError("FIND-PACKAGE")
+    if isinstance(name, lisptype.Package):
+        return name
+    return lisptype.find_package(str(name))
 
 
 def find_all_symbols(string):
     """Find all symbols with given name."""
-    return [lisptype.LispSymbol(string)]
+    name = string if isinstance(string, str) else str(string)
+    out = []
+    for p in set(state.packages.values()):
+        sym, status = p.find_symbol(name)
+        if sym is not None:
+            out.append(sym)
+    return out
 
 
 def export_symbol(symbols, package=None):
     """Export symbols from package."""
-    raise lisptype.LispNotImplementedError("EXPORT")
+    if not isinstance(symbols, (list, tuple)):
+        symbols = [symbols]
+    pkg = lisptype.COMMON_LISP_USER_PACKAGE if package is None else (package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)))
+    if pkg is None:
+        raise lisptype.LispNotImplementedError("EXPORT: unknown package")
+    for s in symbols:
+        name = s.name if hasattr(s, 'name') else str(s)
+        pkg.intern_symbol(name, external=True)
+        pkg.export_symbol(name)
+    return True
 
 
 def import_symbol(symbols, package=None):
     """Import symbols into package."""
-    raise lisptype.LispNotImplementedError("IMPORT")
+    if not isinstance(symbols, (list, tuple)):
+        symbols = [symbols]
+    pkg = lisptype.COMMON_LISP_USER_PACKAGE if package is None else (package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)))
+    if pkg is None:
+        raise lisptype.LispNotImplementedError("IMPORT: unknown package")
+    for s in symbols:
+        name = s.name if hasattr(s, 'name') else str(s)
+        pkg.intern_symbol(name, external=True)
+    return True
 
 
 def in_package(name):
     """Set current package."""
-    raise lisptype.LispNotImplementedError("IN-PACKAGE")
+    # Set a module-level current package pointer so other code can reference it
+    if isinstance(name, lisptype.Package):
+        state.current_package = name
+        return name
+    pkg = lisptype.find_package(str(name))
+    if pkg is None:
+        pkg = lisptype.make_package(str(name))
+    state.current_package = pkg
+    return pkg
 
 
 def function_keywords(function):
@@ -765,73 +833,160 @@ def copy_symbol(symbol, copy_props=None):
 
 # Package operations
 def make_package(name, **kwargs):
-    """Make package."""
-    # Simplified - just return name
-    return name
+    """Make package using canonical lisptype implementation."""
+    nicknames = kwargs.get('nicknames') or kwargs.get('nicknames', None)
+    use_list = kwargs.get('use_list') or kwargs.get('use_list', None)
+    return lisptype.make_package(str(name), nicknames or None, use_list or None)
 
 
 def package_name(package):
     """Get package name."""
+    if isinstance(package, lisptype.Package):
+        return package.name
     return str(package)
 
 
 def package_nicknames(package):
     """Get package nicknames."""
+    if isinstance(package, lisptype.Package):
+        return package.nicknames
     return []
 
 
 def rename_package(package, new_name, new_nicknames=None):
     """Rename package."""
-    return str(new_name)
+    if isinstance(package, lisptype.Package):
+        package.name = str(new_name).upper()
+        if new_nicknames is not None:
+            package.nicknames = [n.upper() for n in new_nicknames]
+        return package
+    return lisptype.make_package(str(new_name), new_nicknames or None, None)
 
 
 def package_use_list(package):
     """Get packages used by package."""
+    if isinstance(package, lisptype.Package):
+        return package.use_list
     return []
 
 
 def package_used_by_list(package):
     """Get packages that use package."""
-    return []
+    # Reverse lookup through all packages
+    if not isinstance(package, lisptype.Package):
+        return []
+    out = []
+    for p in set(state.packages.values()):
+        if package in p.use_list:
+            out.append(p)
+    return out
 
 
 def package_shadowing_symbols(package):
     """Get package shadowing symbols."""
+    if isinstance(package, lisptype.Package):
+        return list(package.shadowing_symbols)
     return []
 
 
 def list_all_packages():
     """List all packages."""
-    return []
+    # Return unique packages by name
+    seen = set()
+    out = []
+    for p in set(state.packages.values()):
+        if p.name not in seen:
+            seen.add(p.name)
+            out.append(p)
+    return out
 
 
 def unintern(symbol, package=None):
     """Unintern symbol."""
-    return True
+    if isinstance(symbol, lisptype.LispSymbol):
+        name = symbol.name
+    else:
+        name = str(symbol)
+    pkg = lisptype.COMMON_LISP_USER_PACKAGE if package is None else (package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)))
+    if pkg is None:
+        return False
+    if name.upper() in pkg.symbols:
+        del pkg.symbols[name.upper()]
+        pkg.external_symbols.discard(name.upper())
+        return True
+    return False
 
 
 def unexport(symbols, package=None):
     """Unexport symbols."""
+    if not isinstance(symbols, (list, tuple)):
+        symbols = [symbols]
+    pkg = lisptype.COMMON_LISP_USER_PACKAGE if package is None else (package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)))
+    if pkg is None:
+        return False
+    for s in symbols:
+        name = s.name if hasattr(s, 'name') else str(s)
+        pkg.unexport_symbol(name)
     return True
 
 
 def shadowing_import(symbols, package=None):
     """Import symbols with shadowing."""
+    if not isinstance(symbols, (list, tuple)):
+        symbols = [symbols]
+    pkg = lisptype.COMMON_LISP_USER_PACKAGE if package is None else (package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)))
+    if pkg is None:
+        return False
+    for s in symbols:
+        name = s.name if hasattr(s, 'name') else str(s)
+        pkg.intern_symbol(name, external=False)
+        pkg.shadowing_symbols.add(name.upper())
     return True
 
 
 def shadow(symbol_names, package=None):
     """Shadow symbols."""
+    pkg = lisptype.COMMON_LISP_USER_PACKAGE if package is None else (package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)))
+    if pkg is None:
+        return False
+    if not isinstance(symbol_names, (list, tuple)):
+        symbol_names = [symbol_names]
+    for n in symbol_names:
+        pkg.shadowing_symbols.add(str(n).upper())
     return True
 
 
 def use_package(packages_to_use, package=None):
     """Use packages."""
+    pkg = lisptype.COMMON_LISP_USER_PACKAGE if package is None else (package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)))
+    if pkg is None:
+        return False
+    if not isinstance(packages_to_use, (list, tuple)):
+        packages_to_use = [packages_to_use]
+    for p in packages_to_use:
+        if isinstance(p, lisptype.Package):
+            pkg.use_list.append(p)
+        else:
+            target = lisptype.find_package(str(p)) or lisptype.make_package(str(p))
+            pkg.use_list.append(target)
     return True
 
 
 def unuse_package(packages_to_unuse, package=None):
     """Unuse packages."""
+    pkg = lisptype.COMMON_LISP_USER_PACKAGE if package is None else (package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)))
+    if pkg is None:
+        return False
+    if not isinstance(packages_to_unuse, (list, tuple)):
+        packages_to_unuse = [packages_to_unuse]
+    for p in packages_to_unuse:
+        if isinstance(p, lisptype.Package):
+            if p in pkg.use_list:
+                pkg.use_list.remove(p)
+        else:
+            target = lisptype.find_package(str(p))
+            if target and target in pkg.use_list:
+                pkg.use_list.remove(target)
     return True
 
 

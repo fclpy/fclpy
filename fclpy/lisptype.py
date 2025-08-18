@@ -218,31 +218,33 @@ class Package(lispT):
         self.external_symbols.discard(name)
 
 
-# Standard packages
-_packages = {}
+import fclpy.state as state
+
 
 def make_package(name, nicknames=None, use_list=None):
     """Create a new package."""
     name = name.upper()
-    if name in _packages:
-        return _packages[name]
+    if name in state.packages:
+        return state.packages[name]
     package = Package(name, nicknames, use_list)
-    _packages[name] = package
+    state.packages[name] = package
     # Also register by nicknames
     for nick in package.nicknames:
-        _packages[nick] = package
+        state.packages[nick] = package
     return package
+
 
 def find_package(name):
     """Find package by name or nickname."""
     if isinstance(name, Package):
         return name
     name = name.upper()
-    return _packages.get(name)
+    return state.packages.get(name)
 
-# Create standard packages
+
+# Create standard packages (populate the central state registry)
 KEYWORD_PACKAGE = make_package("KEYWORD")
-COMMON_LISP_PACKAGE = make_package("COMMON-LISP", ["CL"])  
+COMMON_LISP_PACKAGE = make_package("COMMON-LISP", ["CL"])
 COMMON_LISP_USER_PACKAGE = make_package("COMMON-LISP-USER", ["CL-USER"], [COMMON_LISP_PACKAGE])
 
 class lispConsIterator:    
