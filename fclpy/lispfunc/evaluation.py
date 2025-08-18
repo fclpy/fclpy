@@ -5,6 +5,8 @@ import fclpy.lisptype as lisptype
 import fclpy.lispreader as lispreader
 from .core import car, cdr, cons, _consp_internal, _atom_internal
 
+# Register special operator handlers into the builtin registry
+from . import registry as _registry
 
 def eval(form, env=None):
     """Evaluate a Lisp form."""
@@ -85,6 +87,7 @@ def eval(form, env=None):
     return form
 
 
+@_registry.cl_special('IF')
 def eval_if(form, env):
     """Evaluate IF special form."""
     args = cdr(form)
@@ -104,6 +107,7 @@ def eval_if(form, env):
         return None
 
 
+@_registry.cl_special('SETQ')
 def eval_setq(form, env):
     """Evaluate SETQ special form."""
     args = cdr(form)
@@ -124,6 +128,7 @@ def eval_setq(form, env):
     return result
 
 
+@_registry.cl_special('DEFUN')
 def eval_defun(form, env):
     """Evaluate DEFUN special form."""
     args = cdr(form)

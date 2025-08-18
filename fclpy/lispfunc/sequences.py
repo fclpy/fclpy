@@ -2,6 +2,7 @@
 
 import functools
 from .core import cons, car, cdr, atom
+from . import registry as _registry
 import fclpy.lisptype as lisptype
 
 
@@ -10,6 +11,7 @@ def endp(x):
     return x is None or x == lisptype.NIL
 
 
+@_registry.cl_function('NBUTLAST')
 def nbutlast(seq, n=1):
     """Destructively remove last n elements."""
     if isinstance(seq, list):
@@ -22,6 +24,7 @@ def nbutlast(seq, n=1):
         return seq[:-n] if len(seq) > n else []
 
 
+@_registry.cl_function('APPEND')
 def append(*args):
     """Append sequences together."""
     if len(args) < 1:
@@ -40,11 +43,13 @@ def append(*args):
     return val
 
 
+@_registry.cl_function('ADJOIN')
 def adjoin(x, seq, test=lambda x, y: x is y):
     """Tests whether item is the same as an existing element of list."""
     return seq if any(map(functools.partial(test, x), seq)) else cons(x, seq)
 
 
+@_registry.cl_function('ASSOC')
 def assoc(item, alist):
     """Find association with key equal to item."""
     for pair in alist:
@@ -53,6 +58,7 @@ def assoc(item, alist):
     return None
 
 
+@_registry.cl_function('ASSOC-IF')
 def assoc_if(predicate, alist):
     """Find association whose key satisfies predicate."""
     for pair in alist:
@@ -61,6 +67,7 @@ def assoc_if(predicate, alist):
     return None
 
 
+@_registry.cl_function('ASSOC-IF-NOT')
 def assoc_if_not(predicate, alist):
     """Find association whose key does not satisfy predicate."""
     for pair in alist:
@@ -69,6 +76,7 @@ def assoc_if_not(predicate, alist):
     return None
 
 
+@_registry.cl_function('RASSOC')
 def rassoc(item, alist, test=None, test_not=None, key=None):
     """Reverse association - find by value."""
     for pair in alist:
@@ -77,6 +85,7 @@ def rassoc(item, alist, test=None, test_not=None, key=None):
     return None
 
 
+@_registry.cl_function('RASSOC-IF')
 def rassoc_if(predicate, alist, key=None):
     """Reverse association with predicate."""
     for pair in alist:
@@ -85,6 +94,7 @@ def rassoc_if(predicate, alist, key=None):
     return None
 
 
+@_registry.cl_function('RASSOC-IF-NOT')
 def rassoc_if_not(predicate, alist, key=None):
     """Reverse association with negated predicate."""
     for pair in alist:
@@ -93,6 +103,7 @@ def rassoc_if_not(predicate, alist, key=None):
     return None
 
 
+@_registry.cl_function('PAIRLIS')
 def pairlis(keys, data, alist=None):
     """Create alist from keys and data."""
     result = []
@@ -103,11 +114,13 @@ def pairlis(keys, data, alist=None):
     return result
 
 
+@_registry.cl_function('ACONS')
 def acons(key, datum, alist):
     """Add key-datum pair to alist."""
     return [(key, datum)] + list(alist) if alist else [(key, datum)]
 
 
+@_registry.cl_function('SUBST')
 def subst(new, old, tree, test=None):
     """Substitute old with new in tree."""
     if test is None:
@@ -122,6 +135,7 @@ def subst(new, old, tree, test=None):
                    subst(new, old, cdr(tree), test))
 
 
+@_registry.cl_function('SUBST-IF')
 def subst_if(new, predicate, tree):
     """Substitute with predicate."""
     if predicate(tree):
@@ -133,11 +147,13 @@ def subst_if(new, predicate, tree):
                    subst_if(new, predicate, cdr(tree)))
 
 
+@_registry.cl_function('SUBST-IF-NOT')
 def subst_if_not(new, predicate, tree):
     """Substitute with negated predicate."""
     return subst_if(new, lambda x: not predicate(x), tree)
 
 
+@_registry.cl_function('SUBLIS')
 def sublis(alist, tree, test=None):
     """Substitute using association list."""
     if test is None:
@@ -153,6 +169,7 @@ def sublis(alist, tree, test=None):
                    sublis(alist, cdr(tree), test))
 
 
+@_registry.cl_function('MEMBER')
 def member(item, list_seq, test=None, test_not=None, key=None):
     """Find member in list."""
     for x in list_seq:
@@ -161,6 +178,7 @@ def member(item, list_seq, test=None, test_not=None, key=None):
     return None
 
 
+@_registry.cl_function('MEMBER-IF')
 def member_if(predicate, list_seq, key=None):
     """Find member satisfying predicate."""
     for x in list_seq:
@@ -169,6 +187,7 @@ def member_if(predicate, list_seq, key=None):
     return None
 
 
+@_registry.cl_function('MEMBER-IF-NOT')
 def member_if_not(predicate, list_seq, key=None):
     """Find member not satisfying predicate."""
     for x in list_seq:
@@ -177,6 +196,7 @@ def member_if_not(predicate, list_seq, key=None):
     return None
 
 
+@_registry.cl_function('FIND')
 def find(item, sequence, **kwargs):
     """Find item in sequence."""
     for x in sequence:
@@ -185,6 +205,7 @@ def find(item, sequence, **kwargs):
     return None
 
 
+@_registry.cl_function('FIND-IF')
 def find_if(predicate, sequence, **kwargs):
     """Find item satisfying predicate."""
     for x in sequence:
@@ -193,6 +214,7 @@ def find_if(predicate, sequence, **kwargs):
     return None
 
 
+@_registry.cl_function('FIND-IF-NOT')
 def find_if_not(predicate, sequence, **kwargs):
     """Find item not satisfying predicate."""
     for x in sequence:
@@ -201,6 +223,7 @@ def find_if_not(predicate, sequence, **kwargs):
     return None
 
 
+@_registry.cl_function('POSITION')
 def position(item, sequence, **kwargs):
     """Find position of item."""
     try:
@@ -209,6 +232,7 @@ def position(item, sequence, **kwargs):
         return None
 
 
+@_registry.cl_function('POSITION-IF')
 def position_if(predicate, sequence, **kwargs):
     """Find position of item satisfying predicate."""
     for i, x in enumerate(sequence):
@@ -217,6 +241,7 @@ def position_if(predicate, sequence, **kwargs):
     return None
 
 
+@_registry.cl_function('POSITION-IF-NOT')
 def position_if_not(predicate, sequence, **kwargs):
     """Find position of item not satisfying predicate."""
     for i, x in enumerate(sequence):
@@ -225,21 +250,25 @@ def position_if_not(predicate, sequence, **kwargs):
     return None
 
 
+@_registry.cl_function('COUNT')
 def count(item, sequence, **kwargs):
     """Count occurrences of item."""
     return sum(1 for x in sequence if x == item)
 
 
+@_registry.cl_function('COUNT-IF')
 def count_if(predicate, sequence, **kwargs):
     """Count items satisfying predicate."""
     return sum(1 for x in sequence if predicate(x))
 
 
+@_registry.cl_function('COUNT-IF-NOT')
 def count_if_not(predicate, sequence, **kwargs):
     """Count items not satisfying predicate."""
     return sum(1 for x in sequence if not predicate(x))
 
 
+@_registry.cl_function('LENGTH')
 def length(sequence):
     """Get sequence length."""
     if sequence is None or sequence == lisptype.NIL:
@@ -257,6 +286,7 @@ def length(sequence):
         return len(sequence)
 
 
+@_registry.cl_function('REVERSE')
 def reverse(sequence):
     """Reverse sequence."""
     if sequence is None or sequence == lisptype.NIL:
@@ -274,11 +304,13 @@ def reverse(sequence):
         return list(reversed(sequence))
 
 
+@_registry.cl_function('NREVERSE')
 def nreverse(sequence):
     """Destructively reverse sequence."""
     return reverse(sequence)  # Non-destructive for now
 
 
+@_registry.cl_function('SUBSEQ')
 def subseq(sequence, start, end=None):
     """Get subsequence."""
     if end is None:
@@ -287,6 +319,7 @@ def subseq(sequence, start, end=None):
         return sequence[start:end]
 
 
+@_registry.cl_function('COPY-SEQ')
 def copy_seq(sequence):
     """Copy sequence."""
     if isinstance(sequence, list):
@@ -299,16 +332,19 @@ def copy_seq(sequence):
         return sequence
 
 
+@_registry.cl_function('COPY-LIST')
 def copy_list(list_seq):
     """Copy list."""
     return list(list_seq) if list_seq else []
 
 
+@_registry.cl_function('COPY-ALIST')
 def copy_alist(alist):
     """Copy association list."""
     return [list(pair) if isinstance(pair, (list, tuple)) else pair for pair in alist]
 
 
+@_registry.cl_function('TREE-EQUAL')
 def tree_equal(tree1, tree2, test=None):
     """Test tree equality."""
     if test is None:
@@ -323,6 +359,7 @@ def tree_equal(tree1, tree2, test=None):
                 tree_equal(cdr(tree1), cdr(tree2), test))
 
 
+@_registry.cl_function('LIST-LENGTH')
 def list_length(list_seq):
     """Get list length (proper or dotted)."""
     if list_seq is None or list_seq == lisptype.NIL:
@@ -348,6 +385,7 @@ def list_length(list_seq):
     return count
 
 
+@_registry.cl_function('LAST')
 def last(list_seq, n=1):
     """Get last n elements."""
     if not list_seq:
@@ -363,6 +401,7 @@ def last(list_seq, n=1):
         return list_seq[-n:] if len(list_seq) >= n else list_seq
 
 
+@_registry.cl_function('NTHCDR')
 def nthcdr(n, list_seq):
     """Get nth cdr."""
     current = list_seq
@@ -376,6 +415,7 @@ def nthcdr(n, list_seq):
     return current
 
 
+@_registry.cl_function('NTH')
 def nth(n, list_seq):
     """Get nth element (0-indexed)."""
     current = nthcdr(n, list_seq)
@@ -386,6 +426,7 @@ def nth(n, list_seq):
     return None
 
 
+@_registry.cl_function('ELT')
 def elt(sequence, index):
     """Get element at index."""
     try:
@@ -394,11 +435,13 @@ def elt(sequence, index):
         return None
 
 
+@_registry.cl_function('MAKE-LIST')
 def make_list(size, initial_element=None):
     """Make list of given size."""
     return [initial_element] * size
 
 
+@_registry.cl_function('LIST')
 def list_fn(*args):
     """Create list from arguments."""
     result = lisptype.NIL
@@ -407,11 +450,13 @@ def list_fn(*args):
     return result
 
 
+@_registry.cl_function('LIST')
 def lisp_list(*args):
     """Create Lisp list from arguments."""
     return list(args)
 
 
+@_registry.cl_function('LIST*')
 def list_star(*args):
     """Create dotted list."""
     if not args:
@@ -425,6 +470,7 @@ def list_star(*args):
     return result
 
 
+@_registry.cl_function('CONCATENATE')
 def concatenate(result_type, *sequences):
     """Concatenate sequences."""
     if result_type == 'LIST' or result_type == list:
@@ -445,6 +491,7 @@ def concatenate(result_type, *sequences):
                                     actual_value=result_type)
 
 
+@_registry.cl_function('FILL')
 def fill(sequence, item, start=0, end=None):
     """Fill sequence with item."""
     if isinstance(sequence, list):
@@ -459,6 +506,7 @@ def fill(sequence, item, start=0, end=None):
                                     actual_value=type(sequence).__name__)
 
 
+@_registry.cl_function('REPLACE')
 def replace(sequence1, sequence2, **kwargs):
     """Replace elements of sequence1 with elements of sequence2."""
     start1 = kwargs.get('start1', 0)
@@ -473,36 +521,43 @@ def replace(sequence1, sequence2, **kwargs):
     return sequence1
 
 
+@_registry.cl_function('REMOVE')
 def remove(item, sequence, **kwargs):
     """Remove item from sequence."""
     return [x for x in sequence if x != item]
 
 
+@_registry.cl_function('REMOVE-IF')
 def remove_if(test, sequence, **kwargs):
     """Remove elements satisfying test."""
     return [x for x in sequence if not test(x)]
 
 
+@_registry.cl_function('REMOVE-IF-NOT')
 def remove_if_not(test, sequence, **kwargs):
     """Remove elements not satisfying test."""
     return [x for x in sequence if test(x)]
 
 
+@_registry.cl_function('DELETE')
 def delete_fn(item, sequence, **kwargs):
     """Delete item from sequence."""
     return [x for x in sequence if x != item]
 
 
+@_registry.cl_function('DELETE-IF')
 def delete_if(predicate, sequence, **kwargs):
     """Delete if predicate true."""
     return [x for x in sequence if not predicate(x)]
 
 
+@_registry.cl_function('DELETE-IF-NOT')
 def delete_if_not(predicate, sequence, **kwargs):
     """Delete if predicate false."""
     return [x for x in sequence if predicate(x)]
 
 
+@_registry.cl_function('REMOVE-DUPLICATES')
 def remove_duplicates(sequence, **kwargs):
     """Remove duplicate elements."""
     seen = set()
@@ -514,41 +569,49 @@ def remove_duplicates(sequence, **kwargs):
     return result
 
 
+@_registry.cl_function('DELETE-DUPLICATES')
 def delete_duplicates(sequence, **kwargs):
     """Delete duplicate elements."""
     return remove_duplicates(sequence, **kwargs)
 
 
+@_registry.cl_function('SUBSTITUTE')
 def substitute(newitem, olditem, sequence, **kwargs):
     """Substitute elements in sequence."""
     return [newitem if x == olditem else x for x in sequence]
 
 
+@_registry.cl_function('SUBSTITUTE-IF')
 def substitute_if(newitem, test, sequence, **kwargs):
     """Substitute using predicate."""
     return [newitem if test(x) else x for x in sequence]
 
 
+@_registry.cl_function('SUBSTITUTE-IF-NOT')
 def substitute_if_not(newitem, test, sequence, **kwargs):
     """Substitute using negated predicate."""
     return [newitem if not test(x) else x for x in sequence]
 
 
+@_registry.cl_function('NSUBSTITUTE')
 def nsubstitute(newitem, olditem, sequence, **kwargs):
     """Destructively substitute."""
     return substitute(newitem, olditem, sequence, **kwargs)  # Non-destructive for now
 
 
+@_registry.cl_function('NSUBSTITUTE-IF')
 def nsubstitute_if(newitem, test, sequence, **kwargs):
     """Destructively substitute using predicate."""
     return substitute_if(newitem, test, sequence, **kwargs)  # Non-destructive for now
 
 
+@_registry.cl_function('NSUBSTITUTE-IF-NOT')
 def nsubstitute_if_not(newitem, test, sequence, **kwargs):
     """Destructively substitute using negated predicate."""
     return substitute_if_not(newitem, test, sequence, **kwargs)  # Non-destructive for now
 
 
+@_registry.cl_function('SORT')
 def sort(sequence, predicate, key=None):
     """Sort sequence."""
     if key:
@@ -557,11 +620,13 @@ def sort(sequence, predicate, key=None):
         return sorted(sequence, key=lambda x: x, reverse=False)
 
 
+@_registry.cl_function('STABLE-SORT')
 def stable_sort(sequence, predicate, key=None):
     """Stable sort sequence."""
     return sort(sequence, predicate, key)  # Python's sort is stable
 
 
+@_registry.cl_function('MERGE')
 def merge(result_type, sequence1, sequence2, predicate, **kwargs):
     """Merge two sorted sequences."""
     result = []
@@ -582,6 +647,7 @@ def merge(result_type, sequence1, sequence2, predicate, **kwargs):
     return result
 
 
+@_registry.cl_function('SEARCH')
 def search(sequence1, sequence2, **kwargs):
     """Search for sequence1 in sequence2."""
     for i in range(len(sequence2) - len(sequence1) + 1):
@@ -590,6 +656,7 @@ def search(sequence1, sequence2, **kwargs):
     return None
 
 
+@_registry.cl_function('MISMATCH')
 def mismatch(sequence1, sequence2, **kwargs):
     """Find first mismatch between sequences."""
     for i, (x, y) in enumerate(zip(sequence1, sequence2)):
@@ -600,6 +667,7 @@ def mismatch(sequence1, sequence2, **kwargs):
     return None
 
 
+@_registry.cl_function('EVERY')
 def every(predicate, *sequences):
     """Test if predicate is true for every element."""
     if not sequences:
@@ -612,6 +680,7 @@ def every(predicate, *sequences):
     return True
 
 
+@_registry.cl_function('SOME')
 def some(predicate, *sequences):
     """Test if predicate is true for some element."""
     if not sequences:
@@ -624,16 +693,19 @@ def some(predicate, *sequences):
     return False
 
 
+@_registry.cl_function('NOTEVERY')
 def notevery(predicate, *sequences):
     """Test if predicate is false for some element."""
     return not every(predicate, *sequences)
 
 
+@_registry.cl_function('NOTANY')
 def notany(predicate, *sequences):
     """Test if predicate is false for all elements."""
     return not some(predicate, *sequences)
 
 
+@_registry.cl_function('MAP')
 def map_fn(result_type, function, *sequences):
     """Map function over sequences."""
     if not sequences:
@@ -654,11 +726,13 @@ def map_fn(result_type, function, *sequences):
         return results
 
 
+@_registry.cl_function('MAPCAR')
 def mapcar(function, *lists):
     """Map function over lists."""
     return map_fn('LIST', function, *lists)
 
 
+@_registry.cl_function('MAPCAN')
 def mapcan(function, *lists):
     """Map and concatenate results."""
     results = mapcar(function, *lists)
@@ -671,33 +745,39 @@ def mapcan(function, *lists):
     return flattened
 
 
+@_registry.cl_function('MAPC')
 def mapc(function, *lists):
     """Map for side effects."""
     map_fn(None, function, *lists)
     return lists[0] if lists else None
 
 
+@_registry.cl_function('MAPCON')
 def mapcon(function, *lists):
     """Map over cdrs and concatenate."""
     return mapcan(function, *lists)  # Simplified
 
 
+@_registry.cl_function('MAPLIST')
 def maplist(function, *lists):
     """Map over lists as lists."""
     return mapcar(function, *lists)  # Simplified
 
 
+@_registry.cl_function('MAPL')
 def mapl(function, *lists):
     """Map over lists for side effects."""
     return mapc(function, *lists)
 
 
 # Set operations
+@_registry.cl_function('INTERSECTION')
 def intersection(list1, list2, **kwargs):
     """Set intersection."""
     return [x for x in list1 if x in list2]
 
 
+@_registry.cl_function('UNION')
 def union(list1, list2, **kwargs):
     """Set union."""
     result = list(list1)
@@ -707,6 +787,7 @@ def union(list1, list2, **kwargs):
     return result
 
 
+@_registry.cl_function('NUNION')
 def nunion(list1, list2, **kwargs):
     """Destructive set union."""
     for item in list2:
@@ -715,11 +796,13 @@ def nunion(list1, list2, **kwargs):
     return list1
 
 
+@_registry.cl_function('SET-DIFFERENCE')
 def set_difference(list1, list2, **kwargs):
     """Set difference."""
     return [x for x in list1 if x not in list2]
 
 
+@_registry.cl_function('NSET-DIFFERENCE')
 def nset_difference(list1, list2, **kwargs):
     """Destructive set difference."""
     for item in list2:
@@ -728,11 +811,13 @@ def nset_difference(list1, list2, **kwargs):
     return list1
 
 
+@_registry.cl_function('SET-EXCLUSIVE-OR')
 def set_exclusive_or(list1, list2, **kwargs):
     """Set exclusive or."""
     return [x for x in list1 if x not in list2] + [x for x in list2 if x not in list1]
 
 
+@_registry.cl_function('NSET-EXCLUSIVE-OR')
 def nset_exclusive_or(list1, list2, **kwargs):
     """Destructive set exclusive or."""
     # Remove items from list1 that are in list2
@@ -746,6 +831,7 @@ def nset_exclusive_or(list1, list2, **kwargs):
     return list1
 
 
+@_registry.cl_function('SUBSETP')
 def subsetp(subset, set_arg, **kwargs):
     """Test if subset is a subset of set_arg."""
     for item in subset:
@@ -754,6 +840,7 @@ def subsetp(subset, set_arg, **kwargs):
     return True
 
 
+@_registry.cl_function('LIST*')
 def list_s_star_(*args):
     """LIST* function - creates a dotted list."""
     if not args:
@@ -764,6 +851,7 @@ def list_s_star_(*args):
 
 
 # Array operations
+@_registry.cl_function('MAKE-ARRAY')
 def make_array(dimensions, **kwargs):
     """Create array."""
     if isinstance(dimensions, int):
@@ -776,6 +864,7 @@ def make_array(dimensions, **kwargs):
     return make_nested(dimensions)
 
 
+@_registry.cl_function('ARRAY-DIMENSIONS')
 def array_dimensions(array):
     """Get array dimensions."""
     if isinstance(array, list):
@@ -786,11 +875,13 @@ def array_dimensions(array):
     return [1]
 
 
+@_registry.cl_function('ARRAYP')
 def arrayp(object):
     """Test if object is array."""
     return isinstance(object, list)
 
 
+@_registry.cl_function('ARRAY-IN-BOUNDS-P')
 def array_in_bounds_p(array, *subscripts):
     """Test if subscripts are valid for array."""
     try:
@@ -805,32 +896,38 @@ def array_in_bounds_p(array, *subscripts):
         return False
 
 
+@_registry.cl_function('ARRAY-DISPLACEMENT')
 def array_displacement(array):
     """Return array displacement info."""
     # In Python, arrays are not displaced, so return None and 0
     return None, 0
 
 
+@_registry.cl_function('VECTORP')
 def vectorp(object):
     """Test if object is vector."""
     return isinstance(object, list)
 
 
+@_registry.cl_function('SIMPLE-VECTOR-P')
 def simple_vector_p(object):
     """Test if object is simple vector."""
     return isinstance(object, list)
 
 
+@_registry.cl_function('BIT-VECTOR-P')
 def bit_vector_p(object):
     """Test if object is bit vector."""
     return isinstance(object, list) and all(x in (0, 1) for x in object)
 
 
+@_registry.cl_function('SIMPLE-BIT-VECTOR-P')
 def simple_bit_vector_p(object):
     """Test if object is simple bit vector."""
     return bit_vector_p(object)
 
 
+@_registry.cl_function('AREF')
 def aref(array, *subscripts):
     """Array reference."""
     result = array
@@ -839,16 +936,19 @@ def aref(array, *subscripts):
     return result
 
 
+@_registry.cl_function('SVREF')
 def svref(vector, index):
     """Simple vector reference."""
     return vector[index]
 
 
+@_registry.cl_function('VECTOR')
 def vector_fn(*elements):
     """Create vector from elements."""
     return list(elements)
 
 
+@_registry.cl_function('VECTOR-POP')
 def vector_pop(vector):
     """Pop from end of vector."""
     if vector:
@@ -856,12 +956,14 @@ def vector_pop(vector):
     return None
 
 
+@_registry.cl_function('VECTOR-PUSH')
 def vector_push(new_element, vector):
     """Push to end of vector."""
     vector.append(new_element)
     return len(vector) - 1
 
 
+@_registry.cl_function('VECTOR-PUSH-EXTEND')
 def vector_push_extend(new_element, vector, extension=None):
     """Push with possible extension."""
     vector.append(new_element)
@@ -869,37 +971,44 @@ def vector_push_extend(new_element, vector, extension=None):
 
 
 # Additional destructive operations
+@_registry.cl_function('NINTERSECTION')
 def nintersection(list1, list2, **kwargs):
     """Destructive intersection."""
     return [x for x in list1 if x in list2]
 
 
+@_registry.cl_function('NSUBST')
 def nsubst(new, old, tree, **kwargs):
     """Destructive substitute in tree."""
     return subst(new, old, tree)  # Non-destructive for now
 
 
+@_registry.cl_function('NSUBST-IF')
 def nsubst_if(new, predicate, tree, **kwargs):
     """Destructive substitute if in tree."""
     return subst_if(new, predicate, tree)  # Non-destructive for now
 
 
+@_registry.cl_function('NSUBST-IF-NOT')
 def nsubst_if_not(new, predicate, tree, **kwargs):
     """Destructive substitute if not in tree."""
     return subst_if_not(new, predicate, tree)  # Non-destructive for now
 
 
+@_registry.cl_function('NSUBLIS')
 def nsublis(alist, tree, **kwargs):
     """Destructive substitute using alist."""
     return sublis(alist, tree)  # Non-destructive for now
 
 
 # Aliased functions for compatibility
+@_registry.cl_function('EVERY')
 def every_fn(predicate, *sequences):
     """Test if predicate is true for every element."""
     return every(predicate, *sequences)
 
 
+@_registry.cl_function('SOME')
 def some_fn(predicate, *sequences):
     """Test if predicate is true for some element."""
     return some(predicate, *sequences)
@@ -907,6 +1016,7 @@ def some_fn(predicate, *sequences):
 
 # === BATCH: Missing Functions for Complete lispenv.py Integration ===
 
+@_registry.cl_function('MAKE-SEQUENCE')
 def make_sequence(sequence_type, size, **kwargs):
     """Create a sequence of the specified type and size."""
     initial_element = kwargs.get('initial_element', None)
@@ -920,6 +1030,7 @@ def make_sequence(sequence_type, size, **kwargs):
         return [initial_element] * size
 
 
+@_registry.cl_function('NCONC')
 def nconc(*lists):
     """Destructive concatenation of lists."""
     if not lists:
@@ -931,6 +1042,7 @@ def nconc(*lists):
     return result
 
 
+@_registry.cl_function('NRECONC')
 def nreconc(list1, list2):
     """Destructively reverse list1 and concatenate with list2."""
     if isinstance(list1, list):
@@ -940,6 +1052,7 @@ def nreconc(list1, list2):
     return list2
 
 
+@_registry.cl_function('POP')
 def pop_fn(place):
     """Remove and return first element of list."""
     if isinstance(place, list) and place:
@@ -947,6 +1060,7 @@ def pop_fn(place):
     return None
 
 
+@_registry.cl_function('PUSH')
 def push_fn(item, place):
     """Add item to front of list."""
     if isinstance(place, list):
@@ -955,6 +1069,7 @@ def push_fn(item, place):
     return [item]
 
 
+@_registry.cl_function('PUSHNEW')
 def pushnew(item, place, **kwargs):
     """Add item to front of list if not already present."""
     if isinstance(place, list):
@@ -964,6 +1079,7 @@ def pushnew(item, place, **kwargs):
     return [item]
 
 
+@_registry.cl_function('REDUCE')
 def reduce_fn(function, sequence, **kwargs):
     """Reduce sequence using function."""
     if not sequence:
@@ -979,6 +1095,7 @@ def reduce_fn(function, sequence, **kwargs):
     return result
 
 
+@_registry.cl_function('REPLACE')
 def replace_fn(sequence1, sequence2, **kwargs):
     """Replace elements of sequence1 with elements from sequence2."""
     start1 = kwargs.get('start1', 0)
@@ -996,6 +1113,7 @@ def replace_fn(sequence1, sequence2, **kwargs):
     return result
 
 
+@_registry.cl_function('REVAPPEND')
 def revappend(list1, list2):
     """Append reversed list1 to list2."""
     if isinstance(list1, list):
@@ -1003,6 +1121,7 @@ def revappend(list1, list2):
     return list(list2)
 
 
+@_registry.cl_function('SEARCH')
 def search_fn(sequence1, sequence2, **kwargs):
     """Search for subsequence in sequence."""
     test = kwargs.get('test', lambda x, y: x == y)
@@ -1025,6 +1144,7 @@ def search_fn(sequence1, sequence2, **kwargs):
     return None
 
 
+@_registry.cl_function('SORT')
 def sort_fn(sequence, predicate=None, **kwargs):
     """Sort sequence using predicate."""
     key_func = kwargs.get('key')

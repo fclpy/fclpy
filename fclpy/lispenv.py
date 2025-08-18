@@ -22,24 +22,66 @@ def setup_standard_environment():
         
     # Import here to avoid circular imports
     import fclpy.lispfunc as lispfunc
+    # Prefer registry-driven population when available
+    try:
+        from fclpy.lispfunc import registry as _registry
+    except Exception:
+        _registry = None
     
-    # Function name mappings from Lisp names to Python function names
+    # If registry is available, populate from it (but do not return early)
+    # Some registry entries may be partial; keep fallback mapping to ensure full coverage.
+    if _registry:
+        for lisp_name, meta in _registry.function_registry.items():
+            py_name = meta.get('py_name')
+            if not py_name:
+                continue
+            python_func = getattr(lispfunc, py_name, None)
+            if python_func:
+                symbol = fclpy.lisptype.LispSymbol(lisp_name)
+                # only add if not already present
+                if state.current_environment.find_func(symbol) is None:
+                    state.current_environment.add_function(symbol, python_func)
+        # register specials into environment as markers handled by evaluator
+        for lisp_name, meta in _registry.special_registry.items():
+            py_name = meta.get('py_name')
+            python_func = getattr(lispfunc, py_name, None)
+            symbol = fclpy.lisptype.LispSymbol(lisp_name)
+            if state.current_environment.find_func(symbol) is None:
+                state.current_environment.add_function(symbol, python_func or (lambda *a: f"SPECIAL:{lisp_name}"))
+
+    # Fallback: use the large hand-maintained mapping (unchanged)
     function_mappings = {
         # Core list operations
         'CAR': lispfunc.car,
         'CDR': lispfunc.cdr,
         'CONS': lispfunc.cons,
-        'LIST': lispfunc.list,
-        'APPEND': lispfunc.append,
-        'REVERSE': lispfunc.reverse,
-        'LENGTH': lispfunc.length,
-        'LAST': lispfunc.last,
         'FIRST': lispfunc.first,
         'SECOND': lispfunc.second,
         'THIRD': lispfunc.third,
         'FOURTH': lispfunc.fourth,
         'FIFTH': lispfunc.fifth,
         'REST': lispfunc.rest,
+        # Arithmetic operator symbols and numeric predicates
+        '+': lispfunc._s_plus_,
+        '-': lispfunc._s_minus_,
+        '*': lispfunc._s_star_,
+        '/': lispfunc._s_slash_,
+        '=': lispfunc._s_eq_,
+        '<': lispfunc._s_lt_,
+        '>': lispfunc._s_gt_,
+        '<=': lispfunc._s_lt__s_eq_,
+        '>=': lispfunc._s_gt__s_eq_,
+        '/=': lispfunc._s_slash__s_eq_,
+        '1+': lispfunc._s_one_s_plus_,
+        '1-': lispfunc._s_one_s_minus_,
+        'NUMBERP': lispfunc.numberp,
+        'INTEGERP': lispfunc.integerp,
+        'FLOATP': lispfunc.floatp,
+        'ZEROP': lispfunc.zerop,
+        'PLUSP': lispfunc.plusp,
+        'MINUSP': lispfunc.minusp,
+        'EVENP': lispfunc.evenp,
+        'ODDP': lispfunc.oddp,
         
         # List accessors (all CAR/CDR combinations)
         'CADR': lispfunc.cadr,
@@ -78,15 +120,10 @@ def setup_standard_environment():
         'NULL': lispfunc.null,
         'SYMBOLP': lispfunc.symbolp,
         'STRINGP': lispfunc.stringp,
-        'NUMBERP': lispfunc.numberp,
-        'INTEGERP': lispfunc.integerp,
-        'FLOATP': lispfunc.floatp,
         'FUNCTIONP': lispfunc.functionp,
         'COMPILED-FUNCTION-P': lispfunc.compiled_function_p,
-        'ARRAYP': lispfunc.arrayp,
         'HASH-TABLE-P': lispfunc.hash_table_p,
         'KEYWORDP': lispfunc.keywordp,
-        'ZEROP': lispfunc.zerop,
         'ALPHA-CHAR-P': lispfunc.alpha_char_p,
         'ALPHANUMERICP': lispfunc.alphanumericp,
         'GRAPHIC-CHAR-P': lispfunc.graphic_char_p,
@@ -100,20 +137,6 @@ def setup_standard_environment():
         'EQ': lispfunc.eq,
         'EQUAL': lispfunc.equal,
         
-        # Arithmetic operations
-        '+': lispfunc._s_plus_,
-        '-': lispfunc._s_minus_,
-        '*': lispfunc._s_star_,
-        '/': lispfunc._s_slash_,
-        '=': lispfunc._s_eq_,
-        '<': lispfunc._s_lt_,
-        '>': lispfunc._s_gt_,
-        '<=': lispfunc._s_lt__s_eq_,
-        '>=': lispfunc._s_gt__s_eq_,
-        '/=': lispfunc._s_slash__s_eq_,
-        '1+': lispfunc._s_one_s_plus_,
-        '1-': lispfunc._s_one_s_minus_,
-        
         # Mathematical functions
         'FLOOR': lispfunc.floor,
         'CEILING': lispfunc.ceiling,
@@ -125,10 +148,6 @@ def setup_standard_environment():
         'LCM': lispfunc.lcm,
         'MAX': lispfunc.max_fn,
         'MIN': lispfunc.min_fn,
-        'PLUSP': lispfunc.plusp,
-        'MINUSP': lispfunc.minusp,
-        'EVENP': lispfunc.evenp,
-        'ODDP': lispfunc.oddp,
         'MOD': lispfunc.mod,
         'ISQRT': lispfunc.isqrt,
         
@@ -151,17 +170,7 @@ def setup_standard_environment():
         'FLOAT-RADIX': lispfunc.float_radix,
         'FLOAT-SIGN': lispfunc.float_sign,
         
-        # Sequence operations
-        'FIND': lispfunc.find,
-        'FIND-IF': lispfunc.find_if,
-        'FIND-IF-NOT': lispfunc.find_if_not,
-        'MEMBER': lispfunc.member,
-        'MEMBER-IF': lispfunc.member_if,
-        'MEMBER-IF-NOT': lispfunc.member_if_not,
-        'INTERSECTION': lispfunc.intersection,
-        'MERGE': lispfunc.merge,
-        'MISMATCH': lispfunc.mismatch,
-        'FILL': lispfunc.fill,
+        # Sequence operations (most moved to registry in sequences.py)
         'BUTLAST': lispfunc.butlast,
         
         # Array operations
@@ -186,13 +195,13 @@ def setup_standard_environment():
         'RPLACD': lispfunc.rplacd,
         
         # Package and symbol operations
-    'INTERN': lispfunc.intern,
-    'FIND-SYMBOL': lispfunc.find_symbol,
-    'FIND-PACKAGE': lispfunc.find_package,
-    'FIND-ALL-SYMBOLS': lispfunc.find_all_symbols,
-    'EXPORT': lispfunc.export_symbol,
-    'IMPORT': lispfunc.import_symbol,
-    'IN-PACKAGE': lispfunc.in_package,
+        'INTERN': lispfunc.intern,
+        'FIND-SYMBOL': lispfunc.find_symbol,
+        'FIND-PACKAGE': lispfunc.find_package,
+        'FIND-ALL-SYMBOLS': lispfunc.find_all_symbols,
+        'EXPORT': lispfunc.export_symbol,
+        'IMPORT': lispfunc.import_symbol,
+        'IN-PACKAGE': lispfunc.in_package,
         'GENTEMP': lispfunc.gentemp,
         'APROPOS': lispfunc.apropos,
         'APROPOS-LIST': lispfunc.apropos_list,
@@ -344,30 +353,6 @@ def setup_standard_environment():
         'LOGBITP': lispfunc.logbitp,
         'LOGCOUNT': lispfunc.logcount,
         'ENDP': lispfunc.endp,
-        'NTH': lispfunc.nth,
-        'NTHCDR': lispfunc.nthcdr,
-        'NREVERSE': lispfunc.nreverse,
-        'SIXTH': lispfunc.sixth,
-        'SEVENTH': lispfunc.seventh,
-        'EIGHTH': lispfunc.eighth,
-        'NINTH': lispfunc.ninth,
-        'TENTH': lispfunc.tenth,
-        'NBUTLAST': lispfunc.nbutlast,
-        'ELT': lispfunc.elt,
-        'SUBSEQ': lispfunc.subseq,
-        'COPY-SEQ': lispfunc.copy_seq,
-        'COUNT': lispfunc.count,
-        'COUNT-IF': lispfunc.count_if,
-        'COUNT-IF-NOT': lispfunc.count_if_not,
-        'POSITION': lispfunc.position,
-        'POSITION-IF': lispfunc.position_if,
-        'POSITION-IF-NOT': lispfunc.position_if_not,
-        'REMOVE': lispfunc.remove,
-        'REMOVE-IF': lispfunc.remove_if,
-        'REMOVE-IF-NOT': lispfunc.remove_if_not,
-        'SUBSTITUTE': lispfunc.substitute,
-        'SUBSTITUTE-IF': lispfunc.substitute_if,
-        'SUBSTITUTE-IF-NOT': lispfunc.substitute_if_not,
         'CHAR': lispfunc.char,
         'CHAR-CODE': lispfunc.char_code,
         'CODE-CHAR': lispfunc.code_char,
@@ -385,20 +370,13 @@ def setup_standard_environment():
         'UNLESS': lispfunc.unless,
         'PROG1': lispfunc.prog1,
         'PROG2': lispfunc.prog2,
-        'VECTOR': lispfunc.vector,
-        'VECTORP': lispfunc.vectorp,
-        'UNION': lispfunc.union,
         'NUNION': lispfunc.nunion,
         'SET-DIFFERENCE': lispfunc.set_difference,
         'NSET-DIFFERENCE': lispfunc.nset_difference,
         'SET-EXCLUSIVE-OR': lispfunc.set_exclusive_or,
         'NSET-EXCLUSIVE-OR': lispfunc.nset_exclusive_or,
         'SUBSETP': lispfunc.subsetp,
-        'COPY-ALIST': lispfunc.copy_alist,
         'TREE-EQUAL': lispfunc.tree_equal,
-        'SUBST': lispfunc.subst,
-        'SUBST-IF': lispfunc.subst_if,
-        'SUBST-IF-NOT': lispfunc.subst_if_not,
         'SUBLIS': lispfunc.sublis,
         'TYPEP': lispfunc.typep,
         'TYPE-OF': lispfunc.type_of,
@@ -443,8 +421,6 @@ def setup_standard_environment():
         'COND': lispfunc.cond_fn,
         
         # Array operations
-        'MAKE-ARRAY': lispfunc.make_array,
-        'ARRAY-DIMENSIONS': lispfunc.array_dimensions,
         'ARRAY-ELEMENT-TYPE': lispfunc.array_element_type,
         'ARRAY-RANK': lispfunc.array_rank,
         'ARRAY-TOTAL-SIZE': lispfunc.array_total_size,
@@ -453,10 +429,7 @@ def setup_standard_environment():
         
         # Sequence operations
         'MAKE-SEQUENCE': lispfunc.make_sequence,
-        'CONCATENATE': lispfunc.concatenate,
-        'MAP': lispfunc.map_fn,
         'REDUCE': lispfunc.reduce_fn,
-        'SORT': lispfunc.sort_fn,
         'STABLE-SORT': lispfunc.stable_sort,
         'SEARCH': lispfunc.search_fn,
         'REPLACE': lispfunc.replace_fn,
@@ -475,7 +448,6 @@ def setup_standard_environment():
         'BIT-ORC1': lispfunc.bit_orc1,
         'BIT-ORC2': lispfunc.bit_orc2,
         'BIT-NOT': lispfunc.bit_not,
-        'BIT-VECTOR-P': lispfunc.bit_vector_p,
         'SIMPLE-BIT-VECTOR-P': lispfunc.simple_bit_vector_p,
         
         # Character comparison functions
@@ -548,11 +520,6 @@ def setup_standard_environment():
         'NSUBSTITUTE': lispfunc.nsubstitute,
         'NSUBSTITUTE-IF': lispfunc.nsubstitute_if,
         'NSUBSTITUTE-IF-NOT': lispfunc.nsubstitute_if_not,
-        'DELETE': lispfunc.delete_fn,
-        'DELETE-IF': lispfunc.delete_if,
-        'DELETE-IF-NOT': lispfunc.delete_if_not,
-        'DELETE-DUPLICATES': lispfunc.delete_duplicates,
-        'REMOVE-DUPLICATES': lispfunc.remove_duplicates,
         'NINTERSECTION': lispfunc.nintersection,
         
         # Tree operations (destructive versions)
@@ -699,13 +666,8 @@ def setup_standard_environment():
         'MOST-NEGATIVE-DOUBLE-FLOAT': lispfunc.most_negative_double_float,
         
         # Essential sequence operations
-        'EVERY': lispfunc.every_fn,
-        'SOME': lispfunc.some_fn,
         'NOTEVERY': lispfunc.notevery,
         'NOTANY': lispfunc.notany,
-        'MAPCAR': lispfunc.mapcar,
-        'MAPC': lispfunc.mapc,
-        'MAPCAN': lispfunc.mapcan,
         'MAPL': lispfunc.mapl,
         'MAPLIST': lispfunc.maplist,
         'APPLY': lispfunc.apply_fn,
@@ -722,9 +684,7 @@ def setup_standard_environment():
         'CHAR': lispfunc.char_fn,
         
         # More array operations
-        'AREF': lispfunc.aref,
         'SVREF': lispfunc.svref,
-        'VECTOR': lispfunc.vector_fn,
         'SIMPLE-VECTOR-P': lispfunc.simple_vector_p,
         'VECTOR-POP': lispfunc.vector_pop,
         'VECTOR-PUSH': lispfunc.vector_push,
@@ -756,12 +716,6 @@ def setup_standard_environment():
         'INTEGER-LENGTH': lispfunc.integer_length,
         
         # More list operations
-        'ASSOC': lispfunc.assoc,
-        'ASSOC-IF': lispfunc.assoc_if,
-        'ASSOC-IF-NOT': lispfunc.assoc_if_not,
-        'RASSOC': lispfunc.rassoc,
-        'RASSOC-IF': lispfunc.rassoc_if,
-        'RASSOC-IF-NOT': lispfunc.rassoc_if_not,
         'PAIRLIS': lispfunc.pairlis,
         
         # More control constructs

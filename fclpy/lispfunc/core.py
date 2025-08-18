@@ -1,8 +1,10 @@
 """Core Lisp data structure functions - cons cells, lists, and basic accessors."""
 
 import fclpy.lisptype as lisptype
+from . import registry as _registry
 
 
+@_registry.cl_function('CAR')
 def car(seq):
     """Get the first element of a cons cell or sequence."""
     if type(seq) is lisptype.lispCons:
@@ -12,6 +14,7 @@ def car(seq):
     return seq
 
 
+@_registry.cl_function('CDR')
 def cdr(seq):
     """Get the rest of a cons cell or sequence."""
     if type(seq) is lisptype.lispCons:
@@ -21,6 +24,7 @@ def cdr(seq):
     return seq
 
 
+@_registry.cl_function('CONS')
 def cons(x, seq):
     """Returns a new cons cell where x is the first element and seq is the rest."""
     return lisptype.lispCons(x, seq)
