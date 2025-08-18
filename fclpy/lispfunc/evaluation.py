@@ -1,6 +1,6 @@
 """Lisp evaluation system - eval, special forms, and control structures."""
 
-from fclpy.lispenv import current_environment
+import fclpy.state as state
 import fclpy.lisptype as lisptype
 import fclpy.lispreader as lispreader
 from .core import car, cdr, cons, _consp_internal, _atom_internal
@@ -9,7 +9,9 @@ from .core import car, cdr, cons, _consp_internal, _atom_internal
 def eval(form, env=None):
     """Evaluate a Lisp form."""
     if env is None:
-        env = current_environment
+        # Always use the live environment stored in shared state so tests
+        # that reset state.current_environment get the correct object.
+        env = state.current_environment
     
     # Self-evaluating forms
     if form is None or isinstance(form, (int, float, str, bool)):

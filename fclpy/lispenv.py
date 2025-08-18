@@ -16,6 +16,9 @@ def setup_standard_environment():
     # Use centralized state flags and environment
     if state.functions_loaded:
         return state.current_environment
+    # Ensure an Environment object exists on state (tests may reset it to None)
+    if state.current_environment is None:
+        state.current_environment = fclpy.lisptype.Environment()
         
     # Import here to avoid circular imports
     import fclpy.lispfunc as lispfunc
