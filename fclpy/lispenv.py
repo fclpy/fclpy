@@ -19,7 +19,7 @@ def setup_standard_environment():
     # Ensure an Environment object exists on state (tests may reset it to None)
     if state.current_environment is None:
         state.current_environment = fclpy.lisptype.Environment()
-        
+
     # Import here to avoid circular imports
     import fclpy.lispfunc as lispfunc
     # Prefer registry-driven population when available
@@ -27,7 +27,7 @@ def setup_standard_environment():
         from fclpy.lispfunc import registry as _registry
     except Exception:
         _registry = None
-    
+
     # If registry is available, populate from it (but do not return early)
     # Some registry entries may be partial; keep fallback mapping to ensure full coverage.
     if _registry:
@@ -47,17 +47,12 @@ def setup_standard_environment():
             python_func = getattr(lispfunc, py_name, None)
             symbol = fclpy.lisptype.LispSymbol(lisp_name)
             if state.current_environment.find_func(symbol) is None:
-                state.current_environment.add_function(symbol, python_func or (lambda *a: f"SPECIAL:{lisp_name}"))
+                state.current_environment.add_function(
+                    symbol, python_func or (lambda *a: f"SPECIAL:{lisp_name}"))
 
     # Fallback: use the large hand-maintained mapping (unchanged)
     function_mappings = {
-        # Core list operations
-        'FIRST': lispfunc.first,
-        'SECOND': lispfunc.second,
-        'THIRD': lispfunc.third,
-        'FOURTH': lispfunc.fourth,
-        'FIFTH': lispfunc.fifth,
-        'REST': lispfunc.rest,
+        # Core list operations (now registered via decorators in core.py)
         # Arithmetic operator symbols and numeric predicates
         '+': lispfunc._s_plus_,
         '-': lispfunc._s_minus_,
@@ -79,37 +74,9 @@ def setup_standard_environment():
         'MINUSP': lispfunc.minusp,
         'EVENP': lispfunc.evenp,
         'ODDP': lispfunc.oddp,
-        
-        # List accessors (all CAR/CDR combinations)
-        'CADR': lispfunc.cadr,
-        'CADDR': lispfunc.caddr,
-        'CADDDR': lispfunc.cadddr,
-        'CDDR': lispfunc.cddr,
-        'CDDDR': lispfunc.cdddr,
-        'CAAR': lispfunc.caar,
-        'CAAAR': lispfunc.caaar,
-        'CAAAAR': lispfunc.caaaar,
-        'CAAADR': lispfunc.caaadr,
-        'CAADAR': lispfunc.caadar,
-        'CAADDR': lispfunc.caaddr,
-        'CAADR': lispfunc.caadr,
-        'CADAAR': lispfunc.cadaar,
-        'CADADR': lispfunc.cadadr,
-        'CADAR': lispfunc.cadar,
-        'CADDAR': lispfunc.caddar,
-        'CDAR': lispfunc.cdar,
-        'CDAAR': lispfunc.cdaar,
-        'CDAAAR': lispfunc.cdaaar,
-        'CDAADR': lispfunc.cdaadr,
-        'CDADAR': lispfunc.cdadar,
-        'CDADDR': lispfunc.cdaddr,
-        'CDADR': lispfunc.cdadr,
-        'CDDAAR': lispfunc.cddaar,
-        'CDDADR': lispfunc.cddadr,
-        'CDDAR': lispfunc.cddar,
-        'CDDDAR': lispfunc.cdddar,
-        'CDDDDR': lispfunc.cddddr,
-        
+
+        # List accessors (CAR/CDR combinations) registered via decorators in core.py
+
         # Predicates
         'ATOM': lispfunc.atom,
         'CONSP': lispfunc.consp,
@@ -129,37 +96,37 @@ def setup_standard_environment():
         'ADJUSTABLE-ARRAY-P': lispfunc.adjustable_array_p,
         'ARRAY-HAS-FILL-POINTER-P': lispfunc.array_has_fill_pointer_p,
         'FBOUNDP': lispfunc.fboundp,
-        
+
         # Equality and comparison
         'EQ': lispfunc.eq,
         'EQUAL': lispfunc.equal,
-        
-    # Mathematical and float functions are now registered via decorators in lispfunc/math.py
-        
+
+        # Mathematical and float functions are now registered via decorators in lispfunc/math.py
+
         # Sequence operations (most moved to registry in sequences.py)
         'BUTLAST': lispfunc.butlast,
-        
+
         # Array operations
         'ARRAY-DIMENSION': lispfunc.array_dimension,
         'ADJUST-ARRAY': lispfunc.adjust_array,
-        
+
         # Hash table operations
         'HASH-TABLE-COUNT': lispfunc.hash_table_count,
         'HASH-TABLE-SIZE': lispfunc.hash_table_size,
         'HASH-TABLE-TEST': lispfunc.hash_table_test,
         'HASH-TABLE-REHASH-SIZE': lispfunc.hash_table_rehash_size,
         'HASH-TABLE-REHASH-THRESHOLD': lispfunc.hash_table_rehash_threshold,
-        
+
         # String/Character operations
         'MERGE-PATHNAMES': lispfunc.merge_pathnames,
         'HOST-NAMESTRING': lispfunc.host_namestring,
         'FILE-NAMESTRING': lispfunc.file_namestring,
-        
+
         # Property lists
         'GET': lispfunc.get,
         'RPLACA': lispfunc.rplaca,
         'RPLACD': lispfunc.rplacd,
-        
+
         # Package and symbol operations
         'INTERN': lispfunc.intern,
         'FIND-SYMBOL': lispfunc.find_symbol,
@@ -171,13 +138,13 @@ def setup_standard_environment():
         'GENTEMP': lispfunc.gentemp,
         'APROPOS': lispfunc.apropos,
         'APROPOS-LIST': lispfunc.apropos_list,
-        
+
         # Function operations
         'FDEFINITION': lispfunc.fdefinition,
         'FMAKUNBOUND': lispfunc.fmakunbound,
         'FUNCTION-KEYWORDS': lispfunc.function_keywords,
         'FUNCTION-LAMBDA-EXPRESSION': lispfunc.function_lambda_expression,
-        
+
         # File operations
         'COMPILE-FILE-PATHNAME': lispfunc.compile_file_pathname,
         'DELETE-FILE': lispfunc.delete_file,
@@ -186,28 +153,17 @@ def setup_standard_environment():
         'FILE-WRITE-DATE': lispfunc.file_write_date,
         'PROBE-FILE': lispfunc.probe_file,
         'RENAME-FILE': lispfunc.rename_file,
-        
-        # Stream operations
-        'GET-OUTPUT-STREAM-STRING': lispfunc.get_output_stream_string,
-        'STREAM-EXTERNAL-FORMAT': lispfunc.stream_external_format,
-        
-        # Format operations
-        'FORMAT': lispfunc.format_fn,
-        'FORMATTER': lispfunc.formatter,
-        'SIMPLE-CONDITION-FORMAT-ARGUMENTS': lispfunc.simple_condition_format_arguments,
-        'SIMPLE-CONDITION-FORMAT-CONTROL': lispfunc.simple_condition_format_control,
-        
+
+        # Stream and format operations are registered via decorators in io.py
+
         # Time operations
         'GET-DECODED-TIME': lispfunc.get_decoded_time,
         'GET-INTERNAL-REAL-TIME': lispfunc.get_internal_real_time,
         'GET-INTERNAL-RUN-TIME': lispfunc.get_internal_run_time,
         'INTERNAL-TIME-UNITS-PER-SECOND': lispfunc.internal_time_units_per_second,
-        
-        # Macro operations
-        'GET-MACRO-CHARACTER': lispfunc.get_macro_character,
-        'SET-DISPATCH-MACRO-CHARACTER': lispfunc.set_dispatch_macro_character,
-        'GET-DISPATCH-MACRO-CHARACTER': lispfunc.get_dispatch_macro_character,
-        
+
+        # Macro/readtable operations are registered via decorators in io.py
+
         # CLOS operations
         'FIND-CLASS': lispfunc.find_class,
         'FIND-METHOD': lispfunc.find_method,
@@ -218,33 +174,33 @@ def setup_standard_environment():
         'UPDATE-INSTANCE-FOR-REDEFINED-CLASS': lispfunc.update_instance_for_redefined_class,
         'SLOT-MISSING': lispfunc.slot_missing,
         'INVALID-METHOD-ERROR': lispfunc.invalid_method_error,
-        
+
         # Conditions and restarts
         'INVOKE-DEBUGGER': lispfunc.invoke_debugger,
         'INVOKE-RESTART': lispfunc.invoke_restart,
         'INVOKE-RESTART-INTERACTIVELY': lispfunc.invoke_restart_interactively,
         'ABORT': lispfunc.abort,
-        
-    # Constants and type operations (non-math remain here)
+
+        # Constants and type operations (non-math remain here)
         'LAMBDA-LIST-KEYWORDS': lispfunc.lambda_list_keywords,
         'LAMBDA-PARAMETERS-LIMIT': lispfunc.lambda_parameters_limit,
-        
+
         # Utilities
         'IDENTITY': lispfunc.identity,
         'COPY-TREE': lispfunc.copy_tree,
         'INSPECT': lispfunc.inspect,
         'INCF': lispfunc.incf,
-        
+
         # Load form operations
         'MAKE-LOAD-FORM': lispfunc.make_load_form,
         'MAKE-LOAD-FORM-SAVING-SLOTS': lispfunc.make_load_form_saving_slots,
-        
+
         # Pretty printing
         'PPRINT-FILL': lispfunc.pprint_fill,
-        
+
         # Special symbols and constants
-    # LIST* registered via decorator in sequences
-        
+        # LIST* registered via decorator in sequences
+
         # Types and constants
         'KEYWORD': lispfunc.keyword,
         'INTEGER': lispfunc.integer,
@@ -265,20 +221,20 @@ def setup_standard_environment():
         'ARITHMETIC-ERROR-OPERANDS': lispfunc.arithmetic_error_operands,
         'ARITHMETIC-ERROR-OPERATION': lispfunc.arithmetic_error_operation,
         'FILE-ERROR-PATHNAME': lispfunc.file_error_pathname,
-        
+
         # I/O and utilities
         'PRINT': lispfunc._s_print_,
         'READ': lispfunc.read,
         'ERROR': lispfunc.error,
         'GENSYM': lispfunc.gensym,
-        
+
         # Special forms are handled by eval, but we can include them for completeness
         'EVAL': lispfunc.eval,
         'APPLY': lispfunc.apply,
-        
+
         # Special forms (these are handled specially in eval)
         'IF': lambda *args: "SPECIAL_FORM_IF",
-        'COND': lambda *args: "SPECIAL_FORM_COND", 
+        'COND': lambda *args: "SPECIAL_FORM_COND",
         'DEFUN': lambda *args: "SPECIAL_FORM_DEFUN",
         'SETQ': lambda *args: "SPECIAL_FORM_SETQ",
         'DEFVAR': lambda *args: "SPECIAL_FORM_DEFVAR",
@@ -293,9 +249,9 @@ def setup_standard_environment():
         'INLINE': lispfunc.inline_decl,
         'IGNORE': lispfunc.ignore,
         'IGNORABLE': lispfunc.ignorable,
-        
+
         # Essential ANSI Lisp functions
-    # Math functions moved to registry via decorators
+        # Math functions moved to registry via decorators
         'ENDP': lispfunc.endp,
         'CHAR': lispfunc.char,
         'CHAR-CODE': lispfunc.char_code,
@@ -342,7 +298,7 @@ def setup_standard_environment():
         'TAGBODY': lispfunc.tagbody,
         'GO': lispfunc.go,
         'UNWIND-PROTECT': lispfunc.unwind_protect,
-        
+
         # Additional essential ANSI Lisp functions
         'AND': lispfunc.and_fn,
         'OR': lispfunc.or_fn,
@@ -352,20 +308,20 @@ def setup_standard_environment():
         'UNLESS': lispfunc.unless_fn,
         'CASE': lispfunc.case_fn,
         'COND': lispfunc.cond_fn,
-        
+
         # Array operations
         'ARRAY-ELEMENT-TYPE': lispfunc.array_element_type,
         'ARRAY-RANK': lispfunc.array_rank,
         'ARRAY-TOTAL-SIZE': lispfunc.array_total_size,
         'ARRAY-IN-BOUNDS-P': lispfunc.array_in_bounds_p,
         'ARRAY-DISPLACEMENT': lispfunc.array_displacement,
-        
+
         # Sequence operations
-    # Registered via decorators in sequences module
-        
+        # Registered via decorators in sequences module
+
         # Bit operations
-    # Registered via decorators in math/sequences modules
-        
+        # Registered via decorators in math/sequences modules
+
         # Character comparison functions
         'CHAR=': lispfunc.char_equal,
         'CHAR/=': lispfunc.char_not_equal,
@@ -385,7 +341,7 @@ def setup_standard_environment():
         'CHAR-NAME': lispfunc.char_name,
         'NAME-CHAR': lispfunc.name_char,
         'DIGIT-CHAR': lispfunc.digit_char,
-        
+
         # String operations
         'SCHAR': lispfunc.schar,
         'STRING=': lispfunc.string_equal_fn,
@@ -407,7 +363,7 @@ def setup_standard_environment():
         'STRING-LEFT-TRIM': lispfunc.string_left_trim,
         'STRING-RIGHT-TRIM': lispfunc.string_right_trim,
         'PARSE-INTEGER': lispfunc.parse_integer,
-        
+
         # Hash table operations
         'MAKE-HASH-TABLE': lispfunc.make_hash_table,
         'GETHASH': lispfunc.gethash,
@@ -415,7 +371,7 @@ def setup_standard_environment():
         'MAPHASH': lispfunc.maphash,
         'CLRHASH': lispfunc.clrhash,
         'SXHASH': lispfunc.sxhash,
-        
+
         # Property list operations
         'GETF': lispfunc.getf,
         'GET-PROPERTIES': lispfunc.get_properties,
@@ -423,54 +379,18 @@ def setup_standard_environment():
         'REMPROP': lispfunc.remprop,
         'SYMBOL-PLIST': lispfunc.symbol_plist,
         'REMF': lispfunc.remf,
-        
+
         # More list operations
-    # Registered via decorators in sequences module
-        
+        # Registered via decorators in sequences module
+
         # Set operations (destructive versions)
-    # Registered via decorators in sequences module
-        
+        # Registered via decorators in sequences module
+
         # Tree operations (destructive versions)
-    # Registered via decorators in sequences module
-        
-        # I/O operations
-        'READ-LINE': lispfunc.read_line,
-        'READ-CHAR': lispfunc.read_char,
-        'READ-BYTE': lispfunc.read_byte,
-        'WRITE-CHAR': lispfunc.write_char,
-        'WRITE-STRING': lispfunc.write_string,
-        'WRITE-LINE': lispfunc.write_line,
-        'WRITE-BYTE': lispfunc.write_byte,
-        'PEEK-CHAR': lispfunc.peek_char,
-        'UNREAD-CHAR': lispfunc.unread_char,
-        'LISTEN': lispfunc.listen_fn,
-        'CLEAR-INPUT': lispfunc.clear_input,
-        'CLEAR-OUTPUT': lispfunc.clear_output,
-        'WRITE': lispfunc.write_fn,
-        'PRIN1-TO-STRING': lispfunc.prin1_to_string,
-        'PRINC-TO-STRING': lispfunc.princ_to_string,
-        'WRITE-TO-STRING': lispfunc.write_to_string,
-        
-        # Pathname operations
-        'PATHNAME': lispfunc.pathname,
-        'PATHNAME-HOST': lispfunc.pathname_host,
-        'PATHNAME-DEVICE': lispfunc.pathname_device,
-        'PATHNAME-DIRECTORY': lispfunc.pathname_directory,
-        'PATHNAME-NAME': lispfunc.pathname_name,
-        'PATHNAME-TYPE': lispfunc.pathname_type,
-        'PATHNAME-VERSION': lispfunc.pathname_version,
-        'MAKE-PATHNAME': lispfunc.make_pathname,
-        'NAMESTRING': lispfunc.namestring,
-        'DIRECTORY-NAMESTRING': lispfunc.directory_namestring,
-        'ENOUGH-NAMESTRING': lispfunc.enough_namestring,
-        'PARSE-NAMESTRING': lispfunc.parse_namestring,
-        'WILD-PATHNAME-P': lispfunc.wild_pathname_p,
-        'PATHNAME-MATCH-P': lispfunc.pathname_match_p,
-        'TRANSLATE-PATHNAME': lispfunc.translate_pathname,
-        'LOGICAL-PATHNAME': lispfunc.logical_pathname,
-        'TRANSLATE-LOGICAL-PATHNAME': lispfunc.translate_logical_pathname,
-        'TRUENAME': lispfunc.truename,
-        
+        # Registered via decorators in sequences module
+
+        # I/O, pathname, and stream operations are registered via decorators in io.py
+
         # Stream operations
         'OPEN': lispfunc.open_fn,
         'CLOSE': lispfunc.close_fn,
@@ -484,13 +404,13 @@ def setup_standard_environment():
         'MAKE-ECHO-STREAM': lispfunc.make_echo_stream,
         'MAKE-SYNONYM-STREAM': lispfunc.make_synonym_stream,
         'MAKE-TWO-WAY-STREAM': lispfunc.make_two_way_stream,
-        
+
         # Time operations
         'GET-UNIVERSAL-TIME': lispfunc.get_universal_time,
         'DECODE-UNIVERSAL-TIME': lispfunc.decode_universal_time,
         'ENCODE-UNIVERSAL-TIME': lispfunc.encode_universal_time,
         'SLEEP': lispfunc.sleep_fn,
-        
+
         # Multiple values
         'MULTIPLE-VALUE-BIND': lispfunc.multiple_value_bind,
         'MULTIPLE-VALUE-CALL': lispfunc.multiple_value_call,
@@ -498,7 +418,7 @@ def setup_standard_environment():
         'MULTIPLE-VALUE-PROG1': lispfunc.multiple_value_prog1,
         'MULTIPLE-VALUE-SETQ': lispfunc.multiple_value_setq,
         'NTH-VALUE': lispfunc.nth_value,
-        
+
         # Symbol operations
         'SYMBOL-NAME': lispfunc.symbol_name,
         'SYMBOL-PACKAGE': lispfunc.symbol_package,
@@ -506,7 +426,7 @@ def setup_standard_environment():
         'SYMBOL-FUNCTION': lispfunc.symbol_function,
         'MAKE-SYMBOL': lispfunc.make_symbol,
         'COPY-SYMBOL': lispfunc.copy_symbol,
-        
+
         # Package operations
         'MAKE-PACKAGE': lispfunc.make_package,
         'PACKAGE-NAME': lispfunc.package_name,
@@ -522,11 +442,11 @@ def setup_standard_environment():
         'SHADOW': lispfunc.shadow,
         'USE-PACKAGE': lispfunc.use_package,
         'UNUSE-PACKAGE': lispfunc.unuse_package,
-        
+
         # Macro operations
         'MACROEXPAND': lispfunc.macroexpand,
         'MACROEXPAND-1': lispfunc.macroexpand_1,
-        
+
         # Constants and limits
         'ARRAY-DIMENSION-LIMIT': lispfunc.array_dimension_limit,
         'ARRAY-RANK-LIMIT': lispfunc.array_rank_limit,
@@ -534,12 +454,12 @@ def setup_standard_environment():
         'CALL-ARGUMENTS-LIMIT': lispfunc.call_arguments_limit,
         'MULTIPLE-VALUES-LIMIT': lispfunc.multiple_values_limit,
         'CHAR-CODE-LIMIT': lispfunc.char_code_limit,
-        
+
         # Essential predicates
         'CONSTANTP': lispfunc.constantp,
         'SPECIAL-OPERATOR-P': lispfunc.special_operator_p,
         'MACRO-FUNCTION': lispfunc.macro_function,
-        
+
         # Critical missing functions for 75% coverage
         # Control flow
         'DO': lispfunc.do_fn,
@@ -548,66 +468,66 @@ def setup_standard_environment():
         'LOOP': lispfunc.loop_fn,
         'EVAL-WHEN': lispfunc.eval_when,
         'LOAD': lispfunc.load_fn,
-        
+
         # Essential predicates and comparisons
         'EQUALP': lispfunc.equalp,
         'NOT': lispfunc.not_fn,
         'EQL': lispfunc.eql,
         'EQUAL': lispfunc.equal_fn,
-        
+
         # Symbol and package operations
         'DO-SYMBOLS': lispfunc.do_symbols,
         'DO-EXTERNAL-SYMBOLS': lispfunc.do_external_symbols,
         'DO-ALL-SYMBOLS': lispfunc.do_all_symbols,
         'DOCUMENTATION': lispfunc.documentation,
-        
-    # Mathematical constants now registered via decorators in lispfunc/math.py
-        
+
+        # Mathematical constants now registered via decorators in lispfunc/math.py
+
         # Essential sequence operations
         'NOTEVERY': lispfunc.notevery,
         'NOTANY': lispfunc.notany,
         'MAPL': lispfunc.mapl,
         'MAPLIST': lispfunc.maplist,
         'APPLY': lispfunc.apply_fn,
-        
+
         # File and stream operations
         'FILE-POSITION': lispfunc.file_position,
         'FILE-LENGTH': lispfunc.file_length,
         'FRESH-LINE': lispfunc.fresh_line,
         'FINISH-OUTPUT': lispfunc.finish_output,
         'FORCE-OUTPUT': lispfunc.force_output,
-        
+
         # More string operations
         'STRING': lispfunc.string_fn,
         'CHAR': lispfunc.char_fn,
-        
+
         # More array operations
-    # Registered via decorators in sequences module
+        # Registered via decorators in sequences module
         'FILL-POINTER': lispfunc.fill_pointer,
-        
+
         # More type predicates
         'SIMPLE-STRING-P': lispfunc.simple_string_p,
         'RANDOM-STATE-P': lispfunc.random_state_p,
-        
+
         # Essential arithmetic operations
-    # Registered via decorators in math module
-        
+        # Registered via decorators in math module
+
         # Logical operations on integers
-    # Registered via decorators in math module
-        
+        # Registered via decorators in math module
+
         # More list operations
-    # Registered via decorators in sequences module
-        
+        # Registered via decorators in sequences module
+
         # More control constructs
         'TYPECASE': lispfunc.typecase,
         'ETYPECASE': lispfunc.etypecase,
         'CTYPECASE': lispfunc.ctypecase,
-        
+
         # Compiler and evaluation
         'COMPILE': lispfunc.compile_fn,
         'COMPILE-FILE': lispfunc.compile_file,
         'EVAL': lispfunc.eval_fn,
-        
+
         # Additional critical ANSI functions
         # Format and pretty printing
         'COPY-PPRINT-DISPATCH': lispfunc.copy_pprint_dispatch,
@@ -620,20 +540,20 @@ def setup_standard_environment():
         'PPRINT-NEWLINE': lispfunc.pprint_newline,
         'PPRINT-POP': lispfunc.pprint_pop,
         'PPRINT-TAB': lispfunc.pprint_tab,
-        
+
         # Generalized assignment
         'DECF': lispfunc.decf,
         'PSETF': lispfunc.psetf,
         'SETF': lispfunc.setf,
         'SHIFTF': lispfunc.shiftf,
         'ROTATEF': lispfunc.rotatef,
-        
+
         # Package system
         'PACKAGE-ERROR-PACKAGE': lispfunc.package_error_package,
         'WITH-PACKAGE-ITERATOR': lispfunc.with_package_iterator,
         'EXPORT': lispfunc.export_fn,
         'IMPORT': lispfunc.import_fn,
-        
+
         # Essential missing functions
         'ARRAY-ROW-MAJOR-INDEX': lispfunc.array_row_major_index,
         'BREAK': lispfunc.break_fn,
@@ -688,7 +608,7 @@ def setup_standard_environment():
         'WARN': lispfunc.warn_fn,
         'WITH-CONDITION-RESTARTS': lispfunc.with_condition_restarts,
         'WITH-SIMPLE-RESTART': lispfunc.with_simple_restart,
-        
+
         # Additional ANSI Common Lisp functions
         'LISP-IMPLEMENTATION-TYPE': lispfunc.lisp_implementation_type,
         'LISP-IMPLEMENTATION-VERSION': lispfunc.lisp_implementation_version,
@@ -720,10 +640,10 @@ def setup_standard_environment():
         'CONCATENATED-STREAM-P': lispfunc.concatenated_stream_p,
         'CONCATENATED-STREAM-STREAMS': lispfunc.concatenated_stream_streams,
         'FILE-STREAM-P': lispfunc.file_stream_p,
-        'COPY-READTABLE': lispfunc.copy_readtable,
+        # COPY-READTABLE, readtable, and pprint helpers registered via decorators in io.py
         'ENSURE-DIRECTORIES-EXIST': lispfunc.ensure_directories_exist,
-    # Float rounding functions registered via decorators in math module
-        
+        # Float rounding functions registered via decorators in math module
+
         # Complete ANSI Common Lisp function coverage
         'MAKE-INSTANCE': lispfunc.make_instance,
         'MAKE-METHOD': lispfunc.make_method,
@@ -757,12 +677,8 @@ def setup_standard_environment():
         'TWO-WAY-STREAM-INPUT-STREAM': lispfunc.two_way_stream_input_stream,
         'TWO-WAY-STREAM-OUTPUT-STREAM': lispfunc.two_way_stream_output_stream,
         'TWO-WAY-STREAM-P': lispfunc.two_way_stream_p,
-    # Float constants registered via decorators in math module
-        'MAKE-DISPATCH-MACRO-CHARACTER': lispfunc.make_dispatch_macro_character,
-        'SET-MACRO-CHARACTER': lispfunc.set_macro_character,
-        'SET-PPRINT-DISPATCH': lispfunc.set_pprint_dispatch,
-        'SET-SYNTAX-FROM-CHAR': lispfunc.set_syntax_from_char,
-        'READTABLE-CASE': lispfunc.readtable_case,
+        # Float constants registered via decorators in math module
+        # Readtable/macro character and pprint dispatch functions are registered via decorators in io.py
         'PROGV': lispfunc.progv,
         'PSETQ': lispfunc.psetq,
         'QUOTE': lispfunc.quote_fn,
@@ -793,7 +709,7 @@ def setup_standard_environment():
         'WITH-PPRINT-LOGICAL-BLOCK': lispfunc.with_pprint_logical_block,
         'WITH-SLOTS': lispfunc.with_slots,
         'WITH-STANDARD-IO-SYNTAX': lispfunc.with_standard_io_syntax,
-        
+
         # Environment and implementation functions
         'MACHINE-TYPE': lispfunc.machine_type,
         'MACHINE-INSTANCE': lispfunc.machine_instance,
@@ -802,25 +718,25 @@ def setup_standard_environment():
         'SHORT-SITE-NAME': lispfunc.short_site_name,
         'LOAD-LOGICAL-PATHNAME-TRANSLATIONS': lispfunc.load_logical_pathname_translations,
         'LOGICAL-PATHNAME-TRANSLATIONS': lispfunc.logical_pathname_translations,
-        
-    # Floating point constants (keep normalized variants not in decorators)
-    'LEAST-NEGATIVE-LONG-FLOAT': lispfunc.least_negative_long_float,
+
+        # Floating point constants (keep normalized variants not in decorators)
+        'LEAST-NEGATIVE-LONG-FLOAT': lispfunc.least_negative_long_float,
         'LEAST-NEGATIVE-NORMALIZED-DOUBLE-FLOAT': lispfunc.least_negative_normalized_double_float,
         'LEAST-NEGATIVE-NORMALIZED-LONG-FLOAT': lispfunc.least_negative_normalized_long_float,
         'LEAST-NEGATIVE-NORMALIZED-SHORT-FLOAT': lispfunc.least_negative_normalized_short_float,
         'LEAST-NEGATIVE-NORMALIZED-SINGLE-FLOAT': lispfunc.least_negative_normalized_single_float,
-    'LEAST-NEGATIVE-SHORT-FLOAT': lispfunc.least_negative_short_float,
-    'LEAST-NEGATIVE-SINGLE-FLOAT': lispfunc.least_negative_single_float,
-    'LEAST-POSITIVE-LONG-FLOAT': lispfunc.least_positive_long_float,
+        'LEAST-NEGATIVE-SHORT-FLOAT': lispfunc.least_negative_short_float,
+        'LEAST-NEGATIVE-SINGLE-FLOAT': lispfunc.least_negative_single_float,
+        'LEAST-POSITIVE-LONG-FLOAT': lispfunc.least_positive_long_float,
         'LEAST-POSITIVE-NORMALIZED-DOUBLE-FLOAT': lispfunc.least_positive_normalized_double_float,
         'LEAST-POSITIVE-NORMALIZED-LONG-FLOAT': lispfunc.least_positive_normalized_long_float,
         'LEAST-POSITIVE-NORMALIZED-SHORT-FLOAT': lispfunc.least_positive_normalized_short_float,
         'LEAST-POSITIVE-NORMALIZED-SINGLE-FLOAT': lispfunc.least_positive_normalized_single_float,
-    'LEAST-POSITIVE-SHORT-FLOAT': lispfunc.least_positive_short_float,
-    'LEAST-POSITIVE-SINGLE-FLOAT': lispfunc.least_positive_single_float,
-    'LONG-FLOAT-EPSILON': lispfunc.long_float_epsilon,
-    'LONG-FLOAT-NEGATIVE-EPSILON': lispfunc.long_float_negative_epsilon,
-        
+        'LEAST-POSITIVE-SHORT-FLOAT': lispfunc.least_positive_short_float,
+        'LEAST-POSITIVE-SINGLE-FLOAT': lispfunc.least_positive_single_float,
+        'LONG-FLOAT-EPSILON': lispfunc.long_float_epsilon,
+        'LONG-FLOAT-NEGATIVE-EPSILON': lispfunc.long_float_negative_epsilon,
+
         # Additional CLOS and utility functions
         'METHOD-LAMBDA-LIST': lispfunc.method_lambda_list,
         'METHOD-QUALIFIERS': lispfunc.method_qualifiers,
@@ -829,11 +745,11 @@ def setup_standard_environment():
         'NOTINLINE': lispfunc.notinline,
         'INLINE': lispfunc.inline,
     }
-    
+
     # Add all the mapped functions to the environment
     for lisp_name, python_func in function_mappings.items():
         symbol = fclpy.lisptype.LispSymbol(lisp_name)
         state.current_environment.add_function(symbol, python_func)
-    
+
     state.functions_loaded = True
     return state.current_environment

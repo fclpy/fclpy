@@ -1,8 +1,10 @@
 """I/O and stream operations - file handling, string operations, formatting."""
 
 import fclpy.lisptype as lisptype
+from . import registry as _registry
 
 
+@_registry.cl_function('READTABLEP')
 def readtablep(obj):
     """Test if object is a readtable."""
     # For now, return False as we don't have readtable objects yet
@@ -10,6 +12,7 @@ def readtablep(obj):
 
 
 # I/O operations
+@_registry.cl_function('READ-LINE')
 def read_line(stream=None, eof_error_p=True, eof_value=None, recursive_p=None):
     """Read line from stream."""
     # Simplified implementation
@@ -22,6 +25,7 @@ def read_line(stream=None, eof_error_p=True, eof_value=None, recursive_p=None):
         return eof_value
 
 
+@_registry.cl_function('READ-CHAR')
 def read_char(stream=None, eof_error_p=True, eof_value=None, recursive_p=None):
     """Read character from stream."""
     try:
@@ -34,6 +38,7 @@ def read_char(stream=None, eof_error_p=True, eof_value=None, recursive_p=None):
         return eof_value
 
 
+@_registry.cl_function('READ-BYTE')
 def read_byte(stream, eof_error_p=True, eof_value=None):
     """Read byte from stream."""
     try:
@@ -45,12 +50,14 @@ def read_byte(stream, eof_error_p=True, eof_value=None):
         return eof_value
 
 
+@_registry.cl_function('WRITE-CHAR')
 def write_char(character, stream=None):
     """Write character to stream."""
     print(character, end='')
     return character
 
 
+@_registry.cl_function('WRITE-STRING')
 def write_string(string, stream=None, start=0, end=None):
     """Write string to stream."""
     if end is None:
@@ -59,150 +66,177 @@ def write_string(string, stream=None, start=0, end=None):
     return string
 
 
+@_registry.cl_function('WRITE-LINE')
 def write_line(string, stream=None):
     """Write line to stream."""
     print(string)
     return string
 
 
+@_registry.cl_function('WRITE-BYTE')
 def write_byte(byte, stream):
     """Write byte to stream."""
     # Simplified implementation
     return byte
 
 
+@_registry.cl_function('PEEK-CHAR')
 def peek_char(peek_type=None, stream=None, eof_error_p=True, eof_value=None, recursive_p=None):
     """Peek at character in stream."""
     # Simplified implementation
     return ' '  # Return space for now
 
 
+@_registry.cl_function('UNREAD-CHAR')
 def unread_char(character, stream=None):
     """Unread character to stream."""
     # Simplified implementation
     return None
 
 
+@_registry.cl_function('LISTEN')
 def listen_fn(stream=None):
     """Test if stream has input available."""
     return True  # Simplified
 
 
+@_registry.cl_function('LISTEN')
 def listen(stream=None):
     """Test if input is available."""
     return True  # Simplified
 
 
+@_registry.cl_function('CLEAR-INPUT')
 def clear_input(stream=None):
     """Clear input from stream."""
     return None
 
 
+@_registry.cl_function('CLEAR-OUTPUT')
 def clear_output(stream=None):
     """Clear output from stream."""
     return None
 
 
+@_registry.cl_function('WRITE')
 def write_fn(object, **kwargs):
     """Write object."""
     print(object, end='')
     return object
 
 
+@_registry.cl_function('WRITE')
 def write(object, stream=None, **kwargs):
     """Write object to stream."""
     print(object, end='')
     return object
 
 
+@_registry.cl_function('PRIN1-TO-STRING')
 def prin1_to_string(object):
     """Print object to string (readable)."""
     return str(object)
 
 
+@_registry.cl_function('PRINC-TO-STRING')
 def princ_to_string(object):
     """Print object to string (not readable)."""
     return str(object)
 
 
+@_registry.cl_function('WRITE-TO-STRING')
 def write_to_string(object, **kwargs):
     """Write object to string."""
     return str(object)
 
 
+@_registry.cl_function('PRINT')
 def print_fn(object, stream=None):
     """Print object."""
     print(object)
     return object
 
 
+@_registry.cl_function('PRIN1')
 def prin1(object, stream=None):
     """Print object readably."""
     print(repr(object))
     return object
 
 
+@_registry.cl_function('PRINC')
 def princ(object, stream=None):
     """Print object for humans."""
     print(object, end='')
     return object
 
 
+@_registry.cl_function('TERPRI')
 def terpri(stream=None):
     """Output newline."""
     print()
     return None
 
 
+@_registry.cl_function('FRESH-LINE')
 def fresh_line(stream=None):
     """Start fresh line if needed."""
     print()
     return None
 
 
+@_registry.cl_function('FINISH-OUTPUT')
 def finish_output(stream=None):
     """Finish output to stream."""
     return None
 
 
+@_registry.cl_function('FORCE-OUTPUT')
 def force_output(stream=None):
     """Force output to stream."""
     return None
 
 
 # Pathname operations
+@_registry.cl_function('PATHNAME')
 def pathname(pathspec):
     """Convert to pathname."""
     return str(pathspec)
 
 
+@_registry.cl_function('PATHNAMEP')
 def pathnamep(object):
     """Test if object is pathname."""
     return isinstance(object, str)  # Simplified
 
 
+@_registry.cl_function('PATHNAME-HOST')
 def pathname_host(pathname):
     """Get pathname host."""
     return None  # No host for now
 
 
+@_registry.cl_function('PATHNAME-DEVICE')
 def pathname_device(pathname):
     """Get pathname device."""
     return None  # No device for now
 
 
+@_registry.cl_function('PATHNAME-DIRECTORY')
 def pathname_directory(pathname):
     """Get pathname directory."""
     import os
     return os.path.dirname(str(pathname))
 
 
+@_registry.cl_function('PATHNAME-NAME')
 def pathname_name(pathname):
     """Get pathname name."""
     import os
     return os.path.splitext(os.path.basename(str(pathname)))[0]
 
 
+@_registry.cl_function('PATHNAME-TYPE')
 def pathname_type(pathname):
     """Get pathname type."""
     import os
@@ -210,11 +244,13 @@ def pathname_type(pathname):
     return ext[1:] if ext else None
 
 
+@_registry.cl_function('PATHNAME-VERSION')
 def pathname_version(pathname):
     """Get pathname version."""
     return None  # No versions for now
 
 
+@_registry.cl_function('MAKE-PATHNAME')
 def make_pathname(**kwargs):
     """Make pathname."""
     import os
@@ -229,68 +265,81 @@ def make_pathname(**kwargs):
     return os.path.join(*parts) if parts else ""
 
 
+@_registry.cl_function('NAMESTRING')
 def namestring(pathname):
     """Get namestring of pathname."""
     return str(pathname)
 
 
+@_registry.cl_function('DIRECTORY-NAMESTRING')
 def directory_namestring(pathname):
     """Get directory namestring."""
     import os
     return os.path.dirname(str(pathname))
 
 
+@_registry.cl_function('HOST-NAMESTRING')
 def host_namestring(pathname):
     """Return host portion of pathname."""
     return ""  # No host for simplified implementation
 
 
+@_registry.cl_function('FILE-NAMESTRING')
 def file_namestring(pathname):
     """Return file portion of pathname."""
     import os
     return os.path.basename(str(pathname))
 
 
+@_registry.cl_function('ENOUGH-NAMESTRING')
 def enough_namestring(pathname, defaults=None):
     """Get enough namestring."""
     return str(pathname)  # Simplified
 
 
+@_registry.cl_function('PARSE-NAMESTRING')
 def parse_namestring(thing, **kwargs):
     """Parse namestring."""
     return str(thing)  # Simplified
 
 
+@_registry.cl_function('MERGE-PATHNAMES')
 def merge_pathnames(pathname, default_pathname=None, default_version=None):
     """Merge pathname with default."""
     return str(pathname)  # Simplified
 
 
+@_registry.cl_function('WILD-PATHNAME-P')
 def wild_pathname_p(pathname, field_key=None):
     """Test if pathname is wild."""
     return False  # No wildcards for now
 
 
+@_registry.cl_function('PATHNAME-MATCH-P')
 def pathname_match_p(pathname, wildname):
     """Test if pathname matches wildname."""
     return str(pathname) == str(wildname)  # Simplified
 
 
+@_registry.cl_function('TRANSLATE-PATHNAME')
 def translate_pathname(source, from_wildname, to_wildname):
     """Translate pathname."""
     return str(source)  # Simplified
 
 
+@_registry.cl_function('LOGICAL-PATHNAME')
 def logical_pathname(pathspec):
     """Convert to logical pathname."""
     return str(pathspec)  # No logical pathnames for now
 
 
+@_registry.cl_function('TRANSLATE-LOGICAL-PATHNAME')
 def translate_logical_pathname(pathname, **kwargs):
     """Translate logical pathname."""
     return str(pathname)
 
 
+@_registry.cl_function('TRUENAME')
 def truename(filespec):
     """Get truename of file."""
     import os
@@ -298,52 +347,62 @@ def truename(filespec):
 
 
 # Stream operations
+@_registry.cl_function('OPEN')
 def open_fn(filespec, **kwargs):
     """Open file."""
     # Simplified - return file name
     return str(filespec)
 
 
+@_registry.cl_function('CLOSE')
 def close_fn(stream, **kwargs):
     """Close stream."""
     return True
 
 
+@_registry.cl_function('OUTPUT-STREAM-P')
 def output_stream_p(stream):
     """Test if stream is output stream."""
     return True  # Simplified
 
 
+@_registry.cl_function('INPUT-STREAM-P')
 def input_stream_p(stream):
     """Test if stream is input stream."""
     return True  # Simplified
 
 
+@_registry.cl_function('OPEN-STREAM-P')
 def open_stream_p(stream):
     """Test if stream is open."""
     return True  # Simplified
 
 
+@_registry.cl_function('INTERACTIVE-STREAM-P')
 def interactive_stream_p(stream):
     """Test if stream is interactive."""
     return True  # Simplified
 
 
+@_registry.cl_function('STREAMP')
 def streamp(object):
     """Test if object is stream."""
     return hasattr(object, 'read') or hasattr(object, 'write')  # Simplified
 
 
+@_registry.cl_function('STREAM-ELEMENT-TYPE')
 def stream_element_type(stream):
     """Get stream element type."""
     return 'CHARACTER'
 
 
+@_registry.cl_function('STREAM-EXTERNAL-FORMAT')
 def stream_external_format(stream):
     """Get stream external format."""
     return 'UTF-8'  # Simplified
 
 
+@_registry.cl_function('MAKE-STRING-INPUT-STREAM')
 def make_string_input_stream(string, start=0, end=None):
     """Make string input stream."""
     if end is None:
@@ -351,47 +410,56 @@ def make_string_input_stream(string, start=0, end=None):
     return string[start:end]  # Simplified
 
 
+@_registry.cl_function('MAKE-STRING-OUTPUT-STREAM')
 def make_string_output_stream(**kwargs):
     """Make string output stream."""
     return ""  # Simplified
 
 
+@_registry.cl_function('GET-OUTPUT-STREAM-STRING')
 def get_output_stream_string(stream):
     """Get string from output stream."""
     return str(stream)  # Simplified
 
 
+@_registry.cl_function('MAKE-BROADCAST-STREAM')
 def make_broadcast_stream(*streams):
     """Make broadcast stream."""
     return streams[0] if streams else None
 
 
+@_registry.cl_function('MAKE-CONCATENATED-STREAM')
 def make_concatenated_stream(*streams):
     """Make concatenated stream."""
     return streams[0] if streams else None
 
 
+@_registry.cl_function('MAKE-ECHO-STREAM')
 def make_echo_stream(input_stream, output_stream):
     """Make echo stream."""
     return output_stream
 
 
+@_registry.cl_function('MAKE-SYNONYM-STREAM')
 def make_synonym_stream(symbol):
     """Make synonym stream."""
     return str(symbol)
 
 
+@_registry.cl_function('MAKE-TWO-WAY-STREAM')
 def make_two_way_stream(input_stream, output_stream):
     """Make two-way stream."""
     return output_stream
 
 
 # Pretty printing operations
+@_registry.cl_function('COPY-PPRINT-DISPATCH')
 def copy_pprint_dispatch(table=None):
     """Copy pretty print dispatch table."""
     return {}  # Simplified
 
 
+@_registry.cl_function('PPRINT')
 def pprint(object, stream=None):
     """Pretty print object."""
     print(object)
@@ -453,6 +521,8 @@ def pprint_fill(stream, list_obj, colon_p=None, at_sign_p=None):
     return None
 
 
+
+@_registry.cl_function('SET-PPRINT-DISPATCH')
 def set_pprint_dispatch(type_specifier, function, priority=0, table=None):
     """Set pretty print dispatch."""
     return None
@@ -563,6 +633,7 @@ def read_preserving_whitespace(stream=None, eof_error_p=True, eof_value=None, re
 
 
 # Format operations
+@_registry.cl_function('FORMAT')
 def format_fn(destination, control_string, *args):
     """Format output."""
     try:
@@ -580,6 +651,7 @@ def format_fn(destination, control_string, *args):
         return str(control_string)  # Fallback
 
 
+@_registry.cl_function('FORMATTER')
 def formatter(control_string):
     """Create formatter function."""
     def format_func(stream, *args):
@@ -588,11 +660,13 @@ def formatter(control_string):
 
 
 # Condition operations
+@_registry.cl_function('SIMPLE-CONDITION-FORMAT-ARGUMENTS')
 def simple_condition_format_arguments(condition):
     """Get format arguments from condition."""
     return []  # Simplified
 
 
+@_registry.cl_function('SIMPLE-CONDITION-FORMAT-CONTROL')
 def simple_condition_format_control(condition):
     """Get format control from condition."""
     return str(condition)  # Simplified
@@ -658,6 +732,8 @@ def _s_print_(object, stream=None):
 # Macro character operations - use centralized readtable
 from ..readtable import get_current_readtable
 
+
+@_registry.cl_function('GET-MACRO-CHARACTER')
 def get_macro_character(char, readtable=None):
     """Get macro character function."""
     if readtable is None:
@@ -665,6 +741,7 @@ def get_macro_character(char, readtable=None):
     return readtable.get_macro_character(char)
 
 
+@_registry.cl_function('SET-MACRO-CHARACTER')
 def set_macro_character(char, function, non_terminating_p=None, readtable=None):
     """Set macro character function."""
     if readtable is None:
@@ -672,6 +749,7 @@ def set_macro_character(char, function, non_terminating_p=None, readtable=None):
     return readtable.set_macro_character(char, function, non_terminating_p or False)
 
 
+@_registry.cl_function('SET-DISPATCH-MACRO-CHARACTER')
 def set_dispatch_macro_character(disp_char, sub_char, function, readtable=None):
     """Set dispatch macro character."""
     if readtable is None:
@@ -679,6 +757,7 @@ def set_dispatch_macro_character(disp_char, sub_char, function, readtable=None):
     return readtable.set_dispatch_macro_character(disp_char, sub_char, function)
 
 
+@_registry.cl_function('GET-DISPATCH-MACRO-CHARACTER')
 def get_dispatch_macro_character(disp_char, sub_char, readtable=None):
     """Get dispatch macro character function."""
     if readtable is None:
@@ -686,6 +765,7 @@ def get_dispatch_macro_character(disp_char, sub_char, readtable=None):
     return readtable.get_dispatch_macro_character(disp_char, sub_char)
 
 
+@_registry.cl_function('MAKE-DISPATCH-MACRO-CHARACTER')
 def make_dispatch_macro_character(char, non_terminating_p=False, readtable=None):
     """Make character into dispatch macro character."""
     if readtable is None:
@@ -693,6 +773,7 @@ def make_dispatch_macro_character(char, non_terminating_p=False, readtable=None)
     return readtable.make_dispatch_macro_character(char, non_terminating_p)
 
 
+@_registry.cl_function('COPY-READTABLE')
 def copy_readtable(from_readtable=None, to_readtable=None):
     """Copy readtable."""
     if from_readtable is None:
@@ -700,6 +781,7 @@ def copy_readtable(from_readtable=None, to_readtable=None):
     return from_readtable.copy_readtable()
 
 
+@_registry.cl_function('READTABLE-CASE')
 def readtable_case(readtable=None):
     """Get readtable case."""
     if readtable is None:
@@ -707,8 +789,9 @@ def readtable_case(readtable=None):
     return readtable.readtable_case()
 
 
+@_registry.cl_function('SET-SYNTAX-FROM-CHAR')
 def set_syntax_from_char(to_char, from_char, to_readtable=None, from_readtable=None):
-    """Set syntax from another character."""
+    """Set syntax from another character in a readtable."""
     # Placeholder implementation
     return True
 
