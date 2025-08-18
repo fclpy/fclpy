@@ -51,7 +51,23 @@ def eval(form, env=None):
                 return eval_lambda(form, env)
             elif operator.name == 'WHEN':
                 return eval_when(form, env)
+            elif operator.name == 'DEFMACRO':
+                return eval_defmacro(form, env)
         
+        # Macro handling: if operator names a macro function, expand first
+        if isinstance(operator, lisptype.LispSymbol):
+            func_binding = env.find_func(operator)
+            if callable(func_binding) and getattr(func_binding, '__is_macro__', False):
+                # Gather raw args (without evaluating)
+                raw_args = []
+                current = args
+                while _consp_internal(current):
+                    raw_args.append(car(current))
+                    current = cdr(current)
+                expanded = func_binding(*raw_args)
+                # If macro returns a tuple/list of forms, wrap as progn
+                return eval(expanded, env)
+
         # Regular function call
         func = eval(operator, env)
         if callable(func):
@@ -90,83 +106,19 @@ def eval_setq(form, env):
     """Evaluate SETQ special form."""
     args = cdr(form)
     result = None
-    
+
     while _consp_internal(args) and _consp_internal(cdr(args)):
         var = car(args)
         value_form = car(cdr(args))
-        
+
         if not isinstance(var, lisptype.LispSymbol):
             raise lisptype.LispNotImplementedError("SETQ: variable must be a symbol")
-        
+
         result = eval(value_form, env)
         env.set_variable(var, result)
-        
+
         args = cdr(cdr(args))
-    
-    return result
 
-
-def eval_defvar(form, env):
-    """Evaluate DEFVAR special form."""
-    args = cdr(form)
-    if not _consp_internal(args):
-        raise lisptype.LispNotImplementedError("DEFVAR requires at least 1 argument")
-    
-    var = car(args)
-    if not isinstance(var, lisptype.LispSymbol):
-        raise lisptype.LispNotImplementedError("DEFVAR: variable must be a symbol")
-    
-    # Check if variable already exists
-    existing = env.find_variable(var)
-    if existing is None:
-        # Only set if not already defined
-        if _consp_internal(cdr(args)):
-            value = eval(car(cdr(args)), env)
-            env.add_variable(var, value)
-        else:
-            env.add_variable(var, None)
-    
-    return var
-
-
-def eval_let(form, env):
-    """Evaluate LET special form."""
-    args = cdr(form)
-    if not _consp_internal(args):
-        raise lisptype.LispNotImplementedError("LET requires at least 1 argument")
-    
-    bindings = car(args)
-    body = cdr(args)
-    
-    # Create new environment
-    new_env = lisptype.Environment(env)
-    
-    # Process bindings
-    current_binding = bindings
-    while _consp_internal(current_binding):
-        binding = car(current_binding)
-        if isinstance(binding, lisptype.LispSymbol):
-            # Simple variable binding with NIL
-            new_env.add_variable(binding, None)
-        elif _consp_internal(binding):
-            var = car(binding)
-            value_form = car(cdr(binding)) if _consp_internal(cdr(binding)) else None
-            
-            if not isinstance(var, lisptype.LispSymbol):
-                raise lisptype.LispNotImplementedError("LET: binding variable must be a symbol")
-            
-            value = eval(value_form, env) if value_form else None
-            new_env.add_variable(var, value)
-        
-        current_binding = cdr(current_binding)
-    
-    # Evaluate body
-    result = None
-    current_body = body
-    while _consp_internal(current_body):
-        result = eval(car(current_body), new_env)
-        current_body = cdr(current_body)
-    
     return result
 
 
@@ -209,6 +161,85 @@ def eval_defun(form, env):
     # Add function to environment
     env.add_function(func_name, user_function)
     return func_name
+
+
+def eval_defmacro(form, env):
+    """Evaluate DEFMACRO special form: register a macro in the environment.
+
+    This creates a Python callable that performs simple textual substitution of
+    the lambda-list parameters into the macro body forms and marks it as a macro
+    so that the evaluator will call it with raw (unevaluated) arguments.
+    """
+    args = cdr(form)
+    if not _consp_internal(args) or not _consp_internal(cdr(args)):
+        raise lisptype.LispNotImplementedError("DEFMACRO requires a name, lambda-list and body")
+
+    macro_name = car(args)
+    lambda_list = car(cdr(args))
+    body = cdr(cdr(args))
+
+    if not isinstance(macro_name, lisptype.LispSymbol):
+        raise lisptype.LispNotImplementedError("DEFMACRO: macro name must be a symbol")
+
+    # Build parameter name list
+    params = []
+    cur = lambda_list
+    while _consp_internal(cur):
+        p = car(cur)
+        if isinstance(p, lisptype.LispSymbol):
+            params.append(p.name)
+        cur = cdr(cur)
+
+    # Helper to substitute params in a form
+    def substitute(form, mapping):
+        # Symbols: replace if in mapping
+        if isinstance(form, lisptype.LispSymbol):
+            if form.name in mapping:
+                return mapping[form.name]
+            return form
+        # Cons cell: recurse
+        if _consp_internal(form):
+            new_car = substitute(car(form), mapping)
+            new_cdr = substitute(cdr(form), mapping) if _consp_internal(cdr(form)) or isinstance(cdr(form), lisptype.LispSymbol) else cdr(form)
+            return lisptype.lispCons(new_car, new_cdr)
+        # Other atoms: return as-is
+        return form
+
+    # Create the macro callable
+    def macro_callable(*call_args):
+        # Map parameter names to raw argument forms
+        mapping = {}
+        for i, name in enumerate(params):
+            if i < len(call_args):
+                mapping[name] = call_args[i]
+            else:
+                mapping[name] = None
+
+        # If multiple body forms, wrap in PROGN
+        if not _consp_internal(body):
+            return None
+
+        # Build substituted body forms
+        substituted_forms = []
+        cur_body = body
+        while _consp_internal(cur_body):
+            substituted_forms.append(substitute(car(cur_body), mapping))
+            cur_body = cdr(cur_body)
+
+        if len(substituted_forms) == 1:
+            return substituted_forms[0]
+        else:
+            # Build (PROGN <forms...>)
+            progn_sym = lisptype.LispSymbol('PROGN')
+            forms_list = lisptype.NIL
+            for f in reversed(substituted_forms):
+                forms_list = lisptype.lispCons(f, forms_list)
+            return lisptype.lispCons(progn_sym, forms_list)
+
+    # Mark as macro and register in environment
+    setattr(macro_callable, '__is_macro__', True)
+    env.add_function(macro_name, macro_callable)
+    return macro_name
 
 
 def eval_lambda(form, env):
@@ -758,9 +789,175 @@ def dotimes(*args):
 
 
 def loop_fn(*args):
-    """Loop macro."""
-    # For now, return None - proper implementation later
-    return None
+    """Simple LOOP implementation that accepts common clauses.
+
+    Supports forms such as:
+      (LOOP FOR i FROM 0 TO 9 BY 1 DO (PRINT i))
+      (LOOP WHILE <test> DO <forms>)
+      (LOOP UNTIL <test> DO <forms>)
+      (LOOP REPEAT <n> DO <forms>)
+
+    This is not a complete implementation of ANSI LOOP, but covers common cases.
+    loop_fn is invoked as a function/macro with raw unevaluated args; here we
+    accept either raw cons arguments or Python sequences and interpret them.
+    """
+    # Normalize args into a Python list of forms
+    forms = []
+    # If the macro was passed a single cons wrapping the clause list, unwrap it
+    if len(args) == 1 and _consp_internal(args[0]):
+        cur = args[0]
+        while _consp_internal(cur):
+            clause = car(cur)
+            # clause is expected to be a cons whose car is the clause keyword
+            if _consp_internal(clause):
+                # append the clause head symbol
+                forms.append(car(clause))
+                # append each element of the clause tail as a single form
+                tail = cdr(clause)
+                while _consp_internal(tail):
+                    forms.append(car(tail))
+                    tail = cdr(tail)
+            else:
+                forms.append(clause)
+            cur = cdr(cur)
+    else:
+        for a in args:
+            forms.append(a)
+
+    # Simple parser: look for keywords FOR, FROM, TO, BY, DO, WHILE, UNTIL, REPEAT
+    i = 0
+    results = None
+
+    def eval_body_list(body_forms, env):
+        res = None
+        for f in body_forms:
+            res = eval(f, env)
+        return res
+
+    # If forms start with a single body, just evaluate it repeatedly? handle trivial case
+    # Parse a single clause at a time
+    env_for_loop = None
+    while i < len(forms):
+        token = forms[i]
+        # Treat token names (symbols) by uppercase name
+        name = token.name if isinstance(token, lisptype.LispSymbol) else None
+
+        if name == 'FOR':
+            # Expect: FOR <var> FROM <start> TO <end> [BY <step>] DO <body...>
+            var = forms[i+1]
+            if not isinstance(var, lisptype.LispSymbol):
+                raise lisptype.LispNotImplementedError('LOOP FOR requires a symbol')
+            # default values
+            start = 0
+            end = None
+            step = 1
+            j = i+2
+            while j < len(forms):
+                f = forms[j]
+                fname = f.name if isinstance(f, lisptype.LispSymbol) else None
+                if fname == 'FROM':
+                    start = eval(forms[j+1])
+                    j += 2
+                elif fname == 'TO':
+                    end = eval(forms[j+1])
+                    j += 2
+                elif fname == 'BY':
+                    step = eval(forms[j+1])
+                    j += 2
+                elif fname == 'DO':
+                    # body consumes rest until next top-level clause; take remaining as body
+                    body = []
+                    k = j+1
+                    while k < len(forms):
+                        body.append(forms[k])
+                        k += 1
+                    # run loop
+                    # create local environment for loop variables
+                    loop_env = lisptype.Environment(current_environment)
+                    loop_env.add_variable(var, start)
+                    val = None
+                    cur = start
+                    # inclusive loop when end is provided
+                    if end is None:
+                        # no end -> single evaluation
+                        val = eval_body_list(body, loop_env)
+                    else:
+                        # iterate
+                        if step == 0:
+                            raise lisptype.LispNotImplementedError('LOOP BY step cannot be 0')
+                        compare = (lambda a, b: a <= b) if step > 0 else (lambda a, b: a >= b)
+                        while compare(cur, end):
+                            loop_env.set_variable(var, cur)
+                            val = eval_body_list(body, loop_env)
+                            cur = cur + step
+                    results = val
+                    return results
+                else:
+                    # Unexpected token, break
+                    break
+            i = j
+
+        elif name == 'WHILE':
+            # (LOOP WHILE <test> DO <body...>)
+            test = forms[i+1]
+            # find DO
+            j = i+2
+            while j < len(forms) and not (isinstance(forms[j], lisptype.LispSymbol) and forms[j].name == 'DO'):
+                j += 1
+            body = []
+            k = j+1
+            while k < len(forms) and not (isinstance(forms[k], lisptype.LispSymbol) and forms[k].name in ('WHILE','UNTIL','REPEAT','FOR')):
+                body.append(forms[k]); k += 1
+
+            # execute
+            res = None
+            while eval(test):
+                res = eval_body_list(body, current_environment)
+            return res
+
+        elif name == 'UNTIL':
+            test = forms[i+1]
+            # find DO
+            j = i+2
+            while j < len(forms) and not (isinstance(forms[j], lisptype.LispSymbol) and forms[j].name == 'DO'):
+                j += 1
+            body = []
+            k = j+1
+            while k < len(forms) and not (isinstance(forms[k], lisptype.LispSymbol) and forms[k].name in ('WHILE','UNTIL','REPEAT','FOR')):
+                body.append(forms[k]); k += 1
+
+            res = None
+            while True:
+                res = eval_body_list(body, current_environment)
+                if eval(test):
+                    break
+            return res
+
+        elif name == 'REPEAT':
+            # (LOOP REPEAT <n> DO <body...>)
+            count = eval(forms[i+1])
+            # find DO
+            j = i+2
+            while j < len(forms) and not (isinstance(forms[j], lisptype.LispSymbol) and forms[j].name == 'DO'):
+                j += 1
+            body = []
+            k = j+1
+            while k < len(forms):
+                body.append(forms[k]); k += 1
+
+            res = None
+            for _ in range(count):
+                res = eval_body_list(body, current_environment)
+            return res
+
+        else:
+            # Unrecognized - try to eval as single body
+            return eval(token)
+
+    return results
+
+# Mark LOOP implementation as a macro so evaluator will call it with raw args
+setattr(loop_fn, '__is_macro__', True)
 
 
 def load_fn(filename, **kwargs):
