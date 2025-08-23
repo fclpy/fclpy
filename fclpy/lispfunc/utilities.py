@@ -374,6 +374,7 @@ def fill_pointer(vector):
 
 
 # Hash table operations
+@_registry.cl_function('HASH-TABLE-COUNT')
 def hash_table_count(hash_table):
     """Return number of entries in hash table."""
     if isinstance(hash_table, dict):
@@ -381,6 +382,7 @@ def hash_table_count(hash_table):
     return 0
 
 
+@_registry.cl_function('HASH-TABLE-SIZE')
 def hash_table_size(hash_table):
     """Return current size of hash table."""
     if isinstance(hash_table, dict):
@@ -388,16 +390,19 @@ def hash_table_size(hash_table):
     return 0
 
 
+@_registry.cl_function('HASH-TABLE-TEST')
 def hash_table_test(hash_table):
     """Return test function for hash table."""
     return 'EQ'  # Default test
 
 
+@_registry.cl_function('HASH-TABLE-REHASH-SIZE')
 def hash_table_rehash_size(hash_table):
     """Return rehash size of hash table."""
     return 1.5  # Default rehash size
 
 
+@_registry.cl_function('HASH-TABLE-REHASH-THRESHOLD')
 def hash_table_rehash_threshold(hash_table):
     """Return rehash threshold of hash table."""
     return 0.75  # Default threshold

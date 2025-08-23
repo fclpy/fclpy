@@ -903,6 +903,29 @@ def array_displacement(array):
     return None, 0
 
 
+@_registry.cl_function('ARRAY-DIMENSION')
+def array_dimension(array, axis_number):
+    """Get specific array dimension."""
+    try:
+        dimensions = array_dimensions(array)
+        if axis_number < 0 or axis_number >= len(dimensions):
+            raise IndexError("Invalid axis number")
+        return dimensions[axis_number]
+    except:
+        return 1
+
+
+@_registry.cl_function('ADJUST-ARRAY')
+def adjust_array(array, new_dimensions, **kwargs):
+    """Adjust array to new dimensions."""
+    # Simple implementation - create new array with new dimensions
+    # This is a simplified version
+    if isinstance(new_dimensions, int):
+        return [None] * new_dimensions
+    # For multi-dimensional arrays, delegate to make_array
+    return make_array(new_dimensions, **kwargs)
+
+
 @_registry.cl_function('VECTORP')
 def vectorp(object):
     """Test if object is vector."""

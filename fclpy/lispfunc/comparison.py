@@ -5,11 +5,13 @@ from .core import atom, car, cdr, consp
 from fclpy.lispfunc import registry as _registry
 
 
+@_registry.cl_function('EQ')
 def eq(obj1, obj2):
     """Test for object identity."""
     return lisptype.lisp_bool(obj1 is obj2)
 
 
+@_registry.cl_function('EQL')
 def eql(obj1, obj2):
     """Test for object equality (numbers and characters)."""
     if obj1 is obj2:
@@ -26,6 +28,7 @@ def eql(obj1, obj2):
     return lisptype.NIL
 
 
+@_registry.cl_function('EQUAL')
 def equal(obj1, obj2):
     """Test for structural equality."""
     if eql(obj1, obj2) == lisptype.T:
@@ -53,6 +56,7 @@ def equal(obj1, obj2):
     return lisptype.NIL
 
 
+@_registry.cl_function('EQUALP')
 def equalp(obj1, obj2):
     """Test for liberal equality."""
     if equal(obj1, obj2) == lisptype.T:
@@ -82,6 +86,7 @@ def equalp(obj1, obj2):
     return lisptype.NIL
 
 
+@_registry.cl_function('NOT')
 def not_fn(obj):
     """Logical NOT."""
     if obj is None or obj == lisptype.NIL:

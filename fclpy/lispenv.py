@@ -59,25 +59,16 @@ def setup_standard_environment():
 
         # Predicates (now registered via decorators in core.py, characters.py, utilities.py, io.py, comparison.py)
 
-        # Equality and comparison
-        'EQ': lispfunc.eq,
-        'EQUAL': lispfunc.equal,
+        # Equality and comparison functions now registered via decorators in comparison.py
 
         # Mathematical and float functions are now registered via decorators in lispfunc/math.py
 
         # Sequence operations (most moved to registry in sequences.py)
         'BUTLAST': lispfunc.butlast,
 
-        # Array operations
-        'ARRAY-DIMENSION': lispfunc.array_dimension,
-        'ADJUST-ARRAY': lispfunc.adjust_array,
+        # Array operations now registered via decorators in sequences.py and core.py
 
-        # Hash table operations
-        'HASH-TABLE-COUNT': lispfunc.hash_table_count,
-        'HASH-TABLE-SIZE': lispfunc.hash_table_size,
-        'HASH-TABLE-TEST': lispfunc.hash_table_test,
-        'HASH-TABLE-REHASH-SIZE': lispfunc.hash_table_rehash_size,
-        'HASH-TABLE-REHASH-THRESHOLD': lispfunc.hash_table_rehash_threshold,
+        # Hash table operations now registered via decorators in utilities.py
 
         # String/Character operations
         'MERGE-PATHNAMES': lispfunc.merge_pathnames,
@@ -271,12 +262,7 @@ def setup_standard_environment():
         'CASE': lispfunc.case_fn,
         'COND': lispfunc.cond_fn,
 
-        # Array operations
-        'ARRAY-ELEMENT-TYPE': lispfunc.array_element_type,
-        'ARRAY-RANK': lispfunc.array_rank,
-        'ARRAY-TOTAL-SIZE': lispfunc.array_total_size,
-        'ARRAY-IN-BOUNDS-P': lispfunc.array_in_bounds_p,
-        'ARRAY-DISPLACEMENT': lispfunc.array_displacement,
+        # Array operations now registered via decorators in sequences.py and core.py
 
         # Sequence operations
         # Registered via decorators in sequences module
@@ -431,11 +417,7 @@ def setup_standard_environment():
         'EVAL-WHEN': lispfunc.eval_when,
         'LOAD': lispfunc.load_fn,
 
-        # Essential predicates and comparisons
-        'EQUALP': lispfunc.equalp,
-        'NOT': lispfunc.not_fn,
-        'EQL': lispfunc.eql,
-        'EQUAL': lispfunc.equal_fn,
+        # Essential predicates and comparisons now registered via decorators in comparison.py
 
         # Symbol and package operations
         'DO-SYMBOLS': lispfunc.do_symbols,

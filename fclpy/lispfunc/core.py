@@ -506,11 +506,13 @@ def internal_time_units_per_second():
     return 1000
 
 
+@_registry.cl_function('ARRAY-ELEMENT-TYPE')
 def array_element_type(array):
     """Get array element type."""
     return 'T'
 
 
+@_registry.cl_function('ARRAY-RANK')
 def array_rank(array):
     """Get array rank."""
     try:
@@ -519,6 +521,7 @@ def array_rank(array):
         return 1
 
 
+@_registry.cl_function('ARRAY-TOTAL-SIZE')
 def array_total_size(array):
     """Get array total size."""
     try:
