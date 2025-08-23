@@ -6,14 +6,34 @@
 
 FCLPY is a Common Lisp interpreter implemented in Python. It provides a complete Lisp environment with an interactive REPL, file evaluation, and a clean API for embedding Lisp functionality into Python applications.
 
-## Features
+## Features (Current Core vs Planned)
 
-### 🚀 **Complete Lisp Implementation**
-- **Arithmetic Operations**: `+`, `-`, `*`, `/`, `=`, `<`, `>`, `<=`, `>=`
-- **List Operations**: `car`, `cdr`, `cons`, `list`, `append`, `reverse`
-- **Logic Functions**: `not`, `and`, `or`
-- **Predicates**: `atom`, `null`, `eq`, `equal`, `symbolp`, `numberp`, `stringp`
-- **Special Forms**: `quote`, `if`, `setq`, `let`, `defun`, `lambda`
+### ✅ Implemented Core (Early Phase 0)
+- Arithmetic: `+ - * / = < > <= >=`
+- Lists: `CAR CDR CONS LIST APPEND REVERSE` (plus many CADR variants via tests)
+- Logic: `NOT AND OR`
+- Predicates: `ATOM NULL EQ EQUAL SYMBOLP NUMBERP STRINGP` (some still returning Python bool; normalization in progress)
+- Special Forms: `QUOTE IF SETQ LET DEFUN LAMBDA` (macro system not yet active)
+- REPL & basic file loading
+
+### 🛠 In Progress (Phase 0 Hygiene)
+- Canonical boolean returns (`T` / `NIL` only) – auditing predicates
+- Reader/Readtable consolidation planning
+- Package and symbol registry groundwork
+
+### 🔜 Upcoming (Phases 1–3 Highlights)
+- Symbol slots (`value`, `function`, `plist`) & registry-driven environment
+- Package-aware reader + printer round‑trips
+- Macroexpansion, special operator dispatcher, backquote
+
+### 📅 Later (Phases 4–8 Highlights)
+- Multiple values & condition/restart system
+- Unified sequence protocol, arrays, streams, pathnames
+- Type system & early CLOS (DEFCLASS, generic dispatch)
+- Declarations, coverage metrics & optimization metadata
+- Extended numeric tower, FORMAT subset, pretty printer controls
+
+Full phased plan: see `plan.md` and `plans/phase*.md` files.
 
 ### 💻 **Interactive REPL**
 - Command-line interface similar to CLISP
@@ -309,23 +329,34 @@ MIT License - see LICENSE file for details.
 - **Operating Systems**: Windows, macOS, Linux
 - **Dependencies**: None (pure Python implementation)
 
-## Roadmap
+## Roadmap & Phase Dashboard
 
-### Current Status ✅
-- [x] Complete Lisp interpreter
-- [x] Interactive REPL
-- [x] File evaluation
-- [x] Comprehensive test suite
-- [x] Python API
-- [x] CLI interface
+Progress is tracked in `plan.md` (authoritative). Snapshot (manual – update as phases advance):
 
-### Future Enhancements 🚧
-- [ ] Macro system
-- [ ] Package system
-- [ ] Error handling improvements
-- [ ] Performance optimizations
-- [ ] Additional built-in functions
-- [ ] Documentation improvements
+| Phase | Theme | Status | Notes |
+|-------|-------|--------|-------|
+| 0 | Quick Wins & Hygiene | In Progress | `T` symbol added; predicate audit ongoing |
+| 1 | Canonical Core & Registry | Pending | |
+| 2 | Reader + Printer + Packages | Pending | |
+| 3 | Evaluator + Macros | Pending | |
+| 4 | Multiple Values + Conditions | Pending | |
+| 5 | Sequences/Arrays/Streams/Pathnames | Pending | |
+| 6 | Type System & Early CLOS | Pending | |
+| 7 | Declarations & Optimization | Pending | |
+| 8 | Extended Numeric & Advanced I/O | Pending | Optional milestone extension |
+
+Milestone "Meaningful ANSI Subset" = Phases 0–5 complete + coverage thresholds (see plan).
+
+### High‑Level Upcoming Work
+- Normalize predicate returns (finish Phase 0)
+- Introduce registry metadata & symbol slot expansion (Phase 1)
+- Implement readtable + tokenizer + basic printer (Phase 2)
+- Add macro system & special operators (Phase 3)
+
+### Deferred / Not Yet Implemented
+Macro system, condition/restart hierarchy, multiple values semantics, sequences protocol refactor, hash tables (spec subset), CLOS, FORMAT, LOOP, pretty printing controls, advanced pathnames, declarations effect on optimization.
+
+See `docs/spec_deviations.md` (to be created) for intentional omissions once documented.
 
 ## Examples and Learning
 
