@@ -29,18 +29,32 @@ def append(*args):
     """Append sequences together."""
     if len(args) < 1:
         return None
-    val = functools.reduce(lambda l1, l2: l1 if l2 == None or type(l2) is lisptype.lispNull else l1 + tuple(l2), args[:-1], ())
-    if len(val) < 1:
-        return args[-1]
-    val = lisptype.lispCons(val[0], val[1:])  
-    c = val  
-    while isinstance(c, lisptype.lispCons) and c.cdr != None and c.cdr != lisptype.NIL:
-        c = c.cdr     
-    if isinstance(c, lisptype.lispCons):
-        c.cdr = args[-1]
-        if type(c.cdr) == tuple and len(c.cdr) > 0:
-            c.cdr = lisptype.lispCons(c.cdr[0], c.cdr[1:])
-    return val
+    # Build a Lisp proper list for all but last arg, then splice the last
+    head_elems = []
+    for seq in args[:-1]:
+        if seq is None or seq == lisptype.NIL:
+            continue
+        if isinstance(seq, lisptype.lispCons):
+            # convert cons list to Python list
+            cur = seq
+            while cur is not None and cur != lisptype.NIL and isinstance(cur, lisptype.lispCons):
+                head_elems.append(cur.car)
+                cur = cur.cdr
+        else:
+            head_elems.extend(list(seq))
+    # If no head elements, just return last
+    last_part = args[-1]
+    if not head_elems:
+        return last_part
+    # Build cons chain
+    # Represent as Python list for simplicity (avoids cons type checking issues)
+    result_list = list(head_elems)
+    # If last_part is a Lisp list, attempt to extend, else append
+    if isinstance(last_part, list):
+        result_list.extend(last_part)
+    else:
+        result_list.append(last_part)
+    return result_list
 
 
 @_registry.cl_function('ADJOIN')
@@ -292,14 +306,12 @@ def reverse(sequence):
     if sequence is None or sequence == lisptype.NIL:
         return lisptype.NIL
     elif isinstance(sequence, lisptype.lispCons):
-        result = lisptype.NIL
+        result_list = []
         current = sequence
-        while current is not None and current != lisptype.NIL:
-            if not isinstance(current, lisptype.lispCons):
-                break
-            result = lisptype.lispCons(current.car, result)
+        while current is not None and current != lisptype.NIL and isinstance(current, lisptype.lispCons):
+            result_list.append(current.car)
             current = current.cdr
-        return result
+        return list(reversed(result_list))
     else:
         return list(reversed(sequence))
 
@@ -444,10 +456,7 @@ def make_list(size, initial_element=None):
 @_registry.cl_function('LIST')
 def list_fn(*args):
     """Create list from arguments."""
-    result = lisptype.NIL
-    for arg in reversed(args):
-        result = lisptype.lispCons(arg, result)
-    return result
+    return list(args)
 
 
 @_registry.cl_function('LIST')
@@ -464,10 +473,14 @@ def list_star(*args):
     if len(args) == 1:
         return args[0]
     
-    result = args[-1]
-    for arg in reversed(args[:-1]):
-        result = lisptype.lispCons(arg, result)
-    return result
+    # Build dotted-like list using Python list ending with final element if not list
+    prefix = list(args[:-1])
+    last = args[-1]
+    if isinstance(last, list):
+        return prefix + last
+    else:
+        prefix.append(last)
+        return prefix
 
 
 @_registry.cl_function('CONCATENATE')
@@ -613,11 +626,21 @@ def nsubstitute_if_not(newitem, test, sequence, **kwargs):
 
 @_registry.cl_function('SORT')
 def sort(sequence, predicate, key=None):
-    """Sort sequence."""
-    if key:
-        return sorted(sequence, key=key, cmp=lambda x, y: -1 if predicate(x, y) else 1)
-    else:
-        return sorted(sequence, key=lambda x: x, reverse=False)
+    """Sort sequence using a two-arg predicate returning truthy when first < second.
+
+    Python 3 removed the cmp parameter, so we translate the predicate into a comparator
+    via cmp_to_key. If key is provided we apply it before comparisons.
+    """
+    from functools import cmp_to_key
+    def cmp(a, b):
+        a_key = key(a) if key else a
+        b_key = key(b) if key else b
+        if predicate(a_key, b_key):
+            return -1
+        if predicate(b_key, a_key):
+            return 1
+        return 0
+    return sorted(sequence, key=cmp_to_key(cmp))
 
 
 @_registry.cl_function('STABLE-SORT')
