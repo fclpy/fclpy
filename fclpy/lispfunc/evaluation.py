@@ -442,6 +442,7 @@ def funcall(function, *args):
     return function(*args)
 
 
+@_registry.cl_function('LAMBDA')
 def lambda_fn(lambda_list, *body):
     """Create lambda function."""
     def lambda_func(*args):
@@ -470,6 +471,7 @@ def handler_case(form, *clauses):
     """Handle conditions with case."""
     raise lisptype.LispNotImplementedError("HANDLER-CASE")
 
+@_registry.cl_function('IGNORE-ERRORS')
 def ignore_errors(*body):
     """Ignore errors in body."""
     try:
@@ -536,6 +538,7 @@ def ignorable(*args):
     """Ignorable declaration."""
     return None
 
+@_registry.cl_function('DEFINE-MODIFY-MACRO')
 def define_modify_macro(name, lambda_list, function, **kwargs):
     """Define modify macro."""
     raise lisptype.LispNotImplementedError("DEFINE-MODIFY-MACRO")
@@ -594,11 +597,13 @@ def ctypecase(keyform, *clauses):
     return None  # Simplified
 
 
+@_registry.cl_function('CCASE')
 def ccase(keyform, *clauses):
     """Correctable case."""
     return None  # Simplified
 
 
+@_registry.cl_function('ECASE')
 def ecase(keyform, *clauses):
     """Exhaustive case."""
     return None  # Simplified
@@ -614,11 +619,13 @@ def compile_fn(name, definition=None):
     return None  # Simplified
 
 
+@_registry.cl_function('THE')
 def the(type_spec, form):
     """Type declaration."""
     return form
 
 
+@_registry.cl_function('LOCALLY')
 def locally(*body):
     """Local declarations."""
     result = None
@@ -627,6 +634,7 @@ def locally(*body):
     return result
 
 
+@_registry.cl_function('DESTRUCTURING-BIND')
 def destructuring_bind(lambda_list, expression, *body):
     """Destructuring bind."""
     result = None

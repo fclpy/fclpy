@@ -149,6 +149,7 @@ def get_decoded_time():
     return decode_universal_time(get_universal_time())
 
 
+@_registry.cl_function('TIME')
 def time_fn():
     """Return current time in seconds since epoch (stub for Lisp TIME)."""
     import time as _time
@@ -1329,9 +1330,10 @@ def concatenated_stream_p(obj):
     return False  # Simplified
 
 
+@_registry.cl_function('ECHO-STREAM-P')
 def echo_stream_p(obj):
     """Test if object is echo stream."""
-    return False  # Simplified
+    return lisptype.lisp_bool(False)  # Simplified
 
 
 def file_stream_p(obj):
@@ -1382,16 +1384,19 @@ def dribble(pathname=None):
     return None
 
 
+@_registry.cl_function('BREAK')
 def break_fn(format_control=None, *format_args):
     """Enter debugger."""
     return None
 
 
+@_registry.cl_function('CONTINUE')
 def continue_fn(condition=None):
     """Continue from debugger."""
     return None
 
 
+@_registry.cl_function('TRACE')
 def trace_fn(*function_names):
     """Trace functions."""
     return None
@@ -1446,6 +1451,7 @@ def import_fn(symbols, package=None):
     return True
 
 
+@_registry.cl_function('PROVIDE')
 def provide(module_name):
     """Provide module."""
     return module_name
@@ -1456,27 +1462,32 @@ def documentation(item=None):
     return f"Documentation for {item}"
 
 
+@_registry.cl_function('REQUIRE')
 def require(module_name, pathname=None):
     """Require module."""
     return None
 
 
 # Declaration and definition functions
+@_registry.cl_function('DECLAIM')
 def declaim(*declaration_specifiers):
     """Global declarations."""
     return None
 
 
+@_registry.cl_function('DECLARE')
 def declare(*declaration_specifiers):
     """Local declarations."""
     return None
 
 
+@_registry.cl_function('DEFCONSTANT')
 def defconstant(name, initial_value, documentation=None):
     """Define constant."""
     return name
 
 
+@_registry.cl_function('DEFPARAMETER')
 def defparameter(name, initial_value, documentation=None):
     """Define parameter."""
     return name
@@ -1490,27 +1501,32 @@ def deftype(name, lambda_list, *body):
     return name
 
 
+@_registry.cl_function('DEFSTRUCT')
 def defstruct(name_and_options, *slot_descriptions):
     """Define structure."""
     return None
 
 
+@_registry.cl_function('DEFPACKAGE')
 def defpackage(package_name, *options):
     """Define package."""
     return str(package_name)
 
 
 # CLOS functions (simplified)
+@_registry.cl_function('DEFCLASS')
 def defclass(name, superclasses, slots, *class_options):
     """Define class."""
     return name
 
 
+@_registry.cl_function('DEFGENERIC')
 def defgeneric(name, lambda_list, *options):
     """Define generic function."""
     return name
 
 
+@_registry.cl_function('DEFMETHOD')
 def defmethod(name, *args):
     """Define method."""
     return name
@@ -1688,26 +1704,31 @@ def structure_object():
 
 
 # Final large batch of remaining functions
+@_registry.cl_function('DEFINE-CONDITION')
 def define_condition(name, parent_types, slot_specs, *options):
     """Define condition."""
     return name
 
 
+@_registry.cl_function('DEFINE-METHOD-COMBINATION')
 def define_method_combination(name, *args):
     """Define method combination."""
     return name
 
 
+@_registry.cl_function('DEFINE-SETF-EXPANDER')
 def define_setf_expander(access_fn, lambda_list, *body):
     """Define setf expander."""
     return access_fn
 
 
+@_registry.cl_function('DEFSETF')
 def defsetf(access_fn, update_fn, documentation=None):
     """Define setf function."""
     return access_fn
 
 
+@_registry.cl_function('GET-SETF-EXPANSION')
 def get_setf_expansion(place, environment=None):
     """Get setf expansion."""
     return [], [], [], place, place
@@ -1723,26 +1744,31 @@ def ensure_directories_exist(pathspec, **kwargs):
     return pathspec, True
 
 
+@_registry.cl_function('LOAD-TIME-VALUE')
 def load_time_value(form, read_only_p=None):
     """Load time value."""
     return form
 
 
+@_registry.cl_function('MAKE-CONDITION')
 def make_condition(type_designator, *args):
     """Make condition."""
     return type_designator
 
 
+@_registry.cl_function('COMPUTE-RESTARTS')
 def compute_restarts(condition=None):
     """Compute restarts."""
     return []
 
 
+@_registry.cl_function('FIND-RESTART')
 def find_restart(identifier, condition=None):
     """Find restart."""
     return None
 
 
+@_registry.cl_function('RESTART-BIND')
 def restart_bind(restart_definitions, *body):
     """Restart bind macro."""
     result = None
@@ -1751,6 +1777,7 @@ def restart_bind(restart_definitions, *body):
     return result
 
 
+@_registry.cl_function('RESTART-CASE')
 def restart_case(form, *restart_clauses):
     """Restart case macro."""
     return form
@@ -1790,27 +1817,32 @@ def cerror(continue_format_control, datum, *arguments):
     return None
 
 
+@_registry.cl_function('RESTART-NAME')
 def restart_name(restart):
     """Get restart name."""
     return str(restart)
 
 
+@_registry.cl_function('SIGNAL')
 def signal_fn(datum, *arguments):
     """Signal condition."""
     return None
 
 
+@_registry.cl_function('ERROR')
 def error_fn(datum, *arguments):
     """Signal error."""
     raise Exception(str(datum))
 
 
+@_registry.cl_function('WARN')
 def warn_fn(datum, *arguments):
     """Warn."""
     print(f"Warning: {datum}")
     return None
 
 
+@_registry.cl_function('MUFFLE-WARNING')
 def muffle_warning(condition=None):
     """Muffle warning."""
     return None
@@ -1822,11 +1854,13 @@ def invoke_debugger(condition=None):
     return None
 
 
+@_registry.cl_function('STORE-VALUE')
 def store_value(value):
     """Store value restart."""
     return value
 
 
+@_registry.cl_function('USE-VALUE')
 def use_value(value):
     """Use value restart."""
     return value
@@ -1843,6 +1877,7 @@ def ignore_errors(*body):
         return None
 
 
+@_registry.cl_function('WITH-CONDITION-RESTARTS')
 def with_condition_restarts(condition_form, restarts_form, *body):
     """With condition restarts."""
     result = None
@@ -1851,6 +1886,7 @@ def with_condition_restarts(condition_form, restarts_form, *body):
     return result
 
 
+@_registry.cl_function('WITH-SIMPLE-RESTART')
 def with_simple_restart(name, format_control, *body):
     """With simple restart."""
     result = None
@@ -1865,11 +1901,13 @@ def proclaim(declaration_specifier):
 
 
 # Stream functions
+@_registry.cl_function('ECHO-STREAM-INPUT-STREAM')
 def echo_stream_input_stream(echo_stream):
     """Get input stream from echo stream."""
     return echo_stream
 
 
+@_registry.cl_function('ECHO-STREAM-OUTPUT-STREAM')
 def echo_stream_output_stream(echo_stream):
     """Get output stream from echo stream."""
     return echo_stream
@@ -1952,6 +1990,7 @@ def rationalize(number):
     return number
 
 
+@_registry.cl_function('COMPLEX')
 def complex_fn(realpart, imagpart=0):
     """Create complex number."""
     return complex(realpart, imagpart)
@@ -2007,16 +2046,19 @@ def least_positive_normalized_single_float():
 
 
 # Additional utility functions
+@_registry.cl_function('ARRAY-ROW-MAJOR-INDEX')
 def array_row_major_index(array, *subscripts):
     """Array row major index."""
     return 0  # Simplified
 
 
+@_registry.cl_function('CHAR-BITS-LIMIT')
 def char_bits_limit():
     """Character bits limit."""
     return 16
 
 
+@_registry.cl_function('CHAR-FONT-LIMIT')
 def char_font_limit():
     """Character font limit."""
     return 256
