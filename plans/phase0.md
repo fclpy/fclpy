@@ -1,60 +1,102 @@
-# Phase 0 – Quick Wins & Hygiene
+# Phase 0 – Fix Basic Problems
 
-Agent MUST run `pipenv run pytest -q` after EACH checkbox before ticking it.
+**CRITICAL**: Run `pipenv run pytest -q` after EVERY task. If tests fail, fix them before moving on.
 
-## Tasks (Breakdowns the agent must follow in order)
+**REMEMBER**: Use PowerShell syntax! Use `;` not `&&` to join commands.
 
-- [x] Fix `cddddr` bug (`core.py`). (Verified present and correct)
+## Current Phase 0 Status
+- [x] Task 1: Fix `cddddr` function ✅ (Already complete)
+- [ ] Task 2: Fix predicate functions (Next to work on)
+- [ ] Task 3: Move reader functions 
+- [ ] Task 4: Remove duplicate function definitions
+- [ ] Task 5: Replace package stubs
+- [ ] Task 6: Add test to catch duplicate registrations
+- [ ] Task 7: Fix printer to show T and NIL correctly  
+- [ ] Task 8: Add basic round-trip test
+
+## Step-By-Step Tasks (Do These In Order)
+
+### Task 1: Fix the `cddddr` function
+- [x] Fix `cddddr` bug in `fclpy/lispfunc/core.py`. (Verified present and correct)
 	- (Done) Confirm implementation: nested four `cdr` calls.
 	- (Done) Unit test exists & passes.
 
-- [x] Introduce canonical `T` symbol; unify predicates to return `T` / `NIL` only.
+### Task 2: Fix predicate functions to return T and NIL instead of True and False
+- [x] Make sure canonical `T` symbol exists in `lisptype.py`.
 	- (Done) `T` symbol present in `lisptype.py`.
-	- [ ] Audit predicates still returning raw Python bool.
-		- [ ] Grep for `return True` / `return False` in lisp source dirs.
-		- [ ] For each occurrence decide: replace with `T` / `NIL` or wrap via `lisp_bool` helper.
-		- [ ] Add / extend tests asserting `(type-of (predicate ...))` yields symbol not Python bool (if such type checks exist) OR assert printer outputs `T`/`NIL`.
+	
+- [ ] Find and fix predicates that return Python True/False instead of Lisp T/NIL.
+	- [ ] **Step 2.1**: Run this command to find problems:
+		```powershell  
+		Get-ChildItem -Recurse .\fclpy\fclpy\lispfunc | Select-String -Pattern 'return True','return False'
+		```
+	- [ ] **Step 2.2**: For each file that shows up, open it and find lines with `return True` or `return False`
+	- [ ] **Step 2.3**: Change `return True` to `return lisptype.T` and `return False` to `return lisptype.NIL`
+	- [ ] **Step 2.4**: If you see complex expressions, wrap them like: `return lisptype.lisp_bool(some_complex_test)`
+	- [ ] **Step 2.5**: Add tests to check that predicates like `(symbolp 'x)` return `T` not Python `True`
+	- [ ] **Step 2.6**: Run tests after each file you change: `pipenv run pytest -q`
 
-- [ ] Centralize reader macro/readtable API (single module e.g. `readtable.py`).
-	- [ ] Inventory existing readtable / macro char functions in `io.py` and stubs in `utilities.py`.
-	- [ ] Design target module interface: `*READTABLE*`, `copy_readtable`, `make_dispatch_macro_character`, `set_syntax_from_char`, `readtable_case`, registration of macro chars.
-	- [ ] Create new module (if not present) and move canonical implementations there.
-	- [ ] Replace stubs in `utilities.py` with imports or remove + re-export.
-	- [ ] Update any import sites to new module path.
-	- [ ] Add tests: copying readtable preserves macro char, dispatch macro installation, case mode.
-	- [ ] Run full test suite.
+### Task 3: Move reader functions to one place
+- [ ] **Goal**: Put all reader-related functions in one file called `readtable.py`
+	- [ ] **Step 3.1**: Look for readtable functions in `fclpy/io.py` and `fclpy/lispfunc/utilities.py`
+	- [ ] **Step 3.2**: Find functions with names like `*READTABLE*`, `copy_readtable`, `make_dispatch_macro_character`
+	- [ ] **Step 3.3**: Create new file `fclpy/readtable.py` if it doesn't exist  
+	- [ ] **Step 3.4**: Move all readtable functions to this new file
+	- [ ] **Step 3.5**: Update any other files that import these functions to import from the new location
+	- [ ] **Step 3.6**: Add tests that copying a readtable works and macro characters can be installed
+	- [ ] **Step 3.7**: Run `pipenv run pytest -q` to make sure nothing broke
 
-- [ ] Remove duplicate function registrations; generate env strictly from registry.
-	- [ ] Implement script/test to build list of registered symbol names (function namespace) and assert uniqueness.
-	- [ ] Grep for duplicate function definitions (same Lisp name bound multiple times).
-	- [ ] Eliminate or consolidate duplicates (prefer canonical location; keep docstrings).
-	- [ ] Ensure environment construction code iterates only registry metadata (Phase 1 will enrich metadata—keep forward compatibility).
-	- [ ] Run tests.
+### Task 4: Remove duplicate function definitions
+- [ ] **Goal**: Make sure each Lisp function is only defined once
+	- [ ] **Step 4.1**: Create a script to find duplicates (or check manually)
+	- [ ] **Step 4.2**: Look through files in `fclpy/lispfunc/` for functions with same `@_registry.cl_function('NAME')`  
+	- [ ] **Step 4.3**: When you find duplicates, keep the best implementation and delete the others
+	- [ ] **Step 4.4**: Make sure the environment only loads functions from the registry, not from old hard-coded lists
+	- [ ] **Step 4.5**: Run `pipenv run pytest -q` to check everything still works
 
-- [ ] Replace package stubs in `utilities` with real `lisptype.Package` exports.
-	- [ ] Locate stub functions (package create/find/ensure etc.).
-	- [ ] Inspect existing `Package` class (if exists) or implement minimal version: name, nicknames, symbols table, use list.
-	- [ ] Implement real operations: `find-package`, `intern`, `export`, `use-package` (stubs may just raise or no-op now).
-	- [ ] Adjust registration decorators to point to real implementations.
-	- [ ] Add tests: interning same symbol returns identical object; keyword self-evaluates (Phase 1 dependency—can write pending tests skipped until Phase 1 completes if needed).
+### Task 5: Replace package stubs with real Package objects
+- [ ] **Goal**: Use real Package objects instead of fake stub functions  
+	- [ ] **Step 5.1**: Find stub functions in `fclpy/lispfunc/utilities.py` that just return `None` or raise errors
+	- [ ] **Step 5.2**: Look for functions like `find-package`, `intern`, `export`, `use-package`
+	- [ ] **Step 5.3**: Check if `lisptype.Package` class exists. If not, create a simple one with: name, nicknames, symbol table, use list
+	- [ ] **Step 5.4**: Implement real `find_package` that actually finds packages by name
+	- [ ] **Step 5.5**: Implement real `intern` that actually adds symbols to packages and returns same object for same symbol
+	- [ ] **Step 5.6**: Update the registry decorators to use the real package functions
+	- [ ] **Step 5.7**: Add tests that interning the same symbol twice returns the same object
+	- [ ] **Step 5.8**: Add test that keywords like `:FOO` evaluate to themselves
 
-- [ ] Add test asserting no duplicate symbol registrations after env init.
-	- [ ] Implement helper `collect_function_symbols()` returning list of names.
-	- [ ] Assert `len(set(names)) == len(names)`.
-	- [ ] Fail test first by artificially duplicating (optional) then remove duplication.
+### Task 6: Add test to catch duplicate registrations  
+- [ ] **Goal**: Make sure we never accidentally register the same function twice
+	- [ ] **Step 6.1**: Write a function `collect_function_symbols()` that gets all registered function names
+	- [ ] **Step 6.2**: Write a test that calls this function and checks `len(set(names)) == len(names)`
+	- [ ] **Step 6.3**: Run the test - it should pass (no duplicates)
+	- [ ] **Step 6.4**: If test fails, find and fix the duplicate registrations
 
-- [ ] Normalize printer for booleans: prints `T` and `NIL`.
-	- [ ] Identify printer function(s) (likely in `io` or `printer` module).
-	- [ ] Ensure `lisp_bool` always returns canonical symbols; printer should simply print symbol names.
-	- [ ] Add tests capturing printed output of `(list t nil)` equals `(T NIL)` (or appropriate formatting) and not Python `True`/`False`.
+### Task 7: Fix printer to show T and NIL correctly
+- [ ] **Goal**: When printing Lisp values, show `T` and `NIL` not Python `True`/`False`
+	- [ ] **Step 7.1**: Find the printer functions (probably in `fclpy/io.py` or similar)
+	- [ ] **Step 7.2**: Make sure `lisp_bool` function always returns `T` and `NIL` symbols
+	- [ ] **Step 7.3**: Update printer to print symbol names correctly  
+	- [ ] **Step 7.4**: Add test that printing `(list t nil)` shows `(T NIL)` not `(True False)`
+	- [ ] **Step 7.5**: Run `pipenv run pytest -q`
 
-- [ ] Add simple round‑trip test for `(A B C)` and a keyword symbol.
-	- [ ] Use printer to render structure; feed to reader; compare structural equality (symbols identity + list shape).
-	- [ ] Include a keyword (e.g., `:FOO`) verifying keyword package interning.
-	- [ ] Mark test expected-fail (xfail) until reader/package pieces implemented if sequence depends on later phases.
+### Task 8: Add basic round-trip test
+- [ ] **Goal**: Test that we can read a simple expression and print it back correctly
+	- [ ] **Step 8.1**: Write test that uses printer to convert `(A B C)` to string
+	- [ ] **Step 8.2**: Feed that string to reader and make sure we get back the same structure
+	- [ ] **Step 8.3**: Test the same thing with a keyword like `:FOO`
+	- [ ] **Step 8.4**: Make sure reading same symbol twice gives identical objects (use `is` in Python)
+	- [ ] **Step 8.5**: If this test fails, mark it as expected to fail until reader/packages are better implemented
+	- [ ] **Step 8.6**: Run `pipenv run pytest -q`
 
-## Sequencing Notes
-Execute remaining unchecked tasks roughly in listed order; package stubs and reader centralization can be parallel but finalize centralization before duplicate-registration test to avoid churn.
+## Important Notes
+- Do these tasks in the exact order shown above
+- Don't skip steps within a task
+- Reader and package improvements can be done at same time, but finish completely before testing duplicate registrations
+- If you get stuck on a task after trying twice, write down the problem in the main plan file section 18
 
-## Exit Criteria
-All boxes checked + full test suite green.
+## How to Know Phase 0 is Done
+✅ All checkboxes above are checked
+✅ All tests pass when you run `pipenv run pytest -q`
+✅ No Python `True`/`False` values are returned by predicate functions
+✅ No duplicate function registrations exist
