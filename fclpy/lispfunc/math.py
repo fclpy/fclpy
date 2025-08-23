@@ -554,6 +554,7 @@ def dpb(newbyte, bytespec, integer):
 
 
 # Special operator functions (with symbol-safe names)
+@_registry.cl_function('+')
 def _s_plus_(*args):
     """Addition operator (+)."""
     if not args:
@@ -561,6 +562,7 @@ def _s_plus_(*args):
     return sum(args)
 
 
+@_registry.cl_function('-')
 def _s_minus_(*args):
     """Subtraction operator (-)."""
     if not args:
@@ -573,6 +575,7 @@ def _s_minus_(*args):
     return result
 
 
+@_registry.cl_function('*')
 def _s_star_(*args):
     """Multiplication operator (*)."""
     if not args:
@@ -583,6 +586,7 @@ def _s_star_(*args):
     return result
 
 
+@_registry.cl_function('/')
 def _s_slash_(*args):
     """Division operator (/)."""
     if not args:
@@ -595,6 +599,7 @@ def _s_slash_(*args):
     return result
 
 
+@_registry.cl_function('=')
 def _s_eq_(*args):
     """Numeric equality operator (=)."""
     if len(args) < 2:
@@ -603,6 +608,7 @@ def _s_eq_(*args):
     return lisptype.lisp_bool(all(x == first for x in args[1:]))
 
 
+@_registry.cl_function('<')
 def _s_lt_(*args):
     """Less than operator (<)."""
     if len(args) < 2:
@@ -613,6 +619,7 @@ def _s_lt_(*args):
     return lisptype.T
 
 
+@_registry.cl_function('>')
 def _s_gt_(*args):
     """Greater than operator (>)."""
     if len(args) < 2:
@@ -623,6 +630,7 @@ def _s_gt_(*args):
     return lisptype.T
 
 
+@_registry.cl_function('<=')
 def _s_lt__s_eq_(*args):
     """Less than or equal operator (<=)."""
     if len(args) < 2:
@@ -633,6 +641,7 @@ def _s_lt__s_eq_(*args):
     return lisptype.T
 
 
+@_registry.cl_function('>=')
 def _s_gt__s_eq_(*args):
     """Greater than or equal operator (>=)."""
     if len(args) < 2:
@@ -643,6 +652,7 @@ def _s_gt__s_eq_(*args):
     return lisptype.T
 
 
+@_registry.cl_function('/=')
 def _s_slash__s_eq_(*args):
     """Not equal operator (/=)."""
     if len(args) < 2:
@@ -654,11 +664,13 @@ def _s_slash__s_eq_(*args):
     return lisptype.T
 
 
+@_registry.cl_function('1+')
 def _s_one_s_plus_(x):
     """Increment by one operator (1+)."""
     return x + 1
 
 
+@_registry.cl_function('1-')
 def _s_one_s_minus_(x):
     """Decrement by one operator (1-)."""
     return x - 1

@@ -53,27 +53,7 @@ def setup_standard_environment():
     # Fallback: use the large hand-maintained mapping (unchanged)
     function_mappings = {
         # Core list operations (now registered via decorators in core.py)
-        # Arithmetic operator symbols and numeric predicates
-        '+': lispfunc._s_plus_,
-        '-': lispfunc._s_minus_,
-        '*': lispfunc._s_star_,
-        '/': lispfunc._s_slash_,
-        '=': lispfunc._s_eq_,
-        '<': lispfunc._s_lt_,
-        '>': lispfunc._s_gt_,
-        '<=': lispfunc._s_lt__s_eq_,
-        '>=': lispfunc._s_gt__s_eq_,
-        '/=': lispfunc._s_slash__s_eq_,
-        '1+': lispfunc._s_one_s_plus_,
-        '1-': lispfunc._s_one_s_minus_,
-        'NUMBERP': lispfunc.numberp,
-        'INTEGERP': lispfunc.integerp,
-        'FLOATP': lispfunc.floatp,
-        'ZEROP': lispfunc.zerop,
-        'PLUSP': lispfunc.plusp,
-        'MINUSP': lispfunc.minusp,
-        'EVENP': lispfunc.evenp,
-        'ODDP': lispfunc.oddp,
+        # Arithmetic operator symbols and numeric predicates (now registered via decorators in math.py)
 
         # List accessors (CAR/CDR combinations) registered via decorators in core.py
 
