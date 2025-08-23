@@ -13,10 +13,19 @@ def readtablep(obj):
 
 @_registry.cl_function('STREAMP')
 def streamp(obj):
-    """Test if object is a stream (very simplified)."""
-    # Treat Python file objects and basic IO types as streams
+    """Return True if obj behaves like a Common Lisp stream.
+
+    Criteria (inclusive heuristic):
+    - Instance of io.IOBase (covers open file handles, StringIO, BytesIO, etc.)
+    - OR has any typical stream method: read / write / readline / readinto / flush.
+    This keeps the predicate flexible for user-defined stream-like objects while
+    still catching all standard Python I/O objects.
+    """
     import io as _io
-    return isinstance(obj, (_io.IOBase,))
+    if isinstance(obj, _io.IOBase):
+        return True
+    stream_attrs = ("read", "write", "readline", "readinto", "flush")
+    return any(hasattr(obj, a) for a in stream_attrs)
 
 
 # I/O operations
@@ -392,10 +401,7 @@ def interactive_stream_p(stream):
     return True  # Simplified
 
 
-@_registry.cl_function('STREAMP')
-def streamp(object):
-    """Test if object is stream."""
-    return hasattr(object, 'read') or hasattr(object, 'write')  # Simplified
+## Removed duplicate STREAMP definition (merged above)
 
 
 @_registry.cl_function('STREAM-ELEMENT-TYPE')
@@ -806,7 +812,12 @@ def make_dispatch_macro_character(char, non_terminating_p=False, readtable=None)
     """Make character into dispatch macro character."""
     if readtable is None:
         readtable = get_current_readtable()
-    return readtable.make_dispatch_macro_character(char, non_terminating_p)
+    # Our simplified Readtable doesn't expose a dedicated creator; emulate by
+    # registering a placeholder sharp reader if needed and marking non-terminating.
+    # We re-use set_macro_character to ensure the dispatch starter exists.
+    # In CL, MAKEDISPATCHMACROCHARACTER installs a dispatch macro; here just ensure entry.
+    readtable.set_macro_character(char, lambda c, s: None, not non_terminating_p)
+    return True
 
 
 @_registry.cl_function('COPY-READTABLE')
@@ -814,7 +825,16 @@ def copy_readtable(from_readtable=None, to_readtable=None):
     """Copy readtable."""
     if from_readtable is None:
         from_readtable = get_current_readtable()
-    return from_readtable.copy_readtable()
+    # Our simplified Readtable lacks copy method; perform shallow structure copy.
+    from fclpy.readtable import Readtable as _RT
+    new_rt = _RT()
+    # Replace its tables with copies of source (shallow copy suffices for function refs)
+    new_rt._macro_characters = dict(from_readtable._macro_characters)
+    new_rt._dispatch_macro_characters = {
+        k: dict(v) for k, v in from_readtable._dispatch_macro_characters.items()
+    }
+    new_rt.set_readtable_case(from_readtable.readtable_case())
+    return new_rt
 
 
 @_registry.cl_function('READTABLE-CASE')

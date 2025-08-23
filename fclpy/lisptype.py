@@ -31,6 +31,16 @@ class LispEndOfFileError(LispError):
         self.stream = stream
 
 
+class LispEnvironmentError(LispError):
+    """Raised when an operation requiring an active Lisp environment is invoked without one.
+
+    This typically indicates that the standard environment has not yet been initialized
+    (e.g. lispenv.setup_standard_environment() was not called) and neither an explicit
+    environment argument nor state.current_environment is available.
+    """
+    pass
+
+
 class Binding:
     def __init__(self,symbol,value,next,env=None):
         self.symbol = symbol
@@ -320,6 +330,24 @@ def py_str_to_sym(s):
   for p in py_str_map:
       s = s.replace(*p)
   return LispSymbol(s)
+
+
+# --- Environment resolution helper ---------------------------------------------------------
+def resolve_environment(env=None):
+    """Return a usable environment or raise LispEnvironmentError.
+
+    If an explicit env is provided it is returned as-is. Otherwise the global
+    state.current_environment is used. If that is still None, a LispEnvironmentError
+    is raised to surface a clearer error than AttributeError / None dereference.
+    """
+    if env is not None:
+        return env
+    from . import state  # local import to avoid cycles at module import time
+    if state.current_environment is None:
+        raise LispEnvironmentError(
+            "No active environment (call lispenv.setup_standard_environment() first or pass env explicitly)."
+        )
+    return state.current_environment
 
             
 

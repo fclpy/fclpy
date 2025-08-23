@@ -4,17 +4,21 @@ import fclpy.state as state
 import fclpy.lisptype as lisptype
 import fclpy.lispreader as lispreader
 from .core import car, cdr, cons, _consp_internal, _atom_internal
+import fclpy.lispenv as lispenv  # environment setup utilities
+from fclpy.lisptype import resolve_environment, LispEnvironmentError
 
 # Register special operator handlers into the builtin registry
 from . import registry as _registry
 
 @_registry.cl_function('EVAL')
 def eval(form, env=None):
-    """Evaluate a Lisp form."""
-    if env is None:
-        # Always use the live environment stored in shared state so tests
-        # that reset state.current_environment get the correct object.
-        env = state.current_environment
+    """Evaluate a Lisp form.
+
+    An explicit env takes precedence; otherwise the global state.current_environment
+    is used. If neither is available a LispEnvironmentError is raised (surfacing a
+    clearer message instead of None dereference).
+    """
+    env = resolve_environment(env)
     
     # Self-evaluating forms
     if form is None or isinstance(form, (int, float, str, bool)):
@@ -46,10 +50,11 @@ def eval(form, env=None):
                 return eval_if(form, env)
             elif operator.name == 'SETQ':
                 return eval_setq(form, env)
+            # TODO: Implement DEFVAR / LET special forms directly; for now raise clearer error
             elif operator.name == 'DEFVAR':
-                return eval_defvar(form, env)
+                raise lisptype.LispNotImplementedError('DEFVAR special form not yet implemented in evaluator')
             elif operator.name == 'LET':
-                return eval_let(form, env)
+                raise lisptype.LispNotImplementedError('LET special form not yet implemented in evaluator')
             elif operator.name == 'DEFUN':
                 return eval_defun(form, env)
             elif operator.name == 'LAMBDA':
@@ -75,15 +80,14 @@ def eval(form, env=None):
 
         # Regular function call
         func = eval(operator, env)
-        if callable(func):
-            eval_args = []
-            current = args
-            while _consp_internal(current):
-                eval_args.append(eval(car(current), env))
-                current = cdr(current)
-            return func(*eval_args)
-        else:
+        if not callable(func):
             raise lisptype.LispNotImplementedError(f"Not a function: {operator}")
+        eval_args = []
+        current = args
+        while _consp_internal(current):
+            eval_args.append(eval(car(current), env))
+            current = cdr(current)
+        return func(*eval_args)
     
     return form
 
@@ -236,13 +240,8 @@ def eval_defmacro(form, env):
 
         if len(substituted_forms) == 1:
             return substituted_forms[0]
-        else:
-            # Build (PROGN <forms...>)
-            progn_sym = lisptype.LispSymbol('PROGN')
-            forms_list = lisptype.NIL
-            for f in reversed(substituted_forms):
-                forms_list = lisptype.lispCons(f, forms_list)
-            return lisptype.lispCons(progn_sym, forms_list)
+        # Simplified: return last form (implicit PROGN semantics not modeled fully)
+        return substituted_forms[-1]
 
     # Mark as macro and register in environment
     setattr(macro_callable, '__is_macro__', True)
@@ -915,7 +914,7 @@ def loop_fn(*args):
                         k += 1
                     # run loop
                     # create local environment for loop variables
-                    loop_env = lisptype.Environment(current_environment)
+                    loop_env = lisptype.Environment(lispenv.current_environment)
                     loop_env.add_variable(var, start)
                     val = None
                     cur = start
@@ -954,7 +953,7 @@ def loop_fn(*args):
             # execute
             res = None
             while eval(test):
-                res = eval_body_list(body, current_environment)
+                res = eval_body_list(body, lispenv.current_environment)
             return res
 
         elif name == 'UNTIL':
@@ -970,7 +969,7 @@ def loop_fn(*args):
 
             res = None
             while True:
-                res = eval_body_list(body, current_environment)
+                res = eval_body_list(body, lispenv.current_environment)
                 if eval(test):
                     break
             return res
@@ -989,7 +988,7 @@ def loop_fn(*args):
 
             res = None
             for _ in range(count):
-                res = eval_body_list(body, current_environment)
+                res = eval_body_list(body, lispenv.current_environment)
             return res
 
         else:
@@ -1016,7 +1015,7 @@ def function_fn(name):
 
 @_registry.cl_special('QUOTE')
 def quote_fn(expression):
-    """QUOTE special form."""
+    return expression
 
 @_registry.cl_special('DEFMACRO')
 def special_defmacro(*args):
