@@ -1,13 +1,16 @@
 """Character operations - character predicates, manipulation, and comparison."""
 
 import fclpy.lisptype as lisptype
+from fclpy.lispfunc import registry as _registry
 
 
+@_registry.cl_function('ALPHA-CHAR-P')
 def alpha_char_p(character):
     """Test if character is alphabetic."""
     return isinstance(character, str) and len(character) == 1 and character.isalpha()
 
 
+@_registry.cl_function('ALPHANUMERICP')
 def alphanumericp(character):
     """Test if character is alphanumeric."""
     return isinstance(character, str) and len(character) == 1 and character.isalnum()
@@ -259,6 +262,7 @@ def digit_char_p(character, radix=10):
     return weight if weight < radix else None
 
 
+@_registry.cl_function('GRAPHIC-CHAR-P')
 def graphic_char_p(character):
     """Test if character is graphic."""
     return isinstance(character, str) and len(character) == 1 and character.isprintable()
@@ -332,6 +336,7 @@ def string_fn(designator):
         return str(designator)
 
 
+@_registry.cl_function('STRINGP')
 def stringp(object):
     """Test if object is a string."""
     return isinstance(object, str)

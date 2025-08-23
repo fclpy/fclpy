@@ -3,6 +3,7 @@
 import time
 import fclpy.lisptype as lisptype
 import fclpy.state as state
+from fclpy.lispfunc import registry as _registry
 
 
 def abort(condition=True):
@@ -311,6 +312,7 @@ def compiler_macro_function(name, environment=None):
     raise lisptype.LispNotImplementedError("COMPILER-MACRO-FUNCTION")
 
 
+@_registry.cl_function('FBOUNDP')
 def fboundp(symbol):
     """Test if symbol has function binding."""
     raise lisptype.LispNotImplementedError("FBOUNDP")
@@ -331,11 +333,13 @@ def symbol_function(symbol):
     return fdefinition(symbol)
 
 
+@_registry.cl_function('FUNCTIONP')
 def functionp(object):
     """Test if object is a function."""
     return callable(object)
 
 
+@_registry.cl_function('COMPILED-FUNCTION-P')
 def compiled_function_p(object):
     """Test if object is compiled function."""
     return callable(object) and hasattr(object, '__code__')
@@ -1293,6 +1297,7 @@ def arrayp(obj):
     return isinstance(obj, (list, tuple, str))
 
 
+@_registry.cl_function('ADJUSTABLE-ARRAY-P')
 def adjustable_array_p(obj):
     """Test if array is adjustable."""
     return False  # Simplified

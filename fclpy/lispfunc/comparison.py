@@ -2,6 +2,7 @@
 
 import fclpy.lisptype as lisptype
 from .core import atom, car, cdr, consp
+from fclpy.lispfunc import registry as _registry
 
 
 def eq(obj1, obj2):
@@ -89,6 +90,7 @@ def not_fn(obj):
         return lisptype.NIL
 
 
+@_registry.cl_function('NULL')
 def null(obj):
     """Test for null/nil."""
     if obj is None or obj == lisptype.NIL:

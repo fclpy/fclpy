@@ -57,25 +57,7 @@ def setup_standard_environment():
 
         # List accessors (CAR/CDR combinations) registered via decorators in core.py
 
-        # Predicates
-        'ATOM': lispfunc.atom,
-        'CONSP': lispfunc.consp,
-        'LISTP': lispfunc.listp,
-        'NULL': lispfunc.null,
-        'SYMBOLP': lispfunc.symbolp,
-        'STRINGP': lispfunc.stringp,
-        'FUNCTIONP': lispfunc.functionp,
-        'COMPILED-FUNCTION-P': lispfunc.compiled_function_p,
-        'HASH-TABLE-P': lispfunc.hash_table_p,
-        'KEYWORDP': lispfunc.keywordp,
-        'ALPHA-CHAR-P': lispfunc.alpha_char_p,
-        'ALPHANUMERICP': lispfunc.alphanumericp,
-        'GRAPHIC-CHAR-P': lispfunc.graphic_char_p,
-        'INPUT-STREAM-P': lispfunc.input_stream_p,
-        'INTERACTIVE-STREAM-P': lispfunc.interactive_stream_p,
-        'ADJUSTABLE-ARRAY-P': lispfunc.adjustable_array_p,
-        'ARRAY-HAS-FILL-POINTER-P': lispfunc.array_has_fill_pointer_p,
-        'FBOUNDP': lispfunc.fboundp,
+        # Predicates (now registered via decorators in core.py, characters.py, utilities.py, io.py, comparison.py)
 
         # Equality and comparison
         'EQ': lispfunc.eq,

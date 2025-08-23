@@ -30,6 +30,7 @@ def cons(x, seq):
     return lisptype.lispCons(x, seq)
 
 
+@_registry.cl_function('CONSP')
 def consp(obj):
     """Test if object is a cons cell."""
     return lisptype.lisp_bool(type(obj) is lisptype.lispCons)
@@ -39,6 +40,7 @@ def _consp_internal(obj):
     return type(obj) is lisptype.lispCons
 
 
+@_registry.cl_function('ATOM')
 def atom(obj):
     """Test if object is an atom (not a cons cell)."""
     return lisptype.lisp_bool(type(obj) is not lisptype.lispCons)
@@ -55,21 +57,25 @@ def acons(x, v, seq):
     return lisptype.lispCons(lisptype.lispCons(x, v), seq)
 
 
+@_registry.cl_function('LISTP')
 def listp(obj):
     """Test if object is a list (either nil or a cons cell)."""
     return lisptype.lisp_bool(obj is None or type(obj) is lisptype.lispCons)
 
 
+@_registry.cl_function('SYMBOLP')
 def symbolp(obj):
     """Test if object is a symbol."""
     return lisptype.lisp_bool(type(obj) is lisptype.LispSymbol)
 
 
+@_registry.cl_function('KEYWORDP')
 def keywordp(obj):
     """Test if object is a keyword."""
     return lisptype.lisp_bool(type(obj) is lisptype.lispKeyword)
 
 
+@_registry.cl_function('HASH-TABLE-P')
 def hash_table_p(obj):
     """Test if object is a hash table."""
     return lisptype.lisp_bool(isinstance(obj, dict))
@@ -90,6 +96,7 @@ def make_package_fn(name, nicknames=None, use_list=None):
     return lisptype.make_package(name, nicknames or [], use_list or [])
 
 
+@_registry.cl_function('ARRAY-HAS-FILL-POINTER-P')
 def array_has_fill_pointer_p(array):
     """Test if array has a fill pointer."""
     return hasattr(array, '_fill_pointer')
@@ -564,6 +571,7 @@ def standard_char_p(char):
     return ord(char) < 128
 
 
+@_registry.cl_function('GRAPHIC-CHAR-P')
 def graphic_char_p(char):
     """Test if graphic character."""
     return char.isprintable()
