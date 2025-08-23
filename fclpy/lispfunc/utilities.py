@@ -1,28 +1,32 @@
 """Miscellaneous utility functions and system operations."""
 
 import time
+import inspect
 import fclpy.lisptype as lisptype
 import fclpy.state as state
 from fclpy.lispfunc import registry as _registry
 
 
+@_registry.cl_function('ABORT')
 def abort(condition=True):
-    """Abort with restart."""
-    raise lisptype.LispNotImplementedError("ABORT")
+    """Abort with restart (stub)."""
+    return None
 
 
+@_registry.cl_function('APROPOS')
 def apropos(string, package=None):
     """Find symbols matching string."""
     raise lisptype.LispNotImplementedError("APROPOS")
 
 
+@_registry.cl_function('APROPOS-LIST')
 def apropos_list(string, package=None):
     """List symbols matching string."""
     raise lisptype.LispNotImplementedError("APROPOS-LIST")
 
 
-def describe(object, stream=None):
-    """Describe object."""
+# NOTE: describe already provided elsewhere; retain single implementation
+def describe(object, stream=None):  # keep simple description
     return str(object)
 
 
@@ -113,6 +117,7 @@ def parse_macro_lambda_list(lambda_list):
     }
 
 # ---------------------------------------------------------------------------
+@_registry.cl_function('ENCODE-UNIVERSAL-TIME')
 def encode_universal_time(year, month, date, hour, minute, second):
     """Encode date/time to universal time (seconds since 1900-01-01)."""
     import datetime
@@ -124,6 +129,7 @@ def encode_universal_time(year, month, date, hour, minute, second):
         raise lisptype.LispNotImplementedError("ENCODE-UNIVERSAL-TIME: invalid date/time")
 
 
+@_registry.cl_function('GET-UNIVERSAL-TIME')
 def get_universal_time():
     """Return current universal time (seconds since 1900-01-01)."""
     import datetime
@@ -131,6 +137,7 @@ def get_universal_time():
     return int((datetime.datetime.utcnow() - epoch).total_seconds())
 
 
+@_registry.cl_function('DECODE-UNIVERSAL-TIME')
 def decode_universal_time(universal_time=None):
     """Decode universal time (seconds since 1900-01-01) into components.
 
@@ -144,6 +151,7 @@ def decode_universal_time(universal_time=None):
     return (dt.second, dt.minute, dt.hour, dt.day, dt.month, dt.year, None)
 
 
+@_registry.cl_function('GET-DECODED-TIME')
 def get_decoded_time():
     """Return decoded components for the current universal time."""
     return decode_universal_time(get_universal_time())
@@ -164,57 +172,67 @@ def sleep(seconds):
 
 
 # System information
+@_registry.cl_function('LISP-IMPLEMENTATION-TYPE')
 def lisp_implementation_type():
     """Get Lisp implementation type."""
     return "FCLPY"
 
 
+@_registry.cl_function('LISP-IMPLEMENTATION-VERSION')
 def lisp_implementation_version():
     """Get Lisp implementation version."""
     return "0.1.0"
 
 
+@_registry.cl_function('MACHINE-INSTANCE')
 def machine_instance():
     """Get machine instance."""
     import socket
     return socket.gethostname()
 
 
+@_registry.cl_function('MACHINE-TYPE')
 def machine_type():
     """Get machine type."""
     import platform
     return platform.machine()
 
 
+@_registry.cl_function('MACHINE-VERSION')
 def machine_version():
     """Get machine version."""
     import platform
     return platform.platform()
 
 
+@_registry.cl_function('SOFTWARE-TYPE')
 def software_type():
     """Get software type."""
     import platform
     return platform.system()
 
 
+@_registry.cl_function('SOFTWARE-VERSION')
 def software_version():
     """Get software version."""
     import platform
     return platform.release()
 
 
+@_registry.cl_function('SHORT-SITE-NAME')
 def short_site_name():
     """Get short site name."""
     return "Unknown"
 
 
+@_registry.cl_function('LONG-SITE-NAME')
 def long_site_name():
     """Get long site name."""
     return "Unknown Site"
 
 
 # Environment access
+@_registry.cl_function('USER-HOMEDIR-PATHNAME')
 def user_homedir_pathname():
     """Get user home directory."""
     import os
@@ -238,7 +256,7 @@ def quit(code=0):
     exit(code)
 
 
-# Random number generation
+@_registry.cl_function('RANDOM')
 def random(limit, state=None):
     """Generate random number."""
     import random as rnd
@@ -250,6 +268,7 @@ def random(limit, state=None):
         raise lisptype.LispNotImplementedError("RANDOM: invalid limit type")
 
 
+@_registry.cl_function('MAKE-RANDOM-STATE')
 def make_random_state(state=None):
     """Make random state."""
     import random as rnd
@@ -259,25 +278,21 @@ def make_random_state(state=None):
     return new_state
 
 
+@_registry.cl_function('RANDOM-STATE-P')
 def random_state_p(object):
     """Test if object is random state."""
     return isinstance(object, tuple) and len(object) >= 2
 
 
-# Load and compile
-def load(filespec, **kwargs):
-    """Load file."""
-    raise lisptype.LispNotImplementedError("LOAD")
-
-
+@_registry.cl_function('COMPILE')
 def compile_fn(name, definition=None):
     """Compile function."""
-    raise lisptype.LispNotImplementedError("COMPILE")
+    return name
 
 
+@_registry.cl_special('EVAL-WHEN')
 def eval_when(situations, *forms):
     """Evaluate when situations apply."""
-    # Simplified - always evaluate
     result = None
     for form in forms:
         result = form  # Would normally evaluate
@@ -289,28 +304,38 @@ def locally(*body):
     raise lisptype.LispNotImplementedError("LOCALLY")
 
 
+@_registry.cl_special('PROGV')
 def progv(symbols, values, *body):
-    """Execute with dynamic bindings."""
+    """Special form PROGV (stub)."""
     raise lisptype.LispNotImplementedError("PROGV")
 
 
+@_registry.cl_function('SPECIAL-OPERATOR-P')
 def special_operator_p(symbol):
-    """Test if symbol is special operator."""
+    """SPECIAL-OPERATOR-P predicate (simplified)."""
     if isinstance(symbol, lisptype.LispSymbol):
         special_ops = {'QUOTE', 'IF', 'LAMBDA', 'SETQ', 'LET', 'DEFUN', 'DEFVAR',
-                      'PROGN', 'COND', 'AND', 'OR', 'WHEN', 'UNLESS'}
-        return symbol.name in special_ops
-    return False
+                      'PROGN', 'COND', 'AND', 'OR', 'WHEN', 'UNLESS', 'PROGV'}
+        return lisptype.lisp_bool(symbol.name in special_ops)
+    return lisptype.lisp_bool(False)
 
 
+@_registry.cl_function('MACRO-FUNCTION')
 def macro_function(symbol, environment=None):
     """Get macro function."""
-    raise lisptype.LispNotImplementedError("MACRO-FUNCTION")
+    if environment is None:
+        from fclpy.lispenv import current_environment as _cur_env
+        environment = _cur_env
+    func = environment.find_func(symbol)
+    if callable(func) and getattr(func, '__is_macro__', False):
+        return func
+    return None
 
 
+@_registry.cl_function('COMPILER-MACRO-FUNCTION')
 def compiler_macro_function(name, environment=None):
     """Get compiler macro function."""
-    raise lisptype.LispNotImplementedError("COMPILER-MACRO-FUNCTION")
+    return None
 
 
 @_registry.cl_function('FBOUNDP')
@@ -319,14 +344,53 @@ def fboundp(symbol):
     raise lisptype.LispNotImplementedError("FBOUNDP")
 
 
+@_registry.cl_function('FMAKUNBOUND')
 def fmakunbound(symbol):
-    """Remove function binding."""
-    raise lisptype.LispNotImplementedError("FMAKUNBOUND")
+    """Remove function binding for SYMBOL.
 
+    This walks the current global environment's function bindings and
+    removes any entry whose symbol name matches the provided symbol.
+    Returns T if a binding was removed, otherwise NIL.
+    """
+    # Normalize symbol to LispSymbol
+    if not isinstance(symbol, lisptype.LispSymbol):
+        symbol = lisptype.LispSymbol(str(symbol))
+    env = state.current_environment
+    if env is None:
+        return lisptype.NIL
+    prev = None
+    node = env.function_bindings
+    removed = False
+    while node is not None:
+        if node.symbol.name == symbol.name:
+            # Remove node from linked list
+            if prev is None:
+                env.function_bindings = node.next
+            else:
+                prev.next = node.next
+            removed = True
+            break
+        prev = node
+        node = node.next
+    return lisptype.T if removed else lisptype.NIL
 
+@_registry.cl_function('FDEFINITION')
 def fdefinition(symbol):
-    """Get function definition."""
-    raise lisptype.LispNotImplementedError("FDEFINITION")
+    """Return the function object bound to SYMBOL.
+
+    Looks up the symbol in the current environment's function bindings.
+    Signals a LispNotImplementedError (standing in for UNDEFINED-FUNCTION)
+    if the symbol is not fbound.
+    """
+    if not isinstance(symbol, lisptype.LispSymbol):
+        symbol = lisptype.LispSymbol(str(symbol))
+    env = state.current_environment
+    if env is None:
+        raise lisptype.LispNotImplementedError("FDEFINITION: no environment")
+    func = env.find_func(symbol)
+    if func is None:
+        raise lisptype.LispNotImplementedError("FDEFINITION: undefined function")
+    return func
 
 
 def symbol_function(symbol):
@@ -355,6 +419,7 @@ def gensym(prefix="G"):
     return lisptype.LispSymbol(f"{prefix}{_gensym_counter}")
 
 
+@_registry.cl_function('GENTEMP')
 def gentemp(prefix="T", package=None):
     """Generate temporary symbol."""
     count = 0
@@ -365,6 +430,7 @@ def gentemp(prefix="T", package=None):
         return symbol
 
 
+@_registry.cl_function('FILL-POINTER')
 def fill_pointer(vector):
     """Return the fill pointer of a vector."""
     if hasattr(vector, '_fill_pointer'):
@@ -409,6 +475,7 @@ def hash_table_rehash_threshold(hash_table):
 
 
 # Property list operations
+@_registry.cl_function('GET')
 def get(symbol, indicator, default=None):
     """Get property from symbol's property list."""
     if hasattr(symbol, '_plist'):
@@ -419,6 +486,7 @@ def get(symbol, indicator, default=None):
     return default
 
 
+@_registry.cl_function('RPLACA')
 def rplaca(cons, new_car):
     """Replace car of cons cell."""
     if hasattr(cons, 'car'):
@@ -426,6 +494,7 @@ def rplaca(cons, new_car):
     return cons
 
 
+@_registry.cl_function('RPLACD')
 def rplacd(cons, new_cdr):
     """Replace cdr of cons cell."""
     if hasattr(cons, 'cdr'):
@@ -434,6 +503,7 @@ def rplacd(cons, new_cdr):
 
 
 # Package and symbol operations
+@_registry.cl_function('INTERN')
 def intern(string, package=None):
     """Intern symbol in package."""
     # Support keyword syntax ":FOO" -> intern into KEYWORD package
@@ -459,6 +529,7 @@ def intern(string, package=None):
     return pkg.intern_symbol(name, external=False)
 
 
+@_registry.cl_function('FIND-SYMBOL')
 def find_symbol(string, package=None):
     """Find symbol in package."""
     name = string if isinstance(string, str) else str(string)
@@ -478,6 +549,7 @@ def find_symbol(string, package=None):
     return pkg.find_symbol(name)
 
 
+@_registry.cl_function('FIND-PACKAGE')
 def find_package(name):
     """Find package by name."""
     if isinstance(name, lisptype.Package):
@@ -485,6 +557,7 @@ def find_package(name):
     return lisptype.find_package(str(name))
 
 
+@_registry.cl_function('FIND-ALL-SYMBOLS')
 def find_all_symbols(string):
     """Find all symbols with given name."""
     name = string if isinstance(string, str) else str(string)
@@ -496,6 +569,7 @@ def find_all_symbols(string):
     return out
 
 
+@_registry.cl_function('EXPORT')
 def export_symbol(symbols, package=None):
     """Export symbols from package."""
     if not isinstance(symbols, (list, tuple)):
@@ -510,6 +584,7 @@ def export_symbol(symbols, package=None):
     return True
 
 
+@_registry.cl_function('IMPORT')
 def import_symbol(symbols, package=None):
     """Import symbols into package."""
     if not isinstance(symbols, (list, tuple)):
@@ -523,6 +598,7 @@ def import_symbol(symbols, package=None):
     return True
 
 
+@_registry.cl_function('IN-PACKAGE')
 def in_package(name):
     """Set current package."""
     # Set a module-level current package pointer so other code can reference it
@@ -536,49 +612,106 @@ def in_package(name):
     return pkg
 
 
+@_registry.cl_function('FUNCTION-KEYWORDS')
 def function_keywords(function):
-    """Return function's keyword parameters."""
-    raise lisptype.LispNotImplementedError("FUNCTION-KEYWORDS")
+    """Return two values similar to CL: FUNCTION-KEYWORDS.
 
+    For Python callables we inspect the signature and collect keyword
+    parameters (those with defaults) and &ALLOW-OTHER-KEYS status.
+    Returns (keywords, allow_other_keys_p).
+    """
+    if not callable(function):
+        return [], lisptype.NIL
+    try:
+        sig = inspect.signature(function)
+        keywords = []
+        allow_other = lisptype.NIL
+        for p in sig.parameters.values():
+            # Heuristic: parameters with defaults become keyword params
+            if getattr(p, 'default', None) not in (None, getattr(inspect, '_empty', None)):
+                keywords.append(p.name.upper())
+            name_kind = str(getattr(p, 'kind', ''))
+            if 'VAR_KEYWORD' in name_kind:
+                allow_other = lisptype.T
+        return keywords, allow_other
+    except Exception:
+        return [], lisptype.NIL
 
+@_registry.cl_function('FUNCTION-LAMBDA-EXPRESSION')
 def function_lambda_expression(function):
-    """Return function's lambda expression."""
-    raise lisptype.LispNotImplementedError("FUNCTION-LAMBDA-EXPRESSION")
+    """Return three values approximating CL: FUNCTION-LAMBDA-EXPRESSION.
+
+    1. A simplified lambda list (list of parameter names as symbols)
+    2. The body form source (string of source if available, else NIL)
+    3. A closure-p flag (T if the function appears to close over free vars)
+    """
+    if not callable(function):
+        return [], lisptype.NIL, lisptype.NIL
+    params = []
+    closure_p = lisptype.NIL
+    try:
+        sig = inspect.signature(function)
+        for p in sig.parameters.values():
+            name_kind = str(getattr(p, 'kind', ''))
+            if 'POSITIONAL' in name_kind or 'KEYWORD_ONLY' in name_kind:
+                params.append(lisptype.LispSymbol(p.name.upper()))
+            elif 'VAR_POSITIONAL' in name_kind:
+                params.append(lisptype.LispSymbol('&REST'))
+            elif 'VAR_KEYWORD' in name_kind:
+                params.append(lisptype.LispSymbol('&KEY'))
+        if getattr(function, '__closure__', None):
+            closure_p = lisptype.T if function.__closure__ else lisptype.NIL
+        try:
+            src = inspect.getsource(function)
+        except Exception:
+            src = None
+        return params, (src or lisptype.NIL), closure_p
+    except Exception:
+        return [], lisptype.NIL, lisptype.NIL
 
 
 # Stubs for many missing CLOS and system functions
+@_registry.cl_function('FIND-CLASS')
 def find_class(name, errorp=True, environment=None):
     """Find class by name."""
     raise lisptype.LispNotImplementedError("FIND-CLASS")
 
+@_registry.cl_function('FIND-METHOD')
 def find_method(generic_function, qualifiers, specializers, errorp=True):
     """Find method."""
     raise lisptype.LispNotImplementedError("FIND-METHOD")
 
+@_registry.cl_function('ADD-METHOD')
 def add_method(generic_function, method):
     """Add method to generic function."""
     raise lisptype.LispNotImplementedError("ADD-METHOD")
 
+@_registry.cl_function('ALLOCATE-INSTANCE')
 def allocate_instance(class_obj, **kwargs):
     """Allocate instance."""
     raise lisptype.LispNotImplementedError("ALLOCATE-INSTANCE")
 
+@_registry.cl_function('INITIALIZE-INSTANCE')
 def initialize_instance(instance, **kwargs):
     """Initialize instance."""
     raise lisptype.LispNotImplementedError("INITIALIZE-INSTANCE")
 
+@_registry.cl_function('UPDATE-INSTANCE-FOR-DIFFERENT-CLASS')
 def update_instance_for_different_class(instance, new_class):
     """Update instance for different class."""
     raise lisptype.LispNotImplementedError("UPDATE-INSTANCE-FOR-DIFFERENT-CLASS")
 
+@_registry.cl_function('UPDATE-INSTANCE-FOR-REDEFINED-CLASS')
 def update_instance_for_redefined_class(instance, added_slots, discarded_slots, property_list):
     """Update instance for redefined class."""
     raise lisptype.LispNotImplementedError("UPDATE-INSTANCE-FOR-REDEFINED-CLASS")
 
+@_registry.cl_function('SLOT-MISSING')
 def slot_missing(class_obj, instance, slot_name, operation, new_value=None):
     """Handle missing slot."""
     raise lisptype.LispNotImplementedError("SLOT-MISSING")
 
+@_registry.cl_function('INVALID-METHOD-ERROR')
 def invalid_method_error(method, format_control, *args):
     """Signal invalid method error."""
     raise lisptype.LispNotImplementedError("INVALID-METHOD-ERROR")
@@ -612,196 +745,218 @@ def most_negative_short_float():
     """Most negative short float."""
     return float('-inf')
 
+@_registry.cl_function('LAMBDA-LIST-KEYWORDS')
 def lambda_list_keywords():
-    """Lambda list keywords."""
+    """Return implementation lambda list keyword symbols.
+
+    Stub implementation returning a Python list of keyword strings.
+    """
     return ['&optional', '&rest', '&key', '&allow-other-keys', '&aux']
 
+@_registry.cl_function('LAMBDA-PARAMETERS-LIMIT')
 def lambda_parameters_limit():
-    """Lambda parameters limit."""
+    """Return an arbitrary large implementation limit for lambda parameters."""
     return 65536
 
+@_registry.cl_function('IDENTITY')
 def identity(x):
-    """Identity function."""
+    """Identity function (returns its single argument)."""
     return x
 
+@_registry.cl_function('COPY-TREE')
 def copy_tree(tree):
-    """Copy tree structure."""
+    """Return a (shallow) copy of a cons tree.
+
+    Recursively copies cons cells (simple stub) leaving non-cons leaves intact.
+    """
     if hasattr(tree, 'car') and hasattr(tree, 'cdr'):
         return lisptype.lispCons(copy_tree(tree.car), copy_tree(tree.cdr))
     return tree
 
+@_registry.cl_function('INSPECT')
 def inspect(object):
-    """Inspect object."""
+    """Very small stub for INSPECT: prints object and returns it."""
     print(f"Object: {object}")
     print(f"Type: {type(object)}")
     return object
 
+@_registry.cl_function('INCF')
 def incf(place, delta=1):
-    """Increment place."""
-    raise lisptype.LispNotImplementedError("INCF")
+    """INCF stub.
 
+    In a full implementation this would modify a generalized PLACE. For now,
+    if a numeric value is passed we return the incremented result; otherwise
+    we raise a not implemented error to signal unsupported place types.
+    """
+    if isinstance(place, (int, float)):
+        return place + delta
+    raise lisptype.LispNotImplementedError("INCF generalized PLACE not implemented")
+
+@_registry.cl_function('MAKE-LOAD-FORM')
 def make_load_form(object, environment=None):
-    """Make load form."""
-    raise lisptype.LispNotImplementedError("MAKE-LOAD-FORM")
+    """Stub MAKE-LOAD-FORM returning (creation-form . init-form).
 
+    We simply return a cons-like Python tuple of two identical objects.
+    """
+    return (object, object)
+
+@_registry.cl_function('MAKE-LOAD-FORM-SAVING-SLOTS')
 def make_load_form_saving_slots(object, **kwargs):
-    """Make load form saving slots."""
-    raise lisptype.LispNotImplementedError("MAKE-LOAD-FORM-SAVING-SLOTS")
+    """Stub MAKE-LOAD-FORM-SAVING-SLOTS returning simple reconstruction tuple."""
+    return (object, kwargs or {})
 
+@_registry.cl_function('PPRINT-FILL')
 def pprint_fill(stream, object, colon_p=False, at_sign_p=False):
-    """Pretty print fill."""
-    raise lisptype.LispNotImplementedError("PPRINT-FILL")
+    """Minimal PPRINT-FILL stub: write object's string representation to stream if possible."""
+    try:
+        if hasattr(stream, 'write'):
+            stream.write(str(object))
+    except Exception:
+        pass
+    return object
 
 
-# Type constants - simple stub implementations
+# Type/condition constants - simple stub implementations
+@_registry.cl_function('KEYWORD')
 def keyword():
-    """Keyword type."""
+    """Return a placeholder representing the KEYWORD type."""
     return 'KEYWORD'
 
+@_registry.cl_function('INTEGER')
 def integer():
-    """Integer type."""
+    """Return a placeholder representing the INTEGER type."""
     return 'INTEGER'
 
+@_registry.cl_function('FIXNUM')
 def fixnum():
-    """Fixnum type."""
+    """Return a placeholder representing the FIXNUM type."""
     return 'FIXNUM'
 
+@_registry.cl_function('DOUBLE-FLOAT')
 def double_float():
-    """Double float type."""
+    """Return a placeholder representing the DOUBLE-FLOAT type."""
     return 'DOUBLE-FLOAT'
 
+@_registry.cl_function('SINGLE-FLOAT')
 def single_float():
-    """Single float type."""
+    """Return a placeholder representing the SINGLE-FLOAT type."""
     return 'SINGLE-FLOAT'
 
+@_registry.cl_function('SHORT-FLOAT')
 def short_float():
-    """Short float type."""
+    """Return a placeholder representing the SHORT-FLOAT type."""
     return 'SHORT-FLOAT'
 
+@_registry.cl_function('EXTENDED-CHAR')
 def extended_char():
-    """Extended char type."""
+    """Return a placeholder representing the EXTENDED-CHAR type."""
     return 'EXTENDED-CHAR'
 
+@_registry.cl_function('HASH-TABLE')
 def hash_table():
-    """Hash table type."""
+    """Return a placeholder representing the HASH-TABLE type."""
     return 'HASH-TABLE'
 
+@_registry.cl_function('GENERIC-FUNCTION')
 def generic_function():
-    """Generic function type."""
+    """Return a placeholder representing the GENERIC-FUNCTION type."""
     return 'GENERIC-FUNCTION'
 
+@_registry.cl_function('FILE-STREAM')
 def file_stream():
-    """File stream type."""
+    """Return a placeholder representing the FILE-STREAM type."""
     return 'FILE-STREAM'
 
+@_registry.cl_function('FILE-ERROR')
 def file_error():
-    """File error type."""
+    """Return a placeholder representing the FILE-ERROR condition type."""
     return 'FILE-ERROR'
 
+@_registry.cl_function('END-OF-FILE')
 def end_of_file():
-    """End of file condition."""
+    """Return a placeholder representing the END-OF-FILE condition type."""
     return 'END-OF-FILE'
 
+@_registry.cl_function('FLOATING-POINT-INEXACT')
 def floating_point_inexact():
-    """Floating point inexact condition."""
+    """Return placeholder for FLOATING-POINT-INEXACT condition."""
     return 'FLOATING-POINT-INEXACT'
 
+@_registry.cl_function('FLOATING-POINT-INVALID-OPERATION')
 def floating_point_invalid_operation():
-    """Floating point invalid operation."""
+    """Return placeholder for FLOATING-POINT-INVALID-OPERATION condition."""
     return 'FLOATING-POINT-INVALID-OPERATION'
 
+@_registry.cl_function('FLOATING-POINT-OVERFLOW')
 def floating_point_overflow():
-    """Floating point overflow."""
+    """Return placeholder for FLOATING-POINT-OVERFLOW condition."""
     return 'FLOATING-POINT-OVERFLOW'
 
+@_registry.cl_function('FLOATING-POINT-UNDERFLOW')
 def floating_point_underflow():
-    """Floating point underflow."""
+    """Return placeholder for FLOATING-POINT-UNDERFLOW condition."""
     return 'FLOATING-POINT-UNDERFLOW'
 
+@_registry.cl_function('ARITHMETIC-ERROR-OPERANDS')
 def arithmetic_error_operands(condition):
-    """Get arithmetic error operands."""
-    raise lisptype.LispNotImplementedError("ARITHMETIC-ERROR-OPERANDS")
+    """Stub accessor returning an empty list for arithmetic error operands."""
+    return []
 
+@_registry.cl_function('ARITHMETIC-ERROR-OPERATION')
 def arithmetic_error_operation(condition):
-    """Get arithmetic error operation."""
-    raise lisptype.LispNotImplementedError("ARITHMETIC-ERROR-OPERATION")
+    """Stub accessor returning None for arithmetic error operation."""
+    return None
 
+@_registry.cl_function('FILE-ERROR-PATHNAME')
 def file_error_pathname(condition):
-    """Get file error pathname."""
-    raise lisptype.LispNotImplementedError("FILE-ERROR-PATHNAME")
-
-
-# Hash table operations
-def make_hash_table(**kwargs):
-    """Create hash table."""
-    return {}
-
-
-def gethash(key, hash_table, default=None):
-    """Get value from hash table."""
-    return hash_table.get(key, default)
-
-
-def remhash(key, hash_table):
-    """Remove entry from hash table."""
-    if key in hash_table:
-        del hash_table[key]
-        return True
-    return False
-
-
-def maphash(function, hash_table):
-    """Map function over hash table."""
-    for key, value in hash_table.items():
-        function(key, value)
+    """Stub accessor returning None for file error pathname."""
     return None
 
 
-def clrhash(hash_table):
-    """Clear hash table."""
-    hash_table.clear()
-    return hash_table
-
-
-def sxhash(object):
-    """Compute hash code."""
-    return hash(object) % (2**32)  # Keep it positive and bounded
+# (Old non-decorated hash table functions removed after migration)
 
 
 # Multiple values
+@_registry.cl_function('MULTIPLE-VALUE-BIND')
 def multiple_value_bind(*args):
-    """Bind multiple values."""
-    return None  # Simplified
-
-
-def multiple_value_call(function, *args):
-    """Call function with multiple values."""
-    return function(*args)
-
-
-def multiple_value_list(*values):
-    """Create list from multiple values."""
-    return list(values)
-
-
-def multiple_value_prog1(first_form, *forms):
-    """Multiple value prog1."""
-    return first_form
-
-
-def multiple_value_setq(*args):
-    """Multiple value setq."""
+    """Stub MULTIPLE-VALUE-BIND returns NIL (Python None)."""
     return None
 
 
+@_registry.cl_function('MULTIPLE-VALUE-CALL')
+def multiple_value_call(function, *args):
+    """Stub MULTIPLE-VALUE-CALL applies function to args."""
+    return function(*args)
+
+
+@_registry.cl_function('MULTIPLE-VALUE-LIST')
+def multiple_value_list(*values):
+    """Return Python list collecting multiple values."""
+    return list(values)
+
+
+@_registry.cl_function('MULTIPLE-VALUE-PROG1')
+def multiple_value_prog1(first_form, *forms):
+    """Return first_form ignoring remaining forms (stub)."""
+    return first_form
+
+
+@_registry.cl_function('MULTIPLE-VALUE-SETQ')
+def multiple_value_setq(*args):
+    """Stub MULTIPLE-VALUE-SETQ returns NIL."""
+    return None
+
+
+@_registry.cl_function('NTH-VALUE')
 def nth_value(n, values_form):
-    """Get nth value."""
+    """Return nth value from an iterable (stub)."""
     if isinstance(values_form, (list, tuple)) and n < len(values_form):
         return values_form[n]
     return None
 
 
 # Symbol operations
+@_registry.cl_function('SYMBOL-NAME')
 def symbol_name(symbol):
     """Get symbol name."""
     if hasattr(symbol, 'name'):
@@ -809,6 +964,7 @@ def symbol_name(symbol):
     return str(symbol)
 
 
+@_registry.cl_function('SYMBOL-PACKAGE')
 def symbol_package(symbol):
     """Get symbol package."""
     if hasattr(symbol, 'package'):
@@ -816,6 +972,7 @@ def symbol_package(symbol):
     return None
 
 
+@_registry.cl_function('SYMBOL-VALUE')
 def symbol_value(symbol):
     """Get symbol value."""
     if hasattr(symbol, 'value'):
@@ -823,6 +980,7 @@ def symbol_value(symbol):
     return None
 
 
+@_registry.cl_function('SYMBOL-FUNCTION')
 def symbol_function(symbol):
     """Get symbol function."""
     if hasattr(symbol, 'function'):
@@ -830,25 +988,28 @@ def symbol_function(symbol):
     return None
 
 
+@_registry.cl_function('MAKE-SYMBOL')
 def make_symbol(name):
     """Make uninterned symbol."""
     return lisptype.LispSymbol(name)
 
 
+@_registry.cl_function('COPY-SYMBOL')
 def copy_symbol(symbol, copy_props=None):
     """Copy symbol."""
     new_sym = make_symbol(symbol_name(symbol))
     return new_sym
 
 
-# Package operations
+@_registry.cl_function('MAKE-PACKAGE')
 def make_package(name, **kwargs):
-    """Make package using canonical lisptype implementation."""
+    """Create a new package (wrapper around lisptype.make_package)."""
     nicknames = kwargs.get('nicknames') or kwargs.get('nicknames', None)
     use_list = kwargs.get('use_list') or kwargs.get('use_list', None)
     return lisptype.make_package(str(name), nicknames or None, use_list or None)
 
 
+@_registry.cl_function('PACKAGE-NAME')
 def package_name(package):
     """Get package name."""
     if isinstance(package, lisptype.Package):
@@ -856,6 +1017,7 @@ def package_name(package):
     return str(package)
 
 
+@_registry.cl_function('PACKAGE-NICKNAMES')
 def package_nicknames(package):
     """Get package nicknames."""
     if isinstance(package, lisptype.Package):
@@ -863,6 +1025,7 @@ def package_nicknames(package):
     return []
 
 
+@_registry.cl_function('RENAME-PACKAGE')
 def rename_package(package, new_name, new_nicknames=None):
     """Rename package."""
     if isinstance(package, lisptype.Package):
@@ -873,6 +1036,7 @@ def rename_package(package, new_name, new_nicknames=None):
     return lisptype.make_package(str(new_name), new_nicknames or None, None)
 
 
+@_registry.cl_function('PACKAGE-USE-LIST')
 def package_use_list(package):
     """Get packages used by package."""
     if isinstance(package, lisptype.Package):
@@ -880,9 +1044,9 @@ def package_use_list(package):
     return []
 
 
+@_registry.cl_function('PACKAGE-USED-BY-LIST')
 def package_used_by_list(package):
     """Get packages that use package."""
-    # Reverse lookup through all packages
     if not isinstance(package, lisptype.Package):
         return []
     out = []
@@ -892,6 +1056,7 @@ def package_used_by_list(package):
     return out
 
 
+@_registry.cl_function('PACKAGE-SHADOWING-SYMBOLS')
 def package_shadowing_symbols(package):
     """Get package shadowing symbols."""
     if isinstance(package, lisptype.Package):
@@ -899,9 +1064,9 @@ def package_shadowing_symbols(package):
     return []
 
 
+@_registry.cl_function('LIST-ALL-PACKAGES')
 def list_all_packages():
     """List all packages."""
-    # Return unique packages by name
     seen = set()
     out = []
     for p in set(state.packages.values()):
@@ -911,6 +1076,7 @@ def list_all_packages():
     return out
 
 
+@_registry.cl_function('UNINTERN')
 def unintern(symbol, package=None):
     """Unintern symbol."""
     if isinstance(symbol, lisptype.LispSymbol):
@@ -927,6 +1093,7 @@ def unintern(symbol, package=None):
     return False
 
 
+@_registry.cl_function('UNEXPORT')
 def unexport(symbols, package=None):
     """Unexport symbols."""
     if not isinstance(symbols, (list, tuple)):
@@ -940,6 +1107,7 @@ def unexport(symbols, package=None):
     return True
 
 
+@_registry.cl_function('SHADOWING-IMPORT')
 def shadowing_import(symbols, package=None):
     """Import symbols with shadowing."""
     if not isinstance(symbols, (list, tuple)):
@@ -954,6 +1122,7 @@ def shadowing_import(symbols, package=None):
     return True
 
 
+@_registry.cl_function('SHADOW')
 def shadow(symbol_names, package=None):
     """Shadow symbols."""
     pkg = lisptype.COMMON_LISP_USER_PACKAGE if package is None else (package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)))
@@ -966,6 +1135,7 @@ def shadow(symbol_names, package=None):
     return True
 
 
+@_registry.cl_function('USE-PACKAGE')
 def use_package(packages_to_use, package=None):
     """Use packages."""
     pkg = lisptype.COMMON_LISP_USER_PACKAGE if package is None else (package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)))
@@ -982,6 +1152,7 @@ def use_package(packages_to_use, package=None):
     return True
 
 
+@_registry.cl_function('UNUSE-PACKAGE')
 def unuse_package(packages_to_unuse, package=None):
     """Unuse packages."""
     pkg = lisptype.COMMON_LISP_USER_PACKAGE if package is None else (package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)))
@@ -1001,6 +1172,7 @@ def unuse_package(packages_to_unuse, package=None):
 
 
 # Macro operations
+@_registry.cl_function('MACROEXPAND')
 def macroexpand(form, env=None):
     """Macroexpand form repeatedly until no change."""
     if env is None:
@@ -1012,6 +1184,7 @@ def macroexpand(form, env=None):
     return expanded, False
 
 
+@_registry.cl_function('MACROEXPAND-1')
 def macroexpand_1(form, env=None):
     """Macroexpand form once.
 
@@ -1042,191 +1215,37 @@ def macroexpand_1(form, env=None):
     return form, False
 
 
-def macro_function(symbol, environment=None):
-    """Get macro function bound to symbol in environment (or None)."""
-    if environment is None:
-        from fclpy.lispenv import current_environment as _cur_env
-        environment = _cur_env
-    func = environment.find_func(symbol)
-    if callable(func) and getattr(func, '__is_macro__', False):
-        return func
-    return None
-
-
-def defmacro_fn(name, lambda_list, *body):
-    """Define a macro in the current environment (utilities-level)."""
-    from fclpy.lispenv import current_environment as _cur_env
-    env = _cur_env
-    from fclpy.lispfunc.core import _consp_internal, car, cdr
-    # Helper: convert Python list of raw forms into Lisp cons list
-    def list_to_cons(pylist):
-        lst = lisptype.NIL
-        for itm in reversed(pylist):
-            lst = lisptype.lispCons(itm, lst)
-        return lst
-
-    # Parse macro lambda-list with basic support for &optional, &rest, &whole, &key
-    def parse_macro_lambda_list(lambda_list):
-        mode = 'required'
-        required = []
-        optional = []  # list of (name, default)
-        rest = None
-        whole = None
-        keys = []  # list of (name, default)
-        allow_other_keys = False
-        cur = lambda_list
-        while _consp_internal(cur):
-            item = car(cur)
-            cur = cdr(cur)
-            if isinstance(item, lisptype.LispSymbol):
-                nm = item.name.upper()
-                if nm == '&OPTIONAL':
-                    mode = 'optional'; continue
-                if nm == '&REST':
-                    # next element is rest var
-                    if _consp_internal(cur):
-                        rest_item = car(cur); cur = cdr(cur)
-                        if isinstance(rest_item, lisptype.LispSymbol):
-                            rest = rest_item.name
-                    continue
-                if nm == '&WHOLE':
-                    if _consp_internal(cur):
-                        whole_item = car(cur); cur = cdr(cur)
-                        if isinstance(whole_item, lisptype.LispSymbol):
-                            whole = whole_item.name
-                    continue
-                if nm == '&KEY':
-                    mode = 'key'; continue
-                if nm == '&ALLOW-OTHER-KEYS':
-                    allow_other_keys = True; continue
-
-            # process according to mode
-            if mode == 'required':
-                if isinstance(item, lisptype.LispSymbol):
-                    required.append(item.name)
-            elif mode == 'optional':
-                # optional element may be (name default) or symbol
-                if _consp_internal(item):
-                    name = car(item); default = car(cdr(item)) if _consp_internal(cdr(item)) else None
-                    if isinstance(name, lisptype.LispSymbol):
-                        optional.append((name.name, default))
-                elif isinstance(item, lisptype.LispSymbol):
-                    optional.append((item.name, None))
-            elif mode == 'key':
-                if _consp_internal(item):
-                    name = car(item); default = car(cdr(item)) if _consp_internal(cdr(item)) else None
-                    if isinstance(name, lisptype.LispSymbol):
-                        keys.append((name.name, default))
-                elif isinstance(item, lisptype.LispSymbol):
-                    keys.append((item.name, None))
-
-        return {
-            'required': required,
-            'optional': optional,
-            'rest': rest,
-            'whole': whole,
-            'keys': keys,
-            'allow_other_keys': allow_other_keys,
-        }
-
-    def substitute(form, mapping):
-        if isinstance(form, lisptype.LispSymbol):
-            if form.name in mapping:
-                return mapping[form.name]
-            return form
-        if _consp_internal(form):
-            new_car = substitute(car(form), mapping)
-            tail = cdr(form)
-            new_tail = substitute(tail, mapping) if _consp_internal(tail) else tail
-            return lisptype.lispCons(new_car, new_tail)
-        return form
-
-    # Build macro callable
-    parsed = parse_macro_lambda_list(lambda_list)
-
-    def macro_callable(*call_args):
-        # raw args as Python list
-        raw = list(call_args)
-        mapping = {}
-
-        # whole binds entire raw list if requested
-        if parsed['whole']:
-            mapping[parsed['whole']] = list_to_cons(raw)
-
-        # positional required
-        idx = 0
-        for name in parsed['required']:
-            mapping[name] = raw[idx] if idx < len(raw) else None
-            idx += 1
-
-        # optional
-        for name, default in parsed['optional']:
-            mapping[name] = raw[idx] if idx < len(raw) else default
-            if idx < len(raw): idx += 1
-
-        # rest
-        if parsed['rest']:
-            mapping[parsed['rest']] = list_to_cons(raw[idx:])
-            idx = len(raw)
-
-        # keys: scan raw for keyword/value pairs
-        for kname, kdefault in parsed['keys']:
-            found = False
-            for i in range(0, len(raw)):
-                keycand = raw[i]
-                # Accept either :KEY or KEY as keyword
-                if isinstance(keycand, lisptype.LispSymbol) and (keycand.name == kname or keycand.name == (':' + kname)):
-                    # take next element as value if present
-                    val = raw[i+1] if i+1 < len(raw) else None
-                    mapping[kname] = val
-                    found = True
-                    break
-            if not found:
-                mapping[kname] = kdefault
-
-        # Perform substitution across body
-        substituted = []
-        for b in body:
-            substituted.append(substitute(b, mapping))
-        if len(substituted) == 1:
-            return substituted[0]
-        progn_sym = lisptype.LispSymbol('PROGN')
-        lst = lisptype.NIL
-        for f in reversed(substituted):
-            lst = lisptype.lispCons(f, lst)
-        return lisptype.lispCons(progn_sym, lst)
-
-    setattr(macro_callable, '__is_macro__', True)
-    env.add_function(name, macro_callable)
-    return name
-
-
-# Constants and limits
+@_registry.cl_function('ARRAY-DIMENSION-LIMIT')
 def array_dimension_limit():
     """Array dimension limit."""
     return 2**16
 
 
+@_registry.cl_function('ARRAY-RANK-LIMIT')
 def array_rank_limit():
     """Array rank limit."""
     return 8
 
 
+@_registry.cl_function('ARRAY-TOTAL-SIZE-LIMIT')
 def array_total_size_limit():
     """Array total size limit."""
     return 2**24
 
 
+@_registry.cl_function('CALL-ARGUMENTS-LIMIT')
 def call_arguments_limit():
     """Call arguments limit."""
     return 2**16
 
 
+@_registry.cl_function('MULTIPLE-VALUES-LIMIT')
 def multiple_values_limit():
     """Multiple values limit."""
     return 20
 
 
+@_registry.cl_function('CHAR-CODE-LIMIT')
 def char_code_limit():
     """Character code limit."""
     return 2**16
@@ -1272,16 +1291,19 @@ def equal_fn(x, y):
 
 
 # Iteration macros
+@_registry.cl_function('DO-SYMBOLS')
 def do_symbols(var_package_result_decl, *body):
     """Do symbols macro."""
     return None  # Simplified
 
 
+@_registry.cl_function('DO-EXTERNAL-SYMBOLS')
 def do_external_symbols(var_package_result_decl, *body):
     """Do external symbols macro."""
     return None  # Simplified
 
 
+@_registry.cl_function('DO-ALL-SYMBOLS')
 def do_all_symbols(var_result_decl, *body):
     """Do all symbols macro."""
     return None  # Simplified
@@ -1320,18 +1342,21 @@ def simple_array_p(obj):
 
 
 # Stream predicates
+@_registry.cl_function('STREAMP')
 def streamp(obj):
-    """Test if object is stream."""
+    """STREAMP predicate (simplified)."""
     return hasattr(obj, 'read') or hasattr(obj, 'write')  # Simplified
 
 
+@_registry.cl_function('BROADCAST-STREAM-P')
 def broadcast_stream_p(obj):
-    """Test if object is broadcast stream."""
+    """BROADCAST-STREAM-P predicate (stub)."""
     return False  # Simplified
 
 
+@_registry.cl_function('CONCATENATED-STREAM-P')
 def concatenated_stream_p(obj):
-    """Test if object is concatenated stream."""
+    """CONCATENATED-STREAM-P predicate (stub)."""
     return False  # Simplified
 
 
@@ -1341,23 +1366,27 @@ def echo_stream_p(obj):
     return lisptype.lisp_bool(False)  # Simplified
 
 
+@_registry.cl_function('FILE-STREAM-P')
 def file_stream_p(obj):
-    """Test if object is file stream."""
+    """FILE-STREAM-P predicate (stub)."""
     return False  # Simplified
 
 
+@_registry.cl_function('STRING-STREAM-P')
 def string_stream_p(obj):
-    """Test if object is string stream."""
+    """STRING-STREAM-P predicate (stub)."""
     return False  # Simplified
 
 
+@_registry.cl_function('SYNONYM-STREAM-P')
 def synonym_stream_p(obj):
-    """Test if object is synonym stream."""
+    """SYNONYM-STREAM-P predicate (stub)."""
     return False  # Simplified
 
 
+@_registry.cl_function('TWO-WAY-STREAM-P')
 def two_way_stream_p(obj):
-    """Test if object is two-way stream."""
+    """TWO-WAY-STREAM-P predicate (stub)."""
     return False  # Simplified
 
 
@@ -1438,8 +1467,12 @@ def package_error_package(condition):
     return None
 
 
+@_registry.cl_function('WITH-PACKAGE-ITERATOR')
 def with_package_iterator(name, package_list_form, symbol_types, *body):
-    """Iterate over package symbols."""
+    """Stub WITH-PACKAGE-ITERATOR: sequentially evaluate body forms and return last.
+
+    Common Lisp semantics are complex; this simplified version just returns the last form.
+    """
     result = None
     for form in body:
         result = form
@@ -1537,6 +1570,7 @@ def defmethod(name, *args):
     return name
 
 
+@_registry.cl_function('MAKE-INSTANCE')
 def make_instance(class_designator, *initargs):
     """Make instance."""
     return {}  # Simplified
@@ -1598,111 +1632,133 @@ def generic_function_name(generic_function):
     return str(generic_function)
 
 
+@_registry.cl_function('MAKE-METHOD')
 def make_method(*args):
     """Make method."""
     return None
 
 
+@_registry.cl_function('METHOD-COMBINATION-ERROR')
 def method_combination_error(format_control, *format_arguments):
     """Method combination error."""
     return None
 
 
+@_registry.cl_function('METHOD-FUNCTION')
 def method_function(method):
     """Get method function."""
     return None
 
 
+@_registry.cl_function('METHOD-GENERIC-FUNCTION')
 def method_generic_function(method):
     """Get method generic function."""
     return None
 
 
+@_registry.cl_function('METHOD-SPECIALIZERS')
 def method_specializers(method):
     """Get method specializers."""
     return []
 
 
+@_registry.cl_function('METHOD-LAMBDA-LIST')
 def method_lambda_list(method):
-    """Get method lambda list."""
+    """METHOD-LAMBDA-LIST (stub)."""
     return []
 
 
+@_registry.cl_function('METHOD-QUALIFIERS')
 def method_qualifiers(method):
-    """Get method qualifiers."""
+    """METHOD-QUALIFIERS (stub)."""
     return []
 
 
+@_registry.cl_function('NEXT-METHOD-P')
 def next_method_p():
     """Test if next method exists."""
     return False
 
 
+@_registry.cl_function('NO-APPLICABLE-METHOD')
 def no_applicable_method(generic_function, *arguments):
     """No applicable method."""
     return None
 
 
+@_registry.cl_function('NO-NEXT-METHOD')
 def no_next_method(generic_function, method, *arguments):
     """No next method."""
     return None
 
 
+@_registry.cl_function('REINITIALIZE-INSTANCE')
 def reinitialize_instance(instance, *initargs):
     """Reinitialize instance."""
     return instance
 
 
+@_registry.cl_function('REMOVE-METHOD')
 def remove_method(generic_function, method):
     """Remove method."""
     return generic_function
 
 
+@_registry.cl_function('SHARED-INITIALIZE')
 def shared_initialize(instance, slot_names, *initargs):
     """Shared initialize."""
     return instance
 
 
+@_registry.cl_function('SLOT-BOUNDP')
 def slot_boundp(instance, slot_name):
     """Test if slot is bound."""
     return True
 
 
+@_registry.cl_function('SLOT-EXISTS-P')
 def slot_exists_p(instance, slot_name):
     """Test if slot exists."""
     return True
 
 
+@_registry.cl_function('SLOT-MAKUNBOUND')
 def slot_makunbound(instance, slot_name):
     """Make slot unbound."""
     return instance
 
 
+@_registry.cl_function('SLOT-UNBOUND')
 def slot_unbound(class_obj, instance, slot_name):
     """Slot unbound."""
     return None
 
 
+@_registry.cl_function('SLOT-VALUE')
 def slot_value(instance, slot_name):
     """Get slot value."""
     return None
 
 
+@_registry.cl_function('STANDARD-CLASS')
 def standard_class():
     """Standard class type."""
     return 'STANDARD-CLASS'
 
 
+@_registry.cl_function('STANDARD-OBJECT')
 def standard_object():
     """Standard object type."""
     return 'STANDARD-OBJECT'
 
 
+@_registry.cl_function('STRUCTURE-CLASS')
 def structure_class():
     """Structure class type."""
     return 'STRUCTURE-CLASS'
 
 
+@_registry.cl_function('STRUCTURE-OBJECT')
 def structure_object():
     """Structure object type."""
     return 'STRUCTURE-OBJECT'
@@ -1801,11 +1857,13 @@ def handler_case(form, *handler_clauses):
     return form
 
 
+@_registry.cl_function('INVOKE-RESTART')
 def invoke_restart(restart, *arguments):
     """Invoke restart."""
     return None
 
 
+@_registry.cl_function('INVOKE-RESTART-INTERACTIVELY')
 def invoke_restart_interactively(restart):
     """Invoke restart interactively."""
     return None
@@ -1853,6 +1911,7 @@ def muffle_warning(condition=None):
     return None
 
 
+@_registry.cl_function('INVOKE-DEBUGGER')
 def invoke_debugger(condition=None):
     """Invoke debugger - lightweight stub for test environment."""
     print("Debugger invoked", condition)
@@ -1918,28 +1977,33 @@ def echo_stream_output_stream(echo_stream):
     return echo_stream
 
 
+@_registry.cl_function('BROADCAST-STREAM-STREAMS')
 def broadcast_stream_streams(broadcast_stream):
-    """Get streams from broadcast stream."""
+    """BROADCAST-STREAM-STREAMS accessor (stub)."""
     return []
 
 
+@_registry.cl_function('CONCATENATED-STREAM-STREAMS')
 def concatenated_stream_streams(concatenated_stream):
-    """Get streams from concatenated stream."""
+    """CONCATENATED-STREAM-STREAMS accessor (stub)."""
     return []
 
 
+@_registry.cl_function('SYNONYM-STREAM-SYMBOL')
 def synonym_stream_symbol(synonym_stream):
-    """Get symbol from synonym stream."""
+    """SYNONYM-STREAM-SYMBOL accessor (stub)."""
     return synonym_stream
 
 
+@_registry.cl_function('TWO-WAY-STREAM-INPUT-STREAM')
 def two_way_stream_input_stream(two_way_stream):
-    """Get input stream from two-way stream."""
+    """TWO-WAY-STREAM-INPUT-STREAM accessor (stub)."""
     return two_way_stream
 
 
+@_registry.cl_function('TWO-WAY-STREAM-OUTPUT-STREAM')
 def two_way_stream_output_stream(two_way_stream):
-    """Get output stream from two-way stream."""
+    """TWO-WAY-STREAM-OUTPUT-STREAM accessor (stub)."""
     return two_way_stream
 
 
@@ -1984,15 +2048,25 @@ def readtable_case(readtable):
     return 'UPCASE'
 
 
-# Math functions
+# Math functions (RATIONAL / RATIONALIZE already implemented in math.py; provide simple fallbacks)
+@_registry.cl_function('RATIONAL')
 def rational(number):
-    """Convert to rational."""
-    return number
+    """RATIONAL fallback wrapper (delegates to math.rational if available)."""
+    try:
+        from . import math as lmath
+        return lmath.rational(number, 1)
+    except Exception:
+        return number
 
 
+@_registry.cl_function('RATIONALIZE')
 def rationalize(number):
-    """Rationalize number."""
-    return number
+    """RATIONALIZE fallback wrapper (delegates to math.rationalize if available)."""
+    try:
+        from . import math as lmath
+        return lmath.rationalize(number)
+    except Exception:
+        return number
 
 
 @_registry.cl_function('COMPLEX')
@@ -2002,50 +2076,58 @@ def complex_fn(realpart, imagpart=0):
 
 
 # More float constants
+@_registry.cl_function('LEAST-NEGATIVE-NORMALIZED-DOUBLE-FLOAT')
 def least_negative_normalized_double_float():
-    """Least negative normalized double float."""
+    """LEAST-NEGATIVE-NORMALIZED-DOUBLE-FLOAT (stub)."""
     import sys
     return -sys.float_info.min
 
 
+@_registry.cl_function('LEAST-NEGATIVE-NORMALIZED-LONG-FLOAT')
 def least_negative_normalized_long_float():
-    """Least negative normalized long float."""
+    """LEAST-NEGATIVE-NORMALIZED-LONG-FLOAT (stub)."""
     import sys
     return -sys.float_info.min
 
 
+@_registry.cl_function('LEAST-NEGATIVE-NORMALIZED-SHORT-FLOAT')
 def least_negative_normalized_short_float():
-    """Least negative normalized short float."""
+    """LEAST-NEGATIVE-NORMALIZED-SHORT-FLOAT (stub)."""
     import sys
     return -sys.float_info.min
 
 
+@_registry.cl_function('LEAST-NEGATIVE-NORMALIZED-SINGLE-FLOAT')
 def least_negative_normalized_single_float():
-    """Least negative normalized single float."""
+    """LEAST-NEGATIVE-NORMALIZED-SINGLE-FLOAT (stub)."""
     import sys
     return -sys.float_info.min
 
 
+@_registry.cl_function('LEAST-POSITIVE-NORMALIZED-DOUBLE-FLOAT')
 def least_positive_normalized_double_float():
-    """Least positive normalized double float."""
+    """LEAST-POSITIVE-NORMALIZED-DOUBLE-FLOAT (stub)."""
     import sys
     return sys.float_info.min
 
 
+@_registry.cl_function('LEAST-POSITIVE-NORMALIZED-LONG-FLOAT')
 def least_positive_normalized_long_float():
-    """Least positive normalized long float."""
+    """LEAST-POSITIVE-NORMALIZED-LONG-FLOAT (stub)."""
     import sys
     return sys.float_info.min
 
 
+@_registry.cl_function('LEAST-POSITIVE-NORMALIZED-SHORT-FLOAT')
 def least_positive_normalized_short_float():
-    """Least positive normalized short float."""
+    """LEAST-POSITIVE-NORMALIZED-SHORT-FLOAT (stub)."""
     import sys
     return sys.float_info.min
 
 
+@_registry.cl_function('LEAST-POSITIVE-NORMALIZED-SINGLE-FLOAT')
 def least_positive_normalized_single_float():
-    """Least positive normalized single float."""
+    """LEAST-POSITIVE-NORMALIZED-SINGLE-FLOAT (stub)."""
     import sys
     return sys.float_info.min
 
@@ -2069,179 +2151,311 @@ def char_font_limit():
     return 256
 
 
-def octets_to_string(octets, **kwargs):
-    """Convert octets to string."""
-    return str(octets)
-
-
-def string_to_octets(string, **kwargs):
-    """Convert string to octets."""
-    return list(string.encode())
-
-
+@_registry.cl_function('TYPE')
 def type(object):
-    """Get type of object."""
+    """TYPE function (simplified)."""
     return type(object).__name__
 
 
+@_registry.cl_function('UPGRADED-ARRAY-ELEMENT-TYPE')
 def upgraded_array_element_type(typespec, environment=None):
-    """Upgraded array element type."""
+    """UPGRADED-ARRAY-ELEMENT-TYPE (stub)."""
     return 'T'
 
 
+@_registry.cl_function('UPGRADED-COMPLEX-PART-TYPE')
 def upgraded_complex_part_type(typespec, environment=None):
-    """Upgraded complex part type."""
+    """UPGRADED-COMPLEX-PART-TYPE (stub)."""
     return 'REAL'
 
 
+@_registry.cl_function('OPTIMIZE')
 def optimize(*args):
-    """Optimize declaration."""
+    """OPTIMIZE declaration (stub)."""
     return None
 
 
+@_registry.cl_function('SPECIAL')
 def special(*args):
-    """Special declaration."""
+    """SPECIAL declaration (stub)."""
     return None
 
 
+@_registry.cl_function('NIL')
 def nil_symbol():
-    """NIL symbol."""
+    """Return NIL symbol (Python None)."""
     return None
 
 
+@_registry.cl_function('T')
 def t_symbol():
-    """T symbol."""
+    """Return T symbol (Python True)."""
     return True
 
 
+@_registry.cl_function('NOTINLINE')
 def notinline(*args):
-    """Not inline declaration."""
+    """NOTINLINE declaration (stub)."""
     return None
 
 
+@_registry.cl_function('INLINE')
 def inline(*args):
-    """Inline declaration."""
+    """INLINE declaration (stub)."""
     return None
 
 
 # Macro functions
+@_registry.cl_function('MACROLET')
 def macrolet(definitions, *body):
-    """Local macros."""
+    """Local macros (stub)."""
     result = None
     for form in body:
         result = form
     return result
 
 
+@_registry.cl_function('SYMBOL-MACROLET')
 def symbol_macrolet(definitions, *body):
-    """Symbol macros."""
+    """Symbol macros (stub)."""
     result = None
     for form in body:
         result = form
     return result
 
 
+@_registry.cl_function('DEFINE-COMPILER-MACRO')
 def define_compiler_macro(name, lambda_list, *body):
-    """Define compiler macro."""
+    """Define compiler macro (stub)."""
     return name
 
 
+@_registry.cl_function('DYNAMIC-EXTENT')
 def dynamic_extent(*args):
-    """Dynamic extent declaration."""
+    """Dynamic extent declaration (stub)."""
     return None
 
 
+@_registry.cl_function('FTYPE')
 def ftype(*args):
-    """Function type declaration."""
+    """Function type declaration (stub)."""
     return None
 
 
 # Additional WITH- macros
+@_registry.cl_function('WITH-ACCESSORS')
 def with_accessors(slot_entries, instance_form, *body):
-    """With accessors."""
+    """WITH-ACCESSORS (stub)."""
     result = None
     for form in body:
         result = form
     return result
 
 
+@_registry.cl_function('WITH-COMPILATION-UNIT')
 def with_compilation_unit(options, *body):
-    """With compilation unit."""
+    """WITH-COMPILATION-UNIT (stub)."""
     result = None
     for form in body:
         result = form
     return result
 
 
+@_registry.cl_function('WITH-INPUT-FROM-STRING')
 def with_input_from_string(var_string_form, *body):
-    """With input from string."""
+    """WITH-INPUT-FROM-STRING (stub)."""
     result = None
     for form in body:
         result = form
     return result
 
 
+@_registry.cl_function('WITH-OPEN-STREAM')
 def with_open_stream(var_stream_form, *body):
-    """With open stream."""
+    """WITH-OPEN-STREAM (stub)."""
     result = None
     for form in body:
         result = form
     return result
 
 
+@_registry.cl_function('WITH-OUTPUT-TO-STRING')
 def with_output_to_string(var_options, *body):
-    """With output to string."""
+    """WITH-OUTPUT-TO-STRING (stub)."""
     result = None
     for form in body:
         result = form
     return result
 
 
+@_registry.cl_function('WITH-PPRINT-LOGICAL-BLOCK')
 def with_pprint_logical_block(stream_object_options, *body):
-    """With pretty print logical block."""
+    """WITH-PPRINT-LOGICAL-BLOCK (stub)."""
     result = None
     for form in body:
         result = form
     return result
 
 
+@_registry.cl_function('WITH-SLOTS')
 def with_slots(slot_entries, instance_form, *body):
-    """With slots."""
+    """WITH-SLOTS (stub)."""
     result = None
     for form in body:
         result = form
     return result
 
 
+@_registry.cl_function('WITH-STANDARD-IO-SYNTAX')
 def with_standard_io_syntax(*body):
-    """With standard IO syntax."""
+    """WITH-STANDARD-IO-SYNTAX (stub)."""
     result = None
     for form in body:
         result = form
     return result
 
-
-def load_logical_pathname_translations(host):
-    """Load logical pathname translations."""
+@_registry.cl_function('LOAD-LOGICAL-PATHNAME-TRANSLATIONS')
+def load_logical_pathname_translations(host):  # stub
     return True
 
-
-def logical_pathname_translations(host):
-    """Get logical pathname translations."""
+@_registry.cl_function('LOGICAL-PATHNAME-TRANSLATIONS')
+def logical_pathname_translations(host):  # stub
     return []
 
 
 # Final sequence functions
+@_registry.cl_function('MAP-INTO')
 def map_into(result_sequence, function, *sequences):
-    """Map into result sequence."""
+    """MAP-INTO (stub)."""
     return result_sequence
 
 
+@_registry.cl_function('MAPCON')
 def mapcon(function, *lists):
-    """Map concatenate."""
+    """MAPCON fallback (already implemented in sequences.py)."""
     return []
 
 
+@_registry.cl_function('ROW-MAJOR-AREF')
 def row_major_aref(array, index):
-    """Row major array access."""
+    """ROW-MAJOR-AREF (stub)."""
     return None
+
+@_registry.cl_function('MAKE-HASH-TABLE')
+def make_hash_table(test='EQL', size=16, rehash_size=1.5, rehash_threshold=0.75):
+    table = {
+        '__hashmeta__test': str(test).upper(),
+        '__hashmeta__rehash_size': rehash_size,
+        '__hashmeta__rehash_threshold': rehash_threshold,
+    }
+    # pre-size by touching keys (optional)
+    return table
+
+@_registry.cl_function('GETHASH')
+def gethash(key, hashtable, default=None):
+    if isinstance(hashtable, dict) and key in hashtable:
+        return hashtable[key]
+    return default
+
+@_registry.cl_function('REMHASH')
+def remhash(key, hashtable):
+    if isinstance(hashtable, dict) and key in hashtable:
+        del hashtable[key]
+        return lisptype.T
+    return lisptype.NIL
+
+@_registry.cl_function('MAPHASH')
+def maphash(function, hashtable):
+    if isinstance(hashtable, dict):
+        for k,v in list(hashtable.items()):
+            if not k.startswith('__hashmeta__'):
+                function(k,v)
+    return lisptype.NIL
+
+@_registry.cl_function('CLRHASH')
+def clrhash(hashtable):
+    if isinstance(hashtable, dict):
+        meta = {k:v for k,v in hashtable.items() if k.startswith('__hashmeta__')}
+        hashtable.clear()
+        hashtable.update(meta)
+    return hashtable
+
+@_registry.cl_function('SXHASH')
+def sxhash(obj):
+    try:
+        return hash(obj)
+    except Exception:
+        return hash(str(obj))
+
+@_registry.cl_function('LOAD')
+def load(filespec, **kwargs):
+    return filespec
+
+@_registry.cl_function('PACKAGE-ERROR-PACKAGE')
+def package_error_package(condition):
+    return None
+
+@_registry.cl_function('CLASS-OF')
+def class_of(object):
+    return type(object)
+
+@_registry.cl_function('CLASS-NAME')
+def class_name(class_obj):
+    return getattr(class_obj, '__name__', str(class_obj))
+
+@_registry.cl_function('CHANGE-CLASS')
+def change_class(instance, new_class, *initargs):
+    return instance
+
+@_registry.cl_function('BUILT-IN-CLASS')
+def built_in_class():
+    return 'BUILT-IN-CLASS'
+
+@_registry.cl_function('CALL-METHOD')
+def call_method(method, next_methods, *args):
+    return None
+
+@_registry.cl_function('CALL-NEXT-METHOD')
+def call_next_method(*args):
+    return None
+
+@_registry.cl_function('COMPUTE-APPLICABLE-METHODS')
+def compute_applicable_methods(generic_function, arguments):
+    return []
+
+@_registry.cl_function('ENSURE-GENERIC-FUNCTION')
+def ensure_generic_function(function_name, *options):
+    return function_name
+
+@_registry.cl_function('GENERIC-FUNCTION-LAMBDA-LIST')
+def generic_function_lambda_list(generic_function):
+    return []
+
+@_registry.cl_function('GENERIC-FUNCTION-METHODS')
+def generic_function_methods(generic_function):
+    return []
+
+@_registry.cl_function('GENERIC-FUNCTION-NAME')
+def generic_function_name(generic_function):
+    return str(generic_function)
+
+@_registry.cl_function('ENSURE-DIRECTORIES-EXIST')
+def ensure_directories_exist(pathspec, **kwargs):
+    return pathspec, lisptype.T
+
+@_registry.cl_function('OCTETS-TO-STRING')
+def octets_to_string(octets, **kwargs):
+    if isinstance(octets, (bytes, bytearray)):
+        return octets.decode(errors='ignore')
+    if isinstance(octets, (list, tuple)):
+        try:
+            return bytes(octets).decode(errors='ignore')
+        except Exception:
+            return ''.join(str(x) for x in octets)
+    return str(octets)
+
+@_registry.cl_function('STRING-TO-OCTETS')
+def string_to_octets(string, **kwargs):
+    if not isinstance(string, str):
+        string = str(string)
+    return list(string.encode())

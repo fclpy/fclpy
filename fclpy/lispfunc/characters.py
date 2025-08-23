@@ -18,6 +18,7 @@ def alphanumericp(character):
     return lisptype.lisp_bool(result)
 
 
+@_registry.cl_function('BOTH-CASE-P')
 def both_case_p(character):
     """Test if character has both cases."""
     if not isinstance(character, str) or len(character) != 1:
@@ -26,6 +27,7 @@ def both_case_p(character):
     return lisptype.lisp_bool(result)
 
 
+@_registry.cl_function('CHAR-CODE')
 def char_code(character):
     """Get character code."""
     if isinstance(character, str) and len(character) == 1:
@@ -35,6 +37,7 @@ def char_code(character):
                                 actual_value=character)
 
 
+@_registry.cl_function('CHAR-DOWNCASE')
 def char_downcase(character):
     """Convert character to lowercase."""
     if isinstance(character, str) and len(character) == 1:
@@ -42,6 +45,7 @@ def char_downcase(character):
     return character
 
 
+@_registry.cl_function('CHAR-UPCASE')
 def char_upcase(character):
     """Convert character to uppercase."""
     if isinstance(character, str) and len(character) == 1:
@@ -49,14 +53,16 @@ def char_upcase(character):
     return character
 
 
+@_registry.cl_function('CHAR=')
 def char_equal(*characters):
-    """Test character equality (case insensitive)."""
+    """Test character equality (case sensitive)."""
     if len(characters) < 2:
-        return True
-    first = characters[0].upper() if isinstance(characters[0], str) else characters[0]
-    return all(c.upper() == first for c in characters[1:] if isinstance(c, str))
+        return lisptype.T
+    result = all(c == characters[0] for c in characters[1:])
+    return lisptype.lisp_bool(result)
 
 
+@_registry.cl_function('CHAR-EQUAL')
 def char_equal_ignore_case(*characters):
     """Test character equality (case insensitive)."""
     if len(characters) < 2:
@@ -64,7 +70,7 @@ def char_equal_ignore_case(*characters):
     chars = [c.upper() if isinstance(c, str) else c for c in characters]
     return all(c == chars[0] for c in chars[1:])
 
-
+@_registry.cl_function('CHAR-GREATERP')
 def char_greaterp(*characters):
     """Test character greater than (case insensitive)."""
     if len(characters) < 2:
@@ -72,7 +78,7 @@ def char_greaterp(*characters):
     chars = [c.upper() if isinstance(c, str) else c for c in characters]
     return all(chars[i] > chars[i+1] for i in range(len(chars)-1))
 
-
+@_registry.cl_function('CHAR-LESSP')
 def char_lessp(*characters):
     """Test character less than (case insensitive)."""
     if len(characters) < 2:
@@ -80,32 +86,31 @@ def char_lessp(*characters):
     chars = [c.upper() if isinstance(c, str) else c for c in characters]
     return all(chars[i] < chars[i+1] for i in range(len(chars)-1))
 
-
 def char_not_equal(*characters):
-    """Test character inequality (case insensitive)."""
-    return not char_equal(*characters)
+    """Internal helper: inequality (case sensitive)."""
+    return not (char_equal(*characters))
 
-
+@_registry.cl_function('CHAR-NOT-EQUAL')
 def char_not_equal_ignore_case(*characters):
     """Test character inequality (case insensitive)."""
     return not char_equal_ignore_case(*characters)
 
-
+@_registry.cl_function('CHAR-NOT-GREATERP')
 def char_not_greaterp(*characters):
     """Test character not greater than (case insensitive)."""
     return not char_greaterp(*characters)
 
-
+@_registry.cl_function('CHAR-NOT-LESSP')
 def char_not_lessp(*characters):
     """Test character not less than (case insensitive)."""
     return not char_lessp(*characters)
 
-
+@_registry.cl_function('CHAR-INT')
 def char_int(character):
     """Get character integer value."""
     return char_code(character)
 
-
+@_registry.cl_function('CHAR-NAME')
 def char_name(character):
     """Get character name."""
     if isinstance(character, str) and len(character) == 1:
@@ -129,6 +134,7 @@ def char_name(character):
 
 
 # Case sensitive character comparisons
+@_registry.cl_function('CHAR/=')  # case-sensitive inequality
 def char_ne(*characters):
     """Test character inequality (case sensitive)."""
     if len(characters) < 2:
@@ -137,6 +143,7 @@ def char_ne(*characters):
     return lisptype.lisp_bool(result)
 
 
+@_registry.cl_function('CHAR<')
 def char_lt(*characters):
     """Test character less than (case sensitive)."""
     if len(characters) < 2:
@@ -145,6 +152,7 @@ def char_lt(*characters):
     return lisptype.lisp_bool(result)
 
 
+@_registry.cl_function('CHAR<=')
 def char_le(*characters):
     """Test character less than or equal (case sensitive)."""
     if len(characters) < 2:
@@ -153,14 +161,11 @@ def char_le(*characters):
     return lisptype.lisp_bool(result)
 
 
-def char_eq(*characters):
-    """Test character equality (case sensitive)."""
-    if len(characters) < 2:
-        return lisptype.T
-    result = all(c == characters[0] for c in characters[1:])
-    return lisptype.lisp_bool(result)
+def char_eq(*characters):  # alias (no decorator)
+    return char_equal(*characters)
 
 
+@_registry.cl_function('CHAR>')
 def char_gt(*characters):
     """Test character greater than (case sensitive)."""
     if len(characters) < 2:
@@ -169,6 +174,7 @@ def char_gt(*characters):
     return lisptype.lisp_bool(result)
 
 
+@_registry.cl_function('CHAR>=')
 def char_ge(*characters):
     """Test character greater than or equal (case sensitive)."""
     if len(characters) < 2:
@@ -177,38 +183,23 @@ def char_ge(*characters):
     return lisptype.lisp_bool(result)
 
 
-def char_less(*characters):
-    """Test character less than (case sensitive)."""
-    if len(characters) < 2:
-        return lisptype.T
-    result = all(characters[i] < characters[i+1] for i in range(len(characters)-1))
-    return lisptype.lisp_bool(result)
+def char_less(*characters):  # alias
+    return char_lt(*characters)
 
 
-def char_greater(*characters):
-    """Test character greater than (case sensitive)."""
-    if len(characters) < 2:
-        return lisptype.T
-    result = all(characters[i] > characters[i+1] for i in range(len(characters)-1))
-    return lisptype.lisp_bool(result)
+def char_greater(*characters):  # alias
+    return char_gt(*characters)
 
 
-def char_less_equal(*characters):
-    """Test character less than or equal (case sensitive)."""
-    if len(characters) < 2:
-        return lisptype.T
-    result = all(characters[i] <= characters[i+1] for i in range(len(characters)-1))
-    return lisptype.lisp_bool(result)
+def char_less_equal(*characters):  # alias
+    return char_le(*characters)
 
 
-def char_greater_equal(*characters):
-    """Test character greater than or equal (case sensitive)."""
-    if len(characters) < 2:
-        return lisptype.T
-    result = all(characters[i] >= characters[i+1] for i in range(len(characters)-1))
-    return lisptype.lisp_bool(result)
+def char_greater_equal(*characters):  # alias
+    return char_ge(*characters)
 
 
+@_registry.cl_function('CHARACTER')
 def character(designator):
     """Convert to character."""
     if isinstance(designator, str):
@@ -237,11 +228,13 @@ def character(designator):
                                 actual_value=designator)
 
 
+@_registry.cl_function('CHARACTERP')
 def characterp(object):
     """Test if object is a character."""
     return isinstance(object, str) and len(object) == 1
 
 
+@_registry.cl_function('CODE-CHAR')
 def code_char(code):
     """Convert code to character."""
     try:
@@ -250,6 +243,7 @@ def code_char(code):
         return None
 
 
+@_registry.cl_function('DIGIT-CHAR')
 def digit_char(weight, radix=10):
     """Convert digit weight to character."""
     if 0 <= weight < radix:
@@ -260,6 +254,7 @@ def digit_char(weight, radix=10):
     return None
 
 
+@_registry.cl_function('DIGIT-CHAR-P')
 def digit_char_p(character, radix=10):
     """Test if character is digit and return weight."""
     if not isinstance(character, str) or len(character) != 1:
@@ -282,18 +277,21 @@ def graphic_char_p(character):
     return lisptype.lisp_bool(result)
 
 
+@_registry.cl_function('LOWER-CASE-P')
 def lower_case_p(character):
     """Test if character is lowercase."""
     result = isinstance(character, str) and len(character) == 1 and character.islower()
     return lisptype.lisp_bool(result)
 
 
+@_registry.cl_function('UPPER-CASE-P')
 def upper_case_p(character):
     """Test if character is uppercase."""
     result = isinstance(character, str) and len(character) == 1 and character.isupper()
     return lisptype.lisp_bool(result)
 
 
+@_registry.cl_function('NAME-CHAR')
 def name_char(name):
     """Get character by name."""
     if isinstance(name, str):
@@ -301,6 +299,7 @@ def name_char(name):
     return None
 
 
+@_registry.cl_function('INT-CHAR')
 def int_char(integer):
     """Convert integer to character."""
     try:
@@ -309,6 +308,7 @@ def int_char(integer):
         return None
 
 
+@_registry.cl_function('STANDARD-CHAR-P')
 def standard_char_p(character):
     """Test if character is standard."""
     if not isinstance(character, str) or len(character) != 1:
@@ -325,6 +325,7 @@ def standard_char_p(character):
 
 
 # String functions related to characters
+@_registry.cl_function('CHAR')
 def char(string, index):
     """Get character at index in string."""
     if isinstance(string, str) and 0 <= index < len(string):
@@ -343,6 +344,7 @@ def schar(string, index):
     return char(string, index)
 
 
+@_registry.cl_function('STRING')
 def string_fn(designator):
     """Convert to string."""
     if isinstance(designator, str):
@@ -359,11 +361,13 @@ def stringp(object):
     return lisptype.lisp_bool(isinstance(object, str))
 
 
+@_registry.cl_function('SIMPLE-STRING-P')
 def simple_string_p(object):
     """Test if object is a simple string."""
     return lisptype.lisp_bool(isinstance(object, str))
 
 
+@_registry.cl_function('STRING-CAPITALIZE')
 def string_capitalize(string, start=0, end=None):
     """Capitalize string."""
     if end is None:
@@ -385,6 +389,7 @@ def string_capitalize(string, start=0, end=None):
     return ''.join(result)
 
 
+@_registry.cl_function('STRING-DOWNCASE')
 def string_downcase(string, start=0, end=None):
     """Convert string to lowercase."""
     if end is None:
@@ -397,6 +402,7 @@ def string_downcase(string, start=0, end=None):
     return ''.join(result)
 
 
+@_registry.cl_function('STRING-UPCASE')
 def string_upcase(string, start=0, end=None):
     """Convert string to uppercase."""
     if end is None:
@@ -409,21 +415,25 @@ def string_upcase(string, start=0, end=None):
     return ''.join(result)
 
 
+@_registry.cl_function('NSTRING-CAPITALIZE')
 def nstring_capitalize(string, start=0, end=None):
     """Destructively capitalize string."""
     return string_capitalize(string, start, end)
 
 
+@_registry.cl_function('NSTRING-DOWNCASE')
 def nstring_downcase(string, start=0, end=None):
     """Destructively convert to lowercase."""
     return string_downcase(string, start, end)
 
 
+@_registry.cl_function('NSTRING-UPCASE')
 def nstring_upcase(string, start=0, end=None):
     """Destructively convert to uppercase."""
     return string_upcase(string, start, end)
 
 
+@_registry.cl_function('STRING-EQUAL')
 def string_equal(string1, string2, start1=0, end1=None, start2=0, end2=None):
     """Test string equality (case insensitive)."""
     if end1 is None:
@@ -437,11 +447,13 @@ def string_equal(string1, string2, start1=0, end1=None, start2=0, end2=None):
     return substr1 == substr2
 
 
+@_registry.cl_function('STRING-NOT-EQUAL')
 def string_not_equal(string1, string2, start1=0, end1=None, start2=0, end2=None):
     """Test string inequality (case insensitive)."""
     return not string_equal(string1, string2, start1, end1, start2, end2)
 
 
+@_registry.cl_function('STRING-LESSP')
 def string_lessp(string1, string2, start1=0, end1=None, start2=0, end2=None):
     """Test string less than (case insensitive)."""
     if end1 is None:
@@ -455,6 +467,7 @@ def string_lessp(string1, string2, start1=0, end1=None, start2=0, end2=None):
     return substr1 < substr2
 
 
+@_registry.cl_function('STRING-GREATERP')
 def string_greaterp(string1, string2, start1=0, end1=None, start2=0, end2=None):
     """Test string greater than (case insensitive)."""
     if end1 is None:
@@ -468,16 +481,19 @@ def string_greaterp(string1, string2, start1=0, end1=None, start2=0, end2=None):
     return substr1 > substr2
 
 
+@_registry.cl_function('STRING-NOT-GREATERP')
 def string_not_greaterp(string1, string2, start1=0, end1=None, start2=0, end2=None):
     """Test string not greater than (case insensitive)."""
     return not string_greaterp(string1, string2, start1, end1, start2, end2)
 
 
+@_registry.cl_function('STRING-NOT-LESSP')
 def string_not_lessp(string1, string2, start1=0, end1=None, start2=0, end2=None):
     """Test string not less than (case insensitive)."""
     return not string_lessp(string1, string2, start1, end1, start2, end2)
 
 
+@_registry.cl_function('STRING<')
 def string_lt(string1, string2, start1=0, end1=None, start2=0, end2=None):
     """Test string less than (case sensitive)."""
     if end1 is None:
@@ -488,6 +504,7 @@ def string_lt(string1, string2, start1=0, end1=None, start2=0, end2=None):
     return string1[start1:end1] < string2[start2:end2]
 
 
+@_registry.cl_function('STRING<=')
 def string_le(string1, string2, start1=0, end1=None, start2=0, end2=None):
     """Test string less than or equal (case sensitive)."""
     if end1 is None:
@@ -498,6 +515,7 @@ def string_le(string1, string2, start1=0, end1=None, start2=0, end2=None):
     return string1[start1:end1] <= string2[start2:end2]
 
 
+@_registry.cl_function('STRING=')
 def string_eq(string1, string2, start1=0, end1=None, start2=0, end2=None):
     """Test string equality (case sensitive)."""
     if end1 is None:
@@ -508,11 +526,13 @@ def string_eq(string1, string2, start1=0, end1=None, start2=0, end2=None):
     return string1[start1:end1] == string2[start2:end2]
 
 
+@_registry.cl_function('STRING/=')
 def string_ne(string1, string2, start1=0, end1=None, start2=0, end2=None):
     """Test string inequality (case sensitive)."""
     return not string_eq(string1, string2, start1, end1, start2, end2)
 
 
+@_registry.cl_function('STRING>')
 def string_gt(string1, string2, start1=0, end1=None, start2=0, end2=None):
     """Test string greater than (case sensitive)."""
     if end1 is None:
@@ -523,6 +543,7 @@ def string_gt(string1, string2, start1=0, end1=None, start2=0, end2=None):
     return string1[start1:end1] > string2[start2:end2]
 
 
+@_registry.cl_function('STRING>=')
 def string_ge(string1, string2, start1=0, end1=None, start2=0, end2=None):
     """Test string greater than or equal (case sensitive)."""
     if end1 is None:
@@ -533,6 +554,7 @@ def string_ge(string1, string2, start1=0, end1=None, start2=0, end2=None):
     return string1[start1:end1] >= string2[start2:end2]
 
 
+@_registry.cl_function('STRING-LEFT-TRIM')
 def string_left_trim(character_bag, string):
     """Trim characters from left of string."""
     if isinstance(character_bag, str):
@@ -547,6 +569,7 @@ def string_left_trim(character_bag, string):
     return ""
 
 
+@_registry.cl_function('STRING-RIGHT-TRIM')
 def string_right_trim(character_bag, string):
     """Trim characters from right of string."""
     if isinstance(character_bag, str):
@@ -561,12 +584,14 @@ def string_right_trim(character_bag, string):
     return ""
 
 
+@_registry.cl_function('STRING-TRIM')
 def string_trim(character_bag, string):
     """Trim characters from both ends of string."""
     return string_left_trim(character_bag, string_right_trim(character_bag, string))
 
 
 # Additional string operations
+@_registry.cl_function('STRING=')  # duplicate equality multi-arg variant
 def string_equal_fn(*strings):
     """Test string equality (case sensitive)."""
     if len(strings) < 2:
@@ -575,6 +600,7 @@ def string_equal_fn(*strings):
     return lisptype.lisp_bool(result)
 
 
+@_registry.cl_function('STRING<')  # multi-arg chain variant
 def string_less(*strings):
     """Test string less than (case sensitive)."""
     if len(strings) < 2:
@@ -583,6 +609,7 @@ def string_less(*strings):
     return lisptype.lisp_bool(result)
 
 
+@_registry.cl_function('STRING>')  # multi-arg chain variant
 def string_greater(*strings):
     """Test string greater than (case sensitive)."""
     if len(strings) < 2:
@@ -591,6 +618,7 @@ def string_greater(*strings):
     return lisptype.lisp_bool(result)
 
 
+@_registry.cl_function('STRING<=')  # multi-arg chain variant
 def string_less_equal(*strings):
     """Test string less than or equal (case sensitive)."""
     if len(strings) < 2:
@@ -599,6 +627,7 @@ def string_less_equal(*strings):
     return lisptype.lisp_bool(result)
 
 
+@_registry.cl_function('STRING>=')  # multi-arg chain variant
 def string_greater_equal(*strings):
     """Test string greater than or equal (case sensitive)."""
     if len(strings) < 2:
@@ -607,6 +636,7 @@ def string_greater_equal(*strings):
     return lisptype.lisp_bool(result)
 
 
+@_registry.cl_function('STRING-EQUAL')
 def string_equal_ignore_case(*strings):
     """Test string equality (case insensitive)."""
     if len(strings) < 2:
@@ -616,12 +646,14 @@ def string_equal_ignore_case(*strings):
     return lisptype.lisp_bool(result)
 
 
+@_registry.cl_function('STRING-NOT-EQUAL')
 def string_not_equal_ignore_case(*strings):
     """Test string inequality (case insensitive)."""
     result = string_equal_ignore_case(*strings)
     return lisptype.T if result == lisptype.NIL else lisptype.NIL
 
 
+@_registry.cl_function('PARSE-INTEGER')
 def parse_integer(string, **kwargs):
     """Parse integer from string."""
     try:

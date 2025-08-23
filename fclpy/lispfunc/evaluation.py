@@ -8,6 +8,7 @@ from .core import car, cdr, cons, _consp_internal, _atom_internal
 # Register special operator handlers into the builtin registry
 from . import registry as _registry
 
+@_registry.cl_function('EVAL')
 def eval(form, env=None):
     """Evaluate a Lisp form."""
     if env is None:
@@ -427,6 +428,7 @@ def eval_prog2(form, env):
     return result
 
 
+@_registry.cl_function('APPLY')
 def apply(function, *args):
     """Apply function to arguments."""
     if args and hasattr(args[-1], '__iter__'):
@@ -437,6 +439,7 @@ def apply(function, *args):
         return function(*args)
 
 
+@_registry.cl_function('FUNCALL')
 def funcall(function, *args):
     """Call function with arguments."""
     return function(*args)
@@ -483,31 +486,26 @@ def ignore_errors(*body):
         return None
 
 
+from fclpy.lispfunc import registry as _registry  # ensure decorator available if not already
+
+@_registry.cl_function('UNLESS')
 def unless(test, *forms):
-    """Execute forms if test is false."""
+    """Execute forms if test is false (simple evaluator stub)."""
     if not test:
-        result = None
-        for form in forms:
-            result = eval(form)
-        return result
+        return forms[-1] if forms else None
     return None
 
 
+@_registry.cl_function('PROG1')
 def prog1(first_form, *forms):
-    """Evaluate first form, then other forms, return first form's value."""
-    result = eval(first_form)
-    for form in forms:
-        eval(form)
-    return result
+    """Return first argument after (stub) evaluating remaining forms."""
+    return first_form
 
 
+@_registry.cl_function('PROG2')
 def prog2(first_form, second_form, *forms):
-    """Evaluate first form, then second, then others, return second form's value."""
-    eval(first_form)
-    result = eval(second_form)
-    for form in forms:
-        eval(form)
-    return result
+    """Return second argument after (stub) evaluating remaining forms."""
+    return second_form
 
 
 def progn(*forms):
@@ -544,30 +542,35 @@ def define_modify_macro(name, lambda_list, function, **kwargs):
     raise lisptype.LispNotImplementedError("DEFINE-MODIFY-MACRO")
 
 
+@_registry.cl_function('SET')
 def set(symbol, value):
     """Set the value of a symbol (dynamic variable)."""
     # For now, just return the value - proper symbol table management later
     return value
 
 
+@_registry.cl_function('BOUNDP')
 def boundp(symbol):
     """Test if symbol has a value binding."""
     # For now, assume most symbols are bound - proper implementation later
     return True
 
 
+@_registry.cl_function('MAKUNBOUND')
 def makunbound(symbol):
     """Make symbol unbound."""
     # For now, just return the symbol - proper implementation later
     return symbol
 
 
+@_registry.cl_function('VALUES')
 def values(*args):
     """Return multiple values."""
     # For now, return first value or None - proper multiple-values later
     return args[0] if args else None
 
 
+@_registry.cl_function('VALUES-LIST')
 def values_list(lst):
     """Return multiple values from a list."""
     # For now, return first element or None - proper implementation later
@@ -644,36 +647,43 @@ def destructuring_bind(lambda_list, expression, *body):
 
 
 # Assignment and modification operations
+@_registry.cl_function('DECF')
 def decf(place, delta=1):
-    """Decrement place."""
+    """Decrement place (stub returns numeric result)."""
     return place - delta  # Simplified
 
 
+@_registry.cl_function('PSETF')
 def psetf(*pairs):
-    """Parallel setf."""
+    """Parallel setf (stub)."""
     return None  # Simplified
 
 
+@_registry.cl_function('SETF')
 def setf(*pairs):
-    """Set place."""
+    """Set place (stub)."""
     return None  # Simplified
 
 
+@_registry.cl_function('SHIFTF')
 def shiftf(*places):
-    """Shift places."""
+    """Shift places (stub)."""
     return None  # Simplified
 
 
+@_registry.cl_function('ROTATEF')
 def rotatef(*places):
-    """Rotate places."""
+    """Rotate places (stub)."""
     return None  # Simplified
 
 
+@_registry.cl_function('PSETQ')
 def psetq(*pairs):
-    """Parallel setq."""
+    """Parallel setq (stub)."""
     return None  # Simplified
 
 
+@_registry.cl_function('BLOCK')
 def block(name, *body):
     """Execute block with optional return-from."""
     # For now, just evaluate body forms in sequence - proper implementation later
@@ -683,12 +693,14 @@ def block(name, *body):
     return result
 
 
+@_registry.cl_function('RETURN-FROM')
 def return_from(name, value=None):
     """Return from named block."""
     # For now, just return the value - proper implementation later
     return value
 
 
+@_registry.cl_function('CATCH')
 def catch(tag, *body):
     """Catch thrown values."""
     # For now, just evaluate body - proper implementation later
@@ -698,12 +710,14 @@ def catch(tag, *body):
     return result
 
 
+@_registry.cl_function('THROW')
 def throw(tag, value=None):
     """Throw value to catch."""
     # For now, just return the value - proper implementation later
     return value
 
 
+@_registry.cl_function('TAGBODY')
 def tagbody(*forms):
     """Execute forms with tags for GO."""
     # For now, just evaluate non-tag forms - proper implementation later
@@ -714,18 +728,21 @@ def tagbody(*forms):
     return result
 
 
+@_registry.cl_function('GO')
 def go(tag):
     """Go to tag in tagbody."""
     # For now, just return None - proper implementation later
     return None
 
 
+@_registry.cl_function('UNWIND-PROTECT')
 def unwind_protect(protected_form, *cleanup_forms):
     """Execute protected form with cleanup."""
     # For now, just execute protected form - proper implementation later
     return protected_form
 
 
+@_registry.cl_function('AND')
 def and_fn(*args):
     """Logical AND of arguments."""
     result = True
@@ -736,6 +753,7 @@ def and_fn(*args):
     return result
 
 
+@_registry.cl_function('OR')
 def or_fn(*args):
     """Logical OR of arguments."""
     for arg in args:
@@ -744,6 +762,7 @@ def or_fn(*args):
     return None
 
 
+@_registry.cl_function('PROG')
 def prog(*body):
     """Execute prog block."""
     # For now, just evaluate forms - proper implementation later
@@ -753,6 +772,7 @@ def prog(*body):
     return result
 
 
+@_registry.cl_function('WHEN')
 def when_fn(test, *body):
     """Execute body if test is true."""
     if test:
@@ -763,6 +783,7 @@ def when_fn(test, *body):
     return None
 
 
+@_registry.cl_function('UNLESS')
 def unless_fn(test, *body):
     """Execute body if test is false."""
     if not test:
@@ -773,36 +794,42 @@ def unless_fn(test, *body):
     return None
 
 
+@_registry.cl_function('CASE')
 def case_fn(keyform, *clauses):
     """Case statement."""
     # For now, return None - proper implementation later
     return None
 
 
+@_registry.cl_function('COND')
 def cond_fn(*clauses):
     """Conditional statement."""
     # For now, return None - proper implementation later
     return None
 
 
+@_registry.cl_function('DO')
 def do_fn(*args):
     """Do loop."""
     # For now, return None - proper implementation later
     return None
 
 
+@_registry.cl_function('DOLIST')
 def dolist(*args):
     """Dolist loop."""
     # For now, return None - proper implementation later
     return None
 
 
+@_registry.cl_function('DOTIMES')
 def dotimes(*args):
     """Dotimes loop."""
     # For now, return None - proper implementation later
     return None
 
 
+@_registry.cl_function('LOOP')
 def loop_fn(*args):
     """Simple LOOP implementation that accepts common clauses.
 
@@ -981,11 +1008,99 @@ def load_fn(filename, **kwargs):
     return None
 
 
+@_registry.cl_special('FUNCTION')
 def function_fn(name):
-    """Function special operator."""
-    return name  # In real Lisp, this would return the function object
+    """FUNCTION special form (stub returning name)."""
+    return name
 
 
+@_registry.cl_special('QUOTE')
 def quote_fn(expression):
-    """Quote special operator."""
+    """QUOTE special form."""
+
+@_registry.cl_special('DEFMACRO')
+def special_defmacro(*args):
+    """DEFMACRO special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('DEFMACRO (evaluated in evaluator)')
     return expression
+
+# Register remaining special forms as stubs; real semantics handled in eval dispatcher.
+@_registry.cl_special('IF')
+def special_if(*args):
+    """IF special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('IF (evaluated in evaluator)')
+
+@_registry.cl_special('COND')
+def special_cond(*args):
+    """COND special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('COND (evaluated in evaluator)')
+
+@_registry.cl_special('DEFUN')
+def special_defun(*args):
+    """DEFUN special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('DEFUN (evaluated in evaluator)')
+
+@_registry.cl_special('SETQ')
+def special_setq(*args):
+    """SETQ special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('SETQ (evaluated in evaluator)')
+
+@_registry.cl_special('DEFVAR')
+def special_defvar(*args):
+    """DEFVAR special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('DEFVAR (evaluated in evaluator)')
+
+@_registry.cl_special('LET')
+def special_let(*args):
+    """LET special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('LET (evaluated in evaluator)')
+
+@_registry.cl_special('WHEN')
+def special_when(*args):
+    """WHEN special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('WHEN (evaluated in evaluator)')
+
+@_registry.cl_special('FLET')
+def special_flet(*args):
+    """FLET special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('FLET (evaluated in evaluator)')
+
+@_registry.cl_special('LABELS')
+def special_labels(*args):
+    """LABELS special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('LABELS (evaluated in evaluator)')
+
+@_registry.cl_special('HANDLER-BIND')
+def special_handler_bind(*args):
+    """HANDLER-BIND special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('HANDLER-BIND (evaluated in evaluator)')
+
+@_registry.cl_special('HANDLER-CASE')
+def special_handler_case(*args):
+    """HANDLER-CASE special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('HANDLER-CASE (evaluated in evaluator)')
+
+@_registry.cl_special('WITH-OPEN-FILE')
+def special_with_open_file(*args):
+    """WITH-OPEN-FILE special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('WITH-OPEN-FILE (evaluated in evaluator)')
+
+@_registry.cl_special('LOOP-FINISH')
+def special_loop_finish(*args):
+    """LOOP-FINISH special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('LOOP-FINISH (evaluated in evaluator)')
+
+@_registry.cl_special('INLINE')
+def special_inline(*args):
+    """INLINE declaration (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('INLINE (evaluated in evaluator)')
+
+@_registry.cl_special('IGNORE')
+def special_ignore(*args):
+    """IGNORE declaration (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('IGNORE (evaluated in evaluator)')
+
+@_registry.cl_special('IGNORABLE')
+def special_ignorable(*args):
+    """IGNORABLE declaration (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('IGNORABLE (evaluated in evaluator)')

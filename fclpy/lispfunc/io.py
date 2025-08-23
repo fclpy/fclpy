@@ -11,6 +11,14 @@ def readtablep(obj):
     return False
 
 
+@_registry.cl_function('STREAMP')
+def streamp(obj):
+    """Test if object is a stream (very simplified)."""
+    # Treat Python file objects and basic IO types as streams
+    import io as _io
+    return isinstance(obj, (_io.IOBase,))
+
+
 # I/O operations
 @_registry.cl_function('READ-LINE')
 def read_line(stream=None, eof_error_p=True, eof_value=None, recursive_p=None):
@@ -466,57 +474,67 @@ def pprint(object, stream=None):
     return None
 
 
+@_registry.cl_function('PPRINT-DISPATCH')
 def pprint_dispatch(object, table=None):
-    """Get pretty print dispatch function."""
+    """Get pretty print dispatch function (stub)."""
     return print, False  # Simplified
 
 
+@_registry.cl_function('PPRINT-EXIT-IF-LIST-EXHAUSTED')
 def pprint_exit_if_list_exhausted():
-    """Exit if list exhausted."""
+    """Exit if list exhausted (stub)."""
     return None
 
 
+@_registry.cl_function('PPRINT-INDENT')
 def pprint_indent(relative_to, n, stream=None):
-    """Set pretty print indent."""
+    """Set pretty print indent (stub)."""
     return None
 
 
+@_registry.cl_function('PPRINT-LINEAR')
 def pprint_linear(stream, object, prefix=None, per_line_prefix=None, suffix=None):
-    """Linear pretty print."""
+    """Linear pretty print (stub)."""
     print(object)
     return None
 
 
+@_registry.cl_function('PPRINT-LOGICAL-BLOCK')
 def pprint_logical_block(stream, object, prefix=None, per_line_prefix=None, suffix=None):
-    """Logical block pretty print."""
+    """Logical block pretty print (stub)."""
     print(object)
     return None
 
 
+@_registry.cl_function('PPRINT-NEWLINE')
 def pprint_newline(kind, stream=None):
-    """Pretty print newline."""
+    """Pretty print newline (stub)."""
     print()
     return None
 
 
+@_registry.cl_function('PPRINT-POP')
 def pprint_pop():
-    """Pretty print pop."""
+    """Pretty print pop (stub)."""
     return None
 
 
+@_registry.cl_function('PPRINT-TAB')
 def pprint_tab(kind, colnum, colinc, stream=None):
-    """Pretty print tab."""
+    """Pretty print tab (stub)."""
     return None
 
 
+@_registry.cl_function('PPRINT-TABULAR')
 def pprint_tabular(stream, object, prefix=None, per_line_prefix=None, suffix=None):
-    """Tabular pretty print."""
+    """Tabular pretty print (stub)."""
     print(object)
     return None
 
 
+@_registry.cl_function('PPRINT-FILL')
 def pprint_fill(stream, list_obj, colon_p=None, at_sign_p=None):
-    """Pretty print fill."""
+    """Pretty print fill (stub)."""
     print(list_obj)
     return None
 
@@ -529,12 +547,14 @@ def set_pprint_dispatch(type_specifier, function, priority=0, table=None):
 
 
 # File operations
+@_registry.cl_function('PROBE-FILE')
 def probe_file(pathspec):
     """Test if file exists."""
     import os
     return os.path.exists(str(pathspec))
 
 
+@_registry.cl_function('DELETE-FILE')
 def delete_file(filespec):
     """Delete file."""
     import os
@@ -542,6 +562,7 @@ def delete_file(filespec):
     return True
 
 
+@_registry.cl_function('RENAME-FILE')
 def rename_file(filespec, new_name):
     """Rename file."""
     import os
@@ -549,16 +570,19 @@ def rename_file(filespec, new_name):
     return str(new_name)
 
 
+@_registry.cl_function('FILE-AUTHOR')
 def file_author(pathspec):
     """Get file author."""
     return "unknown"  # Simplified
 
 
+@_registry.cl_function('FILE-LENGTH')
 def file_length(stream):
     """Get file length."""
     return 0  # Simplified
 
 
+@_registry.cl_function('FILE-POSITION')
 def file_position(stream, position=None):
     """Get or set file position."""
     if position is None:
@@ -567,11 +591,13 @@ def file_position(stream, position=None):
         return position  # Set position
 
 
+@_registry.cl_function('FILE-STRING-LENGTH')
 def file_string_length(stream, string):
     """Length of string in file."""
     return len(string)
 
 
+@_registry.cl_function('FILE-WRITE-DATE')
 def file_write_date(pathspec):
     """Get file write date."""
     import os
@@ -582,11 +608,13 @@ def file_write_date(pathspec):
         return 0
 
 
+@_registry.cl_function('COMPILE-FILE')
 def compile_file(input_file, output_file=None, **kwargs):
     """Compile file."""
     return str(input_file), [], []  # Simplified
 
 
+@_registry.cl_function('COMPILE-FILE-PATHNAME')
 def compile_file_pathname(input_file, output_file=None, **kwargs):
     """Get compiled file pathname."""
     import os
@@ -595,6 +623,7 @@ def compile_file_pathname(input_file, output_file=None, **kwargs):
 
 
 # Additional I/O functions
+@_registry.cl_function('READ')
 def read(stream=None, eof_error_p=True, eof_value=None, recursive_p=None):
     """Read object from stream."""
     try:
@@ -605,25 +634,29 @@ def read(stream=None, eof_error_p=True, eof_value=None, recursive_p=None):
         return eof_value
 
 
+@_registry.cl_function('READ-CHAR-NO-HANG')
 def read_char_no_hang(stream=None, eof_error_p=True, eof_value=None, recursive_p=None):
-    """Read character without hanging."""
-    return None  # Simplified - no char available
+    """READ-CHAR-NO-HANG: Non-blocking read of a single character or returns eof_value/None."""
+    return None  # Simplified placeholder
 
 
+@_registry.cl_function('READ-DELIMITED-LIST')
 def read_delimited_list(char, stream=None, recursive_p=None):
-    """Read delimited list."""
-    return []  # Simplified
+    """READ-DELIMITED-LIST: Read forms until delimiter char (simplified stub)."""
+    return []  # Simplified placeholder
 
 
+@_registry.cl_function('READ-FROM-STRING')
 def read_from_string(string, eof_error_p=True, eof_value=None, start=0, end=None, preserve_whitespace=None):
-    """Read from string."""
+    """READ-FROM-STRING: Parse first form from substring; simplified returns slice."""
     if end is None:
         end = len(string)
-    return string[start:end]  # Simplified
+    return string[start:end]  # Simplified placeholder
 
 
+@_registry.cl_function('READ-PRESERVING-WHITESPACE')
 def read_preserving_whitespace(stream=None, eof_error_p=True, eof_value=None, recursive_p=None):
-    """Read preserving whitespace."""
+    """READ-PRESERVING-WHITESPACE: Like READ but preserves whitespace (stub)."""
     try:
         return input()  # Simplified
     except EOFError:
@@ -705,6 +738,7 @@ def yes_or_no_p(control_string=None, *args):
 
 
 # Error handling
+@_registry.cl_function('ERROR')
 def error(format_control, *args):
     """Signal error."""
     msg = format_control.format(*args) if args else str(format_control)
@@ -712,6 +746,7 @@ def error(format_control, *args):
 
 
 # Symbol generation
+@_registry.cl_function('GENSYM')
 def gensym(x="G"):
     """Generate unique symbol."""
     import random
@@ -719,6 +754,7 @@ def gensym(x="G"):
 
 
 # Special print function to avoid conflict with Python's print
+@_registry.cl_function('PRINT')
 def _s_print_(object, stream=None):
     """Print function with encoded name to avoid Python print conflict."""
     if stream is None:

@@ -104,6 +104,7 @@ def null(obj):
         return lisptype.NIL
 
 
+@_registry.cl_function('TYPEP')
 def typep(object, type_specifier):
     """Test if object is of given type."""
     if isinstance(type_specifier, str):
@@ -149,6 +150,7 @@ def typep(object, type_specifier):
         return lisptype.NIL
 
 
+@_registry.cl_function('TYPE-OF')
 def type_of(object):
     """Return type of object."""
     if null(object):
@@ -178,6 +180,7 @@ def type_of(object):
         return lisptype.LispSymbol('T')
 
 
+@_registry.cl_function('SUBTYPEP')
 def subtypep(type1, type2):
     """Test if type1 is a subtype of type2."""
     # Convert to string representation for comparison
@@ -302,11 +305,13 @@ def subtypep(type1, type2):
     return False, True
 
 
+@_registry.cl_function('IDENTITY')
 def identity(object):
     """Return the object unchanged."""
     return object
 
 
+@_registry.cl_function('CONSTANTP')
 def constantp(form, environment=None):
     """Test if form is a constant."""
     if isinstance(form, (int, float, str, bool)):
@@ -321,6 +326,7 @@ def constantp(form, environment=None):
         return False
 
 
+@_registry.cl_function('COMPLEMENT')
 def complement(function):
     """Return complement of function."""
     def complemented_function(*args, **kwargs):
@@ -328,6 +334,7 @@ def complement(function):
     return complemented_function
 
 
+@_registry.cl_function('CONSTANTLY')
 def constantly(value):
     """Return function that always returns value."""
     def constant_function(*args, **kwargs):

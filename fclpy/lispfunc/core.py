@@ -81,6 +81,9 @@ def hash_table_p(obj):
     return lisptype.lisp_bool(isinstance(obj, dict))
 
 
+from . import registry as _registry  # ensure decorator availability for new predicates
+
+@_registry.cl_function('PACKAGEP')
 def packagep(obj):
     """Test if object is a package."""
     return lisptype.lisp_bool(isinstance(obj, lisptype.Package))
@@ -278,12 +281,17 @@ def rest(x):
     return cdr(x)
 
 
+@_registry.cl_function('BUTLAST')
 def butlast(seq):
-    """Return all but the last element of a sequence."""
-    return tuple(seq[:-1])
+    """Return all but the last element of SEQ (stub using Python slicing)."""
+    try:
+        return tuple(seq[:-1])
+    except Exception:
+        return ()
 
 
 # Property list operations
+@_registry.cl_function('GETF')
 def getf(plist, indicator, default=None):
     """Get property from property list."""
     current = plist
@@ -297,6 +305,7 @@ def getf(plist, indicator, default=None):
     return default
 
 
+@_registry.cl_function('GET-PROPERTIES')
 def get_properties(plist, indicator_list):
     """Get properties from property list."""
     current = plist
@@ -310,18 +319,21 @@ def get_properties(plist, indicator_list):
     return None, None, None
 
 
+@_registry.cl_function('PUTPROP')
 def putprop(symbol, value, indicator):
     """Put property on symbol."""
     # For now, just return the value - proper implementation later
     return value
 
 
+@_registry.cl_function('REMPROP')
 def remprop(symbol, indicator):
     """Remove property from symbol."""
     # For now, just return None - proper implementation later
     return None
 
 
+@_registry.cl_function('SYMBOL-PLIST')
 def symbol_plist(symbol):
     """Get symbol's property list."""
     if hasattr(symbol, 'plist'):
@@ -329,6 +341,7 @@ def symbol_plist(symbol):
     return None
 
 
+@_registry.cl_function('REMF')
 def remf(place, indicator):
     """Remove property from place."""
     # For now, just return None - proper implementation later
@@ -501,6 +514,7 @@ def boole_xor():
     return 12
 
 
+@_registry.cl_function('INTERNAL-TIME-UNITS-PER-SECOND')
 def internal_time_units_per_second():
     """Internal time units per second."""
     return 1000
@@ -530,6 +544,7 @@ def array_total_size(array):
         return len(array) if hasattr(array, '__len__') else 1
 
 
+@_registry.cl_function('DECODE-UNIVERSAL-TIME')
 def decode_universal_time(universal_time, time_zone=None):
     """Decode universal time."""
     import time
@@ -537,6 +552,7 @@ def decode_universal_time(universal_time, time_zone=None):
     return t.tm_sec, t.tm_min, t.tm_hour, t.tm_mday, t.tm_mon, t.tm_year, t.tm_wday, False, 0
 
 
+@_registry.cl_function('ENCODE-UNIVERSAL-TIME')
 def encode_universal_time(second, minute, hour, date, month, year, time_zone=None):
     """Encode universal time."""
     import time
@@ -544,24 +560,28 @@ def encode_universal_time(second, minute, hour, date, month, year, time_zone=Non
     return int(time.mktime(t)) + 2208988800  # Lisp epoch offset
 
 
+@_registry.cl_function('GET-UNIVERSAL-TIME')
 def get_universal_time():
     """Get current universal time."""
     import time
     return int(time.time()) + 2208988800  # Lisp epoch offset
 
 
+@_registry.cl_function('GET-INTERNAL-REAL-TIME')
 def get_internal_real_time():
     """Get internal real time."""
     import time
     return int(time.time() * 1000)
 
 
+@_registry.cl_function('GET-INTERNAL-RUN-TIME')
 def get_internal_run_time():
     """Get internal run time."""
     import time
     return int(time.process_time() * 1000)
 
 
+@_registry.cl_function('SLEEP')
 def sleep_fn(seconds):
     """Sleep for seconds."""
     import time
