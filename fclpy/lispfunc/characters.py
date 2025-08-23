@@ -7,20 +7,23 @@ from fclpy.lispfunc import registry as _registry
 @_registry.cl_function('ALPHA-CHAR-P')
 def alpha_char_p(character):
     """Test if character is alphabetic."""
-    return isinstance(character, str) and len(character) == 1 and character.isalpha()
+    result = isinstance(character, str) and len(character) == 1 and character.isalpha()
+    return lisptype.lisp_bool(result)
 
 
 @_registry.cl_function('ALPHANUMERICP')
 def alphanumericp(character):
     """Test if character is alphanumeric."""
-    return isinstance(character, str) and len(character) == 1 and character.isalnum()
+    result = isinstance(character, str) and len(character) == 1 and character.isalnum()
+    return lisptype.lisp_bool(result)
 
 
 def both_case_p(character):
     """Test if character has both cases."""
     if not isinstance(character, str) or len(character) != 1:
-        return False
-    return character.upper() != character.lower()
+        return lisptype.NIL
+    result = character.upper() != character.lower()
+    return lisptype.lisp_bool(result)
 
 
 def char_code(character):
@@ -129,71 +132,81 @@ def char_name(character):
 def char_ne(*characters):
     """Test character inequality (case sensitive)."""
     if len(characters) < 2:
-        return False
-    return not all(c == characters[0] for c in characters[1:])
+        return lisptype.NIL
+    result = not all(c == characters[0] for c in characters[1:])
+    return lisptype.lisp_bool(result)
 
 
 def char_lt(*characters):
     """Test character less than (case sensitive)."""
     if len(characters) < 2:
-        return True
-    return all(characters[i] < characters[i+1] for i in range(len(characters)-1))
+        return lisptype.T
+    result = all(characters[i] < characters[i+1] for i in range(len(characters)-1))
+    return lisptype.lisp_bool(result)
 
 
 def char_le(*characters):
     """Test character less than or equal (case sensitive)."""
     if len(characters) < 2:
-        return True
-    return all(characters[i] <= characters[i+1] for i in range(len(characters)-1))
+        return lisptype.T
+    result = all(characters[i] <= characters[i+1] for i in range(len(characters)-1))
+    return lisptype.lisp_bool(result)
 
 
 def char_eq(*characters):
     """Test character equality (case sensitive)."""
     if len(characters) < 2:
-        return True
-    return all(c == characters[0] for c in characters[1:])
+        return lisptype.T
+    result = all(c == characters[0] for c in characters[1:])
+    return lisptype.lisp_bool(result)
 
 
 def char_gt(*characters):
     """Test character greater than (case sensitive)."""
     if len(characters) < 2:
-        return True
-    return all(characters[i] > characters[i+1] for i in range(len(characters)-1))
+        return lisptype.T
+    result = all(characters[i] > characters[i+1] for i in range(len(characters)-1))
+    return lisptype.lisp_bool(result)
 
 
 def char_ge(*characters):
     """Test character greater than or equal (case sensitive)."""
     if len(characters) < 2:
-        return True
-    return all(characters[i] >= characters[i+1] for i in range(len(characters)-1))
+        return lisptype.T
+    result = all(characters[i] >= characters[i+1] for i in range(len(characters)-1))
+    return lisptype.lisp_bool(result)
 
 
 def char_less(*characters):
     """Test character less than (case sensitive)."""
     if len(characters) < 2:
-        return True
-    return all(characters[i] < characters[i+1] for i in range(len(characters)-1))
+        return lisptype.T
+    result = all(characters[i] < characters[i+1] for i in range(len(characters)-1))
+    return lisptype.lisp_bool(result)
 
 
 def char_greater(*characters):
     """Test character greater than (case sensitive)."""
     if len(characters) < 2:
-        return True
-    return all(characters[i] > characters[i+1] for i in range(len(characters)-1))
+        return lisptype.T
+    result = all(characters[i] > characters[i+1] for i in range(len(characters)-1))
+    return lisptype.lisp_bool(result)
 
 
 def char_less_equal(*characters):
     """Test character less than or equal (case sensitive)."""
     if len(characters) < 2:
-        return True
-    return all(characters[i] <= characters[i+1] for i in range(len(characters)-1))
+        return lisptype.T
+    result = all(characters[i] <= characters[i+1] for i in range(len(characters)-1))
+    return lisptype.lisp_bool(result)
 
 
 def char_greater_equal(*characters):
     """Test character greater than or equal (case sensitive)."""
     if len(characters) < 2:
-        return True
-    return all(characters[i] >= characters[i+1] for i in range(len(characters)-1))
+        return lisptype.T
+    result = all(characters[i] >= characters[i+1] for i in range(len(characters)-1))
+    return lisptype.lisp_bool(result)
 
 
 def character(designator):
@@ -265,17 +278,20 @@ def digit_char_p(character, radix=10):
 @_registry.cl_function('GRAPHIC-CHAR-P')
 def graphic_char_p(character):
     """Test if character is graphic."""
-    return isinstance(character, str) and len(character) == 1 and character.isprintable()
+    result = isinstance(character, str) and len(character) == 1 and character.isprintable()
+    return lisptype.lisp_bool(result)
 
 
 def lower_case_p(character):
     """Test if character is lowercase."""
-    return isinstance(character, str) and len(character) == 1 and character.islower()
+    result = isinstance(character, str) and len(character) == 1 and character.islower()
+    return lisptype.lisp_bool(result)
 
 
 def upper_case_p(character):
     """Test if character is uppercase."""
-    return isinstance(character, str) and len(character) == 1 and character.isupper()
+    result = isinstance(character, str) and len(character) == 1 and character.isupper()
+    return lisptype.lisp_bool(result)
 
 
 def name_char(name):
@@ -296,15 +312,16 @@ def int_char(integer):
 def standard_char_p(character):
     """Test if character is standard."""
     if not isinstance(character, str) or len(character) != 1:
-        return False
+        return lisptype.NIL
     
     # Standard characters include space, newline, and graphic characters
     # in the basic Latin alphabet
     if character == ' ' or character == '\n':
-        return True
+        return lisptype.T
     
     code = ord(character)
-    return (33 <= code <= 126)  # Printable ASCII
+    result = (33 <= code <= 126)  # Printable ASCII
+    return lisptype.lisp_bool(result)
 
 
 # String functions related to characters
@@ -339,12 +356,12 @@ def string_fn(designator):
 @_registry.cl_function('STRINGP')
 def stringp(object):
     """Test if object is a string."""
-    return isinstance(object, str)
+    return lisptype.lisp_bool(isinstance(object, str))
 
 
 def simple_string_p(object):
     """Test if object is a simple string."""
-    return isinstance(object, str)
+    return lisptype.lisp_bool(isinstance(object, str))
 
 
 def string_capitalize(string, start=0, end=None):
@@ -553,49 +570,56 @@ def string_trim(character_bag, string):
 def string_equal_fn(*strings):
     """Test string equality (case sensitive)."""
     if len(strings) < 2:
-        return True
-    return all(s == strings[0] for s in strings[1:])
+        return lisptype.T
+    result = all(s == strings[0] for s in strings[1:])
+    return lisptype.lisp_bool(result)
 
 
 def string_less(*strings):
     """Test string less than (case sensitive)."""
     if len(strings) < 2:
-        return True
-    return all(strings[i] < strings[i+1] for i in range(len(strings)-1))
+        return lisptype.T
+    result = all(strings[i] < strings[i+1] for i in range(len(strings)-1))
+    return lisptype.lisp_bool(result)
 
 
 def string_greater(*strings):
     """Test string greater than (case sensitive)."""
     if len(strings) < 2:
-        return True
-    return all(strings[i] > strings[i+1] for i in range(len(strings)-1))
+        return lisptype.T
+    result = all(strings[i] > strings[i+1] for i in range(len(strings)-1))
+    return lisptype.lisp_bool(result)
 
 
 def string_less_equal(*strings):
     """Test string less than or equal (case sensitive)."""
     if len(strings) < 2:
-        return True
-    return all(strings[i] <= strings[i+1] for i in range(len(strings)-1))
+        return lisptype.T
+    result = all(strings[i] <= strings[i+1] for i in range(len(strings)-1))
+    return lisptype.lisp_bool(result)
 
 
 def string_greater_equal(*strings):
     """Test string greater than or equal (case sensitive)."""
     if len(strings) < 2:
-        return True
-    return all(strings[i] >= strings[i+1] for i in range(len(strings)-1))
+        return lisptype.T
+    result = all(strings[i] >= strings[i+1] for i in range(len(strings)-1))
+    return lisptype.lisp_bool(result)
 
 
 def string_equal_ignore_case(*strings):
     """Test string equality (case insensitive)."""
     if len(strings) < 2:
-        return True
+        return lisptype.T
     strings_upper = [s.upper() for s in strings]
-    return all(s == strings_upper[0] for s in strings_upper[1:])
+    result = all(s == strings_upper[0] for s in strings_upper[1:])
+    return lisptype.lisp_bool(result)
 
 
 def string_not_equal_ignore_case(*strings):
     """Test string inequality (case insensitive)."""
-    return not string_equal_ignore_case(*strings)
+    result = string_equal_ignore_case(*strings)
+    return lisptype.T if result == lisptype.NIL else lisptype.NIL
 
 
 def parse_integer(string, **kwargs):
