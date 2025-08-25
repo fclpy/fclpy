@@ -47,6 +47,18 @@
 	- [ ] **Step 3.6**: Add tests that copying a readtable works and macro characters can be installed
 	- [ ] **Step 3.7**: Run `pipenv run pytest -q` to make sure nothing broke
 
+### Task 3: Move reader functions to one place
+- [x] **Goal**: Put all reader-related functions in one file called `readtable.py` (Done 2025-08-26)
+	- [x] **Step 3.1**: Look for readtable functions in `fclpy/io.py` and `fclpy/lispfunc/utilities.py` (Done 2025-08-26)
+	- [x] **Step 3.2**: Find functions with names like `*READTABLE*`, `copy_readtable`, `make_dispatch_macro_character` (Done 2025-08-26)
+	- [x] **Step 3.3**: Create new file `fclpy/readtable.py` if it doesn't exist  (Done 2025-08-26)
+	- [x] **Step 3.4**: Move all readtable functions to this new file (Done 2025-08-26)
+		- Note: duplicate stub implementations were removed from `fclpy/lispfunc/utilities.py` and the decorated API in `fclpy/lispfunc/io.py` now delegates to `fclpy.readtable`.
+	- [x] **Step 3.5**: Update any other files that import these functions to import from the new location (Done 2025-08-26)
+	- [x] **Step 3.6**: Add tests that copying a readtable works and macro characters can be installed (Done 2025-08-26)
+		- Note: added `tests/test_readtable.py` which verifies `copy_readtable`, `set_macro_character`, and dispatch macros.
+	- [x] **Step 3.7**: Run `pipenv run pytest -q` to make sure nothing broke (Done 2025-08-26)
+
 ### Task 4: Remove duplicate function definitions
 - [ ] **Goal**: Make sure each Lisp function is only defined once
 	- [ ] **Step 4.1**: Create a script to find duplicates (or check manually)
