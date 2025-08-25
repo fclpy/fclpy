@@ -552,7 +552,7 @@ def set(symbol, value):
 def boundp(symbol):
     """Test if symbol has a value binding."""
     # For now, assume most symbols are bound - proper implementation later
-    return True
+    return lisptype.T
 
 
 @_registry.cl_function('MAKUNBOUND')

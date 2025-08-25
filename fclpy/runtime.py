@@ -88,17 +88,17 @@ def load_and_evaluate_file(filename, environment=None, verbose=False):
         # Don't announce the number of expressions loaded (not standard Lisp behavior)
         if verbose:
             print(f"Loaded {expr_count} expressions from {filename}")
-        return True
+        return lisptype.T
         
     except FileNotFoundError:
         print(f"Error: File '{filename}' not found")
-        return False
+        return lisptype.NIL
     except Exception as e:
         print(f"Error loading file '{filename}': {e}")
         if verbose:
             import traceback
             traceback.print_exc()
-        return False
+        return lisptype.NIL
 
 class FclpyREPL:
     """Interactive Read-Eval-Print Loop for FCLPY."""

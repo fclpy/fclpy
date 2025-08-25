@@ -102,7 +102,7 @@ def make_package_fn(name, nicknames=None, use_list=None):
 @_registry.cl_function('ARRAY-HAS-FILL-POINTER-P')
 def array_has_fill_pointer_p(array):
     """Test if array has a fill pointer."""
-    return hasattr(array, '_fill_pointer')
+    return lisptype.lisp_bool(hasattr(array, '_fill_pointer'))
 
 
 def copy_tree(tree):

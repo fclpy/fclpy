@@ -243,7 +243,7 @@ def make_random_state(state=None):
 @_registry.cl_function('RANDOM-STATE-P')
 def random_state_p(object):
     """Test if object is random state."""
-    return isinstance(object, tuple) and len(object) >= 2
+    return lisptype.lisp_bool(isinstance(object, tuple) and len(object) >= 2)
 
 
 @_registry.cl_function('COMPILE')
@@ -380,13 +380,13 @@ def symbol_function(symbol):  # type: ignore[override]
 @_registry.cl_function('FUNCTIONP')
 def functionp(object):
     """Test if object is a function."""
-    return callable(object)
+    return lisptype.lisp_bool(callable(object))
 
 
 @_registry.cl_function('COMPILED-FUNCTION-P')
 def compiled_function_p(object):
     """Test if object is compiled function."""
-    return callable(object) and hasattr(object, '__code__')
+    return lisptype.lisp_bool(callable(object) and hasattr(object, '__code__'))
 
 
 _gensym_counter = 0
@@ -447,7 +447,7 @@ def import_symbol(symbols, package=None):
     for s in symbols:
         name = s.name if hasattr(s, 'name') else str(s)
         pkg.intern_symbol(name, external=True)
-    return True
+    return lisptype.T
 
 
 @_registry.cl_function('IN-PACKAGE')
@@ -605,7 +605,7 @@ def method_qualifiers(method):
 @_registry.cl_function('NEXT-METHOD-P')
 def next_method_p():
     """Test if next method exists."""
-    return False
+    return lisptype.NIL
 
 
 @_registry.cl_function('NO-APPLICABLE-METHOD')
@@ -641,13 +641,13 @@ def shared_initialize(instance, slot_names, *initargs):
 @_registry.cl_function('SLOT-BOUNDP')
 def slot_boundp(instance, slot_name):
     """Test if slot is bound."""
-    return True
+    return lisptype.T
 
 
 @_registry.cl_function('SLOT-EXISTS-P')
 def slot_exists_p(instance, slot_name):
     """Test if slot exists."""
-    return True
+    return lisptype.T
 
 
 @_registry.cl_function('SLOT-MAKUNBOUND')
@@ -752,7 +752,7 @@ def compute_restarts(condition=None):
 @_registry.cl_function('FIND-RESTART')
 def find_restart(identifier, condition=None):
     """Find restart."""
-    return None
+    return lisptype.NIL
 
 
 @_registry.cl_function('RESTART-BIND')
@@ -961,12 +961,12 @@ def copy_readtable(from_readtable=None, to_readtable=None):
 
 def make_dispatch_macro_character(char, non_terminating_p=None, readtable=None):
     """Make dispatch macro character."""
-    return True
+    return lisptype.T
 
 
 def set_syntax_from_char(to_char, from_char, to_readtable=None, from_readtable=None):
     """Set syntax from character."""
-    return True
+    return lisptype.T
 
 
 def readtable_case(readtable):
@@ -1110,13 +1110,13 @@ def special(*args):
 @_registry.cl_function('NIL')
 def nil_symbol():
     """Return NIL symbol (Python None)."""
-    return None
+    return lisptype.NIL
 
 
 @_registry.cl_function('T')
 def t_symbol():
     """Return T symbol (Python True)."""
-    return True
+    return lisptype.T
 
 
 @_registry.cl_function('NOTINLINE')
@@ -1242,7 +1242,7 @@ def with_standard_io_syntax(*body):
 
 @_registry.cl_function('LOAD-LOGICAL-PATHNAME-TRANSLATIONS')
 def load_logical_pathname_translations(host):  # stub
-    return True
+    return lisptype.T
 
 @_registry.cl_function('LOGICAL-PATHNAME-TRANSLATIONS')
 def logical_pathname_translations(host):  # stub

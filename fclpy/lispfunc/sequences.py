@@ -8,7 +8,7 @@ import fclpy.lisptype as lisptype
 
 def endp(x):
     """Test if object is end of list (nil or empty)."""
-    return x is None or x == lisptype.NIL
+    return lisptype.lisp_bool(x is None or x == lisptype.NIL)
 
 
 @_registry.cl_function('NBUTLAST')
@@ -28,7 +28,7 @@ def nbutlast(seq, n=1):
 def append(*args):
     """Append sequences together."""
     if len(args) < 1:
-        return None
+        return lisptype.NIL
     # Build a Lisp proper list for all but last arg, then splice the last
     head_elems = []
     for seq in args[:-1]:
@@ -363,12 +363,14 @@ def tree_equal(tree1, tree2, test=None):
         test = lambda x, y: x == y
     
     if atom(tree1) and atom(tree2):
-        return test(tree1, tree2)
+        return lisptype.lisp_bool(test(tree1, tree2))
     elif atom(tree1) or atom(tree2):
-        return False
+        return lisptype.NIL
     else:
-        return (tree_equal(car(tree1), car(tree2), test) and
-                tree_equal(cdr(tree1), cdr(tree2), test))
+        # Combine sub-results and convert to Lisp boolean
+        left = tree_equal(car(tree1), car(tree2), test)
+        right = tree_equal(cdr(tree1), cdr(tree2), test)
+        return lisptype.lisp_bool(left == lisptype.T and right == lisptype.T)
 
 
 @_registry.cl_function('LIST-LENGTH')
@@ -694,38 +696,40 @@ def mismatch(sequence1, sequence2, **kwargs):
 def every(predicate, *sequences):
     """Test if predicate is true for every element."""
     if not sequences:
-        return True
+        return lisptype.T
     min_len = min(len(seq) for seq in sequences)
     for i in range(min_len):
         args = [seq[i] for seq in sequences]
         if not predicate(*args):
-            return False
-    return True
+            return lisptype.NIL
+    return lisptype.T
 
 
 @_registry.cl_function('SOME')
 def some(predicate, *sequences):
     """Test if predicate is true for some element."""
     if not sequences:
-        return False
+        return lisptype.NIL
     min_len = min(len(seq) for seq in sequences)
     for i in range(min_len):
         args = [seq[i] for seq in sequences]
         if predicate(*args):
-            return True
-    return False
+            return lisptype.T
+    return lisptype.NIL
 
 
 @_registry.cl_function('NOTEVERY')
 def notevery(predicate, *sequences):
     """Test if predicate is false for some element."""
-    return not every(predicate, *sequences)
+    ev = every(predicate, *sequences)
+    return lisptype.NIL if ev == lisptype.T else lisptype.T
 
 
 @_registry.cl_function('NOTANY')
 def notany(predicate, *sequences):
     """Test if predicate is false for all elements."""
-    return not some(predicate, *sequences)
+    sv = some(predicate, *sequences)
+    return lisptype.NIL if sv == lisptype.T else lisptype.T
 
 
 @_registry.cl_function('MAP')
@@ -859,8 +863,8 @@ def subsetp(subset, set_arg, **kwargs):
     """Test if subset is a subset of set_arg."""
     for item in subset:
         if item not in set_arg:
-            return False
-    return True
+            return lisptype.NIL
+    return lisptype.T
 
 
 @_registry.cl_function('LIST*')
@@ -901,7 +905,7 @@ def array_dimensions(array):
 @_registry.cl_function('ARRAYP')
 def arrayp(object):
     """Test if object is array."""
-    return isinstance(object, list)
+    return lisptype.lisp_bool(isinstance(object, list))
 
 
 @_registry.cl_function('ARRAY-IN-BOUNDS-P')
@@ -910,13 +914,13 @@ def array_in_bounds_p(array, *subscripts):
     try:
         dims = array_dimensions(array)
         if len(subscripts) != len(dims):
-            return False
+            return lisptype.NIL
         for i, sub in enumerate(subscripts):
             if sub < 0 or sub >= dims[i]:
-                return False
-        return True
+                return lisptype.NIL
+        return lisptype.T
     except:
-        return False
+        return lisptype.NIL
 
 
 @_registry.cl_function('ARRAY-DISPLACEMENT')
@@ -952,19 +956,19 @@ def adjust_array(array, new_dimensions, **kwargs):
 @_registry.cl_function('VECTORP')
 def vectorp(object):
     """Test if object is vector."""
-    return isinstance(object, list)
+    return lisptype.lisp_bool(isinstance(object, list))
 
 
 @_registry.cl_function('SIMPLE-VECTOR-P')
 def simple_vector_p(object):
     """Test if object is simple vector."""
-    return isinstance(object, list)
+    return lisptype.lisp_bool(isinstance(object, list))
 
 
 @_registry.cl_function('BIT-VECTOR-P')
 def bit_vector_p(object):
     """Test if object is bit vector."""
-    return isinstance(object, list) and all(x in (0, 1) for x in object)
+    return lisptype.lisp_bool(isinstance(object, list) and all(x in (0, 1) for x in object))
 
 
 @_registry.cl_function('SIMPLE-BIT-VECTOR-P')

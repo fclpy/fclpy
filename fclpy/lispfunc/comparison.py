@@ -183,126 +183,103 @@ def type_of(object):
 @_registry.cl_function('SUBTYPEP')
 def subtypep(type1, type2):
     """Test if type1 is a subtype of type2."""
-    # Convert to string representation for comparison
+    # Convert to uppercase string names for comparison
     if isinstance(type1, lisptype.LispSymbol):
         t1 = type1.name.upper()
     elif isinstance(type1, str):
         t1 = type1.upper()
     else:
         t1 = str(type1).upper()
-    
+
     if isinstance(type2, lisptype.LispSymbol):
         t2 = type2.name.upper()
     elif isinstance(type2, str):
         t2 = type2.upper()
     else:
         t2 = str(type2).upper()
-    
-    # T is the supertype of everything
+
+    # T is supertype of everything
     if t2 == 'T':
-        return True, True
-    
+        return lisptype.T, lisptype.T
+
     # Everything is a subtype of itself
     if t1 == t2:
-        return True, True
-    
+        return lisptype.T, lisptype.T
+
     # Numeric type hierarchy
-    if t1 == 'INTEGER':
-        if t2 in ['RATIONAL', 'REAL', 'NUMBER']:
-            return True, True
-    elif t1 == 'RATIONAL':
-        if t2 in ['REAL', 'NUMBER']:
-            return True, True
-    elif t1 in ['SINGLE-FLOAT', 'DOUBLE-FLOAT', 'FLOAT']:
-        if t2 in ['REAL', 'NUMBER']:
-            return True, True
-    elif t1 == 'REAL':
-        if t2 == 'NUMBER':
-            return True, True
-    elif t1 == 'COMPLEX':
-        if t2 == 'NUMBER':
-            return True, True
-    
+    if t1 == 'INTEGER' and t2 in ['RATIONAL', 'REAL', 'NUMBER']:
+        return lisptype.T, lisptype.T
+    if t1 == 'RATIONAL' and t2 in ['REAL', 'NUMBER']:
+        return lisptype.T, lisptype.T
+    if t1 in ['SINGLE-FLOAT', 'DOUBLE-FLOAT', 'FLOAT'] and t2 in ['REAL', 'NUMBER']:
+        return lisptype.T, lisptype.T
+    if t1 == 'REAL' and t2 == 'NUMBER':
+        return lisptype.T, lisptype.T
+    if t1 == 'COMPLEX' and t2 == 'NUMBER':
+        return lisptype.T, lisptype.T
+
     # List type hierarchy
-    if t1 == 'NULL':
-        if t2 in ['LIST', 'ATOM']:
-            return True, True
-    elif t1 == 'CONS':
-        if t2 == 'LIST':
-            return True, True
-    
+    if t1 == 'NULL' and t2 in ['LIST', 'ATOM']:
+        return lisptype.T, lisptype.T
+    if t1 == 'CONS' and t2 == 'LIST':
+        return lisptype.T, lisptype.T
+
     # Character and string hierarchy
-    if t1 == 'CHARACTER':
-        if t2 == 'BASE-CHAR':
-            return True, True
-    elif t1 == 'BASE-CHAR':
-        if t2 == 'CHARACTER':
-            return True, True
-    
+    if t1 == 'CHARACTER' and t2 == 'BASE-CHAR':
+        return lisptype.T, lisptype.T
+    if t1 == 'BASE-CHAR' and t2 == 'CHARACTER':
+        return lisptype.T, lisptype.T
+
     # Symbol hierarchy
-    if t1 == 'KEYWORD':
-        if t2 == 'SYMBOL':
-            return True, True
-    
-    # Everything is an atom except cons cells
-    if t2 == 'ATOM':
-        if t1 not in ['CONS', 'LIST']:
-            return True, True
-        elif t1 == 'NULL':  # NULL is both a list and an atom
-            return True, True
-    
+    if t1 == 'KEYWORD' and t2 == 'SYMBOL':
+        return lisptype.T, lisptype.T
+
+    # Atom hierarchy
+    if t2 == 'ATOM' and t1 not in ['CONS', 'LIST']:
+        return lisptype.T, lisptype.T
+    if t2 == 'ATOM' and t1 == 'NULL':
+        return lisptype.T, lisptype.T
+
     # Function types
-    if t1 in ['COMPILED-FUNCTION', 'INTERPRETED-FUNCTION']:
-        if t2 == 'FUNCTION':
-            return True, True
-    
+    if t1 in ['COMPILED-FUNCTION', 'INTERPRETED-FUNCTION'] and t2 == 'FUNCTION':
+        return lisptype.T, lisptype.T
+
     # Array and vector types
-    if t1 == 'SIMPLE-VECTOR':
-        if t2 in ['VECTOR', 'SIMPLE-ARRAY', 'ARRAY']:
-            return True, True
-    elif t1 == 'VECTOR':
-        if t2 in ['ARRAY']:
-            return True, True
-    elif t1 == 'SIMPLE-ARRAY':
-        if t2 == 'ARRAY':
-            return True, True
-    
+    if t1 == 'SIMPLE-VECTOR' and t2 in ['VECTOR', 'SIMPLE-ARRAY', 'ARRAY']:
+        return lisptype.T, lisptype.T
+    if t1 == 'VECTOR' and t2 == 'ARRAY':
+        return lisptype.T, lisptype.T
+    if t1 == 'SIMPLE-ARRAY' and t2 == 'ARRAY':
+        return lisptype.T, lisptype.T
+
     # Stream types
-    if t1 in ['INPUT-STREAM', 'OUTPUT-STREAM']:
-        if t2 == 'STREAM':
-            return True, True
-    elif t1 in ['FILE-STREAM', 'STRING-STREAM']:
-        if t2 in ['STREAM', 'INPUT-STREAM', 'OUTPUT-STREAM']:
-            return True, True
-    
+    if t1 in ['INPUT-STREAM', 'OUTPUT-STREAM'] and t2 == 'STREAM':
+        return lisptype.T, lisptype.T
+    if t1 in ['FILE-STREAM', 'STRING-STREAM'] and t2 in ['STREAM', 'INPUT-STREAM', 'OUTPUT-STREAM']:
+        return lisptype.T, lisptype.T
+
     # Hash table types
-    if t1 == 'HASH-TABLE':
-        if t2 == 'T':
-            return True, True
-    
+    if t1 == 'HASH-TABLE' and t2 == 'T':
+        return lisptype.T, lisptype.T
+
     # Pathname types
-    if t1 == 'LOGICAL-PATHNAME':
-        if t2 == 'PATHNAME':
-            return True, True
-    
+    if t1 == 'LOGICAL-PATHNAME' and t2 == 'PATHNAME':
+        return lisptype.T, lisptype.T
+
     # Package type
-    if t1 == 'PACKAGE':
-        if t2 == 'T':
-            return True, True
-    
+    if t1 == 'PACKAGE' and t2 == 'T':
+        return lisptype.T, lisptype.T
+
     # Condition types (simplified hierarchy)
-    if t1 in ['SIMPLE-ERROR', 'TYPE-ERROR', 'ARITHMETIC-ERROR']:
-        if t2 in ['ERROR', 'SERIOUS-CONDITION', 'CONDITION']:
-            return True, True
-    elif t1 == 'ERROR':
-        if t2 in ['SERIOUS-CONDITION', 'CONDITION']:
-            return True, True
-    elif t1 in ['WARNING', 'STYLE-WARNING']:
-        if t2 == 'CONDITION':
-            return True, True
-    
+    if t1 in ['SIMPLE-ERROR', 'TYPE-ERROR', 'ARITHMETIC-ERROR'] and t2 in ['ERROR', 'SERIOUS-CONDITION', 'CONDITION']:
+        return lisptype.T, lisptype.T
+    if t1 == 'ERROR' and t2 in ['SERIOUS-CONDITION', 'CONDITION']:
+        return lisptype.T, lisptype.T
+    if t1 in ['WARNING', 'STYLE-WARNING'] and t2 == 'CONDITION':
+        return lisptype.T, lisptype.T
+
     # No subtype relationship found
-    return False, True
+    return lisptype.NIL, lisptype.T
 
 
 @_registry.cl_function('IDENTITY')
@@ -315,15 +292,15 @@ def identity(object):
 def constantp(form, environment=None):
     """Test if form is a constant."""
     if isinstance(form, (int, float, str, bool)):
-        return True
+        return lisptype.T
     elif isinstance(form, lisptype.lispKeyword):
-        return True
+        return lisptype.T
     elif null(form):
-        return True
+        return lisptype.T
     elif consp(form) and car(form) == lisptype.LispSymbol('QUOTE'):
-        return True
+        return lisptype.T
     else:
-        return False
+        return lisptype.NIL
 
 
 @_registry.cl_function('COMPLEMENT')

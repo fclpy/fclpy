@@ -7,8 +7,8 @@ from . import registry as _registry
 @_registry.cl_function('READTABLEP')
 def readtablep(obj):
     """Test if object is a readtable."""
-    # For now, return False as we don't have readtable objects yet
-    return False
+    # For now, we don't have readtable objects yet; return NIL
+    return lisptype.NIL
 
 
 @_registry.cl_function('STREAMP')
@@ -23,9 +23,9 @@ def streamp(obj):
     """
     import io as _io
     if isinstance(obj, _io.IOBase):
-        return True
+        return lisptype.T
     stream_attrs = ("read", "write", "readline", "readinto", "flush")
-    return any(hasattr(obj, a) for a in stream_attrs)
+    return lisptype.lisp_bool(any(hasattr(obj, a) for a in stream_attrs))
 
 
 # I/O operations
@@ -114,13 +114,13 @@ def unread_char(character, stream=None):
 @_registry.cl_function('LISTEN')
 def listen_fn(stream=None):
     """Test if stream has input available."""
-    return True  # Simplified
+    return lisptype.T  # Simplified
 
 
 @_registry.cl_function('LISTEN')
 def listen(stream=None):
     """Test if input is available."""
-    return True  # Simplified
+    return lisptype.T  # Simplified
 
 
 @_registry.cl_function('CLEAR-INPUT')
@@ -224,7 +224,7 @@ def pathname(pathspec):
 @_registry.cl_function('PATHNAMEP')
 def pathnamep(object):
     """Test if object is pathname."""
-    return isinstance(object, str)  # Simplified
+    return lisptype.lisp_bool(isinstance(object, str))  # Simplified
 
 
 @_registry.cl_function('PATHNAME-HOST')
@@ -329,13 +329,13 @@ def merge_pathnames(pathname, default_pathname=None, default_version=None):
 @_registry.cl_function('WILD-PATHNAME-P')
 def wild_pathname_p(pathname, field_key=None):
     """Test if pathname is wild."""
-    return False  # No wildcards for now
+    return lisptype.NIL  # No wildcards for now
 
 
 @_registry.cl_function('PATHNAME-MATCH-P')
 def pathname_match_p(pathname, wildname):
     """Test if pathname matches wildname."""
-    return str(pathname) == str(wildname)  # Simplified
+    return lisptype.lisp_bool(str(pathname) == str(wildname))  # Simplified
 
 
 @_registry.cl_function('TRANSLATE-PATHNAME')
@@ -374,31 +374,31 @@ def open_fn(filespec, **kwargs):
 @_registry.cl_function('CLOSE')
 def close_fn(stream, **kwargs):
     """Close stream."""
-    return True
+    return lisptype.T
 
 
 @_registry.cl_function('OUTPUT-STREAM-P')
 def output_stream_p(stream):
     """Test if stream is output stream."""
-    return True  # Simplified
+    return lisptype.T  # Simplified
 
 
 @_registry.cl_function('INPUT-STREAM-P')
 def input_stream_p(stream):
     """Test if stream is input stream."""
-    return True  # Simplified
+    return lisptype.T  # Simplified
 
 
 @_registry.cl_function('OPEN-STREAM-P')
 def open_stream_p(stream):
     """Test if stream is open."""
-    return True  # Simplified
+    return lisptype.T  # Simplified
 
 
 @_registry.cl_function('INTERACTIVE-STREAM-P')
 def interactive_stream_p(stream):
     """Test if stream is interactive."""
-    return True  # Simplified
+    return lisptype.T  # Simplified
 
 
 ## Removed duplicate STREAMP definition (merged above)
@@ -483,7 +483,7 @@ def pprint(object, stream=None):
 @_registry.cl_function('PPRINT-DISPATCH')
 def pprint_dispatch(object, table=None):
     """Get pretty print dispatch function (stub)."""
-    return print, False  # Simplified
+    return print, lisptype.NIL  # Simplified
 
 
 @_registry.cl_function('PPRINT-EXIT-IF-LIST-EXHAUSTED')
@@ -557,7 +557,7 @@ def set_pprint_dispatch(type_specifier, function, priority=0, table=None):
 def probe_file(pathspec):
     """Test if file exists."""
     import os
-    return os.path.exists(str(pathspec))
+    return lisptype.lisp_bool(os.path.exists(str(pathspec)))
 
 
 @_registry.cl_function('DELETE-FILE')
@@ -565,7 +565,7 @@ def delete_file(filespec):
     """Delete file."""
     import os
     os.remove(str(filespec))
-    return True
+    return lisptype.T
 
 
 @_registry.cl_function('RENAME-FILE')
@@ -732,7 +732,7 @@ def y_or_n_p(control_string=None, *args):
     if control_string:
         print(control_string.format(*args), end=' ')
     response = input("(y or n) ").strip().lower()
-    return response in ('y', 'yes')
+    return lisptype.lisp_bool(response in ('y', 'yes'))
 
 
 def yes_or_no_p(control_string=None, *args):
@@ -740,7 +740,7 @@ def yes_or_no_p(control_string=None, *args):
     if control_string:
         print(control_string.format(*args), end=' ')
     response = input("(yes or no) ").strip().lower()
-    return response == 'yes'
+    return lisptype.lisp_bool(response == 'yes')
 
 
 # Error handling
@@ -817,7 +817,7 @@ def make_dispatch_macro_character(char, non_terminating_p=False, readtable=None)
     # We re-use set_macro_character to ensure the dispatch starter exists.
     # In CL, MAKEDISPATCHMACROCHARACTER installs a dispatch macro; here just ensure entry.
     readtable.set_macro_character(char, lambda c, s: None, not non_terminating_p)
-    return True
+    return lisptype.T
 
 
 @_registry.cl_function('COPY-READTABLE')
@@ -849,7 +849,7 @@ def readtable_case(readtable=None):
 def set_syntax_from_char(to_char, from_char, to_readtable=None, from_readtable=None):
     """Set syntax from another character in a readtable."""
     # Placeholder implementation
-    return True
+    return lisptype.T
 
 
 # WITH- macros (simplified implementations)

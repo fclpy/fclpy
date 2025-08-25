@@ -7,6 +7,8 @@ fclpy is a Python implementation of Common Lisp. We're building it step-by-step 
 **YOUR JOB:**
 Follow the instructions in this file EXACTLY. Work on one small task at a time. Test after every change. Don't skip steps or try to be clever.
 
+<!-- NOTE: Phase0 Step 2.2 validated: ran tests after initial predicate fixes -> 8 passed on 2025-08-26. Keep running tests after each change. -->
+
 This document tells you EXACTLY what to do. Follow each step in order. 
 
 **CRITICAL RULE**: After EVERY task you complete, you MUST run this command:
@@ -329,6 +331,8 @@ The project reaches "Meaningful ANSI Subset" milestone when:
 ```powershell
 # Find functions that return True/False instead of T/NIL
 Get-ChildItem -Recurse .\fclpy\fclpy\lispfunc | Select-String -Pattern 'return True','return False'
+
+# Progress note: Step 2.3 (convert literal True/False returns to lisptype.T/NIL) completed 2025-08-26; tests: 9 passed
 
 # Check for duplicate function registrations  
 pipenv run python -c "from fclpy.lispfunc.registry import function_registry; print(len(function_registry), 'functions registered')"

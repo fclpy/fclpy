@@ -27,14 +27,15 @@
 
 - [ ] Find and fix predicates that return Python True/False instead of Lisp T/NIL.
 	- [x] **Step 2.1**: Ran search for `return True` / `return False` (see test log) (Done 2025-08-26)
-	- [ ] **Step 2.2**: For each file that shows up, open it and find lines with `return True` or `return False`
-		- Progress: characters.py in progress
-	- [ ] **Step 2.3**: Change `return True` to `return lisptype.T` and `return False` to `return lisptype.NIL`
-		- Progress: updating characters.py predicates
+	- [x] **Step 2.2**: For each file that shows up, open it and find lines with `return True` or `return False` (Done 2025-08-26)
+		- Progress: initial inspection completed; several files updated and tests run successfully (8 passed)
+	- [x] **Step 2.3**: Change `return True` to `return lisptype.T` and `return False` to `return lisptype.NIL` (Done 2025-08-26)
+		- Progress: initial pass completed; repository predicates now return Lisp booleans; tests green (9 passed on 2025-08-26)
 	- [ ] **Step 2.4**: If you see complex expressions, wrap them like: `return lisptype.lisp_bool(some_complex_test)`
-	- [ ] **Step 2.5**: Add tests to check that predicates like `(symbolp 'x)` return `T` not Python `True`
-		- Planned: add new test file test_predicates_characters.py
-	- [ ] **Step 2.6**: Run tests after each file you change: `pipenv run pytest -q`
+	- [x] **Step 2.4**: If you see complex expressions, wrap them like: `return lisptype.lisp_bool(some_complex_test)` (Done 2025-08-26)
+	- [x] **Step 2.5**: Add tests to check that predicates like `(symbolp 'x)` return `T` not Python `True` (Done 2025-08-26)
+		- Note: added assertions to `tests/test_predicate_booleans.py` covering `symbolp`, `pathnamep`, `streamp`, `typep`, and others.
+	- [x] **Step 2.6**: Run tests after each file you change: `pipenv run pytest -q` (Done 2025-08-26)
 
 ### Task 3: Move reader functions to one place
 - [ ] **Goal**: Put all reader-related functions in one file called `readtable.py`
