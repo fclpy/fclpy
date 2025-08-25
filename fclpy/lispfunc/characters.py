@@ -591,7 +591,7 @@ def string_trim(character_bag, string):
 
 
 # Additional string operations
-@_registry.cl_function('STRING=')  # duplicate equality multi-arg variant
+@_registry.cl_function('STRING=')
 def string_equal_fn(*strings):
     """Test string equality (case sensitive)."""
     if len(strings) < 2:
@@ -600,7 +600,7 @@ def string_equal_fn(*strings):
     return lisptype.lisp_bool(result)
 
 
-@_registry.cl_function('STRING<')  # multi-arg chain variant
+@_registry.cl_function('STRING<')
 def string_less(*strings):
     """Test string less than (case sensitive)."""
     if len(strings) < 2:
@@ -609,7 +609,7 @@ def string_less(*strings):
     return lisptype.lisp_bool(result)
 
 
-@_registry.cl_function('STRING>')  # multi-arg chain variant
+@_registry.cl_function('STRING>')
 def string_greater(*strings):
     """Test string greater than (case sensitive)."""
     if len(strings) < 2:
@@ -618,7 +618,7 @@ def string_greater(*strings):
     return lisptype.lisp_bool(result)
 
 
-@_registry.cl_function('STRING<=')  # multi-arg chain variant
+@_registry.cl_function('STRING<=')
 def string_less_equal(*strings):
     """Test string less than or equal (case sensitive)."""
     if len(strings) < 2:
@@ -627,7 +627,7 @@ def string_less_equal(*strings):
     return lisptype.lisp_bool(result)
 
 
-@_registry.cl_function('STRING>=')  # multi-arg chain variant
+@_registry.cl_function('STRING>=')
 def string_greater_equal(*strings):
     """Test string greater than or equal (case sensitive)."""
     if len(strings) < 2:

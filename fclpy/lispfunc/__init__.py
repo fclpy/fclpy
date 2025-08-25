@@ -31,7 +31,7 @@ from .io import _s_print_
 from .sequences import list_s_star_
 
 # Create aliases for functions that conflict with Python builtins
-list = lisp_list
+list = list_fn
 round = round_fn
 string = string_fn
 

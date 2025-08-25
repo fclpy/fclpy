@@ -461,12 +461,6 @@ def list_fn(*args):
     return list(args)
 
 
-@_registry.cl_function('LIST')
-def lisp_list(*args):
-    """Create Lisp list from arguments."""
-    return list(args)
-
-
 @_registry.cl_function('LIST*')
 def list_star(*args):
     """Create dotted list."""

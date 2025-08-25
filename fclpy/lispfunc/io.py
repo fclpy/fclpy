@@ -112,12 +112,6 @@ def unread_char(character, stream=None):
 
 
 @_registry.cl_function('LISTEN')
-def listen_fn(stream=None):
-    """Test if stream has input available."""
-    return lisptype.T  # Simplified
-
-
-@_registry.cl_function('LISTEN')
 def listen(stream=None):
     """Test if input is available."""
     return lisptype.T  # Simplified
@@ -133,13 +127,6 @@ def clear_input(stream=None):
 def clear_output(stream=None):
     """Clear output from stream."""
     return None
-
-
-@_registry.cl_function('WRITE')
-def write_fn(object, **kwargs):
-    """Write object."""
-    print(object, end='')
-    return object
 
 
 @_registry.cl_function('WRITE')

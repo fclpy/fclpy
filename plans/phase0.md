@@ -37,17 +37,17 @@
 		- Note: added assertions to `tests/test_predicate_booleans.py` covering `symbolp`, `pathnamep`, `streamp`, `typep`, and others.
 	- [x] **Step 2.6**: Run tests after each file you change: `pipenv run pytest -q` (Done 2025-08-26)
 
-### Task 3: Move reader functions to one place
-- [ ] **Goal**: Put all reader-related functions in one file called `readtable.py`
-	- [ ] **Step 3.1**: Look for readtable functions in `fclpy/io.py` and `fclpy/lispfunc/utilities.py`
-	- [ ] **Step 3.2**: Find functions with names like `*READTABLE*`, `copy_readtable`, `make_dispatch_macro_character`
-	- [ ] **Step 3.3**: Create new file `fclpy/readtable.py` if it doesn't exist  
-	- [ ] **Step 3.4**: Move all readtable functions to this new file
-	- [ ] **Step 3.5**: Update any other files that import these functions to import from the new location
-	- [ ] **Step 3.6**: Add tests that copying a readtable works and macro characters can be installed
-	- [ ] **Step 3.7**: Run `pipenv run pytest -q` to make sure nothing broke
+### Task 3a: Move reader functions to one place
+- [x] **Goal**: Put all reader-related functions in one file called `readtable.py` (Done)
+	- [x] **Step 3.1**: Look for readtable functions in `fclpy/io.py` and `fclpy/lispfunc/utilities.py` (Done)
+	- [x] **Step 3.2**: Find functions with names like `*READTABLE*`, `copy_readtable`, `make_dispatch_macro_character` (Done)
+	- [x] **Step 3.3**: Create new file `fclpy/readtable.py` if it doesn't exist  (Done)
+	- [x] **Step 3.4**: Move all readtable functions to this new file (Done)
+	- [x] **Step 3.5**: Update any other files that import these functions to import from the new location (Done)
+	- [x] **Step 3.6**: Add tests that copying a readtable works and macro characters can be installed (Done)
+	- [x] **Step 3.7**: Run `pipenv run pytest -q` to make sure nothing broke (Done)
 
-### Task 3: Move reader functions to one place
+### Task 3b: Move reader functions to one place
 - [x] **Goal**: Put all reader-related functions in one file called `readtable.py` (Done 2025-08-26)
 	- [x] **Step 3.1**: Look for readtable functions in `fclpy/io.py` and `fclpy/lispfunc/utilities.py` (Done 2025-08-26)
 	- [x] **Step 3.2**: Find functions with names like `*READTABLE*`, `copy_readtable`, `make_dispatch_macro_character` (Done 2025-08-26)

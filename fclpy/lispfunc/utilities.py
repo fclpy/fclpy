@@ -953,25 +953,8 @@ def read_preserving_whitespace(stream=None, eof_error_p=True, eof_value=None, re
     return None
 
 
-# Readtable functions
-def copy_readtable(from_readtable=None, to_readtable=None):
-    """Copy readtable."""
-    return {}
-
-
-def make_dispatch_macro_character(char, non_terminating_p=None, readtable=None):
-    """Make dispatch macro character."""
-    return lisptype.T
-
-
-def set_syntax_from_char(to_char, from_char, to_readtable=None, from_readtable=None):
-    """Set syntax from character."""
-    return lisptype.T
-
-
-def readtable_case(readtable):
-    """Get readtable case."""
-    return 'UPCASE'
+# Readtable functions are centralized in fclpy.lispfunc.io / fclpy.readtable
+from .io import copy_readtable, make_dispatch_macro_character, set_syntax_from_char, readtable_case  # type: ignore
 
 
 # Math functions (RATIONAL / RATIONALIZE already implemented in math.py; provide simple fallbacks)
