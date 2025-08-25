@@ -66,44 +66,44 @@ def char_equal(*characters):
 def char_equal_ignore_case(*characters):
     """Test character equality (case insensitive)."""
     if len(characters) < 2:
-        return True
+        return lisptype.T
     chars = [c.upper() if isinstance(c, str) else c for c in characters]
-    return all(c == chars[0] for c in chars[1:])
+    return lisptype.lisp_bool(all(c == chars[0] for c in chars[1:]))
 
 @_registry.cl_function('CHAR-GREATERP')
 def char_greaterp(*characters):
     """Test character greater than (case insensitive)."""
     if len(characters) < 2:
-        return True
+        return lisptype.T
     chars = [c.upper() if isinstance(c, str) else c for c in characters]
-    return all(chars[i] > chars[i+1] for i in range(len(chars)-1))
+    return lisptype.lisp_bool(all(chars[i] > chars[i+1] for i in range(len(chars)-1)))
 
 @_registry.cl_function('CHAR-LESSP')
 def char_lessp(*characters):
     """Test character less than (case insensitive)."""
     if len(characters) < 2:
-        return True
+        return lisptype.T
     chars = [c.upper() if isinstance(c, str) else c for c in characters]
-    return all(chars[i] < chars[i+1] for i in range(len(chars)-1))
+    return lisptype.lisp_bool(all(chars[i] < chars[i+1] for i in range(len(chars)-1)))
 
 def char_not_equal(*characters):
     """Internal helper: inequality (case sensitive)."""
-    return not (char_equal(*characters))
+    return lisptype.lisp_bool(not (char_equal(*characters)) is lisptype.T)
 
 @_registry.cl_function('CHAR-NOT-EQUAL')
 def char_not_equal_ignore_case(*characters):
     """Test character inequality (case insensitive)."""
-    return not char_equal_ignore_case(*characters)
+    return lisptype.lisp_bool(char_equal_ignore_case(*characters) is lisptype.NIL)
 
 @_registry.cl_function('CHAR-NOT-GREATERP')
 def char_not_greaterp(*characters):
     """Test character not greater than (case insensitive)."""
-    return not char_greaterp(*characters)
+    return lisptype.lisp_bool(char_greaterp(*characters) is lisptype.NIL)
 
 @_registry.cl_function('CHAR-NOT-LESSP')
 def char_not_lessp(*characters):
     """Test character not less than (case insensitive)."""
-    return not char_lessp(*characters)
+    return lisptype.lisp_bool(char_lessp(*characters) is lisptype.NIL)
 
 @_registry.cl_function('CHAR-INT')
 def char_int(character):

@@ -24,16 +24,16 @@
 ### Task 2: Fix predicate functions to return T and NIL instead of True and False
 - [x] Make sure canonical `T` symbol exists in `lisptype.py`.
 	- (Done) `T` symbol present in `lisptype.py`.
-	
+
 - [ ] Find and fix predicates that return Python True/False instead of Lisp T/NIL.
-	- [ ] **Step 2.1**: Run this command to find problems:
-		```powershell  
-		Get-ChildItem -Recurse .\fclpy\fclpy\lispfunc | Select-String -Pattern 'return True','return False'
-		```
+	- [x] **Step 2.1**: Ran search for `return True` / `return False` (see test log) (Done 2025-08-26)
 	- [ ] **Step 2.2**: For each file that shows up, open it and find lines with `return True` or `return False`
+		- Progress: characters.py in progress
 	- [ ] **Step 2.3**: Change `return True` to `return lisptype.T` and `return False` to `return lisptype.NIL`
+		- Progress: updating characters.py predicates
 	- [ ] **Step 2.4**: If you see complex expressions, wrap them like: `return lisptype.lisp_bool(some_complex_test)`
 	- [ ] **Step 2.5**: Add tests to check that predicates like `(symbolp 'x)` return `T` not Python `True`
+		- Planned: add new test file test_predicates_characters.py
 	- [ ] **Step 2.6**: Run tests after each file you change: `pipenv run pytest -q`
 
 ### Task 3: Move reader functions to one place
