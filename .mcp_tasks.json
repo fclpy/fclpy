@@ -1,0 +1,15 @@
+{
+  "tasks": {
+    "task_phase0_001": {
+      "id": "task_phase0_001",
+      "title": "Fix predicate functions (Phase0 Task 2)",
+      "description": "Work through Phase 0 Task 2: Fix predicate functions as listed in plans/phase0.md. Run tests after each change.",
+      "status": "incomplete",
+      "parent_id": null,
+      "children": [],
+      "notes": "",
+      "created_at": "2025-10-25T12:00:00"
+    }
+  },
+  "current_task_id": "task_phase0_001"
+}

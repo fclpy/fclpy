@@ -23,6 +23,9 @@ def eval(form, env=None):
     # Self-evaluating forms
     if form is None or isinstance(form, (int, float, str, bool)):
         return form
+    # Keywords are self-evaluating in Common Lisp semantics
+    if isinstance(form, lisptype.lispKeyword):
+        return form
     
     # Symbols - look up in environment
     if isinstance(form, lisptype.LispSymbol):

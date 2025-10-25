@@ -207,6 +207,11 @@ class Readtable:
                 break
             token += c
         from . import lisptype
+        # If symbol starts with a leading colon, treat it as a keyword
+        if token.startswith(':'):
+            # Create a keyword with the name after the colon
+            name = token[1:].upper()
+            return lisptype.lispKeyword(name)
         return lisptype.LispSymbol(token.upper())
     
     def _skip_comment(self, stream):

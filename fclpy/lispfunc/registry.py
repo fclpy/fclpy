@@ -57,19 +57,50 @@ def register_module(module):
     This registers only plain functions (not classes), using the Python name -> Lisp
     name conversion. Existing explicit decorator registrations are not overwritten.
     """
+    # Build set of already-registered Python names to avoid duplicate auto-registrations
+    registered_py = {m.get("py_name") for m in function_registry.values()} | {m.get("py_name") for m in special_registry.values()}
+
     for name, obj in vars(module).items():
         if name.startswith("_"):
             continue
         if not callable(obj):
             continue
-        # Don't overwrite explicit decorator-based registrations
-        lisp_name = _to_lisp_name(name)
-        if lisp_name in function_registry or lisp_name in special_registry:
-            continue
         # Skip modules/classes
         if inspect.isclass(obj) or inspect.ismodule(obj):
             continue
-        function_registry[lisp_name] = {"py_name": name}
+
+        # If this Python callable has already been registered (via decorator), skip auto-registration
+        if name in registered_py:
+            continue
+
+        # Compute the candidate Lisp name for the python function name.
+        lisp_name = _to_lisp_name(name)
+        # Prefer canonical hyphenated Lisp names (e.g. HASH-TABLE-P) over underscore variants
+        hyphenated = lisp_name.replace("_", "-")
+
+        # Derive a shorter canonical form by stripping common implementation suffixes
+        # e.g. -FN and -TYPE are often used in Python names; prefer the base Lisp name when safe.
+        canonical = hyphenated
+        if hyphenated.endswith("-FN"):
+            canonical = hyphenated[:-3]
+        elif hyphenated.endswith("-TYPE"):
+            canonical = hyphenated[:-5]
+
+        # If the canonical (stripped) form already exists, don't create a duplicate.
+        if canonical in function_registry or canonical in special_registry:
+            continue
+
+        # If an explicit registration already exists for the hyphenated or underscored form, prefer it.
+        if hyphenated in function_registry or hyphenated in special_registry:
+            continue
+        if lisp_name in function_registry or lisp_name in special_registry:
+            # migrate underscored entry to hyphenated canonical key if necessary
+            if '_' in lisp_name and hyphenated not in function_registry:
+                function_registry[hyphenated] = function_registry.pop(lisp_name)
+            continue
+
+        # Register using the derived canonical name (prefer stripped base if different)
+        function_registry[canonical] = {"py_name": name}
 
 
 def get_function_py_name(lisp_name: str):

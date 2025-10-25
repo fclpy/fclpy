@@ -1446,7 +1446,13 @@ def find_package(name):
 
 @_registry.cl_function('FIND-ALL-SYMBOLS')
 def find_all_symbols(name):
-    return []
+    # Return all symbols with the given name across all known packages.
+    results = []
+    for pkg in list({id(p): p for p in state.packages.values()}.values()):
+        sym, status = pkg.find_symbol(name)
+        if sym is not None:
+            results.append(sym)
+    return results
 
 @_registry.cl_function('EXPORT')
 def export(symbols, package=None):
@@ -1643,27 +1649,70 @@ def rename_package(package, new_name, new_nicknames=None):
 
 @_registry.cl_function('PACKAGE-USE-LIST')
 def package_use_list(package):
-    return []
+    pkg = package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)) if package else getattr(state, 'current_package', None)
+    if pkg is None:
+        return []
+    # Return the list of Package objects this package uses
+    return list(pkg.use_list)
 
 @_registry.cl_function('PACKAGE-USED-BY-LIST')
 def package_used_by_list(package):
-    return []
+    pkg = package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)) if package else getattr(state, 'current_package', None)
+    if pkg is None:
+        return []
+    used_by = []
+    for p in list({id(p): p for p in state.packages.values()}.values()):
+        if pkg in getattr(p, 'use_list', []):
+            used_by.append(p)
+    return used_by
 
 @_registry.cl_function('PACKAGE-SHADOWING-SYMBOLS')
 def package_shadowing_symbols(package):
-    return []
+    pkg = package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)) if package else getattr(state, 'current_package', None)
+    if pkg is None:
+        return []
+    syms = []
+    for name in getattr(pkg, 'shadowing_symbols', set()):
+        s = pkg.symbols.get(name)
+        if s is not None:
+            syms.append(s)
+    return syms
 
 @_registry.cl_function('LIST-ALL-PACKAGES')
 def list_all_packages():
-    return []
+    # Return unique package objects (state.packages maps names and nicknames -> same package)
+    unique = {id(p): p for p in state.packages.values()}
+    return list(unique.values())
 
 @_registry.cl_function('UNINTERN')
 def unintern(symbol, package=None):
+    # Remove a symbol from a package. Return T if removed, else NIL.
+    if not isinstance(symbol, str) and hasattr(symbol, 'name'):
+        name = symbol.name
+    else:
+        name = str(symbol)
+    pkg = package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)) if package else getattr(state, 'current_package', None)
+    if pkg is None:
+        return lisptype.NIL
+    name = name.upper()
+    if name in pkg.symbols:
+        del pkg.symbols[name]
+        pkg.external_symbols.discard(name)
+        pkg.shadowing_symbols.discard(name)
+        return lisptype.T
     return lisptype.NIL
 
 @_registry.cl_function('UNEXPORT')
 def unexport(symbols, package=None):
-    return lisptype.NIL
+    if not isinstance(symbols, (list, tuple)):
+        symbols = [symbols]
+    pkg = package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)) if package else getattr(state, 'current_package', None)
+    if pkg is None:
+        return lisptype.NIL
+    for s in symbols:
+        name = s.name if hasattr(s, 'name') else str(s)
+        pkg.external_symbols.discard(name.upper())
+    return lisptype.T
 
 @_registry.cl_function('SHADOWING-IMPORT')
 def shadowing_import(symbols, package=None):
@@ -1675,10 +1724,31 @@ def shadow(symbols, package=None):
 
 @_registry.cl_function('USE-PACKAGE')
 def use_package(packages, package=None):
+    # Install package(s) into package's use-list
+    if not isinstance(packages, (list, tuple)):
+        packages = [packages]
+    target = package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)) if package else getattr(state, 'current_package', None)
+    if target is None:
+        return lisptype.NIL
+    for p in packages:
+        pkgobj = p if isinstance(p, lisptype.Package) else lisptype.find_package(str(p))
+        if pkgobj is None:
+            pkgobj = lisptype.make_package(str(p))
+        if pkgobj not in target.use_list:
+            target.use_list.append(pkgobj)
     return lisptype.T
 
 @_registry.cl_function('UNUSE-PACKAGE')
 def unuse_package(packages, package=None):
+    if not isinstance(packages, (list, tuple)):
+        packages = [packages]
+    target = package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)) if package else getattr(state, 'current_package', None)
+    if target is None:
+        return lisptype.NIL
+    for p in packages:
+        pkgobj = p if isinstance(p, lisptype.Package) else lisptype.find_package(str(p))
+        if pkgobj in target.use_list:
+            target.use_list.remove(pkgobj)
     return lisptype.T
 
 @_registry.cl_function('MACROEXPAND')

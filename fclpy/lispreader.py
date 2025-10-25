@@ -2,7 +2,7 @@
 
 import sys
 import re as _re
-from fclpy.lisptype import LispSymbol
+from fclpy.lisptype import LispSymbol, lispKeyword
 
 class LispStream():
     def __init__(self, fh):
@@ -118,6 +118,11 @@ class LispReader():
         elif _re.match(r"^[+-]?\d*\.\d+$", token):
             return float(token)
         # Otherwise it's a symbol
+        # Keywords start with ':' and should be read as lispKeyword
+        if token.startswith(":"):
+            # strip leading ':' and create a keyword symbol
+            name = token[1:]
+            return lispKeyword(name)
         return LispSymbol(token)
     def valid_char(self,c):
         return c is not None

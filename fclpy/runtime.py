@@ -124,9 +124,12 @@ class FclpyREPL:
         try:
             line = input("FCLPY> ").strip()
             
-            # Handle REPL commands
+            # Handle REPL commands (only if they match a known command)
             if line.startswith(':'):
-                return self.handle_repl_command(line)
+                cmd = line.lower().strip()
+                if cmd in [':quit', ':q', ':help', ':h', ':env', ':test', ':verbose']:
+                    return self.handle_repl_command(line)
+                # otherwise fall through and treat as a Lisp keyword/expression (e.g. :FOO)
             
             # Handle empty input
             if not line.strip():
@@ -187,6 +190,9 @@ class FclpyREPL:
             return self.parse_function_call(text)
         else:
             # Assume it's a symbol
+            # Keywords of the form :FOO should be returned as lispKeyword
+            if text.startswith(':'):
+                return lisptype.lispKeyword(text[1:].upper())
             return lisptype.LispSymbol(text.upper())
     
     def parse_function_call(self, text):
@@ -205,7 +211,11 @@ class FclpyREPL:
             elif arg.startswith('"') and arg.endswith('"'):
                 args = lisptype.lispCons(arg[1:-1], args)
             else:
-                args = lisptype.lispCons(lisptype.LispSymbol(arg.upper()), args)
+                # Handle keyword arguments like :FOO
+                if arg.startswith(':'):
+                    args = lisptype.lispCons(lisptype.lispKeyword(arg[1:].upper()), args)
+                else:
+                    args = lisptype.lispCons(lisptype.LispSymbol(arg.upper()), args)
         
         return lisptype.lispCons(func_name, args)
     

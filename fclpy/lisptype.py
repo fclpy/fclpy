@@ -175,7 +175,13 @@ def is_truthy(value):
     return value is not NIL and value is not None
 
 class lispKeyword(LispSymbol):
-    pass
+    def __repr__(self):
+        # Represent keywords with a leading colon, e.g. :FOO
+        return f":{self.name}"
+
+    def __str__(self):
+        # Ensure printing (str) also shows the leading colon
+        return f":{self.name}"
 
 
 class Package(lispT):

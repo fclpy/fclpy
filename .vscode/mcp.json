@@ -1,0 +1,7 @@
+{
+  "servers": {
+    "task-manager": {
+      "command": "c:\\Users\\ACER\\git\\Deep-Learning\\copilot-mcp-task-manager\\task_manager_server.bat"
+    }
+  }
+}

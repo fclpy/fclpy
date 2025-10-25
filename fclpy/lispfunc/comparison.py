@@ -153,15 +153,25 @@ def typep(object, type_specifier):
 @_registry.cl_function('TYPE-OF')
 def type_of(object):
     """Return type of object."""
-    if null(object):
+    # null() and consp() return Lisp T/NIL objects, compare against lisptype.T
+    if null(object) == lisptype.T:
         return lisptype.LispSymbol('NULL')
-    elif consp(object):
+    elif consp(object) == lisptype.T:
         return lisptype.LispSymbol('CONS')
     elif isinstance(object, lisptype.lispKeyword):
         return lisptype.LispSymbol('KEYWORD')
     elif isinstance(object, lisptype.LispSymbol):
         return lisptype.LispSymbol('SYMBOL')
     elif isinstance(object, int):
+        # Common Lisp often returns very specific integer types for small integers
+        # e.g. 0 or 1 may be represented as BIT in some implementations. Return
+        # a more specific type when possible.
+        try:
+            val = int(object)
+        except Exception:
+            return lisptype.LispSymbol('INTEGER')
+        if val in (0, 1):
+            return lisptype.LispSymbol('BIT')
         return lisptype.LispSymbol('INTEGER')
     elif isinstance(object, float):
         return lisptype.LispSymbol('SINGLE-FLOAT')
