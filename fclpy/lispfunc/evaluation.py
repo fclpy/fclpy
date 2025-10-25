@@ -9,6 +9,7 @@ from fclpy.lisptype import resolve_environment, LispEnvironmentError
 
 # Register special operator handlers into the builtin registry
 from . import registry as _registry
+import fclpy.lispfunc as lispfunc
 
 @_registry.cl_function('EVAL')
 def eval(form, env=None):
@@ -37,6 +38,20 @@ def eval(form, env=None):
         value = env.find_func(form)
         if value is not None:
             return value
+        # As a fallback, consult the function registry and auto-install
+        # bindings into the environment if a registered function exists but
+        # hasn't been wired into this Environment instance yet.
+        try:
+            py_name = _registry.get_function_py_name(form.name)
+            if py_name:
+                fn = getattr(lispfunc, py_name, None)
+                if fn:
+                    # Bind into environment for faster future lookups
+                    env.add_function(form, fn)
+                    return fn
+        except Exception:
+            # Defensive: if registry lookup fails, ignore and raise below
+            pass
         # If not found in either, raise error
         raise lisptype.LispNotImplementedError(f"Unbound variable: {form.name}")
     

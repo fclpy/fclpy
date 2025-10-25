@@ -1,3 +1,20 @@
+import fclpy.lispfunc.registry as registry
+
+
+def test_no_duplicate_registrations():
+    """Fail if a single Python callable is registered under multiple Lisp names.
+
+    This helps catch accidental duplicate registrations where the same
+    implementation appears multiple times under different Lisp aliases.
+    """
+    mapping = registry.collect_function_symbols()
+    duplicates = {py: names for py, names in mapping.items() if len(names) > 1}
+    if duplicates:
+        # Provide a helpful assertion message listing the offending mappings
+        msgs = []
+        for py, names in duplicates.items():
+            msgs.append(f"{py}: {', '.join(sorted(names))}")
+        raise AssertionError("Duplicate function registrations found:\n" + "\n".join(msgs))
 import pkgutil
 import importlib
 from collections import defaultdict

@@ -111,3 +111,26 @@ def get_function_py_name(lisp_name: str):
 def get_special_py_name(lisp_name: str):
     entry = special_registry.get(lisp_name)
     return entry.get("py_name") if entry else None
+
+
+def collect_function_symbols():
+    """Collect mapping of Python function names to the Lisp names they implement.
+
+    Returns a dict: {py_name: [lisp_name1, lisp_name2, ...]}
+    This can be used by tests to detect if a single Python callable has been
+    registered under multiple Lisp names (possible duplicate registrations).
+    """
+    mapping = {}
+    for lisp_name, meta in function_registry.items():
+        py = meta.get("py_name")
+        if py is None:
+            continue
+        mapping.setdefault(py, []).append(lisp_name)
+
+    for lisp_name, meta in special_registry.items():
+        py = meta.get("py_name")
+        if py is None:
+            continue
+        mapping.setdefault(py, []).append(lisp_name)
+
+    return mapping
