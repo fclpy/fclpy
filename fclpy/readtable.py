@@ -167,9 +167,9 @@ class Readtable:
             try:
                 return float(token)
             except ValueError:
-                # Not a number, treat as symbol
+                # Not a number, treat as symbol (intern into user package)
                 from . import lisptype
-                return lisptype.LispSymbol(token.upper())
+                return lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol(token)
     
     def _read_string_literal(self, stream):
         """Read a string literal (already consumed opening quote)"""
@@ -205,7 +205,7 @@ class Readtable:
         """Read a quoted expression"""
         expr = self._read_item(stream)
         from . import lisptype
-        quote_sym = lisptype.LispSymbol("QUOTE")
+        quote_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol("QUOTE")
         return lisptype.lispCons(quote_sym, lisptype.lispCons(expr, lisptype.NIL))
     
     def _read_symbol(self, first_char, stream):
@@ -222,9 +222,9 @@ class Readtable:
         # If symbol starts with a leading colon, treat it as a keyword
         if token.startswith(':'):
             # Create a keyword with the name after the colon
-            name = token[1:].upper()
-            return lisptype.lispKeyword(name)
-        return lisptype.LispSymbol(token.upper())
+            name = token[1:]
+            return lisptype.lispKeyword(name.upper())
+        return lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol(token)
     
     def _skip_comment(self, stream):
         """Skip a comment to end of line"""
@@ -261,7 +261,7 @@ class Readtable:
         """
         expr = self._read_item(stream)
         from . import lisptype
-        qq_sym = lisptype.LispSymbol("QUASIQUOTE")
+        qq_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol("QUASIQUOTE")
         return lisptype.lispCons(qq_sym, lisptype.lispCons(expr, lisptype.NIL))
     
     def _comma_reader(self, char, stream):
@@ -275,14 +275,14 @@ class Readtable:
         if next_c == '@':
             expr = self._read_item(stream)
             from . import lisptype
-            sym = lisptype.LispSymbol("UNQUOTE-SPLICING")
+            sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol("UNQUOTE-SPLICING")
             return lisptype.lispCons(sym, lisptype.lispCons(expr, lisptype.NIL))
         else:
             if next_c:
                 stream.unread_char(next_c)
             expr = self._read_item(stream)
             from . import lisptype
-            sym = lisptype.LispSymbol("UNQUOTE")
+            sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol("UNQUOTE")
             return lisptype.lispCons(sym, lisptype.lispCons(expr, lisptype.NIL))
     
     def _sharp_reader(self, char, stream):

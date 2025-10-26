@@ -2,7 +2,7 @@
 
 import sys
 import re as _re
-from fclpy.lisptype import LispSymbol, lispKeyword
+import fclpy.lisptype as lisptype
 
 class LispStream():
     def __init__(self, fh):
@@ -118,12 +118,14 @@ class LispReader():
         elif _re.match(r"^[+-]?\d*\.\d+$", token):
             return float(token)
         # Otherwise it's a symbol
-        # Keywords start with ':' and should be read as lispKeyword
+        # Keywords start with ':' and should be read as keywords interned in KEYWORD package
         if token.startswith(":"):
-            # strip leading ':' and create a keyword symbol
+            # strip leading ':' and return a keyword object (keywords are self-evaluating)
             name = token[1:]
-            return lispKeyword(name)
-        return LispSymbol(token)
+            return lisptype.lispKeyword(name.upper())
+        # Otherwise intern into the COMMON-LISP-USER package so repeated reads
+        # of the same name return the identical Python object.
+        return lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol(token)
     def valid_char(self,c):
         return c is not None
     

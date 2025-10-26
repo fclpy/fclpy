@@ -27,8 +27,8 @@ def test_keyword_roundtrip():
     assert s == ':FOO'
 
 
-@pytest.mark.xfail(reason="Symbols are not yet interned to same identity; expected to xfail until intern implemented")
 def test_symbol_identity_on_read():
+    """Test that repeated reads of the same symbol return the same interned object."""
     r1 = make_reader_from_string('BAR')
     v1 = r1.read_1()
     r2 = make_reader_from_string('BAR')

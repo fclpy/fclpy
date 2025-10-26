@@ -36,14 +36,16 @@ def setup_standard_environment():
                 continue
             fn = getattr(lispfunc, py_name, None)
             if fn:
-                sym = fclpy.lisptype.LispSymbol(lisp_name)
+                # Intern the symbol into the COMMON-LISP-USER package so
+                # environment bindings and reader-produced symbols share identity.
+                sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol(lisp_name)
                 if state.current_environment.find_func(sym) is None:
                     state.current_environment.add_function(sym, fn)
         # Specials
         for lisp_name, meta in _registry.special_registry.items():
             py_name = meta.get('py_name') if isinstance(meta, dict) else None
             fn = getattr(lispfunc, py_name, None) if py_name else None
-            sym = fclpy.lisptype.LispSymbol(lisp_name)
+            sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol(lisp_name)
             if state.current_environment.find_func(sym) is None:
                 state.current_environment.add_function(sym, fn or (lambda *a: f"SPECIAL:{lisp_name}"))
 
@@ -51,14 +53,14 @@ def setup_standard_environment():
     function_mappings = {}
     if function_mappings:
         for lisp_name, python_func in function_mappings.items():
-            sym = fclpy.lisptype.LispSymbol(lisp_name)
+            sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol(lisp_name)
             state.current_environment.add_function(sym, python_func)
     # Ensure core Lisp symbols have variable bindings in the environment
     # so that symbols like T and NIL evaluate to their Lisp values rather
     # than resolving to function bindings when no variable binding exists.
     try:
         for name, val in (('T', fclpy.lisptype.T), ('NIL', fclpy.lisptype.NIL)):
-            sym = fclpy.lisptype.LispSymbol(name)
+            sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol(name)
             if state.current_environment.find_variable(sym) is None:
                 state.current_environment.add_variable(sym, val)
     except Exception:
