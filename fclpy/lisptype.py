@@ -174,6 +174,37 @@ def is_truthy(value):
     """Test if a value is truthy in Lisp (anything except NIL and None)."""
     return value is not NIL and value is not None
 
+
+def lisp_str(value):
+    """Return a Lisp-style string representation for printing.
+
+    This ensures Lisp booleans and symbols print as `T`/`NIL` and that
+    cons lists and keywords use their own string representations.
+    """
+    # Native Python booleans -> Lisp booleans
+    if value is True:
+        return repr(T)
+    if value is False:
+        return repr(NIL)
+
+    # Lisp-specific types already implement __str__/__repr__ as needed
+    try:
+        # For NIL (lispNull) __str__ already returns 'NIL'
+        return str(value)
+    except Exception:
+        return repr(value)
+
+
+def lisp_repr(value):
+    """Return a Lisp-style readable representation (like prin1).
+
+    Prefer __repr__ for Lisp objects so structures are readable.
+    """
+    try:
+        return repr(value)
+    except Exception:
+        return str(value)
+
 class lispKeyword(LispSymbol):
     def __repr__(self):
         # Represent keywords with a leading colon, e.g. :FOO

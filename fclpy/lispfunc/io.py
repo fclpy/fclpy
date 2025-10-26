@@ -132,46 +132,46 @@ def clear_output(stream=None):
 @_registry.cl_function('WRITE')
 def write(object, stream=None, **kwargs):
     """Write object to stream."""
-    print(object, end='')
+    print(lisptype.lisp_str(object), end='')
     return object
 
 
 @_registry.cl_function('PRIN1-TO-STRING')
 def prin1_to_string(object):
     """Print object to string (readable)."""
-    return str(object)
+    return lisptype.lisp_repr(object)
 
 
 @_registry.cl_function('PRINC-TO-STRING')
 def princ_to_string(object):
     """Print object to string (not readable)."""
-    return str(object)
+    return lisptype.lisp_str(object)
 
 
 @_registry.cl_function('WRITE-TO-STRING')
 def write_to_string(object, **kwargs):
     """Write object to string."""
-    return str(object)
+    return lisptype.lisp_str(object)
 
 
 @_registry.cl_function('PRINT')
 def print_fn(object, stream=None):
     """Print object."""
-    print(object)
+    print(lisptype.lisp_str(object))
     return object
 
 
 @_registry.cl_function('PRIN1')
 def prin1(object, stream=None):
     """Print object readably."""
-    print(repr(object))
+    print(lisptype.lisp_repr(object))
     return object
 
 
 @_registry.cl_function('PRINC')
 def princ(object, stream=None):
     """Print object for humans."""
-    print(object, end='')
+    print(lisptype.lisp_str(object), end='')
     return object
 
 

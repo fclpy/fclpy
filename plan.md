@@ -18,38 +18,171 @@ Follow the instructions in this file EXACTLY. Work on one small task at a time. 
 
 ## MCP Task Manager Integration
 
-If you have the MCP Task Manager available (a small service that tracks hierarchical tasks), this repository supports using it to track and resume work.
+**AGENT CRITICAL**: This repository uses the MCP Task Manager for hierarchical task tracking. The task manager provides 14 specialized tools that MUST be used for all task management operations instead of manual file editing.
 
-- Location of the MCP Task Manager server in this workspace: `copilot-mcp-task-manager/run.py`.
-- The task manager stores tasks in a JSON file named `.mcp_tasks.json` (in the working directory where the task manager is run). When the MCP Task Manager server starts, it will load this file if present.
+### Available MCP Task Manager Tools
 
-What I did for you now:
+**Core Task Management:**
+- `mcp_task-manager_add_task` - Create new tasks or subtasks
+  - Required: `title` (string)
+  - Optional: `description`, `priority` (1-5), `difficulty` (1-5), `estimated_minutes`, `parent_id` (for subtasks)
+  
+- `mcp_task-manager_get_task` - Get full details of a specific task
+  - Required: `task_id` (string)
+  
+- `mcp_task-manager_list_tasks` - List all tasks in tree view
+  - Optional: `parent_id` (to show only subtasks of a specific task)
+  
+- `mcp_task-manager_get_next_task` - Get the next incomplete task (useful for "what should I work on next?")
+  - No parameters required
 
-1. I attempted to locate `plans/phase*.md` files and specifically `phase.md`. I did not find a `phase.md` at the repository root or under `plans/` in this workspace during the automated scan.
-2. Because `phase.md` was not found, I created a starter `.mcp_tasks.json` in this repository with a single task: "Fix predicate functions (Phase0 Task 2)" and set it as the current task. This is a safe, minimal starter that you can edit or replace with parsed tasks from your `phase*.md` files.
+**Task Workflow:**
+- `mcp_task-manager_start_task` - Start working on a task (sets status to 'in_progress')
+  - Required: `task_id` (string)
+  
+- `mcp_task-manager_pause_task` - Pause an in-progress task (tracks time spent)
+  - Required: `task_id` (string)
+  - Optional: `note` (reason for pausing)
+  
+- `mcp_task-manager_complete_task` - Mark a task as complete
+  - Required: `task_id` (string)
+  
+- `mcp_task-manager_skip_task` - Skip a task (sets status to 'skipped')
+  - Required: `task_id` (string)
+  - Optional: `reason` (why skipping)
+  
+- `mcp_task-manager_resume_skipped_task` - Unskip a task (changes status from 'skipped' to 'incomplete')
+  - Required: `task_id` (string)
 
-How to use the MCP Task Manager with this repo:
+**Task Updates:**
+- `mcp_task-manager_update_task` - Update task fields (NOT status - use start/complete/etc for status)
+  - Required: `task_id` (string)
+  - Optional: `title`, `description`, `notes`, `priority` (1-5), `difficulty` (1-5), `estimated_minutes`
+  
+- `mcp_task-manager_update_tasks_bulk` - Update multiple tasks at once
+  - Required: `updates` (array of objects with `task_id` and fields to update)
+  - Can update: `status`, `title`, `description`, `notes`, `priority`, `difficulty`, `estimated_minutes`
 
-1. If you haven't already, run the MCP Task Manager server from the `copilot-mcp-task-manager` directory. Example (PowerShell):
+**Task Organization:**
+- `mcp_task-manager_set_current_task` - Set the current working task (marks it in tree view)
+  - Required: `task_id` (string)
+  
+- `mcp_task-manager_delete_task` - Delete a task
+  - Required: `task_id` (string)
+  - Optional: `recursive` (boolean - delete all subtasks recursively)
 
-```powershell
-cd ..\copilot-mcp-task-manager; python run.py
+**Project Overview:**
+- `mcp_task-manager_get_summary` - Get project summary with task statistics
+  - No parameters required
+
+### AGENT WORKFLOW: Using MCP Task Manager
+
+**1. At Session Start (MANDATORY):**
+```
+a) Call mcp_task-manager_list_tasks to see all tasks
+b) Call mcp_task-manager_get_summary to see project statistics
+c) Call mcp_task-manager_get_next_task to determine what to work on
+d) If a task is returned, call mcp_task-manager_start_task with that task_id
 ```
 
-2. The server exposes tools for adding/listing/updating/deleting tasks. If you prefer manual editing, the `.mcp_tasks.json` file will be read on start.
+**2. During Work (AFTER EACH CODE CHANGE):**
+```
+a) Make code change
+b) Run tests: pipenv run pytest -q
+c) If tests pass:
+   - Call mcp_task-manager_complete_task with current task_id
+   - Commit code changes
+   - Call mcp_task-manager_get_next_task to get next task
+d) If tests fail:
+   - Revert changes
+   - Call mcp_task-manager_pause_task with note about failure
+   - Fix the issue or call mcp_task-manager_skip_task if blocked
+```
 
-3. To load `plans/phase0.md` (or any `plans/phaseX.md`) into the task manager:
-    - If you have a file like `plans/phase0.md`, you can either:
-       - Manually parse it into JSON and place it into `.mcp_tasks.json`, or
-       - Use the MCP Task Manager `add_task` tool to create tasks interactively.
+**3. Adding New Tasks (FROM PHASE FILES):**
+When parsing `plans/phase0.md` or other phase files:
+```
+a) For each main task, call mcp_task-manager_add_task with:
+   - title: "Phase0 Task 2: Fix predicate functions"
+   - description: Full task description from markdown
+   - priority: 3 (default) or higher for critical tasks
+   - difficulty: 1-5 based on complexity estimate
+   
+b) For subtasks, call mcp_task-manager_add_task with:
+   - title: Subtask title
+   - parent_id: The task_id of the parent task
+   - Other fields as appropriate
+```
 
-4. If you want me to parse a `plans/phaseX.md` file into tasks and load them into `.mcp_tasks.json`, add that file into the repository (upload or commit it) and I will parse and import it for you.
+**4. Task Status Transitions:**
+```
+incomplete -> start_task -> in_progress
+in_progress -> complete_task -> complete
+in_progress -> pause_task -> incomplete
+incomplete -> skip_task -> skipped
+skipped -> resume_skipped_task -> incomplete
+```
 
-Notes and safety:
-- I created a minimal `.mcp_tasks.json` starter so you have a current task to resume work with. If you prefer not to use it, remove the file and the task manager will start with an empty task list.
-- When resuming work, pick the current task in the manager (either via the manager UI/CLI or by setting `current_task_id` in `.mcp_tasks.json`).
+**5. Querying Task Status:**
+```
+- Use list_tasks with no parent_id to see full tree
+- Use list_tasks with parent_id to see subtasks of a specific task
+- Use get_task to see full details including time tracking
+- Use get_summary to see overall progress statistics
+```
 
-I'll also add a small starter task file `.mcp_tasks.json` in this repo for immediate use.
+### AGENT CRITICAL RULES:
+
+1. **NEVER manually edit `.mcp_tasks.json`** - always use the MCP tools
+2. **ALWAYS call start_task before beginning work** on a task
+3. **ALWAYS call complete_task immediately after tests pass**
+4. **ALWAYS call get_next_task after completing a task** to maintain workflow
+5. **Use hierarchical tasks**: Create parent tasks for phases, child tasks for individual steps
+6. **Set current_task** whenever switching focus using set_current_task
+7. **Track time automatically**: The manager tracks time spent on tasks when you start/pause/complete
+8. **Use priority field**: 1=low, 3=normal, 5=critical (use 5 for blocking issues)
+9. **Use difficulty field**: 1=trivial, 3=moderate, 5=complex (helps with planning)
+10. **Estimate time**: Set estimated_minutes when possible for better project planning
+
+### Example Agent Workflow Session:
+
+```
+# Session start
+> mcp_task-manager_get_summary
+Result: "10 tasks, 3 complete, 1 in_progress, 6 incomplete"
+
+> mcp_task-manager_list_tasks
+Result: Shows task tree with [→] marking current task
+
+> mcp_task-manager_get_next_task
+Result: task_123 "Fix cddddr function"
+
+> mcp_task-manager_start_task task_id="task_123"
+Result: Task now in_progress
+
+# Do the work
+> [Make code changes]
+> pipenv run pytest -q
+Result: All tests pass
+
+> mcp_task-manager_complete_task task_id="task_123"
+Result: Task marked complete, time tracked
+
+> git add . ; git commit -m "phase0: fix cddddr"
+
+> mcp_task-manager_get_next_task
+Result: task_124 "Fix predicate functions"
+
+> mcp_task-manager_start_task task_id="task_124"
+Result: Ready to work on next task
+```
+
+### Setup Instructions:
+
+1. **Task Manager Location**: `copilot-mcp-task-manager/run.py`
+2. **Storage**: Tasks stored in `.mcp_tasks.json` (managed automatically by the tools)
+3. **No manual editing needed**: All operations through MCP tools
+4. **Persistent across sessions**: Task state is preserved between agent sessions
 
 <!-- NOTE: Phase0 Step 2.2 validated: ran tests after initial predicate fixes -> 8 passed on 2025-08-26. Keep running tests after each change. -->
 

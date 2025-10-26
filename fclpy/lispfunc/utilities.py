@@ -1090,15 +1090,25 @@ def special(*args):
     return None
 
 
-@_registry.cl_function('NIL')
 def nil_symbol():
     """Return NIL symbol (Python None)."""
     return lisptype.NIL
 
 
-@_registry.cl_function('T')
+@_registry.cl_function('NIL')
+def nil_symbol_function():
+    """Compatibility wrapper returning the NIL symbol for registry lookup."""
+    return lisptype.NIL
+
+
 def t_symbol():
     """Return T symbol (Python True)."""
+    return lisptype.T
+
+
+@_registry.cl_function('T')
+def t_symbol_function():
+    """Compatibility wrapper returning the T symbol for registry lookup."""
     return lisptype.T
 
 

@@ -458,7 +458,14 @@ def make_list(size, initial_element=None):
 @_registry.cl_function('LIST')
 def list_fn(*args):
     """Create list from arguments."""
-    return list(args)
+    # Create a Lisp linked-list (lispCons) rather than a native Python list
+    if not args:
+        return lisptype.NIL
+    result = lisptype.NIL
+    # Build from the end to preserve order
+    for item in reversed(args):
+        result = lisptype.lispCons(item, result)
+    return result
 
 
 @_registry.cl_function('LIST*')

@@ -53,6 +53,16 @@ def setup_standard_environment():
         for lisp_name, python_func in function_mappings.items():
             sym = fclpy.lisptype.LispSymbol(lisp_name)
             state.current_environment.add_function(sym, python_func)
-
+    # Ensure core Lisp symbols have variable bindings in the environment
+    # so that symbols like T and NIL evaluate to their Lisp values rather
+    # than resolving to function bindings when no variable binding exists.
+    try:
+        for name, val in (('T', fclpy.lisptype.T), ('NIL', fclpy.lisptype.NIL)):
+            sym = fclpy.lisptype.LispSymbol(name)
+            if state.current_environment.find_variable(sym) is None:
+                state.current_environment.add_variable(sym, val)
+    except Exception:
+        # Defensive: if lisptype is not fully available yet, ignore
+        pass
     state.functions_loaded = True
     return state.current_environment
