@@ -79,6 +79,8 @@ def eval(form, env=None):
                 return eval_lambda(form, env)
             elif operator.name == 'WHEN':
                 return eval_when(form, env)
+            elif operator.name == 'QUASIQUOTE':
+                return eval_quasiquote(form, env)
             elif operator.name == 'DEFMACRO':
                 return eval_defmacro(form, env)
         
@@ -405,6 +407,70 @@ def eval_progn(form, env):
         args = cdr(args)
     
     return result
+
+
+def eval_quasiquote(form, env):
+    """Evaluate a QUASIQUOTE form by processing UNQUOTE and UNQUOTE-SPLICING.
+
+    This is a simplified quasiquote evaluator that handles common patterns:
+    - (QUASIQUOTE x) where x is a list will return a new list where elements
+      of the form (UNQUOTE e) are replaced with the evaluated value of e,
+      and elements of the form (UNQUOTE-SPLICING e) are spliced into the list.
+    - Nested quasiquotes are not fully supported beyond a single level.
+    """
+    expr = car(cdr(form))
+
+    def _quasi(obj):
+        # If an explicit (UNQUOTE e) form, evaluate and return its value
+        if _consp_internal(obj) and isinstance(car(obj), lisptype.LispSymbol) and car(obj).name == 'UNQUOTE':
+            return eval(car(cdr(obj)), env)
+
+        # If atom, return as-is
+        if not _consp_internal(obj):
+            return obj
+
+        # Otherwise obj is a cons/list: build a resulting list applying unquote rules
+        parts = []
+        cur = obj
+        while _consp_internal(cur):
+            item = car(cur)
+            # Handle (UNQUOTE-SPLICING e)
+            if _consp_internal(item) and isinstance(car(item), lisptype.LispSymbol):
+                name = car(item).name
+                if name == 'UNQUOTE-SPLICING':
+                    val = eval(car(cdr(item)), env)
+                    # If val is a lispCons, iterate its elements
+                    if isinstance(val, lisptype.lispCons):
+                        for v in val:
+                            parts.append(v)
+                    elif isinstance(val, (list, tuple)):
+                        for v in val:
+                            parts.append(v)
+                    else:
+                        parts.append(val)
+                    cur = cdr(cur)
+                    continue
+                elif name == 'UNQUOTE':
+                    val = eval(car(cdr(item)), env)
+                    parts.append(val)
+                    cur = cdr(cur)
+                    continue
+
+            # Otherwise, recursively quasiquote the item
+            if _consp_internal(item):
+                parts.append(_quasi(item))
+            else:
+                parts.append(item)
+
+            cur = cdr(cur)
+
+        # Convert parts to a lispCons chain
+        res = lisptype.NIL
+        for p in reversed(parts):
+            res = lisptype.lispCons(p, res)
+        return res
+
+    return _quasi(expr)
 
 
 def eval_prog1(form, env):

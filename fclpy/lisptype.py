@@ -187,6 +187,12 @@ def lisp_str(value):
     if value is False:
         return repr(NIL)
 
+    # If the value is a native Python list/tuple (leftover from some helpers)
+    # present it as a Lisp list for readability, e.g. [T, NIL] -> (T NIL)
+    if isinstance(value, (list, tuple)):
+        inner = ' '.join(lisp_str(v) for v in value)
+        return f"({inner})"
+
     # Lisp-specific types already implement __str__/__repr__ as needed
     try:
         # For NIL (lispNull) __str__ already returns 'NIL'
@@ -200,6 +206,10 @@ def lisp_repr(value):
 
     Prefer __repr__ for Lisp objects so structures are readable.
     """
+    # For native Python lists/tuples, render as Lisp-style lists
+    if isinstance(value, (list, tuple)):
+        inner = ' '.join(lisp_repr(v) for v in value)
+        return f"({inner})"
     try:
         return repr(value)
     except Exception:

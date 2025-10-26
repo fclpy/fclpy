@@ -115,6 +115,12 @@ class Readtable:
             
         if not c:
             return None
+        # If this character is a macro character, dispatch to its handler
+        mc = self.get_macro_character(c)
+        if mc is not None:
+            # mc may be (function, non_terminating_p) or a raw function
+            func = mc[0] if isinstance(mc, tuple) else mc
+            return func(c, stream)
             
         # Handle different token types
         if c.isdigit() or c == '-' or c == '+':
@@ -126,6 +132,12 @@ class Readtable:
         elif c == "'":
             # Read quoted expression
             return self._read_quote(stream)
+        elif c == '`':
+            # Backquote/quasiquote
+            return self._backquote_reader(c, stream)
+        elif c == ',':
+            # Unquote or unquote-splicing
+            return self._comma_reader(c, stream)
         elif c == '(':
             # Read nested list
             return self._left_paren_reader(c, stream)
@@ -240,12 +252,38 @@ class Readtable:
         return None  # This will cause LispReader to continue reading
     
     def _backquote_reader(self, char, stream):
-        """Read a backquoted expression."""
-        raise RuntimeError("_backquote_reader should not be called directly")
+        """Read a backquoted (quasiquote) expression.
+
+        `x  => (QUASIQUOTE x)
+        This implements a simple quasiquote reader: it wraps the next form with
+        the symbol QUASIQUOTE. For more complete quasiquote/unquote behavior
+        a future enhancement should perform nested processing.
+        """
+        expr = self._read_item(stream)
+        from . import lisptype
+        qq_sym = lisptype.LispSymbol("QUASIQUOTE")
+        return lisptype.lispCons(qq_sym, lisptype.lispCons(expr, lisptype.NIL))
     
     def _comma_reader(self, char, stream):
-        """Read a comma expression (unquote)."""
-        raise RuntimeError("_comma_reader should not be called directly")
+        """Read a comma expression (unquote / unquote-splicing).
+
+        ,x  => (UNQUOTE x)
+        ,@x => (UNQUOTE-SPLICING x)
+        """
+        # Check for @ for unquote-splicing
+        next_c = stream.read_char()
+        if next_c == '@':
+            expr = self._read_item(stream)
+            from . import lisptype
+            sym = lisptype.LispSymbol("UNQUOTE-SPLICING")
+            return lisptype.lispCons(sym, lisptype.lispCons(expr, lisptype.NIL))
+        else:
+            if next_c:
+                stream.unread_char(next_c)
+            expr = self._read_item(stream)
+            from . import lisptype
+            sym = lisptype.LispSymbol("UNQUOTE")
+            return lisptype.lispCons(sym, lisptype.lispCons(expr, lisptype.NIL))
     
     def _sharp_reader(self, char, stream):
         """Handle dispatch macro characters starting with #."""

@@ -133,9 +133,28 @@ class LispReader():
     def eof(self,c):
         return c != c
     def macro_character(self,c ):
-        return c in ["(",")","'",";"]
+        # Consult the supplied readtable macro-character resolver if available
+        try:
+            mc = self.get_macro_character(c)
+            return mc is not None
+        except Exception:
+            # Fallback to a conservative built-in set for safety
+            return c in ["(",")","'",";"]
     def terminating_macro_character(self,c):
-        return c in [")"]
+        # A macro character is terminating if the readtable marks it as terminating
+        try:
+            mc = self.get_macro_character(c)
+            if mc is None:
+                return False
+            # mc may be a tuple (function, non_terminating_p)
+            if isinstance(mc, tuple) and len(mc) > 1:
+                non_terminating = bool(mc[1])
+            else:
+                # Default: treat as terminating
+                non_terminating = False
+            return not non_terminating
+        except Exception:
+            return c in [")"]
     
     def non_terminating_macro_character(self,c):
         return c != c
