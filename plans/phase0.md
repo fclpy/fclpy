@@ -11,8 +11,8 @@
  - [x] Task 4: Remove duplicate function definitions (Completed)
  - [x] Task 5: Replace package stubs (Completed)
  - [x] Task 6: Add test to catch duplicate registrations (Completed)
-- [ ] Task 7: Fix printer to show T and NIL correctly  
-- [ ] Task 8: Add basic round-trip test
+- [x] Task 7: Fix printer to show T and NIL correctly  (Done 2025-10-26)
+- [x] Task 8: Add basic round-trip test (Done 2025-10-26)
 
 ## Step-By-Step Tasks (Do These In Order)
 
@@ -25,7 +25,7 @@
 - [x] Make sure canonical `T` symbol exists in `lisptype.py`.
 	- (Done) `T` symbol present in `lisptype.py`.
 
-- [ ] Find and fix predicates that return Python True/False instead of Lisp T/NIL.
+- [x] Find and fix predicates that return Python True/False instead of Lisp T/NIL. (Done 2025-10-26)
 	- [x] **Step 2.1**: Ran search for `return True` / `return False` (see test log) (Done 2025-08-26)
 	- [x] **Step 2.2**: For each file that shows up, open it and find lines with `return True` or `return False` (Done 2025-08-26)
 		- Progress: initial inspection completed; several files updated and tests run successfully (8 passed)
@@ -59,7 +59,7 @@
 	- [x] **Step 3.7**: Run `pipenv run pytest -q` to make sure nothing broke (Done 2025-08-26)
 
 ### Task 4: Remove duplicate function definitions
-- [ ] **Goal**: Make sure each Lisp function is only defined once
+- [x] **Goal**: Make sure each Lisp function is only defined once (Done 2025-10-26)
 	- [x] **Step 4.1**: Create a script to find duplicates (or check manually)
 	- [x] **Step 4.2**: Look through files in `fclpy/lispfunc/` for functions with same `@_registry.cl_function('NAME')`  
 	- [x] **Step 4.3**: When you find duplicates, keep the best implementation and delete the others (Completed via registry normalization and duplicate-finder script)
@@ -79,28 +79,28 @@
 	- [x] **Step 5.8**: Add test that keywords like `:FOO` evaluate to themselves (Done)
 
 ### Task 6: Add test to catch duplicate registrations  
-- [ ] **Goal**: Make sure we never accidentally register the same function twice
+- [x] **Goal**: Make sure we never accidentally register the same function twice (Done 2025-10-26)
 	- [x] **Step 6.1**: Write a function `collect_function_symbols()` that gets all registered function names
 	- [x] **Step 6.2**: Write a test that calls this function and checks `len(set(names)) == len(names)`
 	- [x] **Step 6.3**: Run the test - it should pass (no duplicates)
-	- [ ] **Step 6.4**: If test fails, find and fix the duplicate registrations
+	- [x] **Step 6.4**: If test fails, find and fix the duplicate registrations (Done 2025-10-26)
 
 ### Task 7: Fix printer to show T and NIL correctly
-- [ ] **Goal**: When printing Lisp values, show `T` and `NIL` not Python `True`/`False`
-	- [ ] **Step 7.1**: Find the printer functions (probably in `fclpy/io.py` or similar)
-	- [ ] **Step 7.2**: Make sure `lisp_bool` function always returns `T` and `NIL` symbols
-	- [ ] **Step 7.3**: Update printer to print symbol names correctly  
-	- [ ] **Step 7.4**: Add test that printing `(list t nil)` shows `(T NIL)` not `(True False)`
-	- [ ] **Step 7.5**: Run `pipenv run pytest -q`
+- [x] **Goal**: When printing Lisp values, show `T` and `NIL` not Python `True`/`False` (Done 2025-10-26)
+	- [x] **Step 7.1**: Find the printer functions (probably in `fclpy/io.py` or similar) (Done 2025-10-26)
+	- [x] **Step 7.2**: Make sure `lisp_bool` function always returns `T` and `NIL` symbols (Done 2025-10-26)
+	- [x] **Step 7.3**: Update printer to print symbol names correctly  (Done 2025-10-26)
+	- [x] **Step 7.4**: Add test that printing `(list t nil)` shows `(T NIL)` not `(True False)` (Done 2025-10-26)
+	- [x] **Step 7.5**: Run `pipenv run pytest -q` (Done 2025-10-26)
 
 ### Task 8: Add basic round-trip test
-- [ ] **Goal**: Test that we can read a simple expression and print it back correctly
-	- [ ] **Step 8.1**: Write test that uses printer to convert `(A B C)` to string
-	- [ ] **Step 8.2**: Feed that string to reader and make sure we get back the same structure
-	- [ ] **Step 8.3**: Test the same thing with a keyword like `:FOO`
-	- [ ] **Step 8.4**: Make sure reading same symbol twice gives identical objects (use `is` in Python)
-	- [ ] **Step 8.5**: If this test fails, mark it as expected to fail until reader/packages are better implemented
-	- [ ] **Step 8.6**: Run `pipenv run pytest -q`
+- [x] **Goal**: Test that we can read a simple expression and print it back correctly (Done 2025-10-26)
+	- [x] **Step 8.1**: Write test that uses printer to convert `(A B C)` to string (Done 2025-10-26)
+	- [x] **Step 8.2**: Feed that string to reader and make sure we get back the same structure (Done 2025-10-26)
+	- [x] **Step 8.3**: Test the same thing with a keyword like `:FOO` (Done 2025-10-26)
+	- [x] **Step 8.4**: Make sure reading same symbol twice gives identical objects (use `is` in Python) (Done 2025-10-26)
+	- [x] **Step 8.5**: If this test fails, mark it as expected to fail until reader/packages are better implemented (Done 2025-10-26)
+	- [x] **Step 8.6**: Run `pipenv run pytest -q` (Done 2025-10-26)
 
 ## Important Notes
 - Do these tasks in the exact order shown above
