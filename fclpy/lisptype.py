@@ -157,11 +157,53 @@ class LispSymbol(lispT):
     def __init__(self, name, package=None):
         self.name = name
         self.package = package
+        self.value = None        # Symbol's value (for SETQ)
+        self.function = None     # Symbol's function definition (for DEFUN)
+        self.plist = {}          # Property list (for PUTPROP/GETPROP)
     def __repr__(self):
         return self.name
 
 # Global T symbol for consistent boolean returns
 T = LispSymbol('T')
+
+def symbol_value(symbol):
+    """Get the value of a symbol."""
+    if not isinstance(symbol, LispSymbol):
+        raise TypeError(f"symbol-value: {symbol} is not a symbol")
+    return symbol.value
+
+def set_symbol_value(symbol, value):
+    """Set the value of a symbol."""
+    if not isinstance(symbol, LispSymbol):
+        raise TypeError(f"set symbol-value: {symbol} is not a symbol")
+    symbol.value = value
+    return value
+
+def symbol_function(symbol):
+    """Get the function definition of a symbol."""
+    if not isinstance(symbol, LispSymbol):
+        raise TypeError(f"symbol-function: {symbol} is not a symbol")
+    return symbol.function
+
+def set_symbol_function(symbol, func):
+    """Set the function definition of a symbol."""
+    if not isinstance(symbol, LispSymbol):
+        raise TypeError(f"set symbol-function: {symbol} is not a symbol")
+    symbol.function = func
+    return func
+
+def symbol_plist(symbol):
+    """Get the property list of a symbol."""
+    if not isinstance(symbol, LispSymbol):
+        raise TypeError(f"symbol-plist: {symbol} is not a symbol")
+    return symbol.plist
+
+def set_symbol_plist(symbol, plist):
+    """Set the property list of a symbol."""
+    if not isinstance(symbol, LispSymbol):
+        raise TypeError(f"set symbol-plist: {symbol} is not a symbol")
+    symbol.plist = plist
+    return plist
 
 def lisp_bool(value):
     """Convert a Python truthiness value to Lisp T or NIL."""
