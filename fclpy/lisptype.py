@@ -551,6 +551,98 @@ class lispCons(lispList):
     def __iter__(self):
         return lispConsIterator(self)
 
+
+class MultipleValues(lispT):
+    """Represents multiple return values in Common Lisp.
+    
+    In Common Lisp, functions can return multiple values using (VALUES a b c ...).
+    This class wraps those values and can be unpacked as needed.
+    
+    When used in single-value context, the first value is used (default behavior).
+    When used in multiple-value context, all values are available.
+    """
+    
+    def __init__(self, *values):
+        """Initialize with a sequence of values.
+        
+        Args:
+            *values: Variable number of Lisp values
+        """
+        # Store values as a tuple for immutability
+        if len(values) == 1 and isinstance(values[0], (list, tuple)):
+            # Allow passing a list/tuple as a single argument
+            self.values = tuple(values[0])
+        else:
+            self.values = values
+    
+    def __repr__(self):
+        """Return representation as (VALUES ...)."""
+        if not self.values:
+            return "(VALUES)"
+        val_strs = [repr(v) for v in self.values]
+        return f"(VALUES {' '.join(val_strs)})"
+    
+    def __str__(self):
+        """Return string representation."""
+        if not self.values:
+            return "NIL"  # (VALUES) returns NIL
+        return str(self.values[0])  # In single-value context, use first
+    
+    def get_primary(self):
+        """Get the primary (first) value.
+        
+        When multiple values are used in a single-value context,
+        this is what is returned.
+        """
+        if self.values:
+            return self.values[0]
+        else:
+            return NIL
+    
+    def get_all(self):
+        """Get all values as a tuple."""
+        return self.values
+    
+    def __len__(self):
+        """Return number of values."""
+        return len(self.values)
+    
+    def __getitem__(self, index):
+        """Get value by index."""
+        return self.values[index]
+    
+    def to_list(self):
+        """Convert multiple values to a Lisp list.
+        
+        Useful for MULTIPLE-VALUE-LIST.
+        """
+        if not self.values:
+            return NIL
+        result = NIL
+        for val in reversed(self.values):
+            result = lispCons(val, result)
+        return result
+    
+    @staticmethod
+    def from_list(lst):
+        """Create MultipleValues from a Lisp list.
+        
+        Useful for VALUES-LIST.
+        """
+        values = []
+        current = lst
+        while isinstance(current, lispCons):
+            values.append(current.car)
+            current = current.cdr
+        
+        if not values:
+            return NIL
+        elif len(values) == 1:
+            return values[0]
+        else:
+            return MultipleValues(*values)
+
+
 def py_str_to_sym(s):
   s = s.upper()
   for p in py_str_map:

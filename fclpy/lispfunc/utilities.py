@@ -1623,21 +1623,8 @@ def multiple_value_bind(specs, values_form, *body):
 def multiple_value_call(function, *forms):
     return function(*forms) if callable(function) else None
 
-@_registry.cl_function('MULTIPLE-VALUE-LIST')
-def multiple_value_list(form):
-    return [form]
-
-@_registry.cl_function('MULTIPLE-VALUE-PROG1')
-def multiple_value_prog1(first_form, *rest):
-    return first_form
-
-@_registry.cl_function('MULTIPLE-VALUE-SETQ')
-def multiple_value_setq(vars, values_form):
-    return values_form
-
-@_registry.cl_function('NTH-VALUE')
-def nth_value(n, form):
-    return form if n == 0 else None
+# Note: MULTIPLE-VALUE-LIST, MULTIPLE-VALUE-PROG1, MULTIPLE-VALUE-SETQ, and NTH-VALUE
+# are now properly implemented in evaluation.py with full MultipleValues support
 
 @_registry.cl_function('MAKE-PACKAGE')
 def make_package(name, nicknames=None, use=None):

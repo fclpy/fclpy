@@ -1163,24 +1163,104 @@ def makunbound(symbol):
 
 @_registry.cl_function('VALUES')
 def values(*args):
-    """Return multiple values."""
-    # For now, return as tuple if multiple or single if one
-    # or NIL if no values
+    """Return multiple values.
+    
+    (VALUES a b c) returns three values: a, b, and c.
+    When no arguments are given, returns NIL.
+    When one argument is given, returns that value directly.
+    When multiple arguments are given, returns a MultipleValues wrapper.
+    """
     if not args:
         return lisptype.NIL
     elif len(args) == 1:
         return args[0]
     else:
-        # Return as tuple for multiple values
-        return args
+        # Return as MultipleValues wrapper for multiple values
+        return lisptype.MultipleValues(*args)
 
 
 @_registry.cl_function('VALUES-LIST')
 def values_list(lst):
-    """Return multiple values from a list."""
-    # For now, return first element or None - proper implementation later
-    from .core import _consp_internal, car
-    return car(lst) if _consp_internal(lst) else None
+    """Return multiple values from a list.
+    
+    (VALUES-LIST '(a b c)) returns three values: a, b, and c.
+    This is essentially the inverse of MULTIPLE-VALUE-LIST.
+    """
+    if lst is lisptype.NIL or lst is None:
+        return lisptype.NIL
+    
+    # Convert list to MultipleValues
+    return lisptype.MultipleValues.from_list(lst)
+
+
+@_registry.cl_function('MULTIPLE-VALUE-LIST')
+def multiple_value_list(values):
+    """Convert multiple values to a list.
+    
+    (MULTIPLE-VALUE-LIST (VALUES a b c)) returns (a b c) as a list.
+    If the input is a single value, wraps it in a list.
+    If the input is a MultipleValues, converts all values to a list.
+    """
+    if isinstance(values, lisptype.MultipleValues):
+        return values.to_list()
+    elif values is None:
+        return lisptype.NIL
+    elif values is lisptype.NIL:
+        return lisptype.lispCons(lisptype.NIL, lisptype.NIL)
+    else:
+        # Single value wraps in a list
+        return lisptype.lispCons(values, lisptype.NIL)
+
+
+@_registry.cl_function('NTH-VALUE')
+def nth_value(n, values):
+    """Extract the Nth value from multiple values.
+    
+    (NTH-VALUE 0 (VALUES a b c)) returns a
+    (NTH-VALUE 1 (VALUES a b c)) returns b
+    (NTH-VALUE 3 (VALUES a b c)) returns NIL
+    """
+    # Coerce n to int
+    if not isinstance(n, int):
+        raise lisptype.LispTypeError(f"NTH-VALUE: index must be an integer, got {type(n)}")
+    
+    if n < 0:
+        return lisptype.NIL
+    
+    if isinstance(values, lisptype.MultipleValues):
+        if n < len(values.values):
+            return values.values[n]
+        else:
+            return lisptype.NIL
+    elif values is None or values is lisptype.NIL:
+        return lisptype.NIL
+    else:
+        # Single value: only index 0 is valid
+        if n == 0:
+            return values
+        else:
+            return lisptype.NIL
+
+
+@_registry.cl_function('MULTIPLE-VALUE-PROG1')
+def multiple_value_prog1(first_form, *rest):
+    """Execute PROG1 with multiple values support (stub).
+    
+    Evaluates first_form and rest forms, returning values from first_form.
+    Full implementation would handle non-local exits and cleanup.
+    """
+    # For now, just return first_form - proper implementation later
+    return first_form
+
+
+@_registry.cl_function('MULTIPLE-VALUE-SETQ')
+def multiple_value_setq(vars, values_form):
+    """Bind multiple value results to variables (stub).
+    
+    Full implementation would destructure values_form into vars.
+    """
+    # For now, just return values_form - proper implementation later
+    return values_form
 
 
 # Aliases for functions that may have different names in lispenv.py

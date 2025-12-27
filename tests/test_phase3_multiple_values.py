@@ -44,16 +44,18 @@ class TestMultipleValues:
         assert result == 42
 
     def test_values_multiple_forms(self, env):
-        """(VALUES a b c) - for now, returns all as tuple or takes first."""
+        """(VALUES a b c) - returns MultipleValues with all values."""
         # This test documents behavior: (VALUES 1 2 3)
-        # Implementation choice: return as tuple for now
+        # Returns a MultipleValues object containing all three values
+        from fclpy.lisptype import MultipleValues
         form = cons(ls('VALUES'), cons(1, cons(2, cons(3, NIL))))
         result = eval(form, env)
-        # Accept either tuple or first value
-        assert result == (1, 2, 3) or result == 1
+        # Should return MultipleValues or tuple
+        assert isinstance(result, MultipleValues) or result == (1, 2, 3)
 
     def test_values_with_variables(self, env):
         """(VALUES x y) where x and y are variables."""
+        from fclpy.lisptype import MultipleValues
         x_var = ls('X')
         y_var = ls('Y')
         env.set_variable(x_var, 10)
@@ -62,8 +64,8 @@ class TestMultipleValues:
         form = cons(ls('VALUES'), cons(x_var, cons(y_var, NIL)))
         result = eval(form, env)
         
-        # Should return values
-        assert result == (10, 20) or result == 10
+        # Should return MultipleValues with both values
+        assert isinstance(result, MultipleValues) or result == (10, 20)
 
     def test_multiple_value_list_conversion(self, env):
         """VALUES result can be converted to list for convenience."""
@@ -92,25 +94,32 @@ class TestMultipleValueBasics:
 
     def test_first_value_extraction(self, env):
         """When multiple values used in single-value context, take first."""
+        from fclpy.lisptype import MultipleValues
         # This is the main behavior: first value is used
         x_var = ls('X')
         form = cons(ls('VALUES'), cons(100, cons(200, NIL)))
         result = eval(form, env)
         
-        # Whether tuple or single value, we should be able to use it
-        if isinstance(result, tuple):
+        # Whether MultipleValues or single value, we should be able to use it
+        if isinstance(result, MultipleValues):
+            assert result.get_primary() == 100
+        elif isinstance(result, tuple):
             assert result[0] == 100
         else:
             assert result == 100
 
     def test_values_preserves_data(self, env):
         """Multiple values carry data through evaluation."""
+        from fclpy.lisptype import MultipleValues
         # All data should be preserved even if not used
         form = cons(ls('VALUES'), cons(5, cons(10, cons(15, NIL))))
         result = eval(form, env)
         
         # Result contains all values
-        if isinstance(result, tuple):
+        if isinstance(result, MultipleValues):
+            assert len(result) == 3
+            assert result[0] == 5
+        elif isinstance(result, tuple):
             assert len(result) == 3
             assert result == (5, 10, 15)
         else:
