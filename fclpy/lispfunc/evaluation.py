@@ -36,6 +36,24 @@ class GoException(Exception):
         super().__init__(f"GO {tag.name if hasattr(tag, 'name') else tag}")
 
 
+class ConditionException(Exception):
+    """Exception raised when a Lisp condition is signaled.
+    
+    This exception wraps a condition object and is used to communicate
+    error/warning conditions through the Python exception system.
+    """
+    def __init__(self, condition, recoverable=False):
+        """Initialize a condition exception.
+        
+        Args:
+            condition: A Condition object from lisptype
+            recoverable: If True, the condition has a continue restart
+        """
+        self.condition = condition
+        self.recoverable = recoverable
+        super().__init__(str(condition))
+
+
 def parse_lambda_list(lambda_list):
     """Parse a Common Lisp lambda list into structured form.
     
@@ -227,6 +245,14 @@ def eval(form, env=None):
                 return eval_multiple_value_call(form, env)
             elif operator.name == 'MULTIPLE-VALUE-BIND':
                 return eval_multiple_value_bind(form, env)
+            elif operator.name == 'SIGNAL':
+                return eval_signal(form, env)
+            elif operator.name == 'ERROR':
+                return eval_error(form, env)
+            elif operator.name == 'CERROR':
+                return eval_cerror(form, env)
+            elif operator.name == 'WARN':
+                return eval_warn(form, env)
             elif operator.name == 'TAGBODY':
                 return eval_tagbody(form, env)
             elif operator.name == 'GO':
@@ -1384,6 +1410,105 @@ def eval_multiple_value_bind(form, env):
     return result
 
 
+def eval_signal(form, env):
+    """Implement SIGNAL special form.
+    
+    Syntax: (SIGNAL condition-object)
+    
+    Signal a condition, which may be handled by surrounding handlers.
+    If not handled, SIGNAL returns NIL (unlike ERROR which doesn't return).
+    """
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("SIGNAL requires a condition argument")
+    
+    condition = eval(car(args), env)
+    
+    # For now, just raise a ConditionException
+    # In a complete implementation, this would consult handler-bind handlers
+    raise ConditionException(condition, recoverable=True)
+
+
+def eval_error(form, env):
+    """Implement ERROR special form.
+    
+    Syntax: (ERROR condition-object) or (ERROR format-control &rest format-arguments)
+    
+    Signal an error condition. This is like SIGNAL but the condition must be handled,
+    or the program is aborted.
+    """
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("ERROR requires at least one argument")
+    
+    first_arg = car(args)
+    
+    # Check if it's a condition object or format string
+    if isinstance(first_arg, str) or (isinstance(first_arg, lisptype.LispSymbol) and 
+                                      first_arg.name == "ERROR"):
+        # String case: (ERROR "format ~a" arg1 arg2 ...)
+        condition = lisptype.SimpleCondition(format_string=first_arg)
+    else:
+        # Evaluate as condition object
+        first_arg = eval(first_arg, env)
+        condition = first_arg
+    
+    raise ConditionException(condition, recoverable=False)
+
+
+def eval_cerror(form, env):
+    """Implement CERROR special form.
+    
+    Syntax: (CERROR continue-format-control condition &optional (format-control) format-args...)
+    
+    Signal an error that has a built-in continue restart. If the user continues,
+    CERROR returns NIL and execution resumes.
+    """
+    args = cdr(form)
+    if not _consp_internal(args) or not _consp_internal(cdr(args)):
+        raise lisptype.LispNotImplementedError("CERROR requires at least condition argument")
+    
+    continue_format = car(args)  # Format for the continue option
+    condition_form = car(cdr(args))
+    
+    condition = eval(condition_form, env)
+    if not isinstance(condition, lisptype.Condition):
+        condition = lisptype.Error(message=str(condition))
+    
+    # Mark this as recoverable with a continue restart
+    exception = ConditionException(condition, recoverable=True)
+    exception.continue_format = continue_format
+    raise exception
+
+
+def eval_warn(form, env):
+    """Implement WARN special form.
+    
+    Syntax: (WARN condition-object) or (WARN format-control &rest format-arguments)
+    
+    Signal a warning condition. Unlike ERROR, warnings don't require handling
+    and execution normally continues.
+    """
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("WARN requires at least one argument")
+    
+    first_arg = eval(car(args), env)
+    
+    # Check if it's already a condition object
+    if isinstance(first_arg, lisptype.Condition):
+        condition = first_arg
+    elif isinstance(first_arg, lisptype.Warning):
+        condition = first_arg
+    else:
+        # Create a warning condition with the given message
+        condition = lisptype.Warning(message=str(first_arg))
+    
+    # For warnings, we might want to print/log them but not raise
+    # For now, return NIL (warnings don't interrupt execution)
+    return lisptype.NIL
+
+
 # Aliases for functions that may have different names in lispenv.py
 def apply_fn(function, *args):
     """Apply function (alias for apply)."""
@@ -1875,6 +2000,26 @@ def special_flet(*args):
 def special_labels(*args):
     """LABELS special form (handled by evaluator)."""
     raise lisptype.LispNotImplementedError('LABELS (evaluated in evaluator)')
+
+@_registry.cl_special('SIGNAL')
+def special_signal(*args):
+    """SIGNAL special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('SIGNAL (evaluated in evaluator)')
+
+@_registry.cl_special('ERROR')
+def special_error(*args):
+    """ERROR special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('ERROR (evaluated in evaluator)')
+
+@_registry.cl_special('CERROR')
+def special_cerror(*args):
+    """CERROR special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('CERROR (evaluated in evaluator)')
+
+@_registry.cl_special('WARN')
+def special_warn(*args):
+    """WARN special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('WARN (evaluated in evaluator)')
 
 @_registry.cl_special('HANDLER-BIND')
 def special_handler_bind(*args):

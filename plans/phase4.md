@@ -13,23 +13,34 @@
 	- [ ] **Step 1.5**: Run `pipenv run pytest -q`
 
 ### Task 2: Implement multiple value functions  
-- [ ] **Goal**: Add VALUES, MULTIPLE-VALUE-BIND, etc.
-	- [ ] **Step 2.1**: Implement VALUES function to create multiple values
-	- [ ] **Step 2.2**: Implement VALUES-LIST to create multiple values from list
-	- [ ] **Step 2.3**: Implement MULTIPLE-VALUE-CALL for calling function with multiple args
-	- [ ] **Step 2.4**: Implement MULTIPLE-VALUE-BIND to destructure multiple values  
-	- [ ] **Step 2.5**: Implement NTH-VALUE to extract specific value
-	- [ ] **Step 2.6**: Write tests for each function
-	- [ ] **Step 2.7**: Run `pipenv run pytest -q`
+- [x] **Goal**: Add VALUES, MULTIPLE-VALUE-BIND, etc.
+	- [x] **Step 2.1**: Implement VALUES function to create multiple values
+	- [x] **Step 2.2**: Implement VALUES-LIST to create multiple values from list
+	- [x] **Step 2.3**: Implement MULTIPLE-VALUE-CALL for calling function with multiple args
+	- [x] **Step 2.4**: Implement MULTIPLE-VALUE-BIND to destructure multiple values  
+	- [x] **Step 2.5**: Implement NTH-VALUE to extract specific value
+	- [x] **Step 2.6**: Write tests for each function
+	- [x] **Step 2.7**: Run `pipenv run pytest -q`
+
+**COMPLETED**: Implemented MULTIPLE-VALUE-CALL and MULTIPLE-VALUE-BIND special forms
+- MULTIPLE-VALUE-CALL: Calls function with multiple values expanded as arguments (7 tests)
+- MULTIPLE-VALUE-BIND: Destructures multiple values into variables (11 tests)
+- All 18 new tests passing, 554 total tests passing
 
 ### Task 3: Create condition (error) hierarchy
-- [ ] **Goal**: Structured error/warning system like ANSI Common Lisp
-	- [ ] **Step 3.1**: Create base `Condition` class 
-	- [ ] **Step 3.2**: Create subclasses: `Simple-Condition`, `Error`, `Warning`
-	- [ ] **Step 3.3**: Create specific errors: `Type-Error`, `File-Error`, etc.
-	- [ ] **Step 3.4**: Add slot accessors for condition data
-	- [ ] **Step 3.5**: Write tests: check subclass relationships with TYPEP
-	- [ ] **Step 3.6**: Run `pipenv run pytest -q`
+- [x] **Goal**: Structured error/warning system like ANSI Common Lisp
+	- [x] **Step 3.1**: Create base `Condition` class 
+	- [x] **Step 3.2**: Create subclasses: `Simple-Condition`, `Error`, `Warning`
+	- [x] **Step 3.3**: Create specific errors: `Type-Error`, `File-Error`, etc.
+	- [x] **Step 3.4**: Add slot accessors for condition data
+	- [x] **Step 3.5**: Write tests: check subclass relationships with TYPEP
+	- [x] **Step 3.6**: Run `pipenv run pytest -q`
+
+**COMPLETED**: Created comprehensive condition hierarchy
+- Base Condition class with slots system (get_slot/set_slot)
+- SimpleCondition, Warning, Error base classes
+- Specific error types: TypeError, FileError, StreamError, EndOfFile, ArithmeticError, DivisionByZero, etc.
+- All 27 tests passing, 581 total tests passing
 
 ### Task 4: Add signaling functions
 - [ ] **Goal**: Functions to signal errors and warnings
