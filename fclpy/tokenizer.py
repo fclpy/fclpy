@@ -441,10 +441,16 @@ class Tokenizer:
     def _read_character(self, start_line: int, start_col: int) -> Optional[Token]:
         """Read a character literal #\\X."""
         char_str = "#"
-        self._advance()  # consume backslash (already consumed #)
-        char_str += self._advance()
+        # Consume the backslash and add it to the token value
+        if self._peek() == '\\':
+            char_str += self._advance()  # Add the backslash
+        else:
+            # If no backslash, it's malformed
+            raise ValueError(f"Expected backslash after # at line {start_line}, col {start_col}")
         
-        # Check for named characters
+        char_str += self._advance()  # First character after backslash
+        
+        # Check for named characters (like Space, Newline, etc.)
         if self._peek() and self._peek().isalpha():
             while self._peek() and self._peek().isalpha():
                 char_str += self._advance()

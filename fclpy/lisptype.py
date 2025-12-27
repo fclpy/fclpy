@@ -267,6 +267,102 @@ class lispKeyword(LispSymbol):
         return f":{self.name}"
 
 
+class Character(lispT):
+    """Common Lisp CHARACTER type.
+    
+    Represents a single character with a code attribute.
+    """
+    
+    # Standard named character mappings
+    NAMED_CHARACTERS = {
+        'SPACE': ' ',
+        'NEWLINE': '\n',
+        'TAB': '\t',
+        'RETURN': '\r',
+        'BACKSPACE': '\b',
+        'FORM-FEED': '\f',
+        'RUBOUT': '\x7f',  # DELETE character
+    }
+    
+    # Reverse mapping for printing
+    CODE_TO_NAME = {v: k for k, v in NAMED_CHARACTERS.items()}
+    CODE_TO_NAME[' '] = 'Space'  # Preferred form
+    CODE_TO_NAME['\n'] = 'Newline'
+    CODE_TO_NAME['\t'] = 'Tab'
+    CODE_TO_NAME['\r'] = 'Return'
+    
+    def __init__(self, char: str):
+        """Initialize a Character.
+        
+        Args:
+            char: A single character string
+        """
+        if not isinstance(char, str) or len(char) != 1:
+            raise TypeError(f"Character must be a single character, got {char!r}")
+        self.char = char
+        self.code = ord(char)
+    
+    def __repr__(self):
+        """Return character representation for reading: #\\A or #\\Space."""
+        # Check if it's a named character
+        if self.char in self.CODE_TO_NAME:
+            name = self.CODE_TO_NAME[self.char]
+            return f"#\\{name}"
+        elif self.char.isalnum() or self.char in "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~":
+            # ASCII printable character
+            return f"#\\{self.char}"
+        else:
+            # Unprintable character, use code form
+            return f"#\\U{self.code:04X}"
+    
+    def __str__(self):
+        """Return string representation."""
+        if self.char in self.CODE_TO_NAME:
+            name = self.CODE_TO_NAME[self.char]
+            return f"#\\{name}"
+        elif self.char.isprintable():
+            return f"#\\{self.char}"
+        else:
+            return f"#\\U{self.code:04X}"
+    
+    def __eq__(self, other):
+        """Compare characters.
+        
+        Characters are only equal to other Character objects with the same character value.
+        """
+        if isinstance(other, Character):
+            return self.char == other.char
+        return False
+    
+    def __hash__(self):
+        """Allow characters to be used in sets/dicts."""
+        return hash(self.char)
+    
+    @classmethod
+    def from_code(cls, code: int) -> 'Character':
+        """Create a Character from a Unicode code point."""
+        return cls(chr(code))
+    
+    @classmethod
+    def from_name(cls, name: str) -> 'Character':
+        """Create a Character from a named character.
+        
+        Args:
+            name: Named character like "Space", "Newline", etc.
+            
+        Returns:
+            Character instance
+        """
+        name_upper = name.upper()
+        if name_upper in cls.NAMED_CHARACTERS:
+            return cls(cls.NAMED_CHARACTERS[name_upper])
+        # Try exact case match
+        for named_char, char_value in cls.NAMED_CHARACTERS.items():
+            if named_char.lower() == name_upper.lower():
+                return cls(char_value)
+        raise ValueError(f"Unknown named character: {name}")
+
+
 class Package(lispT):
     """Common Lisp package object."""
     
