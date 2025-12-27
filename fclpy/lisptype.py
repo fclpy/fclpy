@@ -346,6 +346,22 @@ KEYWORD_PACKAGE = make_package("KEYWORD")
 COMMON_LISP_PACKAGE = make_package("COMMON-LISP", ["CL"])
 COMMON_LISP_USER_PACKAGE = make_package("COMMON-LISP-USER", ["CL-USER"], [COMMON_LISP_PACKAGE])
 
+def intern_symbol(name, package=None):
+    """Intern a symbol in the given package (or CL-USER if not specified).
+    
+    This should be used instead of directly calling LispSymbol() constructor
+    to ensure proper package association.
+    """
+    if isinstance(name, LispSymbol):
+        return name
+    if package is None:
+        package = COMMON_LISP_USER_PACKAGE
+    if isinstance(package, str):
+        package = find_package(package) or make_package(package)
+    if not isinstance(package, Package):
+        raise TypeError(f"intern_symbol: {package} is not a package")
+    return package.intern_symbol(str(name))
+
 def intern_keyword(name):
     """Intern a keyword symbol in the KEYWORD package.
     
@@ -443,7 +459,7 @@ def py_str_to_sym(s):
   s = s.upper()
   for p in py_str_map:
       s = s.replace(*p)
-  return LispSymbol(s)
+  return intern_symbol(s, COMMON_LISP_USER_PACKAGE)
 
 
 # --- Environment resolution helper ---------------------------------------------------------
