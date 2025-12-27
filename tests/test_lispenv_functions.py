@@ -74,7 +74,7 @@ def test_all_expected_functions_are_registered():
             missing.append(name)
 
     found = len(EXPECTED_LISP_FUNCTIONS) - len(missing)
-    # Log a short summary so test output shows how many bindings were found.
-    logging.getLogger(__name__).info("Found %d Lisp function bindings; missing %d.", found, len(missing))
+    # Log a short summary so test output shows how many bindings were found (debug level to avoid red warning in output).
+    logging.getLogger(__name__).debug("Found %d Lisp function bindings; missing %d.", found, len(missing))
 
     assert not missing, f"Missing Lisp function bindings for: {', '.join(missing)}"
