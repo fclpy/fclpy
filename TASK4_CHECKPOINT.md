@@ -1,5 +1,12 @@
 # Phase 4, Task 4 - Checkpoint Summary
 
+## IMPORTANT: Start by reading plans/phase4.md for task requirements
+
+When resuming, **FIRST read** `plans/phase4.md` to understand:
+- What Task 4 is supposed to accomplish
+- The specific steps that need to be completed
+- The exit criteria for Phase 4
+
 ## Current Status: PARTIALLY COMPLETE (WIP)
 
 ### Completed
