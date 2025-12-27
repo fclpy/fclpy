@@ -33,30 +33,30 @@
 	- [x] **Step 3.6**: Run `pipenv run pytest -q` (8 new tests passing)
 
 ### Task 4: Improve the registry system
-- [ ] **Goal**: Store more information about each registered function
-	- [ ] **Step 4.1**: Create a dataclass called `RegistryEntry` with fields: name, kind (function/macro), arg_spec, documentation
-	- [ ] **Step 4.2**: Update the `@cl_function` decorator to create these objects instead of simple dicts
-	- [ ] **Step 4.3**: Make environment initialization use this registry to bind functions and macros
-	- [ ] **Step 4.4**: Add `kind` field so we can handle macros later (set to 'function' for now)
-	- [ ] **Step 4.5**: Create a tool that can generate markdown showing what's implemented
-	- [ ] **Step 4.6**: Write test: check that registry has the expected number of entries and they're all unique
-	- [ ] **Step 4.7**: Run `pipenv run pytest -q`
+- [x] **Goal**: Store more information about each registered function (Done 2025-12-27)
+	- [x] **Step 4.1**: Create a dataclass called `RegistryEntry` with fields: name, kind (function/macro), arg_spec, documentation
+	- [x] **Step 4.2**: Update the `@cl_function` decorator to create these objects instead of simple dicts
+	- [x] **Step 4.3**: Make environment initialization use this registry to bind functions and macros
+	- [x] **Step 4.4**: Add `kind` field so we can handle macros later (set to 'function' for now)
+	- [x] **Step 4.5**: Create a tool that can generate markdown showing what's implemented
+	- [x] **Step 4.6**: Write test: check that registry has the expected number of entries and they're all unique
+	- [x] **Step 4.7**: Run `pipenv run pytest -q` (48 tests passing)
 
 ### Task 5: Remove old function mapping code
-- [ ] **Goal**: Delete old ways of storing function mappings
-	- [ ] **Step 5.1**: Search for variables like `function_mappings` or similar old structures
-	- [ ] **Step 5.2**: Delete them or replace them with registry-based lookups
-	- [ ] **Step 5.3**: Make sure no code still uses the old global function mapping variables
-	- [ ] **Step 5.4**: Add test that old global names either don't exist or are aliases to new registry
-	- [ ] **Step 5.5**: Run `pipenv run pytest -q`
+- [x] **Goal**: Delete old ways of storing function mappings (Done 2025-12-27)
+	- [x] **Step 5.1**: Search for variables like `function_mappings` or similar old structures
+	- [x] **Step 5.2**: Delete them or replace them with registry-based lookups
+	- [x] **Step 5.3**: Make sure no code still uses the old global function mapping variables
+	- [x] **Step 5.4**: Add test that old global names either don't exist or are aliases to new registry
+	- [x] **Step 5.5**: Run `pipenv run pytest -q` (48 tests passing)
 
 ### Task 6: Add comprehensive tests
-- [ ] **Goal**: Test all the symbol and registry improvements
-	- [ ] **Step 6.1**: Create file `tests/test_symbols.py` (or add to existing symbol test file)
-	- [ ] **Step 6.2**: Test that symbols have identity (same symbol interned twice = same object)
-	- [ ] **Step 6.3**: Test that keywords evaluate to themselves
-	- [ ] **Step 6.4**: Test that registry is complete (expected number of functions registered)
-	- [ ] **Step 6.5**: Run `pipenv run pytest -q` and make sure all tests pass
+- [x] **Goal**: Test all the symbol and registry improvements (Done 2025-12-27)
+	- [x] **Step 6.1**: Create file `tests/test_phase1_comprehensive.py` (comprehensive test suite)
+	- [x] **Step 6.2**: Test that symbols have identity (same symbol interned twice = same object)
+	- [x] **Step 6.3**: Test that keywords evaluate to themselves
+	- [x] **Step 6.4**: Test that registry is complete (expected number of functions registered)
+	- [x] **Step 6.5**: Run `pipenv run pytest -q` and make sure all tests pass (75 tests passing: 48 + 27 new)
 
 ## Important Notes  
 - Do symbol slot extension first, then registry improvements, then enforce package interning
