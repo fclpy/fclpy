@@ -195,25 +195,129 @@ class TestTagbodyGo:
     """Test TAGBODY and GO for labeled jumps."""
     
     def test_tagbody_no_go(self, env):
-        """TAGBODY should evaluate sequentially without GO."""
-        # (TAGBODY (SETQ X 1) (SETQ X (+ X 1)))
-        # This would need SETQ support, simplify to just evaluate forms
+        """TAGBODY should evaluate sequentially without GO and return NIL."""
+        # (TAGBODY 1 2 3) - forms are evaluated, result is NIL
         tagbody_sym = LispSymbol('TAGBODY')
-        # For now, just test that forms are evaluated
         form = lispCons(tagbody_sym, lispCons(1, lispCons(2, lispCons(3, NIL))))
         
-        # This is tricky without GO support - skip for now
-        pytest.skip("TAGBODY without GO not fully testable without variable binding")
+        result = eval(form, env)
+        
+        # TAGBODY always returns NIL
+        assert result is NIL or result is None
+    
+    def test_tagbody_with_tags(self, env):
+        """TAGBODY with tags but no GO should execute all forms."""
+        # (TAGBODY start (+ 1 2) middle (+ 3 4) end)
+        tagbody_sym = LispSymbol('TAGBODY')
+        start_tag = LispSymbol('START')
+        middle_tag = LispSymbol('MIDDLE')
+        end_tag = LispSymbol('END')
+        plus_sym = LispSymbol('+')
+        
+        form1 = lispCons(plus_sym, lispCons(1, lispCons(2, NIL)))
+        form2 = lispCons(plus_sym, lispCons(3, lispCons(4, NIL)))
+        
+        form = lispCons(tagbody_sym, 
+                       lispCons(start_tag,
+                               lispCons(form1,
+                                       lispCons(middle_tag,
+                                               lispCons(form2,
+                                                       lispCons(end_tag, NIL))))))
+        
+        result = eval(form, env)
+        assert result is NIL or result is None
     
     def test_go_forward(self, env):
-        """GO should jump forward to a tag."""
-        # (TAGBODY
-        #   (SETQ X 1)
-        #   (GO end)
-        #   (SETQ X 2)
-        #   end
+        """GO should jump forward to a tag, skipping intermediate code."""
+        # Use a side-effect to track what executed
+        # We'll use a LET to bind a counter variable
+        # (LET ((X 0))
+        #   (TAGBODY
+        #     (SETQ X 1)
+        #     (GO END)
+        #     (SETQ X 999)   ; Should be skipped
+        #     END)
         #   X)
-        pytest.skip("TAGBODY/GO requires complex control flow - deferred")
+        let_sym = LispSymbol('LET')
+        tagbody_sym = LispSymbol('TAGBODY')
+        go_sym = LispSymbol('GO')
+        setq_sym = LispSymbol('SETQ')
+        x_sym = LispSymbol('X')
+        end_tag = LispSymbol('END')
+        
+        # Binding: ((X 0))
+        binding = lispCons(x_sym, lispCons(0, NIL))
+        bindings = lispCons(binding, NIL)
+        
+        # SETQ forms
+        setq_1 = lispCons(setq_sym, lispCons(x_sym, lispCons(1, NIL)))
+        go_end = lispCons(go_sym, lispCons(end_tag, NIL))
+        setq_999 = lispCons(setq_sym, lispCons(x_sym, lispCons(999, NIL)))
+        
+        # TAGBODY
+        tagbody = lispCons(tagbody_sym,
+                         lispCons(setq_1,
+                                 lispCons(go_end,
+                                         lispCons(setq_999,
+                                                 lispCons(end_tag, NIL)))))
+        
+        # LET body: TAGBODY then X
+        let_form = lispCons(let_sym, lispCons(bindings, lispCons(tagbody, lispCons(x_sym, NIL))))
+        
+        result = eval(let_form, env)
+        
+        # X should be 1, not 999 (because GO skipped the second SETQ)
+        assert result == 1
+    
+    def test_go_backward_loop(self, env):
+        """GO can jump backward to create a loop."""
+        # (LET ((X 0))
+        #   (TAGBODY
+        #     LOOP
+        #     (SETQ X (+ X 1))
+        #     (IF (< X 3) (GO LOOP))
+        #     END)
+        #   X)
+        let_sym = LispSymbol('LET')
+        tagbody_sym = LispSymbol('TAGBODY')
+        go_sym = LispSymbol('GO')
+        setq_sym = LispSymbol('SETQ')
+        if_sym = LispSymbol('IF')
+        x_sym = LispSymbol('X')
+        plus_sym = LispSymbol('+')
+        lt_sym = LispSymbol('<')
+        loop_tag = LispSymbol('LOOP')
+        end_tag = LispSymbol('END')
+        
+        # Binding: ((X 0))
+        binding = lispCons(x_sym, lispCons(0, NIL))
+        bindings = lispCons(binding, NIL)
+        
+        # (+ X 1)
+        plus_form = lispCons(plus_sym, lispCons(x_sym, lispCons(1, NIL)))
+        # (SETQ X (+ X 1))
+        setq_inc = lispCons(setq_sym, lispCons(x_sym, lispCons(plus_form, NIL)))
+        # (< X 3)
+        lt_form = lispCons(lt_sym, lispCons(x_sym, lispCons(3, NIL)))
+        # (GO LOOP)
+        go_loop = lispCons(go_sym, lispCons(loop_tag, NIL))
+        # (IF (< X 3) (GO LOOP))
+        if_form = lispCons(if_sym, lispCons(lt_form, lispCons(go_loop, NIL)))
+        
+        # TAGBODY
+        tagbody = lispCons(tagbody_sym,
+                         lispCons(loop_tag,
+                                 lispCons(setq_inc,
+                                         lispCons(if_form,
+                                                 lispCons(end_tag, NIL)))))
+        
+        # LET body: TAGBODY then X
+        let_form = lispCons(let_sym, lispCons(bindings, lispCons(tagbody, lispCons(x_sym, NIL))))
+        
+        result = eval(let_form, env)
+        
+        # Loop should run 3 times: X=1, X=2, X=3, then exit
+        assert result == 3
 
 
 class TestNonLocalExitCombinations:

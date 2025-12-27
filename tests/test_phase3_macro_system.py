@@ -74,14 +74,18 @@ class TestMacroexpand:
     
     def test_macroexpand_simple(self, env):
         """MACROEXPAND should expand a macro call."""
-        # First define a simple macro
+        # First define a simple macro using QUASIQUOTE
         defmacro_sym = LispSymbol('DEFMACRO')
         macro_name = LispSymbol('TWICE')
         x = LispSymbol('x')
         params = lispCons(x, NIL)
-        # Body: (+ x x)
+        # Body: `(+ ,x ,x) - proper code-generating macro
+        quasiquote_sym = LispSymbol('QUASIQUOTE')
         plus_sym = LispSymbol('+')
-        body = lispCons(plus_sym, lispCons(x, lispCons(x, NIL)))
+        unquote_x1 = lispCons(LispSymbol('UNQUOTE'), lispCons(x, NIL))
+        unquote_x2 = lispCons(LispSymbol('UNQUOTE'), lispCons(x, NIL))
+        inner_list = lispCons(plus_sym, lispCons(unquote_x1, lispCons(unquote_x2, NIL)))
+        body = lispCons(quasiquote_sym, lispCons(inner_list, NIL))
         
         defmacro_form = lispCons(defmacro_sym, lispCons(macro_name, lispCons(params, lispCons(body, NIL))))
         eval(defmacro_form, env)

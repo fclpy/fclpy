@@ -29,6 +29,13 @@ class ThrowException(Exception):
         super().__init__(f"Uncaught THROW {tag.name if hasattr(tag, 'name') else tag}")
 
 
+class GoException(Exception):
+    """Exception raised by GO to jump to a tag in TAGBODY."""
+    def __init__(self, tag):
+        self.tag = tag
+        super().__init__(f"GO {tag.name if hasattr(tag, 'name') else tag}")
+
+
 def parse_lambda_list(lambda_list):
     """Parse a Common Lisp lambda list into structured form.
     
@@ -216,6 +223,10 @@ def eval(form, env=None):
                 return eval_throw(form, env)
             elif operator.name == 'UNWIND-PROTECT':
                 return eval_unwind_protect(form, env)
+            elif operator.name == 'TAGBODY':
+                return eval_tagbody(form, env)
+            elif operator.name == 'GO':
+                return eval_go(form, env)
         
         # Macro handling: if operator names a macro function, expand first
         if isinstance(operator, lisptype.LispSymbol):
@@ -331,8 +342,9 @@ def eval_defun(form, env):
 def eval_defmacro(form, env):
     """Evaluate DEFMACRO special form: register a macro in the environment.
 
-    This creates a Python callable that performs parameter substitution in the
-    macro body, returning the substituted form as the expansion (code, not evaluated).
+    This creates a Python callable that evaluates the macro body in an
+    environment where the parameters are bound to the arguments. This allows
+    QUASIQUOTE/UNQUOTE to work correctly in macro templates.
     """
     args = cdr(form)
     if not _consp_internal(args) or not _consp_internal(cdr(args)):
@@ -345,55 +357,39 @@ def eval_defmacro(form, env):
     if not isinstance(macro_name, lisptype.LispSymbol):
         raise lisptype.LispNotImplementedError("DEFMACRO: macro name must be a symbol")
 
-    # Build parameter name list
+    # Build parameter symbols list
     params = []
     cur = lambda_list
     while _consp_internal(cur):
         p = car(cur)
         if isinstance(p, lisptype.LispSymbol):
-            params.append(p.name)
+            params.append(p)
         cur = cdr(cur)
-
-    # Helper to substitute params in a form
-    def substitute(form, mapping):
-        # Symbols: replace if in mapping
-        if isinstance(form, lisptype.LispSymbol):
-            if form.name in mapping:
-                return mapping[form.name]
-            return form
-        # Cons cell: recurse
-        if _consp_internal(form):
-            new_car = substitute(car(form), mapping)
-            new_cdr = substitute(cdr(form), mapping) if _consp_internal(cdr(form)) or isinstance(cdr(form), lisptype.LispSymbol) else cdr(form)
-            return lisptype.lispCons(new_car, new_cdr)
-        # Other atoms: return as-is
-        return form
 
     # Create the macro callable
     def macro_callable(*call_args):
-        # Map parameter names to raw argument forms
-        mapping = {}
-        for i, name in enumerate(params):
+        # Create a new environment extending the definition environment
+        macro_env = lisptype.Environment(parent=env)
+        
+        # Bind parameter symbols to raw argument forms
+        for i, param in enumerate(params):
             if i < len(call_args):
-                mapping[name] = call_args[i]
+                macro_env.add_variable(param, call_args[i])
             else:
-                mapping[name] = None
+                macro_env.add_variable(param, lisptype.NIL)
 
         # If no body, return NIL
         if not _consp_internal(body):
             return lisptype.NIL
 
-        # Build substituted body forms
-        substituted_forms = []
+        # Evaluate body forms in macro environment, return last result
+        result = lisptype.NIL
         cur_body = body
         while _consp_internal(cur_body):
-            substituted_forms.append(substitute(car(cur_body), mapping))
+            result = eval(car(cur_body), macro_env)
             cur_body = cdr(cur_body)
-
-        # Return the last form (simplified PROGN semantics - normally all forms would be wrapped in PROGN)
-        if len(substituted_forms) == 1:
-            return substituted_forms[0]
-        return substituted_forms[-1]
+        
+        return result
 
     # Mark as macro and register in environment
     setattr(macro_callable, '__is_macro__', True)
@@ -630,6 +626,72 @@ def eval_unwind_protect(form, env):
         while _consp_internal(current):
             eval(car(current), env)
             current = cdr(current)
+
+
+def eval_tagbody(form, env):
+    """Evaluate TAGBODY special form: (TAGBODY {tag | statement}*)
+    
+    Establishes tags for GO to jump to. Tags are symbols; other forms are statements.
+    Executes statements in order. GO can jump to a tag, continuing from there.
+    Returns NIL.
+    """
+    args = cdr(form)
+    
+    # Collect all forms and identify tags
+    forms = []
+    tag_indices = {}  # Map tag name -> index in forms list
+    
+    current = args
+    while _consp_internal(current):
+        form_item = car(current)
+        # Tags are symbols that appear at the top level of TAGBODY
+        if isinstance(form_item, lisptype.LispSymbol):
+            tag_indices[form_item.name] = len(forms)
+        forms.append(form_item)
+        current = cdr(current)
+    
+    # Execute forms, handling GO exceptions
+    index = 0
+    while index < len(forms):
+        form_item = forms[index]
+        # Skip tags (they're just labels)
+        if isinstance(form_item, lisptype.LispSymbol) and form_item.name in tag_indices:
+            index += 1
+            continue
+        
+        try:
+            # Evaluate the form
+            eval(form_item, env)
+            index += 1
+        except GoException as e:
+            # GO was called - find the tag and jump to it
+            tag_name = e.tag.name if hasattr(e.tag, 'name') else str(e.tag)
+            if tag_name in tag_indices:
+                # Jump to after the tag
+                index = tag_indices[tag_name] + 1
+            else:
+                # Tag not in this TAGBODY - re-raise for outer TAGBODY
+                raise
+    
+    return lisptype.NIL
+
+
+def eval_go(form, env):
+    """Evaluate GO special form: (GO tag)
+    
+    Jumps to the specified tag in the lexically enclosing TAGBODY.
+    """
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("GO requires a tag argument")
+    
+    tag = car(args)
+    
+    if not isinstance(tag, lisptype.LispSymbol):
+        raise lisptype.LispNotImplementedError(f"GO tag must be a symbol, got {tag}")
+    
+    # Raise exception to be caught by enclosing TAGBODY
+    raise GoException(tag)
 
 
 def eval_lambda(form, env):

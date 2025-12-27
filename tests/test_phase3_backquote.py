@@ -250,11 +250,10 @@ class TestNestedQuasiquote:
 class TestBackquoteInMacros:
     """Test backquote in macro templates.
     
-    Note: These tests document desired behavior but may not fully work yet
-    because combining macro parameter binding with backquote/unquote is complex.
+    These tests verify that macros can use QUASIQUOTE for code generation.
+    The macro body is evaluated in an environment where parameters are bound.
     """
     
-    @pytest.mark.skip(reason="Backquote in macros needs special handling of UNQUOTE parameter resolution")
     def test_backquote_macro_template(self, env):
         """Macros can use backquote for code generation."""
         # Define: (DEFMACRO double (x) `(+ ,x ,x))
@@ -281,7 +280,6 @@ class TestBackquoteInMacros:
         # The macro should expand to (+ 5 5) which evaluates to 10
         assert result == 10
     
-    @pytest.mark.skip(reason="Backquote in macros needs special handling of UNQUOTE parameter resolution")
     def test_backquote_macro_with_list(self, env):
         """Macro templates with UNQUOTE-SPLICING."""
         # Define: (DEFMACRO make-list (x) `(LIST ,x))

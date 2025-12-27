@@ -99,14 +99,20 @@ class TestEnvironmentMacroLookup:
     
     def test_macro_called_with_raw_arguments(self, env):
         """When a macro is called, args should not be evaluated."""
-        # Define a macro that returns its first argument wrapped in QUOTE
+        # Define a macro that returns its first argument wrapped in QUOTE using QUASIQUOTE
+        # Macro: (DEFMACRO IDENTITY-MACRO (x) `(QUOTE ,x))
+        # This constructs (QUOTE <arg>) at expansion time
         defmacro_sym = LispSymbol('DEFMACRO')
         macro_name = LispSymbol('IDENTITY-MACRO')
         x_sym = LispSymbol('x')
         params = lispCons(x_sym, NIL)
-        # Return (QUOTE x) - this quotes the argument
+        
+        # Body: `(QUOTE ,x) - builds (QUOTE <actual-arg>)
+        quasiquote_sym = LispSymbol('QUASIQUOTE')
         quote_sym = LispSymbol('QUOTE')
-        body = lispCons(quote_sym, lispCons(x_sym, NIL))
+        unquote_x = lispCons(LispSymbol('UNQUOTE'), lispCons(x_sym, NIL))
+        quote_form = lispCons(quote_sym, lispCons(unquote_x, NIL))
+        body = lispCons(quasiquote_sym, lispCons(quote_form, NIL))
         
         defmacro_form = lispCons(defmacro_sym, lispCons(macro_name, lispCons(params, lispCons(body, NIL))))
         
