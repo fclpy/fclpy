@@ -12,6 +12,23 @@ from . import registry as _registry
 import fclpy.lispfunc as lispfunc
 
 
+# Exception classes for non-local exits
+class ReturnFromException(Exception):
+    """Exception raised by RETURN-FROM to exit a BLOCK."""
+    def __init__(self, tag, value):
+        self.tag = tag
+        self.value = value
+        super().__init__(f"RETURN-FROM {tag.name if hasattr(tag, 'name') else tag}")
+
+
+class ThrowException(Exception):
+    """Exception raised by THROW when tag not caught."""
+    def __init__(self, tag, value):
+        self.tag = tag
+        self.value = value
+        super().__init__(f"Uncaught THROW {tag.name if hasattr(tag, 'name') else tag}")
+
+
 def parse_lambda_list(lambda_list):
     """Parse a Common Lisp lambda list into structured form.
     
@@ -189,6 +206,14 @@ def eval(form, env=None):
                 return eval_macroexpand_1(form, env)
             elif operator.name == 'MACRO-FUNCTION':
                 return eval_macro_function(form, env)
+            elif operator.name == 'BLOCK':
+                return eval_block(form, env)
+            elif operator.name == 'RETURN-FROM':
+                return eval_return_from(form, env)
+            elif operator.name == 'CATCH':
+                return eval_catch(form, env)
+            elif operator.name == 'THROW':
+                return eval_throw(form, env)
         
         # Macro handling: if operator names a macro function, expand first
         if isinstance(operator, lisptype.LispSymbol):
@@ -458,6 +483,127 @@ def eval_macro_function(form, env):
         return func
     
     return lisptype.NIL
+
+
+def eval_block(form, env):
+    """Evaluate BLOCK special form: (BLOCK name body-form*)
+    
+    Establishes a block with the given name. Evaluates body forms in sequence.
+    Can be exited early with RETURN-FROM.
+    """
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("BLOCK requires at least a name")
+    
+    block_name = car(args)
+    body_forms = cdr(args)
+    
+    if not isinstance(block_name, lisptype.LispSymbol):
+        raise lisptype.LispNotImplementedError(f"BLOCK name must be a symbol, got {block_name}")
+    
+    try:
+        # Evaluate body forms in sequence
+        result = lisptype.NIL
+        current = body_forms
+        while _consp_internal(current):
+            result = eval(car(current), env)
+            current = cdr(current)
+        return result
+    except ReturnFromException as e:
+        # Check if this exception is for our block
+        if e.tag == block_name or (isinstance(e.tag, lisptype.LispSymbol) and 
+                                    isinstance(block_name, lisptype.LispSymbol) and
+                                    e.tag.name == block_name.name):
+            return e.value
+        else:
+            # Not for us, re-raise for outer block
+            raise
+
+
+def eval_return_from(form, env):
+    """Evaluate RETURN-FROM special form: (RETURN-FROM name value?)
+    
+    Exits the named BLOCK, returning the specified value (or NIL).
+    """
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("RETURN-FROM requires at least a name")
+    
+    block_name = car(args)
+    value_forms = cdr(args)
+    
+    if not isinstance(block_name, lisptype.LispSymbol):
+        raise lisptype.LispNotImplementedError(f"RETURN-FROM name must be a symbol, got {block_name}")
+    
+    # Evaluate the value form (default to NIL)
+    if _consp_internal(value_forms):
+        value = eval(car(value_forms), env)
+    else:
+        value = lisptype.NIL
+    
+    # Raise exception to exit the block
+    raise ReturnFromException(block_name, value)
+
+
+def eval_catch(form, env):
+    """Evaluate CATCH special form: (CATCH tag body-form*)
+    
+    Establishes a catch point. Evaluates body forms. If THROW is called
+    with matching tag, catches it and returns the thrown value.
+    """
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("CATCH requires a tag and optional body forms")
+    
+    tag_form = car(args)
+    body_forms = cdr(args)
+    
+    # Evaluate the tag form
+    tag = eval(tag_form, env)
+    
+    try:
+        # Evaluate body forms in sequence
+        result = lisptype.NIL
+        current = body_forms
+        while _consp_internal(current):
+            result = eval(car(current), env)
+            current = cdr(current)
+        return result
+    except ThrowException as e:
+        # Check if tag matches
+        if e.tag == tag or (isinstance(e.tag, lisptype.LispSymbol) and 
+                           isinstance(tag, lisptype.LispSymbol) and
+                           e.tag.name == tag.name):
+            # Caught! Return the thrown value
+            return e.value
+        else:
+            # Not for us, re-raise for outer catch
+            raise
+
+
+def eval_throw(form, env):
+    """Evaluate THROW special form: (THROW tag value)
+    
+    Throws to the nearest matching CATCH.
+    """
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("THROW requires a tag and a value")
+    
+    tag_form = car(args)
+    rest = cdr(args)
+    
+    if not _consp_internal(rest):
+        raise lisptype.LispNotImplementedError("THROW requires a value")
+    
+    value_form = car(rest)
+    
+    # Evaluate both tag and value
+    tag = eval(tag_form, env)
+    value = eval(value_form, env)
+    
+    # Raise exception
+    raise ThrowException(tag, value)
 
 
 def eval_lambda(form, env):
