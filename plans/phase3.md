@@ -64,13 +64,13 @@
 	- [x] **Step 6.7**: Run `pipenv run pytest -q`
 
 ### Task 7: Add non-local exits
-- [x] **Goal**: Support BLOCK/RETURN-FROM, TAGBODY/GO, CATCH/THROW ✅ 12 tests (2 TAGBODY/GO deferred)
+- [x] **Goal**: Support BLOCK/RETURN-FROM, TAGBODY/GO, CATCH/THROW ✅ 16 tests
 	- [x] **Step 7.1**: Implement BLOCK/RETURN-FROM using Python exceptions with tag and values ✅
-	- [x] **Step 7.2**: Implement TAGBODY/GO (simplified: label search + exception jump) - DEFERRED
+	- [x] **Step 7.2**: Implement TAGBODY/GO (simplified: label search + exception jump) ✅
 	- [x] **Step 7.3**: Implement CATCH/THROW with exception matching ✅
 	- [x] **Step 7.4**: Document any limitations of the implementation  
 	- [x] **Step 7.5**: Write tests: nested blocks, throw across call frames
-	- [x] **Step 7.6**: Run `pipenv run pytest -q`
+	- [x] **Step 7.6**: Run `pipenv run pytest -q` ✅ All passing
 
 ### Task 8: Add cleanup support
 - [x] **Goal**: Support UNWIND-PROTECT for cleanup code ✅ 7 tests
@@ -94,10 +94,10 @@
 
 ## How to Know Phase 3 is Done
 ✅ All checkboxes above are checked
-✅ All tests pass: **502 passing, 4 skipped** in `pipenv run pytest -q`
+✅ All tests pass: **508 passing, 0 skipped** in `pipenv run pytest -q`
 ✅ Basic evaluation of simple expressions works
 ✅ Macro expansion works for simple cases
-✅ Non-local exits (BLOCK/RETURN-FROM, CATCH/THROW) with exception-based control flow
+✅ Non-local exits (BLOCK/RETURN-FROM, CATCH/THROW, TAGBODY/GO) with exception-based control flow
 ✅ UNWIND-PROTECT cleanup support using try/finally
 ✅ Basic multiple values support (tuple-based representation)
 
@@ -110,12 +110,12 @@
 - Task 3: 11 tests
 - Task 4: 8 tests
 - Task 5: 9 tests
-- Task 6: 11 tests (2 skipped)
-- Task 7: 12 tests (2 skipped for TAGBODY/GO)
+- Task 6: 13 tests (backquote in macros now works)
+- Task 7: 16 tests (TAGBODY/GO fully implemented)
 - Task 8: 7 tests
 - Task 9: 12 tests
 
-**Final Metrics: 502 passing, 4 skipped**
+**Final Metrics: 508 passing, 0 skipped**
 
 ## Order Guidance
 Implement minimal evaluator & macro system before advanced control transfers; add non-local exits after macro correctness to simplify debugging.
