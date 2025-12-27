@@ -346,6 +346,31 @@ KEYWORD_PACKAGE = make_package("KEYWORD")
 COMMON_LISP_PACKAGE = make_package("COMMON-LISP", ["CL"])
 COMMON_LISP_USER_PACKAGE = make_package("COMMON-LISP-USER", ["CL-USER"], [COMMON_LISP_PACKAGE])
 
+def intern_keyword(name):
+    """Intern a keyword symbol in the KEYWORD package.
+    
+    Keywords are self-evaluating and created from names with leading colons stripped.
+    """
+    if isinstance(name, str):
+        # Remove leading colon if present
+        if name.startswith(':'):
+            name = name[1:]
+        name = name.upper()
+        # Check if already interned
+        if name in KEYWORD_PACKAGE.symbols:
+            symbol = KEYWORD_PACKAGE.symbols[name]
+            if isinstance(symbol, lispKeyword):
+                return symbol
+        # Create new keyword keyword
+        keyword = lispKeyword(name, KEYWORD_PACKAGE)
+        KEYWORD_PACKAGE.symbols[name] = keyword
+        KEYWORD_PACKAGE.external_symbols.add(name)
+        return keyword
+    elif isinstance(name, lispKeyword):
+        return name
+    else:
+        raise TypeError(f"intern_keyword: {name} is not a string or keyword")
+
 class lispConsIterator:    
     def __init__(self, cons):
         self.cons = cons
