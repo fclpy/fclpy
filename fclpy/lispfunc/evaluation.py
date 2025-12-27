@@ -304,9 +304,8 @@ def eval_defun(form, env):
 def eval_defmacro(form, env):
     """Evaluate DEFMACRO special form: register a macro in the environment.
 
-    This creates a Python callable that performs simple textual substitution of
-    the lambda-list parameters into the macro body forms and marks it as a macro
-    so that the evaluator will call it with raw (unevaluated) arguments.
+    This creates a Python callable that performs parameter substitution in the
+    macro body, returning the substituted form as the expansion (code, not evaluated).
     """
     args = cdr(form)
     if not _consp_internal(args) or not _consp_internal(cdr(args)):
@@ -353,9 +352,9 @@ def eval_defmacro(form, env):
             else:
                 mapping[name] = None
 
-        # If multiple body forms, wrap in PROGN
+        # If no body, return NIL
         if not _consp_internal(body):
-            return None
+            return lisptype.NIL
 
         # Build substituted body forms
         substituted_forms = []
@@ -364,9 +363,9 @@ def eval_defmacro(form, env):
             substituted_forms.append(substitute(car(cur_body), mapping))
             cur_body = cdr(cur_body)
 
+        # Return the last form (simplified PROGN semantics - normally all forms would be wrapped in PROGN)
         if len(substituted_forms) == 1:
             return substituted_forms[0]
-        # Simplified: return last form (implicit PROGN semantics not modeled fully)
         return substituted_forms[-1]
 
     # Mark as macro and register in environment
@@ -718,8 +717,11 @@ def eval_quasiquote(form, env):
                 name = car(item).name
                 if name == 'UNQUOTE-SPLICING':
                     val = eval(car(cdr(item)), env)
+                    # If val is NIL, splice nothing (empty)
+                    if val is lisptype.NIL or val is None:
+                        pass  # Don't append anything
                     # If val is a lispCons, iterate its elements
-                    if isinstance(val, lisptype.lispCons):
+                    elif isinstance(val, lisptype.lispCons):
                         for v in val:
                             parts.append(v)
                     elif isinstance(val, (list, tuple)):
