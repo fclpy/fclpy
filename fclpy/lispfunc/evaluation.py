@@ -1102,8 +1102,15 @@ def makunbound(symbol):
 @_registry.cl_function('VALUES')
 def values(*args):
     """Return multiple values."""
-    # For now, return first value or None - proper multiple-values later
-    return args[0] if args else None
+    # For now, return as tuple if multiple or single if one
+    # or NIL if no values
+    if not args:
+        return lisptype.NIL
+    elif len(args) == 1:
+        return args[0]
+    else:
+        # Return as tuple for multiple values
+        return args
 
 
 @_registry.cl_function('VALUES-LIST')
