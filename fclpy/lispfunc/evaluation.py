@@ -11,6 +11,92 @@ from fclpy.lisptype import resolve_environment, LispEnvironmentError
 from . import registry as _registry
 import fclpy.lispfunc as lispfunc
 
+
+def parse_lambda_list(lambda_list):
+    """Parse a Common Lisp lambda list into structured form.
+    
+    Returns a dict with keys:
+    - required: list of required parameter symbols
+    - optional: list of optional parameter specs (symbol or [symbol, default])
+    - rest: single rest parameter symbol or None
+    - keyword: list of keyword parameter specs (symbol or [symbol, default])
+    - aux: list of auxiliary parameter specs (symbol or [symbol, init])
+    
+    Supported format:
+    (req1 req2 &optional opt1 (opt2 default2) &rest rest-var 
+     &key key1 (key2 default2) &aux (aux1 init1))
+    """
+    required = []
+    optional = []
+    rest = None
+    keyword = []
+    aux = []
+    
+    # Parse the lambda list
+    current_section = 'required'
+    current = lambda_list
+    
+    while _consp_internal(current):
+        param = car(current)
+        
+        # Check for section markers
+        if isinstance(param, lisptype.LispSymbol):
+            marker = param.name.upper()
+            if marker == '&OPTIONAL':
+                current_section = 'optional'
+                current = cdr(current)
+                continue
+            elif marker == '&REST':
+                current_section = 'rest'
+                current = cdr(current)
+                continue
+            elif marker == '&KEY':
+                current_section = 'keyword'
+                current = cdr(current)
+                continue
+            elif marker == '&AUX':
+                current_section = 'aux'
+                current = cdr(current)
+                continue
+        
+        # Add parameter to appropriate section
+        if current_section == 'required':
+            if isinstance(param, lisptype.LispSymbol):
+                required.append(param)
+        elif current_section == 'optional':
+            if isinstance(param, lisptype.LispSymbol):
+                optional.append(param)
+            elif _consp_internal(param):
+                # Optional with default: (name default)
+                optional.append(param)
+        elif current_section == 'rest':
+            if isinstance(param, lisptype.LispSymbol):
+                rest = param
+                current_section = 'after_rest'  # After &REST, expect &KEY or &AUX
+        elif current_section == 'keyword':
+            if isinstance(param, lisptype.LispSymbol):
+                keyword.append(param)
+            elif _consp_internal(param):
+                # Keyword with default: (name default)
+                keyword.append(param)
+        elif current_section == 'aux':
+            if isinstance(param, lisptype.LispSymbol):
+                aux.append(param)
+            elif _consp_internal(param):
+                # Aux with init: (name init)
+                aux.append(param)
+        
+        current = cdr(current)
+    
+    return {
+        'required': required,
+        'optional': optional,
+        'rest': rest,
+        'keyword': keyword,
+        'aux': aux
+    }
+
+
 @_registry.cl_function('EVAL')
 def eval(form, env=None):
     """Evaluate a Lisp form.
