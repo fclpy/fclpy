@@ -78,6 +78,24 @@ class Readtable:
         """Set the readtable case (:UPCASE, :DOWNCASE, :PRESERVE, :INVERT)."""
         self._case = case
     
+    def copy(self) -> 'Readtable':
+        """Create a copy of this readtable.
+        
+        The copy has the same macro characters and dispatch characters,
+        but modifying the copy does not affect the original.
+        
+        Returns:
+            A new Readtable instance with copied settings.
+        """
+        new_rt = Readtable.__new__(Readtable)
+        # Create shallow copies of the dictionaries
+        new_rt._macro_characters = dict(self._macro_characters)
+        new_rt._dispatch_macro_characters = {
+            k: dict(v) for k, v in self._dispatch_macro_characters.items()
+        }
+        new_rt._case = self._case
+        return new_rt
+    
     # Simple macro character implementations that don't create circular dependencies
     def _left_paren_reader(self, char, stream):
         """Read a list starting with ("""

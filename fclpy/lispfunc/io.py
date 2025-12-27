@@ -812,16 +812,8 @@ def copy_readtable(from_readtable=None, to_readtable=None):
     """Copy readtable."""
     if from_readtable is None:
         from_readtable = get_current_readtable()
-    # Our simplified Readtable lacks copy method; perform shallow structure copy.
-    from fclpy.readtable import Readtable as _RT
-    new_rt = _RT()
-    # Replace its tables with copies of source (shallow copy suffices for function refs)
-    new_rt._macro_characters = dict(from_readtable._macro_characters)
-    new_rt._dispatch_macro_characters = {
-        k: dict(v) for k, v in from_readtable._dispatch_macro_characters.items()
-    }
-    new_rt.set_readtable_case(from_readtable.readtable_case())
-    return new_rt
+    # Use the built-in copy method on Readtable
+    return from_readtable.copy()
 
 
 @_registry.cl_function('READTABLE-CASE')
