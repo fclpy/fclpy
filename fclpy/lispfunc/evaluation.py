@@ -223,6 +223,10 @@ def eval(form, env=None):
                 return eval_throw(form, env)
             elif operator.name == 'UNWIND-PROTECT':
                 return eval_unwind_protect(form, env)
+            elif operator.name == 'MULTIPLE-VALUE-CALL':
+                return eval_multiple_value_call(form, env)
+            elif operator.name == 'MULTIPLE-VALUE-BIND':
+                return eval_multiple_value_bind(form, env)
             elif operator.name == 'TAGBODY':
                 return eval_tagbody(form, env)
             elif operator.name == 'GO':
@@ -1253,14 +1257,131 @@ def multiple_value_prog1(first_form, *rest):
     return first_form
 
 
-@_registry.cl_function('MULTIPLE-VALUE-SETQ')
-def multiple_value_setq(vars, values_form):
-    """Bind multiple value results to variables (stub).
+@_registry.cl_special('MULTIPLE-VALUE-SETQ')
+def eval_multiple_value_setq(form, env):
+    """Evaluate MULTIPLE-VALUE-SETQ special form (stub).
     
-    Full implementation would destructure values_form into vars.
+    Full implementation would destructure values from the value form.
     """
-    # For now, just return values_form - proper implementation later
-    return values_form
+    # For now, just return NIL - proper implementation later
+    return lisptype.NIL
+
+
+@_registry.cl_special('MULTIPLE-VALUE-CALL')
+def eval_multiple_value_call(form, env):
+    """Evaluate MULTIPLE-VALUE-CALL special form.
+    
+    Syntax: (MULTIPLE-VALUE-CALL function value-form1 value-form2 ...)
+    
+    Each value-form is evaluated. If a value-form returns a MultipleValues,
+    all its values are passed as separate arguments to the function.
+    If it returns a single value, that value is passed as one argument.
+    
+    Returns the result of calling the function.
+    """
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("MULTIPLE-VALUE-CALL requires at least a function")
+    
+    # Evaluate the function form
+    function_form = car(args)
+    func = eval(function_form, env)
+    
+    # If func is a symbol, look it up in the environment (function position)
+    if isinstance(func, lisptype.LispSymbol):
+        func = env.find_func(func)
+        if func is None:
+            # Try auto-loading from registry
+            try:
+                py_name = _registry.get_function_py_name(function_form.name)
+                if py_name:
+                    func = getattr(lispfunc, py_name, None)
+                    if func:
+                        # Bind into environment for future lookups
+                        env.add_function(function_form, func)
+            except Exception:
+                pass
+        if func is None:
+            raise lisptype.LispNotImplementedError(f"MULTIPLE-VALUE-CALL: undefined function: {function_form}")
+    
+    # Collect all arguments from the value forms
+    call_args = []
+    value_forms = cdr(args)
+    while _consp_internal(value_forms):
+        result = eval(car(value_forms), env)
+        if isinstance(result, lisptype.MultipleValues):
+            # Add all values from MultipleValues
+            call_args.extend(result.get_all())
+        else:
+            # Add single value
+            call_args.append(result)
+        value_forms = cdr(value_forms)
+    
+    # Call the function with collected arguments
+    if callable(func):
+        return func(*call_args) if call_args else func()
+    else:
+        raise lisptype.LispNotImplementedError(f"MULTIPLE-VALUE-CALL: not a function: {func}")
+
+
+@_registry.cl_special('MULTIPLE-VALUE-BIND')
+def eval_multiple_value_bind(form, env):
+    """Evaluate MULTIPLE-VALUE-BIND special form.
+    
+    Syntax: (MULTIPLE-VALUE-BIND (var1 var2 ...) value-form body...)
+    
+    Evaluates value-form. If it returns a MultipleValues, each variable
+    is bound to the corresponding value (or NIL if there aren't enough values).
+    If it returns a single value, the first variable gets that value and
+    others get NIL. Then evaluates the body forms.
+    
+    Returns the value of the last body form.
+    """
+    args = cdr(form)
+    if not _consp_internal(args) or not _consp_internal(cdr(args)):
+        raise lisptype.LispNotImplementedError("MULTIPLE-VALUE-BIND requires vars, value-form, and body")
+    
+    # Extract the variable list and value-form
+    vars = car(args)
+    value_form = car(cdr(args))
+    body = cdr(cdr(args))
+    
+    # Evaluate the value-form
+    values = eval(value_form, env)
+    
+    # Create new environment for bindings
+    new_env = lisptype.Environment(parent=env)
+    
+    # Extract variable list (it's a Lisp list of symbols)
+    var_list = []
+    current = vars
+    while _consp_internal(current):
+        var = car(current)
+        var_list.append(var)
+        current = cdr(current)
+    
+    # Bind variables to values
+    if isinstance(values, lisptype.MultipleValues):
+        value_tuple = values.get_all()
+        for i, var in enumerate(var_list):
+            if i < len(value_tuple):
+                new_env.add_variable(var, value_tuple[i])
+            else:
+                new_env.add_variable(var, lisptype.NIL)
+    else:
+        # Single value - bind to first variable, rest get NIL
+        if var_list:
+            new_env.add_variable(var_list[0], values)
+            for var in var_list[1:]:
+                new_env.add_variable(var, lisptype.NIL)
+    
+    # Evaluate body forms and return last result
+    result = lisptype.NIL
+    while _consp_internal(body):
+        result = eval(car(body), new_env)
+        body = cdr(body)
+    
+    return result
 
 
 # Aliases for functions that may have different names in lispenv.py
