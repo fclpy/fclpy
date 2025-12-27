@@ -68,6 +68,22 @@ def eval(form, env=None):
                 return eval_if(form, env)
             elif operator.name == 'SETQ':
                 return eval_setq(form, env)
+            elif operator.name == 'PROGN':
+                return eval_progn(form, env)
+            elif operator.name == 'WHEN':
+                return eval_when(form, env)
+            elif operator.name == 'UNLESS':
+                return eval_unless(form, env)
+            elif operator.name == 'COND':
+                return eval_cond(form, env)
+            elif operator.name == 'AND':
+                return eval_and(form, env)
+            elif operator.name == 'OR':
+                return eval_or(form, env)
+            elif operator.name == 'PROG1':
+                return eval_prog1(form, env)
+            elif operator.name == 'PROG2':
+                return eval_prog2(form, env)
             # TODO: Implement DEFVAR / LET special forms directly; for now raise clearer error
             elif operator.name == 'DEFVAR':
                 raise lisptype.LispNotImplementedError('DEFVAR special form not yet implemented in evaluator')
@@ -77,8 +93,6 @@ def eval(form, env=None):
                 return eval_defun(form, env)
             elif operator.name == 'LAMBDA':
                 return eval_lambda(form, env)
-            elif operator.name == 'WHEN':
-                return eval_when(form, env)
             elif operator.name == 'QUASIQUOTE':
                 return eval_quasiquote(form, env)
             elif operator.name == 'DEFMACRO':
