@@ -5,32 +5,32 @@
 ## Step-By-Step Tasks (Do These In Order)
 
 ### Task 1: Add slots to LispSymbol class
-- [ ] **Goal**: Make symbols able to store values, functions, and property lists
-	- [ ] **Step 1.1**: Open the file where `LispSymbol` class is defined (probably `lisptype.py`)
-	- [ ] **Step 1.2**: Add three new attributes to the class: `value`, `function`, `plist`
-	- [ ] **Step 1.3**: Set default values: `value=None`, `function=None`, `plist=[]`
-	- [ ] **Step 1.4**: Make sure the constructor still works the same way (backward compatibility)
-	- [ ] **Step 1.5**: Add simple accessor functions if needed for `symbol-value`, `symbol-function`, `symbol-plist` 
-	- [ ] **Step 1.6**: Write tests: create a symbol, set its value/function/plist, read them back
-	- [ ] **Step 1.7**: Run `pipenv run pytest -q`
+- [x] **Goal**: Make symbols able to store values, functions, and property lists (Done 2025-12-27)
+	- [x] **Step 1.1**: Open the file where `LispSymbol` class is defined (probably `lisptype.py`)
+	- [x] **Step 1.2**: Add three new attributes to the class: `value`, `function`, `plist`
+	- [x] **Step 1.3**: Set default values: `value=None`, `function=None`, `plist={}`
+	- [x] **Step 1.4**: Make sure the constructor still works the same way (backward compatibility)
+	- [x] **Step 1.5**: Add simple accessor functions if needed for `symbol-value`, `symbol-function`, `symbol-plist` 
+	- [x] **Step 1.6**: Write tests: create a symbol, set its value/function/plist, read them back
+	- [x] **Step 1.7**: Run `pipenv run pytest -q` (6 new tests passing)
 
 ### Task 2: Make keywords work properly
-- [ ] **Goal**: Keywords like `:FOO` should evaluate to themselves
-	- [ ] **Step 2.1**: Make sure KEYWORD package exists (look in package system code)
-	- [ ] **Step 2.2**: Create helper function `intern_keyword(name)` that puts keywords in KEYWORD package
-	- [ ] **Step 2.3**: Make sure keyword symbols return themselves when evaluated (self-evaluating)
-	- [ ] **Step 2.4**: Write test: evaluate `:FOO` returns the same `:FOO` object
-	- [ ] **Step 2.5**: Write test: printing a keyword shows the colon like `:FOO` not `FOO`
-	- [ ] **Step 2.6**: Run `pipenv run pytest -q`
+- [x] **Goal**: Keywords like `:FOO` should evaluate to themselves (Done 2025-12-27)
+	- [x] **Step 2.1**: Make sure KEYWORD package exists (look in package system code)
+	- [x] **Step 2.2**: Create helper function `intern_keyword(name)` that puts keywords in KEYWORD package
+	- [x] **Step 2.3**: Make sure keyword symbols return themselves when evaluated (self-evaluating)
+	- [x] **Step 2.4**: Write test: evaluate `:FOO` returns the same `:FOO` object
+	- [x] **Step 2.5**: Write test: printing a keyword shows the colon like `:FOO` not `FOO`
+	- [x] **Step 2.6**: Run `pipenv run pytest -q` (10 new tests passing)
 
 ### Task 3: Use packages everywhere for symbol creation
-- [ ] **Goal**: Stop creating symbols directly, use proper package interning instead
-	- [ ] **Step 3.1**: Search for `LispSymbol(` in all Python files
-	- [ ] **Step 3.2**: For each one, replace with proper `intern` call or `intern_keyword` call  
-	- [ ] **Step 3.3**: Make sure all symbols go through the package system
-	- [ ] **Step 3.4**: Add a test that fails if anyone creates symbols with bare `LispSymbol(` constructor 
-	- [ ] **Step 3.5**: Update any modules that were using direct symbol creation
-	- [ ] **Step 3.6**: Run `pipenv run pytest -q`
+- [x] **Goal**: Stop creating symbols directly, use proper package interning instead (Done 2025-12-27)
+	- [x] **Step 3.1**: Search for `LispSymbol(` in all Python files
+	- [x] **Step 3.2**: For each one, replace with proper `intern` call or `intern_keyword` call  
+	- [x] **Step 3.3**: Make sure all symbols go through the package system
+	- [x] **Step 3.4**: Add a test that fails if anyone creates symbols with bare `LispSymbol(` constructor 
+	- [x] **Step 3.5**: Update any modules that were using direct symbol creation
+	- [x] **Step 3.6**: Run `pipenv run pytest -q` (8 new tests passing)
 
 ### Task 4: Improve the registry system
 - [ ] **Goal**: Store more information about each registered function

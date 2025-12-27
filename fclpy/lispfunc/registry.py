@@ -3,13 +3,62 @@
 Provides decorators @cl_function and @cl_special to register Python callables
 with metadata and utilities to register entire modules.
 """
-from typing import Callable, Dict
+from typing import Callable, Dict, Optional
+from dataclasses import dataclass, field
 import inspect
 import fclpy.lisptype as lisptype
 
-# Mapping: LISP_NAME (str) -> metadata dict (contains 'py_name' and any extras)
-function_registry: Dict[str, Dict] = {}
-special_registry: Dict[str, Dict] = {}
+
+@dataclass
+class RegistryEntry:
+    """Metadata for a registered Lisp function or special operator."""
+    name: str                              # LISP_NAME (uppercase)
+    py_name: str                           # Python function name
+    kind: str = 'function'                 # 'function', 'special', or 'macro'
+    arg_spec: Optional[str] = None         # Lambda-list specification, e.g. '(x y &optional z)'
+    documentation: Optional[str] = None    # Docstring or help text
+    side_effects: bool = False             # Whether the function has side effects
+    extra: Dict = field(default_factory=dict)  # Additional metadata fields
+    
+    def get(self, key: str, default=None):
+        """Dict-compatible get() method for backward compatibility."""
+        if key == 'py_name':
+            return self.py_name
+        elif key == 'name':
+            return self.name
+        elif key == 'kind':
+            return self.kind
+        elif key == 'arg_spec':
+            return self.arg_spec
+        elif key == 'documentation':
+            return self.documentation
+        elif key == 'side_effects':
+            return self.side_effects
+        else:
+            return self.extra.get(key, default)
+    
+    def __getitem__(self, key: str):
+        """Dict-compatible [] access for backward compatibility."""
+        result = self.get(key)
+        if result is None:
+            raise KeyError(key)
+        return result
+    
+    def items(self):
+        """Dict-compatible items() for backward compatibility."""
+        yield 'name', self.name
+        yield 'py_name', self.py_name
+        yield 'kind', self.kind
+        yield 'arg_spec', self.arg_spec
+        yield 'documentation', self.documentation
+        yield 'side_effects', self.side_effects
+        for k, v in self.extra.items():
+            yield k, v
+
+
+# Mapping: LISP_NAME (str) -> RegistryEntry
+function_registry: Dict[str, RegistryEntry] = {}
+special_registry: Dict[str, RegistryEntry] = {}
 
 
 def _to_lisp_name(py_name: str) -> str:
@@ -33,7 +82,26 @@ def cl_function(lisp_name: str, **meta):
       def car(x): ...
     """
     def decorator(func: Callable):
-        function_registry[lisp_name] = {"py_name": func.__name__, **meta}
+        # Extract standard fields from meta (don't mutate original)
+        arg_spec = meta.get('arg_spec', None)
+        documentation = meta.get('documentation', None)
+        side_effects = meta.get('side_effects', False)
+        
+        # Build extra dict with remaining fields (exclude standard ones)
+        standard_keys = {'arg_spec', 'documentation', 'side_effects'}
+        extra = {k: v for k, v in meta.items() if k not in standard_keys}
+        
+        # Create registry entry with backward compatibility
+        entry = RegistryEntry(
+            name=lisp_name,
+            py_name=func.__name__,
+            kind='function',
+            arg_spec=arg_spec,
+            documentation=documentation,
+            side_effects=side_effects,
+            extra=extra
+        )
+        function_registry[lisp_name] = entry
         return func
     return decorator
 
@@ -46,7 +114,26 @@ def cl_special(lisp_name: str, **meta):
       def special_if(...): ...
     """
     def decorator(func: Callable):
-        special_registry[lisp_name] = {"py_name": func.__name__, **meta}
+        # Extract standard fields from meta (don't mutate original)
+        arg_spec = meta.get('arg_spec', None)
+        documentation = meta.get('documentation', None)
+        side_effects = meta.get('side_effects', False)
+        
+        # Build extra dict with remaining fields (exclude standard ones)
+        standard_keys = {'arg_spec', 'documentation', 'side_effects'}
+        extra = {k: v for k, v in meta.items() if k not in standard_keys}
+        
+        # Create registry entry with backward compatibility
+        entry = RegistryEntry(
+            name=lisp_name,
+            py_name=func.__name__,
+            kind='special',
+            arg_spec=arg_spec,
+            documentation=documentation,
+            side_effects=side_effects,
+            extra=extra
+        )
+        special_registry[lisp_name] = entry
         return func
     return decorator
 
@@ -100,7 +187,12 @@ def register_module(module):
             continue
 
         # Register using the derived canonical name (prefer stripped base if different)
-        function_registry[canonical] = {"py_name": name}
+        entry = RegistryEntry(
+            name=canonical,
+            py_name=name,
+            kind='function'
+        )
+        function_registry[canonical] = entry
 
 
 def get_function_py_name(lisp_name: str):

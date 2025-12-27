@@ -31,7 +31,8 @@ def setup_standard_environment():
     if _registry:
         # Functions
         for lisp_name, meta in _registry.function_registry.items():
-            py_name = meta.get('py_name') if isinstance(meta, dict) else None
+            # meta is now a RegistryEntry, not a dict
+            py_name = meta.py_name if hasattr(meta, 'py_name') else (meta.get('py_name') if isinstance(meta, dict) else None)
             if not py_name:
                 continue
             fn = getattr(lispfunc, py_name, None)
@@ -43,7 +44,8 @@ def setup_standard_environment():
                     state.current_environment.add_function(sym, fn)
         # Specials
         for lisp_name, meta in _registry.special_registry.items():
-            py_name = meta.get('py_name') if isinstance(meta, dict) else None
+            # meta is now a RegistryEntry, not a dict
+            py_name = meta.py_name if hasattr(meta, 'py_name') else (meta.get('py_name') if isinstance(meta, dict) else None)
             fn = getattr(lispfunc, py_name, None) if py_name else None
             sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol(lisp_name)
             if state.current_environment.find_func(sym) is None:
