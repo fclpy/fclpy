@@ -70,6 +70,10 @@ def eval(form, env=None):
                 return eval_setq(form, env)
             elif operator.name == 'PROGN':
                 return eval_progn(form, env)
+            elif operator.name == 'LET':
+                return eval_let(form, env)
+            elif operator.name == 'LET*':
+                return eval_letstar(form, env)
             elif operator.name == 'WHEN':
                 return eval_when(form, env)
             elif operator.name == 'UNLESS':
@@ -87,8 +91,6 @@ def eval(form, env=None):
             # TODO: Implement DEFVAR / LET special forms directly; for now raise clearer error
             elif operator.name == 'DEFVAR':
                 raise lisptype.LispNotImplementedError('DEFVAR special form not yet implemented in evaluator')
-            elif operator.name == 'LET':
-                raise lisptype.LispNotImplementedError('LET special form not yet implemented in evaluator')
             elif operator.name == 'DEFUN':
                 return eval_defun(form, env)
             elif operator.name == 'LAMBDA':
@@ -419,6 +421,93 @@ def eval_progn(form, env):
     while _consp_internal(args):
         result = eval(car(args), env)
         args = cdr(args)
+    
+    return result
+
+
+def eval_let(form, env):
+    """Evaluate LET special form with parallel binding semantics.
+    
+    (LET ((var1 init1) (var2 init2) ...) body...)
+    
+    In LET, all init forms are evaluated in the current environment BEFORE
+    any bindings are created in the new scope. This is "parallel" binding.
+    """
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("LET requires at least a binding list")
+    
+    bindings_form = car(args)
+    body = cdr(args)
+    
+    # Create new environment for LET scope
+    let_env = lisptype.Environment(env)
+    
+    # Process bindings - evaluate all init forms in OUTER environment first
+    bindings_list = []
+    current = bindings_form
+    while _consp_internal(current):
+        binding = car(current)
+        if _consp_internal(binding):
+            var = car(binding)
+            init_form = car(cdr(binding))
+            # Evaluate init in OUTER environment
+            value = eval(init_form, env)
+            bindings_list.append((var, value))
+        current = cdr(current)
+    
+    # Now bind all variables in new environment
+    for var, value in bindings_list:
+        if isinstance(var, lisptype.LispSymbol):
+            let_env.add_variable(var, value)
+    
+    # Evaluate body in new environment
+    result = None
+    current = body
+    while _consp_internal(current):
+        result = eval(car(current), let_env)
+        current = cdr(current)
+    
+    return result
+
+
+def eval_letstar(form, env):
+    """Evaluate LET* special form with sequential binding semantics.
+    
+    (LET* ((var1 init1) (var2 init2) ...) body...)
+    
+    In LET*, each init form is evaluated in the environment AFTER previous
+    bindings have been established. This is "sequential" binding.
+    """
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("LET* requires at least a binding list")
+    
+    bindings_form = car(args)
+    body = cdr(args)
+    
+    # Create new environment for LET* scope
+    letstar_env = lisptype.Environment(env)
+    
+    # Process bindings sequentially - each can see previous ones
+    current = bindings_form
+    while _consp_internal(current):
+        binding = car(current)
+        if _consp_internal(binding):
+            var = car(binding)
+            init_form = car(cdr(binding))
+            # Evaluate init in CURRENT environment (with previous bindings)
+            value = eval(init_form, letstar_env)
+            if isinstance(var, lisptype.LispSymbol):
+                letstar_env.add_variable(var, value)
+        current = cdr(current)
+    
+    # Evaluate body in environment with all bindings
+    result = None
+    current = body
+    while _consp_internal(current):
+        result = eval(car(current), letstar_env)
+        current = cdr(current)
     
     return result
 
