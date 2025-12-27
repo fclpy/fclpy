@@ -13,9 +13,8 @@ current_environment = state.current_environment
 def setup_standard_environment():
     """Initialize or return the standard Lisp environment.
 
-    All function and special form registrations now come from the decorator
-    registry in fclpy.lispfunc. The legacy function_mappings dict has been
-    retired (left empty) but the hook remains for backward compatibility.
+    All function and special form registrations come from the decorator
+    registry in fclpy.lispfunc.
     """
     if state.functions_loaded:
         return state.current_environment
@@ -51,12 +50,6 @@ def setup_standard_environment():
             if state.current_environment.find_func(sym) is None:
                 state.current_environment.add_function(sym, fn or (lambda *a: f"SPECIAL:{lisp_name}"))
 
-    # Empty legacy mapping (interface placeholder retained for compatibility)
-    function_mappings = {}
-    if function_mappings:
-        for lisp_name, python_func in function_mappings.items():
-            sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol(lisp_name)
-            state.current_environment.add_function(sym, python_func)
     # Ensure core Lisp symbols have variable bindings in the environment
     # so that symbols like T and NIL evaluate to their Lisp values rather
     # than resolving to function bindings when no variable binding exists.
