@@ -185,6 +185,10 @@ def eval(form, env=None):
                 return eval_quasiquote(form, env)
             elif operator.name == 'DEFMACRO':
                 return eval_defmacro(form, env)
+            elif operator.name == 'MACROEXPAND-1':
+                return eval_macroexpand_1(form, env)
+            elif operator.name == 'MACRO-FUNCTION':
+                return eval_macro_function(form, env)
         
         # Macro handling: if operator names a macro function, expand first
         if isinstance(operator, lisptype.LispSymbol):
@@ -369,6 +373,92 @@ def eval_defmacro(form, env):
     setattr(macro_callable, '__is_macro__', True)
     env.add_function(macro_name, macro_callable)
     return macro_name
+
+
+def eval_macroexpand_1(form, env):
+    """Evaluate MACROEXPAND-1 special form.
+    
+    (MACROEXPAND-1 form) - expand a macro call one level.
+    If form is a macro call, expands the macro and returns the expansion.
+    Otherwise returns form unchanged.
+    """
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("MACROEXPAND-1 requires 1 argument")
+    
+    form_to_expand_raw = car(args)
+    
+    # If the form is (QUOTE x), evaluate it to get x
+    # Otherwise, use the form as-is
+    if _consp_internal(form_to_expand_raw) and isinstance(car(form_to_expand_raw), lisptype.LispSymbol) and car(form_to_expand_raw).name == 'QUOTE':
+        form_to_expand = eval(form_to_expand_raw, env)
+    else:
+        form_to_expand = form_to_expand_raw
+    
+    # Only cons cells can be macro calls
+    if not _consp_internal(form_to_expand):
+        return form_to_expand
+    
+    operator = car(form_to_expand)
+    if not isinstance(operator, lisptype.LispSymbol):
+        return form_to_expand
+    
+    # Try to find the operator function
+    macro_func = env.find_func(operator)
+    if not macro_func or not callable(macro_func):
+        return form_to_expand
+    
+    # Check if it's actually a macro
+    if not getattr(macro_func, '__is_macro__', False):
+        return form_to_expand
+    
+    # Call the macro with unevaluated arguments
+    args_list = []
+    current = cdr(form_to_expand)
+    while _consp_internal(current):
+        args_list.append(car(current))
+        current = cdr(current)
+    
+    # If there's a non-nil tail, that's an error, but for now just ignore it
+    try:
+        return macro_func(*args_list)
+    except Exception:
+        # If macro expansion fails, return form unchanged
+        return form_to_expand
+
+
+def eval_macro_function(form, env):
+    """Evaluate MACRO-FUNCTION special form.
+    
+    (MACRO-FUNCTION symbol) - return the macro function for a symbol, or NIL if not a macro.
+    """
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("MACRO-FUNCTION requires 1 argument")
+    
+    symbol_form = car(args)
+    
+    # The symbol form might be quoted, so we need to evaluate it to get the symbol
+    # Or it might already be a symbol
+    if isinstance(symbol_form, lisptype.LispSymbol):
+        symbol = symbol_form
+    else:
+        # Try evaluating it
+        symbol = eval(symbol_form, env)
+    
+    if not isinstance(symbol, lisptype.LispSymbol):
+        return lisptype.NIL
+    
+    # Try to find the function
+    func = env.find_func(symbol)
+    if not func or not callable(func):
+        return lisptype.NIL
+    
+    # Check if it's a macro
+    if getattr(func, '__is_macro__', False):
+        return func
+    
+    return lisptype.NIL
 
 
 def eval_lambda(form, env):
