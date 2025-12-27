@@ -214,6 +214,8 @@ def eval(form, env=None):
                 return eval_catch(form, env)
             elif operator.name == 'THROW':
                 return eval_throw(form, env)
+            elif operator.name == 'UNWIND-PROTECT':
+                return eval_unwind_protect(form, env)
         
         # Macro handling: if operator names a macro function, expand first
         if isinstance(operator, lisptype.LispSymbol):
@@ -604,6 +606,30 @@ def eval_throw(form, env):
     
     # Raise exception
     raise ThrowException(tag, value)
+
+
+def eval_unwind_protect(form, env):
+    """Evaluate UNWIND-PROTECT special form: (UNWIND-PROTECT protected-form cleanup-form*)
+    
+    Evaluates protected-form, ensuring cleanup-forms run regardless of how it exits.
+    """
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("UNWIND-PROTECT requires at least a protected form")
+    
+    protected_form = car(args)
+    cleanup_forms = cdr(args)
+    
+    try:
+        # Evaluate the protected form
+        result = eval(protected_form, env)
+        return result
+    finally:
+        # Always run cleanup forms, regardless of how we exit (normal or exception)
+        current = cleanup_forms
+        while _consp_internal(current):
+            eval(car(current), env)
+            current = cdr(current)
 
 
 def eval_lambda(form, env):
