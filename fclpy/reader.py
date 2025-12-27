@@ -60,8 +60,18 @@ class Reader:
         Raises:
             ReaderError and subclasses for malformed input
         """
-        tokenizer = Tokenizer(text)
-        tokens = tokenizer.tokenize_filtered()
+        try:
+            tokenizer = Tokenizer(text)
+            tokens = tokenizer.tokenize_filtered()
+        except ValueError as e:
+            # Convert tokenizer ValueError to ReaderError
+            error_msg = str(e)
+            if "Unterminated string" in error_msg:
+                raise UnexpectedEOF(f"Unexpected EOF: {error_msg}")
+            elif "Unterminated block comment" in error_msg:
+                raise UnexpectedEOF(f"Unexpected EOF in block comment")
+            else:
+                raise ReaderError(f"Tokenization error: {error_msg}")
         
         if not tokens or tokens[-1].type == TokenType.EOF:
             raise UnexpectedEOF("No tokens to read")
@@ -81,8 +91,18 @@ class Reader:
         Returns:
             List of parsed Lisp objects
         """
-        tokenizer = Tokenizer(text)
-        tokens = tokenizer.tokenize_filtered()
+        try:
+            tokenizer = Tokenizer(text)
+            tokens = tokenizer.tokenize_filtered()
+        except ValueError as e:
+            # Convert tokenizer ValueError to ReaderError
+            error_msg = str(e)
+            if "Unterminated string" in error_msg:
+                raise UnexpectedEOF(f"Unexpected EOF: {error_msg}")
+            elif "Unterminated block comment" in error_msg:
+                raise UnexpectedEOF(f"Unexpected EOF in block comment")
+            else:
+                raise ReaderError(f"Tokenization error: {error_msg}")
         
         self.tokens = tokens
         self.position = 0
