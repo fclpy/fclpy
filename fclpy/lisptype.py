@@ -650,6 +650,181 @@ def py_str_to_sym(s):
   return intern_symbol(s, COMMON_LISP_USER_PACKAGE)
 
 
+# --- Common Lisp Condition Hierarchy -------------------------------------------------------
+# ANSI Common Lisp condition system (simplified implementation)
+
+class Condition:
+    """Base class for all Common Lisp conditions.
+    
+    A condition is an object used to communicate information about a situation
+    encountered during program execution. Conditions are organized in a class
+    hierarchy enabling different handlers to be invoked for different conditions.
+    
+    Attributes are provided via slots that can be accessed using SLOT-VALUE.
+    """
+    
+    def __init__(self, **slots):
+        """Initialize a condition with given slots.
+        
+        Args:
+            **slots: Keyword arguments become slots in the condition object
+        """
+        self.slots = slots  # Store all slots as a dict
+        # Common slots
+        if 'message' not in slots:
+            self.slots['message'] = ""
+        if 'format-arguments' not in slots:
+            self.slots['format-arguments'] = NIL
+    
+    def __repr__(self):
+        class_name = self.__class__.__name__.upper()
+        msg = self.slots.get('message', '')
+        if msg:
+            return f"#{class_name}({msg})"
+        return f"#{class_name}"
+    
+    def __str__(self):
+        msg = self.slots.get('message', '')
+        if msg:
+            return str(msg)
+        return f"{self.__class__.__name__}"
+    
+    def get_slot(self, slot_name):
+        """Get value of a slot."""
+        return self.slots.get(slot_name, NIL)
+    
+    def set_slot(self, slot_name, value):
+        """Set value of a slot."""
+        self.slots[slot_name] = value
+        return value
+
+
+class SimpleCondition(Condition):
+    """A simple condition that associates a format string with a message.
+    
+    This is used for conditions that can be reported using FORMAT.
+    """
+    
+    def __init__(self, format_string="", **slots):
+        """Initialize with optional format string.
+        
+        Args:
+            format_string: Format control string (as per FORMAT function)
+            **slots: Additional slots
+        """
+        if 'format-control' not in slots:
+            slots['format-control'] = format_string
+        super().__init__(**slots)
+
+
+class Warning(Condition):
+    """A warning condition indicates something unexpected but not necessarily erroneous.
+    
+    Programs may continue executing after a warning unless handling code
+    specifically transfers control elsewhere.
+    """
+    pass
+
+
+class Error(Condition):
+    """An error condition indicates a serious problem that should be handled.
+    
+    If not handled, the debugger is entered or the program terminates.
+    """
+    pass
+
+
+# Specific error types (as per ANSI Common Lisp specification)
+
+class TypeError(Error):
+    """Condition raised when an object is not of the expected type.
+    
+    Slots:
+        expected-type: Type specifier that was expected
+        datum: The actual object that failed the type check
+    """
+    def __init__(self, datum=None, expected_type=None, **slots):
+        slots['datum'] = datum
+        slots['expected-type'] = expected_type
+        if 'message' not in slots:
+            slots['message'] = f"The value {datum} is not of type {expected_type}"
+        super().__init__(**slots)
+
+
+class ProgramError(Error):
+    """Condition raised for errors in program logic."""
+    pass
+
+
+class ControlError(Error):
+    """Condition raised when control transfer is invoked incorrectly."""
+    pass
+
+
+class FileError(Error):
+    """Condition raised when an error occurs during file I/O.
+    
+    Slots:
+        pathname: The pathname involved in the error
+    """
+    def __init__(self, pathname=None, **slots):
+        slots['pathname'] = pathname
+        super().__init__(**slots)
+
+
+class StreamError(Error):
+    """Condition raised when an error occurs with a stream.
+    
+    Slots:
+        stream: The stream involved in the error
+    """
+    def __init__(self, stream=None, **slots):
+        slots['stream'] = stream
+        super().__init__(**slots)
+
+
+class EndOfFile(StreamError):
+    """Condition raised when end-of-file is encountered."""
+    def __init__(self, stream=None, **slots):
+        slots['stream'] = stream
+        if 'message' not in slots:
+            slots['message'] = "End of file encountered"
+        super().__init__(**slots)
+
+
+class ArithmeticError(Error):
+    """Condition raised when an arithmetic operation fails.
+    
+    Slots:
+        operation: The operation that failed
+        operands: The operands to the operation
+    """
+    def __init__(self, operation=None, operands=None, **slots):
+        slots['operation'] = operation
+        slots['operands'] = operands
+        super().__init__(**slots)
+
+
+class DivisionByZero(ArithmeticError):
+    """Condition raised when division by zero is attempted."""
+    pass
+
+
+class FloatingPointInvalidOperation(ArithmeticError):
+    """Condition raised for invalid floating-point operations."""
+    pass
+
+
+class FloatingPointOverflow(ArithmeticError):
+    """Condition raised when floating-point overflow occurs."""
+    pass
+
+
+class FloatingPointUnderflow(ArithmeticError):
+    """Condition raised when floating-point underflow occurs."""
+    pass
+
+
 # --- Environment resolution helper ---------------------------------------------------------
 def resolve_environment(env=None):
     """Return a usable environment or raise LispEnvironmentError.
