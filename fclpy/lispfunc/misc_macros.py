@@ -78,6 +78,21 @@ def with_standard_io_syntax(*body):
 
 
 # --- Miscellaneous utilities ---
+@_registry.cl_function('ASSERT')
+def assert_fn(test_form, *args, **kwargs):
+    """ASSERT macro - signals error if test-form evaluates to NIL.
+    
+    (ASSERT test-form [(place*) [datum argument*]])
+    
+    If test-form is NIL, signals an error. The optional places specify
+    values that may be setf'd before retrying. The optional datum and
+    arguments describe the error.
+    """
+    if test_form is None or test_form is lisptype.NIL or test_form == False:
+        raise lisptype.LispError("Assertion failed")
+    return lisptype.NIL
+
+
 @_registry.cl_function('COMPLEX')
 def complex_fn(realpart, imagpart=0):
     """Create complex number."""
@@ -119,6 +134,27 @@ def load(filespec, verbose=None, print_p=None, if_does_not_exist=None,
         path_str = filespec.original
     else:
         path_str = str(filespec)
+    
+    # If path is relative, resolve it against *DEFAULT-PATHNAME-DEFAULTS*
+    if not os.path.isabs(path_str):
+        # Get *DEFAULT-PATHNAME-DEFAULTS*
+        default_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*DEFAULT-PATHNAME-DEFAULTS*')
+        default_pathname = env.find_variable(default_sym)
+        
+        if default_pathname and default_pathname is not lisptype.NIL:
+            # Merge with default pathname
+            if isinstance(default_pathname, Pathname):
+                # Check if the default pathname is a directory
+                default_path = default_pathname.original
+                if os.path.isdir(default_path):
+                    # It's a directory - use it directly
+                    default_dir = default_path
+                else:
+                    # It's a file - use its parent directory
+                    default_dir = os.path.dirname(default_path)
+                if default_dir:
+                    path_str = os.path.join(default_dir, path_str)
+                    path_str = os.path.normpath(path_str)
     
     # Handle if-does-not-exist
     if not os.path.exists(path_str):
@@ -1043,6 +1079,7 @@ def is_variable_special(symbol, env=None):
 
 
 __all__ = [
+    'assert_fn',
     'with_accessors',
     'with_compilation_unit',
     'with_input_from_string',
@@ -1115,11 +1152,9 @@ __all__ = [
     'with_package_iterator',
     'declaim',
     'declare',
-    'defclass',
+    # NOTE: defclass, defgeneric, defpackage, defstruct are NOT exported here
+    # because they are stubs that would override real implementations from classes.py
     'defconstant',
-    'defgeneric',
-    'defpackage',
-    'defstruct',
     'deftype',
     'defparameter',
     'echo_stream_p',

@@ -273,11 +273,15 @@ def pathname_without_name_type(pathname):
 
 
 @_registry.cl_function('MAKE-PATHNAME')
-def make_pathname_function(host=None, device=None, directory=None, name=None, 
+def make_pathname_function(*args, host=None, device=None, directory=None, name=None, 
                           type=None, version=None, defaults=None, case=None):
     """Make a pathname from components.
     
+    This function handles both Python keyword arguments and Lisp-style 
+    keyword arguments passed as positional arguments.
+    
     Args:
+        args: Lisp-style keyword arguments (e.g., :name, nil, :type, nil)
         host: Host (not used)
         device: Device (not used)
         directory: Directory component
@@ -290,23 +294,141 @@ def make_pathname_function(host=None, device=None, directory=None, name=None,
     Returns:
         Pathname object
     """
-    parts = []
+    import fclpy.lisptype as lisptype
     
-    if directory:
-        if isinstance(directory, (list, tuple)):
-            parts.extend(directory)
+    # Sentinel to track which values were explicitly provided
+    _NOT_PROVIDED = object()
+    name_explicit = _NOT_PROVIDED
+    type_explicit = _NOT_PROVIDED
+    
+    # Parse Lisp-style keyword arguments if present
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        # Check for keyword argument - can be lispKeyword or LispSymbol starting with ':'
+        is_keyword = False
+        key = None
+        if isinstance(arg, lisptype.lispKeyword):
+            # lispKeyword stores name without the colon
+            is_keyword = True
+            key = arg.name.lower()
+        elif isinstance(arg, lisptype.LispSymbol) and arg.name.startswith(':'):
+            is_keyword = True
+            key = arg.name[1:].lower()
+        
+        if is_keyword and key:
+            value = args[i + 1] if i + 1 < len(args) else None
+            # Track if NIL was explicitly passed for name/type
+            is_nil = value is lisptype.NIL or value is None
+            
+            if key == 'host':
+                host = None if is_nil else value
+            elif key == 'device':
+                device = None if is_nil else value
+            elif key == 'directory':
+                directory = None if is_nil else value
+            elif key == 'name':
+                # Mark as explicitly set (even if to None)
+                name_explicit = None if is_nil else value
+            elif key == 'type':
+                # Mark as explicitly set (even if to None)
+                type_explicit = None if is_nil else value
+            elif key == 'version':
+                version = None if is_nil else value
+            elif key == 'defaults':
+                defaults = None if is_nil else value
+            elif key == 'case':
+                case = None if is_nil else value
+            i += 2
         else:
-            parts.append(directory)
+            i += 1
     
-    if name:
-        name_part = name
-        if type:
-            name_part = f"{name}.{type}"
-        parts.append(name_part)
+    # Start with defaults if provided
+    dir_parts = []
+    result_name = None
+    result_type = None
+    
+    if defaults:
+        if isinstance(defaults, Pathname):
+            # Extract directory from defaults
+            if defaults.directory:
+                dir_parts = list(defaults.directory) if isinstance(defaults.directory, (list, tuple)) else [defaults.directory]
+            result_name = defaults.filename  # Use filename (without extension)
+            result_type = defaults.extension  # Use extension for type
+    
+    # Override with explicit values
+    if directory is not None:
+        if isinstance(directory, (list, tuple)):
+            dir_parts = list(directory)
+        elif isinstance(directory, lisptype.lispCons):
+            # Convert Lisp list to Python list
+            dir_parts = []
+            current = directory
+            while isinstance(current, lisptype.lispCons):
+                item = current.car
+                if isinstance(item, lisptype.LispSymbol):
+                    if item.name == ':RELATIVE':
+                        pass  # Skip relative marker for now
+                    elif item.name == ':WILD':
+                        dir_parts.append('*')
+                    else:
+                        dir_parts.append(item.name.lower())
+                elif isinstance(item, str):
+                    dir_parts.append(item)
+                current = current.cdr
+        elif directory is not lisptype.NIL:
+            dir_parts = [str(directory)]
+    
+    # Check if name was explicitly set (use sentinel to distinguish from defaults)
+    if name_explicit is not _NOT_PROVIDED:
+        # Explicitly set via Lisp-style :name arg - use the explicit value (may be None for NIL)
+        if name_explicit is None:
+            result_name = None
+        elif isinstance(name_explicit, lisptype.LispSymbol):
+            if name_explicit.name == ':WILD':
+                result_name = '*'
+            else:
+                result_name = name_explicit.name.lower()
+        else:
+            result_name = str(name_explicit)
+    elif name is not None and name is not lisptype.NIL:
+        # Fall back to Python keyword arg with actual value
+        if isinstance(name, lisptype.LispSymbol):
+            if name.name == ':WILD':
+                result_name = '*'
+            else:
+                result_name = name.name.lower()
+        else:
+            result_name = str(name)
+    # If name was passed as Python kwarg with None/NIL, clear result_name
+    # (This handles call like make_pathname_function(name=None, defaults=...))
+    # We need to check if 'name' was explicitly passed - but Python doesn't tell us that
+    # So we rely on the Lisp-style args being parsed first
+    
+    # Check if type was explicitly set
+    if type_explicit is not _NOT_PROVIDED:
+        if type_explicit is None:
+            result_type = None
+        elif isinstance(type_explicit, lisptype.LispSymbol):
+            result_type = type_explicit.name.lower()
+        else:
+            result_type = str(type_explicit)
+    elif type is not None and type is not lisptype.NIL:
+        if isinstance(type, lisptype.LispSymbol):
+            result_type = type.name.lower()
+        else:
+            result_type = str(type)
+    
+    # Build path
+    parts = dir_parts[:]
+    if result_name:
+        if result_type:
+            parts.append(f"{result_name}.{result_type}")
+        else:
+            parts.append(result_name)
     
     path_str = os.path.join(*parts) if parts else "."
     return Pathname(path_str)
-
 
 @_registry.cl_function('MERGE-PATHNAMES')
 def merge_pathnames(pathname, defaults=None):
@@ -478,3 +600,164 @@ def relative_pathname_p(pathname):
         path_str = str(pathname)
     
     return lisptype.lisp_bool(not os.path.isabs(path_str))
+
+
+@_registry.cl_function('HOST-NAMESTRING')
+def host_namestring(pathname):
+    """Return host portion of pathname.
+    
+    Args:
+        pathname: Pathname object or string
+    
+    Returns:
+        Empty string (host not supported)
+    """
+    return ""
+
+
+@_registry.cl_function('ENOUGH-NAMESTRING')
+def enough_namestring(pathname, defaults=None):
+    """Get enough of pathname to distinguish it from defaults.
+    
+    Args:
+        pathname: Pathname to convert
+        defaults: Default pathname (optional)
+    
+    Returns:
+        Namestring sufficient to identify pathname
+    """
+    if isinstance(pathname, Pathname):
+        return pathname.original
+    return str(pathname)
+
+
+@_registry.cl_function('PARSE-NAMESTRING')
+def parse_namestring(thing, host=None, defaults=None, **kwargs):
+    """Parse a namestring into a pathname.
+    
+    Args:
+        thing: String to parse
+        host: Host (ignored)
+        defaults: Default pathname (ignored)
+    
+    Returns:
+        Pathname object
+    """
+    return Pathname(str(thing))
+
+
+@_registry.cl_function('WILD-PATHNAME-P')
+def wild_pathname_p(pathname, field_key=None):
+    """Test if pathname has wildcards.
+    
+    Args:
+        pathname: Pathname to test
+        field_key: Optional field to check (ignored, checks whole path)
+    
+    Returns:
+        T if contains wildcards, NIL otherwise
+    """
+    if isinstance(pathname, Pathname):
+        path_str = pathname.original
+    else:
+        path_str = str(pathname)
+    
+    return lisptype.lisp_bool('*' in path_str or '?' in path_str)
+
+
+@_registry.cl_function('PATHNAME-MATCH-P')
+def pathname_match_p(pathname, wildname):
+    """Test if pathname matches a wildcard pattern.
+    
+    Args:
+        pathname: Pathname to test
+        wildname: Wildcard pattern
+    
+    Returns:
+        T if matches, NIL otherwise
+    """
+    import fnmatch
+    if isinstance(pathname, Pathname):
+        path_str = pathname.original
+    else:
+        path_str = str(pathname)
+    
+    if isinstance(wildname, Pathname):
+        wild_str = wildname.original
+    else:
+        wild_str = str(wildname)
+    
+    return lisptype.lisp_bool(fnmatch.fnmatch(path_str, wild_str))
+
+
+@_registry.cl_function('TRANSLATE-PATHNAME')
+def translate_pathname(source, from_wildname, to_wildname):
+    """Translate pathname from one pattern to another.
+    
+    Args:
+        source: Source pathname
+        from_wildname: Source pattern
+        to_wildname: Target pattern
+    
+    Returns:
+        Translated pathname (simplified - just returns source)
+    """
+    if isinstance(source, Pathname):
+        return source
+    return Pathname(str(source))
+
+
+@_registry.cl_function('LOGICAL-PATHNAME')
+def logical_pathname(pathspec):
+    """Convert to logical pathname.
+    
+    Args:
+        pathspec: Path specification
+    
+    Returns:
+        Pathname (logical pathnames not fully supported)
+    """
+    if isinstance(pathspec, Pathname):
+        return pathspec
+    return Pathname(str(pathspec))
+
+
+@_registry.cl_function('TRANSLATE-LOGICAL-PATHNAME')
+def translate_logical_pathname(pathname, **kwargs):
+    """Translate logical pathname to physical pathname.
+    
+    Args:
+        pathname: Logical pathname
+    
+    Returns:
+        Physical pathname (same as input, logical pathnames not supported)
+    """
+    if isinstance(pathname, Pathname):
+        return pathname
+    return Pathname(str(pathname))
+
+
+@_registry.cl_function('LOAD-LOGICAL-PATHNAME-TRANSLATIONS')
+def load_logical_pathname_translations(host):
+    """Load logical pathname translations for a host.
+    
+    Args:
+        host: Host name
+    
+    Returns:
+        T (no-op, logical pathnames not fully supported)
+    """
+    return lisptype.T
+
+
+@_registry.cl_function('LOGICAL-PATHNAME-TRANSLATIONS')
+def logical_pathname_translations(host):
+    """Get logical pathname translations for a host.
+    
+    Args:
+        host: Host name
+    
+    Returns:
+        NIL (no translations defined)
+    """
+    return lisptype.NIL

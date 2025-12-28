@@ -183,10 +183,9 @@ def eval(form, env=None):
     
     # Symbols - look up in environment
     if isinstance(form, lisptype.LispSymbol):
-        # Check variable bindings first
-        value = env.find_variable(form)
-        if value is not None:
-            return value
+        # Check variable bindings first - use has_variable to handle None values
+        if env.has_variable(form):
+            return env.find_variable(form)
         # If not found as variable, check function bindings
         value = env.find_func(form)
         if value is not None:

@@ -146,6 +146,10 @@ class Reader:
         elif token.type == TokenType.FLOAT:
             self._consume_token()
             return float(token.value)
+        elif token.type in (TokenType.HEX_NUMBER, TokenType.BINARY_NUMBER, TokenType.OCTAL_NUMBER):
+            # Radix numbers are already converted to integers by the tokenizer
+            self._consume_token()
+            return int(token.value)
         elif token.type == TokenType.RATIO:
             self._consume_token()
             # For now, return ratio as a symbolic form (will be improved later)
@@ -213,6 +217,12 @@ class Reader:
         elif token.type == TokenType.DOT:
             # Bare dot is an error
             raise ReaderError("Unexpected '.' outside of list context")
+        elif token.type == TokenType.HASH_PLUS:
+            # #+feature form - include form if feature is present
+            return self._read_feature_conditional(True)
+        elif token.type == TokenType.HASH_MINUS:
+            # #-feature form - include form if feature is NOT present
+            return self._read_feature_conditional(False)
         else:
             raise ReaderError(f"Unexpected token type: {token.type}")
     
@@ -290,6 +300,125 @@ class Reader:
             result = lisptype.lispCons(elem, result)
         vector_sym = self.package.intern_symbol('VECTOR')
         return lisptype.lispCons(vector_sym, result)
+    
+    def _read_feature_conditional(self, positive):
+        """Read a feature conditional: #+feature form or #-feature form.
+        
+        Args:
+            positive: True for #+, False for #-
+            
+        Returns:
+            The form if feature test passes, otherwise continues reading.
+        """
+        self._consume_token()  # consume #+ or #-
+        
+        # Read the feature expression
+        feature = self._read_object()
+        
+        # Read the form (regardless of whether we use it)
+        form = self._read_object()
+        
+        # Check if feature is present
+        if self._check_feature(feature, positive):
+            return form
+        else:
+            # Feature test failed, skip this form and read the next object
+            # Continue reading from the stream to get the next form
+            return self._read_object()
+    
+    def _check_feature(self, feature, positive):
+        """Check if a feature expression is satisfied.
+        
+        Args:
+            feature: The feature expression (keyword, or compound with AND/OR/NOT)
+            positive: True for #+ (include if present), False for #- (include if absent)
+            
+        Returns:
+            True if the form should be included, False otherwise.
+        """
+        import fclpy.state as state
+        
+        # Get *FEATURES* list from environment
+        features_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*FEATURES*')
+        features_list = lisptype.NIL
+        if state.current_environment:
+            features_list = state.current_environment.find_variable(features_sym)
+            if features_list is None:
+                features_list = lisptype.NIL
+        
+        # Check if feature is satisfied
+        feature_present = self._eval_feature_expression(feature, features_list)
+        
+        # For #+, include if present; for #-, include if absent
+        return feature_present if positive else not feature_present
+    
+    def _eval_feature_expression(self, feature, features_list):
+        """Evaluate a feature expression against the features list.
+        
+        Supports:
+          - Simple keyword: :FOO
+          - (AND f1 f2 ...)
+          - (OR f1 f2 ...)
+          - (NOT f)
+        
+        Args:
+            feature: The feature expression
+            features_list: The *FEATURES* list
+            
+        Returns:
+            True if the feature is present/satisfied.
+        """
+        # Handle keyword
+        if isinstance(feature, lisptype.LispSymbol):
+            # Check if symbol is in features list
+            return self._symbol_in_list(feature, features_list)
+        
+        # Handle compound expression (list)
+        if isinstance(feature, lisptype.lispCons):
+            op = feature.car
+            args = feature.cdr
+            
+            if isinstance(op, lisptype.LispSymbol):
+                op_name = op.name.upper()
+                
+                if op_name == 'AND':
+                    # All features must be present
+                    current = args
+                    while isinstance(current, lisptype.lispCons):
+                        if not self._eval_feature_expression(current.car, features_list):
+                            return False
+                        current = current.cdr
+                    return True
+                
+                elif op_name == 'OR':
+                    # At least one feature must be present
+                    current = args
+                    while isinstance(current, lisptype.lispCons):
+                        if self._eval_feature_expression(current.car, features_list):
+                            return True
+                        current = current.cdr
+                    return False
+                
+                elif op_name == 'NOT':
+                    # Feature must NOT be present
+                    if isinstance(args, lisptype.lispCons):
+                        return not self._eval_feature_expression(args.car, features_list)
+                    return True
+        
+        # Unknown feature format - assume not present
+        return False
+    
+    def _symbol_in_list(self, symbol, lst):
+        """Check if a symbol is in a list (by name comparison for keywords)."""
+        current = lst
+        while isinstance(current, lisptype.lispCons):
+            item = current.car
+            if isinstance(item, lisptype.LispSymbol):
+                # Compare by name (case-insensitive)
+                if item.name.upper() == symbol.name.upper():
+                    return True
+            current = current.cdr
+        return False
 
 
 def read(text, package=None):

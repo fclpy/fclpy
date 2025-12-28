@@ -28,6 +28,7 @@ from .characters import *
 from .io import *
 from .utilities import *
 from .classes import *
+from .misc_macros import *
 
 # Import special operator functions explicitly (underscores prevent * import)
 from .math import (_s_plus_, _s_minus_, _s_star_, _s_slash_, _s_eq_, _s_lt_, _s_gt_, 

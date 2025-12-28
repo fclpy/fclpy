@@ -92,6 +92,19 @@ def setup_standard_environment():
         if state.current_environment.find_variable(default_pathname_sym) is None:
             cwd_pathname = Pathname(os.getcwd())
             state.current_environment.add_variable(default_pathname_sym, cwd_pathname)
+        
+        # *FEATURES* - list of feature keywords for #+/- conditional read
+        # Standard features include: :FCLPY (our implementation), :COMMON-LISP
+        features_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*FEATURES*')
+        if state.current_environment.find_variable(features_sym) is None:
+            # Create a basic features list with our implementation identifier
+            fclpy_feature = fclpy.lisptype.intern_keyword('FCLPY')
+            cl_feature = fclpy.lisptype.intern_keyword('COMMON-LISP')
+            ansi_cl_feature = fclpy.lisptype.intern_keyword('ANSI-CL')
+            features_list = fclpy.lisptype.lispCons(fclpy_feature, 
+                            fclpy.lisptype.lispCons(cl_feature,
+                            fclpy.lisptype.lispCons(ansi_cl_feature, fclpy.lisptype.NIL)))
+            state.current_environment.add_variable(features_sym, features_list)
     except Exception:
         # Defensive: if initialization fails, continue
         pass

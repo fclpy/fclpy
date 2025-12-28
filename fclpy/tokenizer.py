@@ -20,6 +20,11 @@ class TokenType(Enum):
     STRING = "STRING"
     CHARACTER = "CHARACTER"
     
+    # Radix numbers
+    HEX_NUMBER = "HEX_NUMBER"      # #xFF
+    BINARY_NUMBER = "BINARY_NUMBER"  # #b1010
+    OCTAL_NUMBER = "OCTAL_NUMBER"    # #o17
+    
     # Delimiters
     LPAREN = "LPAREN"
     RPAREN = "RPAREN"
@@ -34,6 +39,8 @@ class TokenType(Enum):
     COMMA_AT = "COMMA_AT"
     HASH_QUOTE = "HASH_QUOTE"
     HASH_LPAREN = "HASH_LPAREN"
+    HASH_PLUS = "HASH_PLUS"      # #+feature
+    HASH_MINUS = "HASH_MINUS"    # #-feature
     
     # Comments and whitespace
     COMMENT = "COMMENT"
@@ -430,6 +437,27 @@ class Tokenizer:
             self._read_block_comment()
             return None
         
+        # Hexadecimal numbers: #x...
+        elif next_char and next_char.upper() == 'X':
+            return self._read_radix_number(start_line, start_col, 16)
+        
+        # Binary numbers: #b...
+        elif next_char and next_char.upper() == 'B':
+            return self._read_radix_number(start_line, start_col, 2)
+        
+        # Octal numbers: #o...
+        elif next_char and next_char.upper() == 'O':
+            return self._read_radix_number(start_line, start_col, 8)
+        
+        # Feature conditionals: #+feature, #-feature
+        elif next_char == '+':
+            self._advance()
+            return Token(TokenType.HASH_PLUS, "#+", start_line, start_col)
+        
+        elif next_char == '-':
+            self._advance()
+            return Token(TokenType.HASH_MINUS, "#-", start_line, start_col)
+        
         # Other dispatch macros would go here
         else:
             # For now, just treat # followed by something as a symbol
@@ -437,6 +465,59 @@ class Tokenizer:
             while self._peek() and self._peek() not in ' \t\n\r()[]':
                 hash_str += self._advance()
             return Token(TokenType.SYMBOL, hash_str, start_line, start_col)
+    
+    def _read_radix_number(self, start_line: int, start_col: int, radix: int) -> Token:
+        """Read a number in the specified radix (base).
+        
+        Args:
+            start_line: Line number where token starts
+            start_col: Column number where token starts
+            radix: The base (2 for binary, 8 for octal, 16 for hex)
+            
+        Returns:
+            Token with the parsed integer value
+        """
+        # Consume the radix indicator (x, b, or o)
+        self._advance()
+        
+        # Define valid digit characters for each radix
+        if radix == 2:
+            valid_chars = '01'
+            token_type = TokenType.BINARY_NUMBER
+        elif radix == 8:
+            valid_chars = '01234567'
+            token_type = TokenType.OCTAL_NUMBER
+        elif radix == 16:
+            valid_chars = '0123456789abcdefABCDEF'
+            token_type = TokenType.HEX_NUMBER
+        else:
+            valid_chars = '0123456789'
+            token_type = TokenType.INTEGER
+        
+        # Check for sign
+        num_str = ""
+        if self._peek() in '+-':
+            num_str += self._advance()
+        
+        # Read digits
+        while self._peek() and self._peek() in valid_chars:
+            num_str += self._advance()
+        
+        if not num_str or num_str in '+-':
+            raise ValueError(f"No digits found for radix-{radix} number at line {start_line}")
+        
+        # Parse and store the integer value directly
+        try:
+            # Handle potential sign prefix
+            if num_str.startswith('-'):
+                value = -int(num_str[1:], radix)
+            elif num_str.startswith('+'):
+                value = int(num_str[1:], radix)
+            else:
+                value = int(num_str, radix)
+            return Token(token_type, str(value), start_line, start_col)
+        except ValueError:
+            raise ValueError(f"Invalid radix-{radix} number: {num_str}")
     
     def _read_character(self, start_line: int, start_col: int) -> Optional[Token]:
         """Read a character literal #\\X."""

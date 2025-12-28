@@ -353,6 +353,15 @@ class Readtable:
         elif sub_char.upper() == 'P':
             # Pathname literal: #P"path" or #p"path"
             return self._read_pathname_literal(stream)
+        elif sub_char.upper() == 'X':
+            # Hexadecimal number: #xFF -> 255
+            return self._read_radix_number(stream, 16)
+        elif sub_char.upper() == 'B':
+            # Binary number: #b1010 -> 10
+            return self._read_radix_number(stream, 2)
+        elif sub_char.upper() == 'O':
+            # Octal number: #o17 -> 15
+            return self._read_radix_number(stream, 8)
         elif sub_char in '0123456789':
             # Could be array rank, reader label, etc.
             # For now, read the number and check what follows
@@ -499,6 +508,62 @@ class Readtable:
         # Read the string
         path_str = self._read_string_literal(stream)
         return Pathname(path_str)
+    
+    def _read_radix_number(self, stream, radix):
+        """Read a number in the specified radix (base).
+        
+        Examples:
+            #xFF -> 255 (radix 16)
+            #b1010 -> 10 (radix 2)  
+            #o17 -> 15 (radix 8)
+        
+        Args:
+            stream: Input stream
+            radix: The base (2 for binary, 8 for octal, 16 for hex)
+            
+        Returns:
+            Integer value
+        """
+        # Define valid digit characters for each radix
+        if radix == 2:
+            valid_chars = '01'
+        elif radix == 8:
+            valid_chars = '01234567'
+        elif radix == 16:
+            valid_chars = '0123456789abcdefABCDEF'
+        else:
+            valid_chars = '0123456789'
+        
+        # Read the number token
+        token = ''
+        negative = False
+        
+        # Check for sign
+        c = stream.read_char()
+        if c == '-':
+            negative = True
+            c = stream.read_char()
+        elif c == '+':
+            c = stream.read_char()
+        
+        # Read digits
+        while c and (c in valid_chars):
+            token += c
+            c = stream.read_char()
+        
+        # Put back the last character if it's not EOF
+        if c:
+            stream.unread_char(c)
+        
+        if not token:
+            raise ValueError(f"No digits found for radix-{radix} number")
+        
+        # Parse the number
+        try:
+            value = int(token, radix)
+            return -value if negative else value
+        except ValueError:
+            raise ValueError(f"Invalid radix-{radix} number: {token}")
 
 
 def get_current_readtable() -> Readtable:

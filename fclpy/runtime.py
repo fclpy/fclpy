@@ -28,10 +28,29 @@ def setup_reader_macros():
 
 def load_and_evaluate_file(filename, environment=None, verbose=False):
     """Load and evaluate a Lisp file."""
+    import os
+    from fclpy.lispfunc.pathnames import Pathname
+    
     if environment is None:
+        # Ensure standard environment is set up
+        lispenv.setup_standard_environment()
         environment = lispenv.current_environment
     
+    # Set *LOAD-TRUENAME* and *LOAD-PATHNAME* for this file
+    abs_path = os.path.abspath(filename)
+    pathname_obj = Pathname(abs_path)
+    
+    load_truename_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*LOAD-TRUENAME*')
+    load_pathname_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*LOAD-PATHNAME*')
+    
+    old_truename = environment.find_variable(load_truename_sym)
+    old_pathname = environment.find_variable(load_pathname_sym)
+    
     try:
+        # Set load variables for this file
+        environment.set_variable(load_truename_sym, pathname_obj)
+        environment.set_variable(load_pathname_sym, pathname_obj)
+        
         if verbose:
             print(f"Loading file: {filename}")
         
@@ -98,6 +117,17 @@ def load_and_evaluate_file(filename, environment=None, verbose=False):
         if verbose:
             import traceback
             traceback.print_exc()
+    finally:
+        # Restore old values
+        if old_truename is not None:
+            environment.set_variable(load_truename_sym, old_truename)
+        else:
+            environment.set_variable(load_truename_sym, lisptype.NIL)
+        
+        if old_pathname is not None:
+            environment.set_variable(load_pathname_sym, old_pathname)
+        else:
+            environment.set_variable(load_pathname_sym, lisptype.NIL)
         return lisptype.NIL
 
 class FclpyREPL:

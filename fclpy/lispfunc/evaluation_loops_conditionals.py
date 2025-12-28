@@ -105,7 +105,8 @@ def eval_or(form, env):
             return result
         args = cdr(args)
     
-    return None
+    # OR with no truthy values returns NIL, not Python None
+    return lisptype.NIL
 
 
 def eval_progn(form, env):
@@ -160,14 +161,23 @@ def eval_let(form, env):
         if isinstance(var, lisptype.LispSymbol):
             let_env.add_variable(var, value)
     
-    # Evaluate body in new environment
-    result = None
-    current = body
-    while _consp_internal(current):
-        result = eval(car(current), let_env)
-        current = cdr(current)
+    # Update state.current_environment for functions that need it (like LOAD)
+    import fclpy.state as state
+    old_env = state.current_environment
+    state.current_environment = let_env
     
-    return result
+    try:
+        # Evaluate body in new environment
+        result = None
+        current = body
+        while _consp_internal(current):
+            result = eval(car(current), let_env)
+            current = cdr(current)
+        
+        return result
+    finally:
+        # Restore the previous environment
+        state.current_environment = old_env
 
 
 def eval_letstar(form, env):
@@ -203,14 +213,23 @@ def eval_letstar(form, env):
                 letstar_env.add_variable(var, value)
         current = cdr(current)
     
-    # Evaluate body in environment with all bindings
-    result = None
-    current = body
-    while _consp_internal(current):
-        result = eval(car(current), letstar_env)
-        current = cdr(current)
+    # Update state.current_environment for functions that need it (like LOAD)
+    import fclpy.state as state
+    old_env = state.current_environment
+    state.current_environment = letstar_env
     
-    return result
+    try:
+        # Evaluate body in environment with all bindings
+        result = None
+        current = body
+        while _consp_internal(current):
+            result = eval(car(current), letstar_env)
+            current = cdr(current)
+        
+        return result
+    finally:
+        # Restore the previous environment
+        state.current_environment = old_env
 
 
 def eval_quasiquote(form, env):

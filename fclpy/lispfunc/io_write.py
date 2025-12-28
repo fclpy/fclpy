@@ -3,6 +3,38 @@
 import fclpy.lisptype as lisptype
 from . import registry as _registry
 
+# Re-export pathname functions from pathnames module for backward compatibility
+# Note: make_pathname (registered as 'PATHNAME') and make_pathname_function
+# (registered as 'MAKE-PATHNAME') are different functions!
+from .pathnames import (
+    make_pathname,  # PATHNAME function - converts string to Pathname
+    make_pathname_function,  # MAKE-PATHNAME function - constructs pathname from components
+    pathnamep,
+    pathname_host,
+    pathname_device,
+    pathname_directory,
+    pathname_name,
+    pathname_type,
+    pathname_version,
+    namestring,
+    directory_namestring,
+    file_namestring,
+    host_namestring,
+    enough_namestring,
+    parse_namestring,
+    merge_pathnames,
+    wild_pathname_p,
+    pathname_match_p,
+    translate_pathname,
+    logical_pathname,
+    translate_logical_pathname,
+    truename,
+    probe_file,
+)
+
+# Alias for backward compatibility - some code may use 'pathname' instead of 'make_pathname'
+pathname = make_pathname
+
 
 @_registry.cl_function('CLEAR-OUTPUT')
 def clear_output(stream=None):
@@ -279,153 +311,8 @@ def formatter(control_string):
     return format_func
 
 
-# Pathname operations
-@_registry.cl_function('PATHNAME')
-def pathname(pathspec):
-    """Convert to pathname."""
-    return str(pathspec)
-
-
-@_registry.cl_function('PATHNAMEP')
-def pathnamep(object):
-    """Test if object is pathname."""
-    return lisptype.lisp_bool(isinstance(object, str))  # Simplified
-
-
-@_registry.cl_function('PATHNAME-HOST')
-def pathname_host(pathname):
-    """Get pathname host."""
-    return None  # No host for now
-
-
-@_registry.cl_function('PATHNAME-DEVICE')
-def pathname_device(pathname):
-    """Get pathname device."""
-    return None  # No device for now
-
-
-@_registry.cl_function('PATHNAME-DIRECTORY')
-def pathname_directory(pathname):
-    """Get pathname directory."""
-    import os
-    return os.path.dirname(str(pathname))
-
-
-@_registry.cl_function('PATHNAME-NAME')
-def pathname_name(pathname):
-    """Get pathname name."""
-    import os
-    return os.path.splitext(os.path.basename(str(pathname)))[0]
-
-
-@_registry.cl_function('PATHNAME-TYPE')
-def pathname_type(pathname):
-    """Get pathname type."""
-    import os
-    ext = os.path.splitext(str(pathname))[1]
-    return ext[1:] if ext else None
-
-
-@_registry.cl_function('PATHNAME-VERSION')
-def pathname_version(pathname):
-    """Get pathname version."""
-    return None  # No versions for now
-
-
-@_registry.cl_function('MAKE-PATHNAME')
-def make_pathname(**kwargs):
-    """Make pathname."""
-    import os
-    parts = []
-    if 'directory' in kwargs:
-        parts.append(kwargs['directory'])
-    if 'name' in kwargs:
-        name = kwargs['name']
-        if 'type' in kwargs:
-            name += '.' + kwargs['type']
-        parts.append(name)
-    return os.path.join(*parts) if parts else ""
-
-
-@_registry.cl_function('NAMESTRING')
-def namestring(pathname):
-    """Get namestring of pathname."""
-    return str(pathname)
-
-
-@_registry.cl_function('DIRECTORY-NAMESTRING')
-def directory_namestring(pathname):
-    """Get directory namestring."""
-    import os
-    return os.path.dirname(str(pathname))
-
-
-@_registry.cl_function('HOST-NAMESTRING')
-def host_namestring(pathname):
-    """Return host portion of pathname."""
-    return ""  # No host for simplified implementation
-
-
-@_registry.cl_function('FILE-NAMESTRING')
-def file_namestring(pathname):
-    """Return file portion of pathname."""
-    import os
-    return os.path.basename(str(pathname))
-
-
-@_registry.cl_function('ENOUGH-NAMESTRING')
-def enough_namestring(pathname, defaults=None):
-    """Get enough namestring."""
-    return str(pathname)  # Simplified
-
-
-@_registry.cl_function('PARSE-NAMESTRING')
-def parse_namestring(thing, **kwargs):
-    """Parse namestring."""
-    return str(thing)  # Simplified
-
-
-@_registry.cl_function('MERGE-PATHNAMES')
-def merge_pathnames(pathname, default_pathname=None, default_version=None):
-    """Merge pathname with default."""
-    return str(pathname)  # Simplified
-
-
-@_registry.cl_function('WILD-PATHNAME-P')
-def wild_pathname_p(pathname, field_key=None):
-    """Test if pathname is wild."""
-    return lisptype.NIL  # No wildcards for now
-
-
-@_registry.cl_function('PATHNAME-MATCH-P')
-def pathname_match_p(pathname, wildname):
-    """Test if pathname matches wildname."""
-    return lisptype.lisp_bool(str(pathname) == str(wildname))  # Simplified
-
-
-@_registry.cl_function('TRANSLATE-PATHNAME')
-def translate_pathname(source, from_wildname, to_wildname):
-    """Translate pathname."""
-    return str(source)  # Simplified
-
-
-@_registry.cl_function('LOGICAL-PATHNAME')
-def logical_pathname(pathspec):
-    """Convert to logical pathname."""
-    return str(pathspec)  # No logical pathnames for now
-
-
-@_registry.cl_function('TRANSLATE-LOGICAL-PATHNAME')
-def translate_logical_pathname(pathname, **kwargs):
-    """Translate logical pathname."""
-    return str(pathname)
-
-
-@_registry.cl_function('TRUENAME')
-def truename(filespec):
-    """Get truename of file."""
-    import os
-    return os.path.abspath(str(filespec))
+# NOTE: Pathname operations are defined in pathnames.py with proper Pathname class support
+# Functions like PATHNAME, PATHNAMEP, PATHNAME-DIRECTORY, etc. are all in pathnames.py
 
 
 # Stream operations
@@ -455,11 +342,7 @@ def stream_external_format(stream):
 
 
 # File operations
-@_registry.cl_function('PROBE-FILE')
-def probe_file(pathspec):
-    """Test if file exists."""
-    import os
-    return lisptype.lisp_bool(os.path.exists(str(pathspec)))
+# NOTE: PROBE-FILE is defined in pathnames.py and imported above
 
 
 @_registry.cl_function('DELETE-FILE')

@@ -146,6 +146,18 @@ class Environment(lispT):
         """Legacy: add a variable binding (use bind)."""
         self.variable_bindings = Binding(symbol, value, self.variable_bindings, self)
     
+    def has_variable(self, sym):
+        """Check if a variable binding exists (distinguishes unbound from bound-to-None)."""
+        b = self.variable_bindings
+        while b is not None:
+            if b.symbol.name == sym.name:
+                return True
+            b = b.next
+        # Check parent
+        if self.parent:
+            return self.parent.has_variable(sym)
+        return False
+    
     def find_variable(self, sym):
         """Legacy: find a variable by symbol name."""
         b = self.variable_bindings
