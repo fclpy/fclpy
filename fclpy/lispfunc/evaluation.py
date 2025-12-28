@@ -1422,7 +1422,11 @@ def eval_signal(form, env):
     if not _consp_internal(args):
         raise lisptype.LispNotImplementedError("SIGNAL requires a condition argument")
     
-    condition = eval(car(args), env)
+    try:
+        condition = eval(car(args), env)
+    except ConditionException as e:
+        # If evaluating the argument raises a condition, re-wrap it as recoverable
+        raise ConditionException(e.condition, recoverable=True)
     
     # For now, just raise a ConditionException
     # In a complete implementation, this would consult handler-bind handlers
@@ -1432,20 +1436,22 @@ def eval_signal(form, env):
 def eval_error(form, env):
     """Implement ERROR special form.
     
-    Syntax: (ERROR condition-object) or (ERROR format-control &rest format-arguments)
+    Syntax: (ERROR) or (ERROR condition-object) or (ERROR format-control &rest format-arguments)
     
     Signal an error condition. This is like SIGNAL but the condition must be handled,
     or the program is aborted.
     """
     args = cdr(form)
+    
+    # If no arguments, create a generic error
     if not _consp_internal(args):
-        raise lisptype.LispNotImplementedError("ERROR requires at least one argument")
+        condition = lisptype.Error(message="Unspecified error")
+        raise ConditionException(condition, recoverable=False)
     
     first_arg = car(args)
     
     # Check if it's a condition object or format string
-    if isinstance(first_arg, str) or (isinstance(first_arg, lisptype.LispSymbol) and 
-                                      first_arg.name == "ERROR"):
+    if isinstance(first_arg, str):
         # String case: (ERROR "format ~a" arg1 arg2 ...)
         condition = lisptype.SimpleCondition(format_string=first_arg)
     else:
@@ -1471,7 +1477,12 @@ def eval_cerror(form, env):
     continue_format = car(args)  # Format for the continue option
     condition_form = car(cdr(args))
     
-    condition = eval(condition_form, env)
+    try:
+        condition = eval(condition_form, env)
+    except ConditionException as e:
+        # If evaluating the argument raises a condition, use that condition
+        condition = e.condition
+    
     if not isinstance(condition, lisptype.Condition):
         condition = lisptype.Error(message=str(condition))
     
@@ -1493,7 +1504,12 @@ def eval_warn(form, env):
     if not _consp_internal(args):
         raise lisptype.LispNotImplementedError("WARN requires at least one argument")
     
-    first_arg = eval(car(args), env)
+    try:
+        first_arg = eval(car(args), env)
+    except ConditionException as e:
+        # If evaluating the argument raises a condition, convert it to a warning
+        # Warnings don't interrupt execution, so we just return NIL
+        return lisptype.NIL
     
     # Check if it's already a condition object
     if isinstance(first_arg, lisptype.Condition):
