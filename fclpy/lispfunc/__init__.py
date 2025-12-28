@@ -19,6 +19,7 @@ from .core import *
 from .math import *
 from .sequences import *
 from .vectors import *
+from .streams import *
 from .evaluation import *
 from .comparison import *
 from .characters import *
