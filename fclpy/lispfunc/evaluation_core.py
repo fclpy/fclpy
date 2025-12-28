@@ -155,7 +155,7 @@ def eval(form, env=None):
     from .evaluation_special_forms import (
         eval_if, eval_setq, eval_defun, eval_defmacro, eval_macroexpand_1,
         eval_macro_function, eval_lambda, eval_declare, eval_declaim,
-        eval_defvar, eval_defparameter, eval_defstruct
+        eval_defvar, eval_defparameter, eval_defstruct, eval_pop
     )
     from .evaluation_control_flow import (
         eval_block, eval_return_from, eval_catch, eval_throw,
@@ -163,7 +163,8 @@ def eval(form, env=None):
     )
     from .evaluation_loops_conditionals import (
         eval_when, eval_unless, eval_cond, eval_and, eval_or,
-        eval_progn, eval_prog1, eval_prog2, eval_let, eval_letstar, eval_quasiquote
+        eval_progn, eval_prog1, eval_prog2, eval_let, eval_letstar, eval_quasiquote,
+        eval_loop
     )
     from .evaluation_conditions import (
         eval_signal, eval_error, eval_cerror, eval_warn,
@@ -246,6 +247,10 @@ def eval(form, env=None):
                 return eval_defparameter(form, env)
             elif operator.name == 'DEFSTRUCT':
                 return eval_defstruct(form, env)
+            elif operator.name == 'LOOP':
+                return eval_loop(form, env)
+            elif operator.name == 'POP':
+                return eval_pop(form, env)
             elif operator.name == 'DEFUN':
                 return eval_defun(form, env)
             elif operator.name == 'LAMBDA':

@@ -6,7 +6,7 @@ control flow, loops/conditionals, or condition handling categories.
 
 import fclpy.lisptype as lisptype
 import fclpy.state as state
-from .core import car, cdr, _consp_internal
+from .core import car, cdr, _consp_internal, cons
 from . import registry as _registry
 
 
@@ -142,26 +142,62 @@ def eval_defmacro(form, env):
             docstring = first_form
             actual_body = cdr(body)
 
-    # Build parameter symbols list
-    params = []
-    cur = lambda_list
-    while _consp_internal(cur):
-        p = car(cur)
-        if isinstance(p, lisptype.LispSymbol):
-            params.append(p)
-        cur = cdr(cur)
+    # Parse lambda list to handle &optional, &rest, &key, etc.
+    from .evaluation_core import parse_lambda_list
+    parsed_params = parse_lambda_list(lambda_list)
+    
+    required_params = parsed_params.get('required', [])
+    optional_params = parsed_params.get('optional', [])
+    rest_param = parsed_params.get('rest', None)
+    keyword_params = parsed_params.get('keyword', [])
 
     # Create the macro callable
     def macro_callable(*call_args):
         # Create a new environment extending the definition environment
         macro_env = lisptype.Environment(parent=env)
         
-        # Bind parameter symbols to raw argument forms
-        for i, param in enumerate(params):
-            if i < len(call_args):
-                macro_env.add_variable(param, call_args[i])
+        arg_idx = 0
+        
+        # Bind required parameters
+        for param in required_params:
+            if arg_idx < len(call_args):
+                macro_env.add_variable(param, call_args[arg_idx])
+                arg_idx += 1
             else:
                 macro_env.add_variable(param, lisptype.NIL)
+        
+        # Bind optional parameters
+        for param in optional_params:
+            if isinstance(param, lisptype.LispSymbol):
+                # Simple optional (name)
+                if arg_idx < len(call_args):
+                    macro_env.add_variable(param, call_args[arg_idx])
+                    arg_idx += 1
+                else:
+                    macro_env.add_variable(param, lisptype.NIL)
+            elif _consp_internal(param):
+                # Optional with default (name default)
+                opt_name = car(param)
+                opt_default = car(cdr(param)) if _consp_internal(cdr(param)) else lisptype.NIL
+                if arg_idx < len(call_args):
+                    macro_env.add_variable(opt_name, call_args[arg_idx])
+                    arg_idx += 1
+                else:
+                    macro_env.add_variable(opt_name, eval(opt_default, macro_env))
+        
+        # Bind &rest parameter to remaining arguments as a list
+        if rest_param:
+            remaining_args = call_args[arg_idx:]
+            if remaining_args:
+                # Convert to Lisp list
+                rest_list = lisptype.NIL
+                for arg in reversed(remaining_args):
+                    rest_list = cons(arg, rest_list)
+                macro_env.add_variable(rest_param, rest_list)
+            else:
+                macro_env.add_variable(rest_param, lisptype.NIL)
+        
+        # TODO: Handle &key parameters properly
 
         # If no body, return NIL
         if not _consp_internal(actual_body):
@@ -763,6 +799,53 @@ def eval_defstruct(form, env):
     return struct_name
 
 
+def eval_pop(form, env):
+    """Evaluate POP special form (macro).
+    
+    (POP place) - Remove and return the first element from the list stored in place.
+    
+    POP is a macro that:
+    1. Gets the value of place (which must be a list)
+    2. Returns CAR of that list  
+    3. Sets place to CDR of that list
+    
+    For simple variable places, this is:
+        (let ((result (car place)))
+          (setq place (cdr place))
+          result)
+    """
+    from .evaluation_core import eval
+    from .core import car, cdr
+    
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("POP requires a place argument")
+    
+    place = car(args)
+    
+    # For simple variable places
+    if isinstance(place, lisptype.LispSymbol):
+        # Get the current value
+        current_value = env.find_variable(place)
+        if current_value is None:
+            return lisptype.NIL
+        
+        # Get CAR (first element)
+        if _consp_internal(current_value):
+            result = car(current_value)
+            # Set the variable to CDR
+            rest = cdr(current_value)
+            env.set_variable(place, rest)
+            return result
+        else:
+            # Not a cons, nothing to pop
+            return lisptype.NIL
+    
+    # For other place forms (like (car x), (gethash key table)), 
+    # we would need more complex handling
+    raise lisptype.LispNotImplementedError(f"POP not implemented for place: {place}")
+
+
 __all__ = [
     'eval_if',
     'eval_setq',
@@ -776,6 +859,7 @@ __all__ = [
     'eval_defvar',
     'eval_defparameter',
     'eval_defstruct',
+    'eval_pop',
     '_store_optimization_declaration',
     '_store_special_declaration',
 ]

@@ -134,7 +134,7 @@ from .evaluation_stubs import (
     do_fn,
     dolist,
     dotimes,
-    loop_fn,
+    # loop_fn,  # LOOP is now a special form
     load_fn,
 )
 
@@ -282,7 +282,7 @@ __all__ = [
     'do_fn',
     'dolist',
     'dotimes',
-    'loop_fn',
+    # 'loop_fn',  # LOOP is now a special form
     'load_fn',
     'function_fn',
     'quote_fn',

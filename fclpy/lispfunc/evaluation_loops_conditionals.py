@@ -324,6 +324,321 @@ def eval_prog2(form, env):
     return result
 
 
+def eval_loop(form, env):
+    """Evaluate LOOP special form with lexical environment support.
+    
+    Extended LOOP implementation supporting ANSI CL loop macro clauses.
+    This is implemented as a special form to access the lexical environment.
+
+    Supports forms such as:
+      (LOOP FOR i FROM 0 TO 9 BY 1 DO (PRINT i))
+      (LOOP WHILE <test> DO <forms>)
+      (LOOP UNTIL <test> DO <forms>)
+      (LOOP REPEAT <n> DO <forms>)
+      (LOOP WHILE <test> UNLESS <cond> DO <action> APPEND <form>)
+      (LOOP FOR x IN list COLLECT x)
+    """
+    from .evaluation_core import eval
+    
+    # Get loop clauses from form
+    args = cdr(form)
+    
+    # Normalize args into a Python list of forms
+    forms = []
+    current = args
+    while _consp_internal(current):
+        forms.append(car(current))
+        current = cdr(current)
+    
+    def sym_name(x):
+        """Get uppercase symbol name or None."""
+        return x.name.upper() if isinstance(x, lisptype.LispSymbol) else None
+
+    # Parse loop clauses into structured form
+    i = 0
+    
+    # Loop state
+    iteration_type = None  # 'for-range', 'for-in', 'for-on', 'while', 'until', 'repeat', None
+    iteration_var = None
+    iteration_test = None  # for WHILE/UNTIL
+    iteration_start = 0
+    iteration_end = None
+    iteration_step = 1
+    iteration_list = None  # for FOR ... IN/ON
+    repeat_count = None
+    
+    conditionals = []  # list of ('when'/'unless', test_form)
+    body_forms = []
+    accumulation = None  # ('collect'/'append'/'sum'/'count', form)
+    finally_forms = []
+    
+    # Parse clauses
+    while i < len(forms):
+        token = forms[i]
+        name = sym_name(token)
+        
+        if name == 'FOR':
+            iteration_var = forms[i+1]
+            if not isinstance(iteration_var, lisptype.LispSymbol):
+                raise lisptype.LispNotImplementedError('LOOP FOR requires a symbol')
+            j = i + 2
+            # Look for FROM/TO/BY/IN/ON/ACROSS
+            while j < len(forms):
+                f = forms[j]
+                fname = sym_name(f)
+                if fname == 'FROM':
+                    iteration_start = forms[j+1]
+                    j += 2
+                elif fname == 'TO':
+                    iteration_end = forms[j+1]
+                    iteration_type = 'for-range'
+                    j += 2
+                elif fname == 'BELOW':
+                    iteration_end = forms[j+1]
+                    iteration_type = 'for-below'
+                    j += 2
+                elif fname == 'BY':
+                    iteration_step = forms[j+1]
+                    j += 2
+                elif fname == 'IN':
+                    iteration_list = forms[j+1]
+                    iteration_type = 'for-in'
+                    j += 2
+                elif fname == 'ON':
+                    iteration_list = forms[j+1]
+                    iteration_type = 'for-on'
+                    j += 2
+                elif fname in ('DO', 'DOING', 'COLLECT', 'COLLECTING', 'APPEND', 'APPENDING',
+                               'NCONC', 'NCONCING', 'SUM', 'SUMMING', 'COUNT', 'COUNTING',
+                               'WHEN', 'UNLESS', 'IF', 'RETURN', 'FINALLY'):
+                    break
+                else:
+                    break
+            i = j
+            
+        elif name == 'WHILE':
+            iteration_type = 'while'
+            iteration_test = forms[i+1]
+            i += 2
+            
+        elif name == 'UNTIL':
+            iteration_type = 'until'
+            iteration_test = forms[i+1]
+            i += 2
+            
+        elif name == 'REPEAT':
+            iteration_type = 'repeat'
+            repeat_count = forms[i+1]
+            i += 2
+            
+        elif name in ('WHEN', 'IF'):
+            conditionals.append(('when', forms[i+1]))
+            i += 2
+            
+        elif name == 'UNLESS':
+            conditionals.append(('unless', forms[i+1]))
+            i += 2
+            
+        elif name in ('DO', 'DOING'):
+            # Collect body forms until next clause keyword
+            i += 1
+            while i < len(forms):
+                f = forms[i]
+                fname = sym_name(f)
+                if fname in ('FOR', 'WHILE', 'UNTIL', 'REPEAT', 'DO', 'DOING',
+                             'COLLECT', 'COLLECTING', 'APPEND', 'APPENDING',
+                             'NCONC', 'NCONCING', 'SUM', 'SUMMING', 'COUNT', 'COUNTING',
+                             'WHEN', 'UNLESS', 'IF', 'RETURN', 'FINALLY'):
+                    break
+                body_forms.append(f)
+                i += 1
+                
+        elif name in ('COLLECT', 'COLLECTING'):
+            accumulation = ('collect', forms[i+1])
+            i += 2
+            
+        elif name in ('APPEND', 'APPENDING'):
+            accumulation = ('append', forms[i+1])
+            i += 2
+            
+        elif name in ('NCONC', 'NCONCING'):
+            accumulation = ('nconc', forms[i+1])
+            i += 2
+            
+        elif name in ('SUM', 'SUMMING'):
+            accumulation = ('sum', forms[i+1])
+            i += 2
+            
+        elif name in ('COUNT', 'COUNTING'):
+            accumulation = ('count', forms[i+1])
+            i += 2
+            
+        elif name == 'RETURN':
+            # Immediate return from loop
+            return eval(forms[i+1], env)
+            
+        elif name == 'FINALLY':
+            i += 1
+            while i < len(forms):
+                finally_forms.append(forms[i])
+                i += 1
+                
+        else:
+            # Simple loop - just evaluate body repeatedly until explicit return
+            # Or if no iteration, evaluate once
+            if iteration_type is None:
+                # Simple infinite loop or body evaluation
+                body_forms.append(token)
+            i += 1
+    
+    # Execute the loop
+    result = None
+    accumulated = []
+    sum_result = 0
+    count_result = 0
+    
+    def should_execute_body(loop_env):
+        """Check conditionals."""
+        for cond_type, cond_form in conditionals:
+            cond_result = eval(cond_form, loop_env)
+            if cond_type == 'when' and not lisptype.is_truthy(cond_result):
+                return False
+            if cond_type == 'unless' and lisptype.is_truthy(cond_result):
+                return False
+        return True
+    
+    def execute_iteration_body(loop_env):
+        """Execute one iteration of the loop body."""
+        nonlocal result, accumulated, sum_result, count_result
+        
+        if not should_execute_body(loop_env):
+            return
+        
+        # Execute body forms
+        for f in body_forms:
+            result = eval(f, loop_env)
+        
+        # Handle accumulation
+        if accumulation:
+            acc_type, acc_form = accumulation
+            acc_value = eval(acc_form, loop_env)
+            if acc_type == 'collect':
+                accumulated.append(acc_value)
+            elif acc_type == 'append':
+                # Append list to result
+                if _consp_internal(acc_value):
+                    cur = acc_value
+                    while _consp_internal(cur):
+                        accumulated.append(car(cur))
+                        cur = cdr(cur)
+                elif acc_value is not lisptype.NIL and acc_value is not None:
+                    accumulated.append(acc_value)
+            elif acc_type == 'nconc':
+                # Similar to append but destructive (same behavior for us)
+                if _consp_internal(acc_value):
+                    cur = acc_value
+                    while _consp_internal(cur):
+                        accumulated.append(car(cur))
+                        cur = cdr(cur)
+            elif acc_type == 'sum':
+                sum_result += acc_value
+            elif acc_type == 'count':
+                if lisptype.is_truthy(acc_value):
+                    count_result += 1
+    
+    # Main loop execution
+    if iteration_type == 'while':
+        while lisptype.is_truthy(eval(iteration_test, env)):
+            execute_iteration_body(env)
+            
+    elif iteration_type == 'until':
+        while True:
+            execute_iteration_body(env)
+            if lisptype.is_truthy(eval(iteration_test, env)):
+                break
+                
+    elif iteration_type == 'repeat':
+        count = eval(repeat_count, env)
+        for _ in range(count):
+            execute_iteration_body(env)
+            
+    elif iteration_type == 'for-range':
+        start = eval(iteration_start, env) if not isinstance(iteration_start, int) else iteration_start
+        end = eval(iteration_end, env)
+        step = eval(iteration_step, env) if not isinstance(iteration_step, int) else iteration_step
+        if step == 0:
+            raise lisptype.LispNotImplementedError('LOOP BY step cannot be 0')
+        
+        loop_env = lisptype.Environment(env)
+        cur = start
+        compare = (lambda a, b: a <= b) if step > 0 else (lambda a, b: a >= b)
+        while compare(cur, end):
+            loop_env.set_variable(iteration_var, cur)
+            execute_iteration_body(loop_env)
+            cur = cur + step
+            
+    elif iteration_type == 'for-below':
+        start = eval(iteration_start, env) if not isinstance(iteration_start, int) else iteration_start
+        end = eval(iteration_end, env)
+        step = eval(iteration_step, env) if not isinstance(iteration_step, int) else iteration_step
+        if step == 0:
+            raise lisptype.LispNotImplementedError('LOOP BY step cannot be 0')
+        
+        loop_env = lisptype.Environment(env)
+        cur = start
+        compare = (lambda a, b: a < b) if step > 0 else (lambda a, b: a > b)
+        while compare(cur, end):
+            loop_env.set_variable(iteration_var, cur)
+            execute_iteration_body(loop_env)
+            cur = cur + step
+            
+    elif iteration_type == 'for-in':
+        lst = eval(iteration_list, env)
+        loop_env = lisptype.Environment(env)
+        cur = lst
+        while _consp_internal(cur):
+            loop_env.set_variable(iteration_var, car(cur))
+            execute_iteration_body(loop_env)
+            cur = cdr(cur)
+            
+    elif iteration_type == 'for-on':
+        lst = eval(iteration_list, env)
+        loop_env = lisptype.Environment(env)
+        cur = lst
+        while _consp_internal(cur):
+            loop_env.set_variable(iteration_var, cur)
+            execute_iteration_body(loop_env)
+            cur = cdr(cur)
+            
+    elif iteration_type is None:
+        # No iteration - simple loop body, execute once
+        # Or infinite loop if there are body forms
+        if body_forms or accumulation:
+            execute_iteration_body(env)
+    
+    # Execute FINALLY forms
+    for f in finally_forms:
+        result = eval(f, env)
+    
+    # Return accumulated result or last result
+    if accumulation:
+        acc_type = accumulation[0]
+        if acc_type in ('collect', 'append', 'nconc'):
+            # Convert accumulated list to Lisp list
+            if not accumulated:
+                return lisptype.NIL
+            result_list = lisptype.NIL
+            for item in reversed(accumulated):
+                result_list = cons(item, result_list)
+            return result_list
+        elif acc_type == 'sum':
+            return sum_result
+        elif acc_type == 'count':
+            return count_result
+    
+    return result
+
+
 __all__ = [
     'eval_when',
     'eval_unless',
@@ -336,4 +651,5 @@ __all__ = [
     'eval_quasiquote',
     'eval_prog1',
     'eval_prog2',
+    'eval_loop',
 ]
