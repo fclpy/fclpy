@@ -9,7 +9,7 @@ from . import lisptype_basic
 from .lisptype_basic import (
     LispSymbol, lispT, NIL, T, LispError, LispEnvironmentError,
     lispCons, Binding, FunctionBinding, SpecialForm,
-    is_truthy, lisp_bool
+    is_truthy, lisp_bool, lispKeyword
 )
 
 
@@ -209,6 +209,7 @@ class Package(lispT):
         """Intern a symbol in this package.
 
         Returns an existing symbol with the given name, or creates a new one.
+        Symbol names are uppercased per Common Lisp standard.
         
         Args:
             name: Symbol name (string)
@@ -217,6 +218,9 @@ class Package(lispT):
         Returns:
             LispSymbol object
         """
+        # Uppercase the name per Common Lisp standard
+        name = name.upper()
+        
         if name not in self.symbols:
             symbol = LispSymbol(name, package=self)
             self.symbols[name] = symbol
@@ -232,6 +236,7 @@ class Package(lispT):
         """Alias for intern() - interned a symbol in this package.
 
         Returns an existing symbol with the given name, or creates a new one.
+        Symbol names are uppercased per Common Lisp standard.
         
         Args:
             name: Symbol name (string)
@@ -245,15 +250,23 @@ class Package(lispT):
     def find_symbol(self, name):
         """Find a symbol in this package.
         
-        Returns the symbol if found, None otherwise.
+        Returns a tuple of (symbol, status) where status is one of:
+        - ':INTERNAL' if symbol exists but not exported
+        - ':EXTERNAL' if symbol exists and is exported
+        - (None, None) if symbol not found
         
         Args:
             name: Symbol name to search for
             
         Returns:
-            LispSymbol or None
+            Tuple of (LispSymbol or None, status string or None)
         """
-        return self.symbols.get(name, None)
+        symbol = self.symbols.get(name, None)
+        if symbol is None:
+            return (None, None)
+        
+        status = ':EXTERNAL' if name in self.external_symbols else ':INTERNAL'
+        return (symbol, status)
     
     def export_symbol(self, name):
         """Export a symbol from this package.
@@ -360,12 +373,33 @@ def intern_keyword(name):
     """Intern a keyword (interned in KEYWORD package and auto-exported).
     
     Args:
-        name: Keyword name (without leading colon)
+        name: Keyword name (without leading colon) or lispKeyword object
         
     Returns:
-        LispSymbol in keyword package
+        lispKeyword in keyword package
     """
-    return KEYWORD_PACKAGE.intern(name, external=True)
+    # If it's already a lispKeyword, return it
+    if isinstance(name, lispKeyword):
+        return name
+    
+    # Convert to string and strip leading colon if present
+    name = str(name)
+    if name.startswith(':'):
+        name = name[1:]
+    
+    # Normalize to uppercase (Common Lisp keyword convention)
+    name = name.upper()
+    
+    # Check if already interned
+    if name in KEYWORD_PACKAGE.symbols:
+        return KEYWORD_PACKAGE.symbols[name]
+    
+    # Create new lispKeyword
+    keyword = lispKeyword(name, package=KEYWORD_PACKAGE)
+    KEYWORD_PACKAGE.symbols[name] = keyword
+    KEYWORD_PACKAGE.external_symbols.add(name)
+    
+    return keyword
 
 
 class Condition(lispT):
@@ -381,19 +415,60 @@ class Condition(lispT):
         
         Args:
             message: Condition message
-            **kwargs: Additional condition attributes
+            **kwargs: Additional condition attributes (stored as slots)
         """
-        self.message = message
-        self.attributes = kwargs
+        self._slots = {'message': message}
+        self._slots.update(kwargs)
         self.format_args = []
+    
+    @property
+    def message(self):
+        """Get the message slot."""
+        return self._slots.get('message', '')
+    
+    @message.setter
+    def message(self, value):
+        """Set the message slot."""
+        self._slots['message'] = value
+    
+    def get_slot(self, name):
+        """Get the value of a named slot.
+        
+        Args:
+            name: Slot name (string, with or without hyphens)
+            
+        Returns:
+            Slot value or None if not found
+        """
+        # Try exact match first
+        if name in self._slots:
+            return self._slots[name]
+        # Try with hyphen-to-underscore conversion
+        underscore_name = name.replace('-', '_')
+        if underscore_name in self._slots:
+            return self._slots[underscore_name]
+        # Try with underscore-to-hyphen conversion
+        hyphen_name = name.replace('_', '-')
+        if hyphen_name in self._slots:
+            return self._slots[hyphen_name]
+        return None
+    
+    def set_slot(self, name, value):
+        """Set the value of a named slot.
+        
+        Args:
+            name: Slot name (string)
+            value: Value to set
+        """
+        self._slots[name] = value
     
     def __str__(self):
         """Return string representation of the condition."""
         return self.message
     
     def __repr__(self):
-        """Return detailed representation."""
-        return f"<{self.__class__.__name__}: {self.message}>"
+        """Return detailed representation with uppercase class name."""
+        return f"<{self.__class__.__name__.upper()}: {self.message}>"
 
 
 class SimpleCondition(Condition):
@@ -413,12 +488,12 @@ class Error(Condition):
 
 class TypeError(Error):
     """Condition raised when an argument has an unexpected type."""
-    def __init__(self, expected_type=None, actual_value=None, message=""):
-        if not message:
-            message = f"Type error: expected {expected_type}, got {actual_value}"
-        super().__init__(message)
-        self.expected_type = expected_type
-        self.actual_value = actual_value
+    def __init__(self, datum=None, expected_type=None, message="", **kwargs):
+        if not message and datum is not None:
+            message = f"Type error: expected {expected_type}, got {datum}"
+        super().__init__(message, **kwargs)
+        self._slots['datum'] = datum
+        self._slots['expected-type'] = expected_type
 
 
 class ProgramError(Error):
@@ -443,21 +518,28 @@ class StreamError(Error):
 
 class EndOfFile(StreamError):
     """Condition raised when EOF is reached unexpectedly."""
-    def __init__(self, stream=None, message="End of file"):
-        super().__init__(message)
-        self.stream = stream
+    def __init__(self, stream=None, message="End of file", **kwargs):
+        super().__init__(message, **kwargs)
+        if stream is not None:
+            self._slots['stream'] = stream
 
 
 class ArithmeticError(Error):
     """Condition for arithmetic errors."""
-    pass
+    def __init__(self, operation=None, operands=None, message="", **kwargs):
+        if not message and operation is not None:
+            message = f"Arithmetic error in operation {operation}"
+        super().__init__(message, **kwargs)
+        if operation is not None:
+            self._slots['operation'] = operation
+        if operands is not None:
+            self._slots['operands'] = operands
 
 
 class DivisionByZero(ArithmeticError):
     """Condition raised for division by zero."""
-    def __init__(self, numerator, message="Division by zero"):
-        super().__init__(message)
-        self.numerator = numerator
+    def __init__(self, operation=None, operands=None, message="Division by zero", **kwargs):
+        super().__init__(operation=operation, operands=operands, message=message, **kwargs)
 
 
 class FloatingPointInvalidOperation(ArithmeticError):
@@ -584,12 +666,22 @@ class RestartException(Exception):
         """Initialize a RestartException.
         
         Args:
-            restart: Restart object being invoked
+            restart: Restart object or restart name (string/symbol) being invoked
             values: Optional values to return from the restart
         """
         self.restart = restart
         self.values = values or []
-        super().__init__(f"Restart: {restart.name.name}")
+        # Handle both Restart objects and string names
+        if isinstance(restart, str):
+            self.restart_name = restart
+            super().__init__(f"Restart: {restart}")
+        elif isinstance(restart, Restart):
+            self.restart_name = restart.name.name if hasattr(restart.name, 'name') else str(restart.name)
+            super().__init__(f"Restart: {self.restart_name}")
+        else:
+            # Assume it has a name attribute
+            self.restart_name = str(restart)
+            super().__init__(f"Restart: {self.restart_name}")
 
 
 __all__ = [

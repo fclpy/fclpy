@@ -53,6 +53,8 @@ __all__ = [
     'find_all_symbols',
     'export',
     'gentemp',
+    'apropos',
+    'apropos_list',
     
     # Functions and macros (utilities_functions)
     'fboundp',

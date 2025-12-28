@@ -297,6 +297,55 @@ def most_negative_long_float():
     return -sys.float_info.max
 
 
+# Normalized floating-point limit constants
+@_registry.cl_function('LEAST-POSITIVE-NORMALIZED-DOUBLE-FLOAT')
+def least_positive_normalized_double_float():
+    """LEAST-POSITIVE-NORMALIZED-DOUBLE-FLOAT."""
+    return sys.float_info.min
+
+
+@_registry.cl_function('LEAST-NEGATIVE-NORMALIZED-DOUBLE-FLOAT')
+def least_negative_normalized_double_float():
+    """LEAST-NEGATIVE-NORMALIZED-DOUBLE-FLOAT."""
+    return -sys.float_info.min
+
+
+@_registry.cl_function('LEAST-POSITIVE-NORMALIZED-LONG-FLOAT')
+def least_positive_normalized_long_float():
+    """LEAST-POSITIVE-NORMALIZED-LONG-FLOAT."""
+    return sys.float_info.min
+
+
+@_registry.cl_function('LEAST-NEGATIVE-NORMALIZED-LONG-FLOAT')
+def least_negative_normalized_long_float():
+    """LEAST-NEGATIVE-NORMALIZED-LONG-FLOAT."""
+    return -sys.float_info.min
+
+
+@_registry.cl_function('LEAST-POSITIVE-NORMALIZED-SHORT-FLOAT')
+def least_positive_normalized_short_float():
+    """LEAST-POSITIVE-NORMALIZED-SHORT-FLOAT."""
+    return sys.float_info.min
+
+
+@_registry.cl_function('LEAST-NEGATIVE-NORMALIZED-SHORT-FLOAT')
+def least_negative_normalized_short_float():
+    """LEAST-NEGATIVE-NORMALIZED-SHORT-FLOAT."""
+    return -sys.float_info.min
+
+
+@_registry.cl_function('LEAST-POSITIVE-NORMALIZED-SINGLE-FLOAT')
+def least_positive_normalized_single_float():
+    """LEAST-POSITIVE-NORMALIZED-SINGLE-FLOAT."""
+    return sys.float_info.min
+
+
+@_registry.cl_function('LEAST-NEGATIVE-NORMALIZED-SINGLE-FLOAT')
+def least_negative_normalized_single_float():
+    """LEAST-NEGATIVE-NORMALIZED-SINGLE-FLOAT."""
+    return -sys.float_info.min
+
+
 # Floating-point epsilon constants
 @_registry.cl_function('SHORT-FLOAT-EPSILON')
 def short_float_epsilon():
@@ -361,6 +410,10 @@ __all__ = [
     'most_positive_single_float', 'most_negative_single_float',
     'least_positive_long_float', 'least_negative_long_float',
     'most_positive_long_float', 'most_negative_long_float',
+    'least_positive_normalized_double_float', 'least_negative_normalized_double_float',
+    'least_positive_normalized_long_float', 'least_negative_normalized_long_float',
+    'least_positive_normalized_short_float', 'least_negative_normalized_short_float',
+    'least_positive_normalized_single_float', 'least_negative_normalized_single_float',
     'short_float_epsilon', 'single_float_epsilon',
     'double_float_epsilon', 'long_float_epsilon',
     'short_float_negative_epsilon', 'single_float_negative_epsilon',

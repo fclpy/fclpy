@@ -139,6 +139,18 @@ def gentemp(prefix='T', package=None):
     return intern(f"{prefix}{int(time.time()*1000)}", package)
 
 
+@_registry.cl_function('APROPOS')
+def apropos(string, package=None):
+    """Find symbols matching string."""
+    raise lisptype.LispNotImplementedError("APROPOS")
+
+
+@_registry.cl_function('APROPOS-LIST')
+def apropos_list(string, package=None):
+    """List symbols matching string."""
+    raise lisptype.LispNotImplementedError("APROPOS-LIST")
+
+
 __all__ = [
     'symbol_name',
     'symbol_package',
@@ -154,4 +166,6 @@ __all__ = [
     'find_all_symbols',
     'export',
     'gentemp',
+    'apropos',
+    'apropos_list',
 ]
