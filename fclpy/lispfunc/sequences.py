@@ -6,6 +6,99 @@ from . import registry as _registry
 import fclpy.lisptype as lisptype
 
 
+# ===== SEQUENCE PROTOCOL =====
+# Unified interface for sequences: lists, vectors, strings, and extensible for custom types
+
+
+class SequenceIterator:
+    """Universal sequence iterator supporting lists, vectors, strings, and extensible types."""
+    
+    def __init__(self, sequence, start=0, end=None, key=None, test=None):
+        """Initialize iterator over a sequence.
+        
+        Args:
+            sequence: The sequence to iterate over (list, str, vector, or custom)
+            start: Starting index (inclusive)
+            end: Ending index (exclusive), None means end of sequence
+            key: Optional function to extract/transform values for testing
+            test: Optional comparison function (default is equal)
+        """
+        self.sequence = sequence
+        self.start = start
+        self.end = end if end is not None else len(sequence)
+        self.key = key
+        self.test = test or (lambda x, y: x == y)
+        self.index = start
+    
+    def __iter__(self):
+        """Return iterator."""
+        return self
+    
+    def __next__(self):
+        """Get next element."""
+        if self.index >= self.end or self.index >= len(self.sequence):
+            raise StopIteration
+        value = self.sequence[self.index]
+        self.index += 1
+        return value
+    
+    def current_index(self):
+        """Get current index in the sequence."""
+        return self.index - 1
+    
+    def get_value(self, item):
+        """Apply key function if provided, otherwise return item unchanged."""
+        return self.key(item) if self.key else item
+    
+    def matches(self, item, target):
+        """Test if item matches target using test function."""
+        return self.test(self.get_value(item), target)
+    
+    def reset(self, start=None):
+        """Reset iterator to start position."""
+        self.index = start if start is not None else self.start
+
+
+def iterate(sequence, start=0, end=None, key=None, test=None):
+    """Create a universal sequence iterator.
+    
+    Args:
+        sequence: List, string, vector, or other sequence type
+        start: Starting index (default 0)
+        end: Ending index (default is length of sequence)
+        key: Optional function to extract/transform values
+        test: Optional comparison function (default is =)
+    
+    Returns:
+        SequenceIterator instance for the sequence.
+    """
+    if not isinstance(sequence, (list, str, tuple)):
+        raise TypeError(f"iterate: unsupported sequence type {type(sequence).__name__}")
+    
+    return SequenceIterator(sequence, start, end, key, test)
+
+
+def with_sequence_protocol(sequence, start=0, end=None, key=None, test=None):
+    """Helper to wrap sequence operations with protocol support.
+    
+    This is a convenience function that ensures consistent handling of:
+    - start/end boundaries
+    - key transformation functions
+    - test comparison functions
+    
+    Args:
+        sequence: The sequence to process
+        start: Starting index
+        end: Ending index
+        key: Optional transformation function
+        test: Optional comparison function
+    
+    Returns:
+        SequenceIterator configured with all parameters.
+    """
+    return iterate(sequence, start, end, key, test)
+
+
 def endp(x):
     """Test if object is end of list (nil or empty)."""
     return lisptype.lisp_bool(x is None or x == lisptype.NIL)
