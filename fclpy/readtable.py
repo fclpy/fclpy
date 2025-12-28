@@ -304,8 +304,201 @@ class Readtable:
             return lisptype.lispCons(sym, lisptype.lispCons(expr, lisptype.NIL))
     
     def _sharp_reader(self, char, stream):
-        """Handle dispatch macro characters starting with #."""
-        raise RuntimeError("_sharp_reader should not be called directly")
+        """Handle dispatch macro characters starting with #.
+        
+        This reads the next character and dispatches to the appropriate
+        sub-character handler, or handles built-in # constructs.
+        """
+        sub_char = stream.read_char()
+        if not sub_char:
+            raise ValueError("EOF after #")
+        
+        sub_char_upper = sub_char.upper()
+        
+        # Check for registered dispatch macro character
+        dispatch_table = self._dispatch_macro_characters.get('#', {})
+        if sub_char_upper in dispatch_table:
+            return dispatch_table[sub_char_upper](sub_char, stream)
+        
+        # Handle built-in # constructs
+        if sub_char == '|':
+            # Block comment #| ... |#
+            self._skip_block_comment(stream)
+            # Block comments don't return a value, continue reading
+            return None
+        elif sub_char == "'":
+            # Function shorthand: #'x -> (FUNCTION x)
+            expr = self._read_item(stream)
+            from . import lisptype
+            func_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol("FUNCTION")
+            return lisptype.lispCons(func_sym, lisptype.lispCons(expr, lisptype.NIL))
+        elif sub_char == '\\':
+            # Character literal: #\x
+            return self._read_character_literal(stream)
+        elif sub_char == '(':
+            # Vector literal: #(...)
+            return self._read_vector(stream)
+        elif sub_char == '+':
+            # Feature expression #+feature form
+            return self._read_feature_plus(stream)
+        elif sub_char == '-':
+            # Feature expression #-feature form
+            return self._read_feature_minus(stream)
+        elif sub_char == '.':
+            # Read-time evaluation: #.(form)
+            expr = self._read_item(stream)
+            # In a full implementation, this would evaluate at read time
+            # For now, just return the form as-is
+            return expr
+        elif sub_char.upper() == 'P':
+            # Pathname literal: #P"path" or #p"path"
+            return self._read_pathname_literal(stream)
+        elif sub_char in '0123456789':
+            # Could be array rank, reader label, etc.
+            # For now, read the number and check what follows
+            num = sub_char
+            while True:
+                c = stream.read_char()
+                if c and c.isdigit():
+                    num += c
+                elif c == '=':
+                    # Reader label: #n=expr
+                    expr = self._read_item(stream)
+                    return expr
+                elif c == '#':
+                    # Reader reference: #n#
+                    return None  # Placeholder
+                elif c == 'A' or c == 'a':
+                    # Array: #nA(...)
+                    return self._read_item(stream)  # Return nested structure
+                else:
+                    if c:
+                        stream.unread_char(c)
+                    break
+            return None
+        else:
+            raise ValueError(f"Unknown # dispatch character: #{sub_char}")
+    
+    def _skip_block_comment(self, stream):
+        """Skip a block comment #| ... |# with nesting support."""
+        depth = 1
+        prev_char = None
+        
+        while depth > 0:
+            c = stream.read_char()
+            if not c:
+                raise ValueError("EOF in block comment")
+            
+            if prev_char == '|' and c == '#':
+                depth -= 1
+                prev_char = None
+            elif prev_char == '#' and c == '|':
+                depth += 1
+                prev_char = None
+            else:
+                prev_char = c
+    
+    def _read_character_literal(self, stream):
+        r"""Read a character literal like #\A or #\Space."""
+        from . import character
+        
+        c = stream.read_char()
+        if not c:
+            raise ValueError("EOF in character literal")
+        
+        # Check for named characters
+        if c.isalpha():
+            # Might be a named character like #\Space or #\Newline
+            name = c
+            while True:
+                next_c = stream.read_char()
+                if next_c and (next_c.isalnum() or next_c == '-'):
+                    name += next_c
+                else:
+                    if next_c:
+                        stream.unread_char(next_c)
+                    break
+            
+            # Check for named characters
+            name_upper = name.upper()
+            if len(name) == 1:
+                # Single character
+                return character.Character(name)
+            elif name_upper == 'SPACE':
+                return character.Character(' ')
+            elif name_upper == 'NEWLINE' or name_upper == 'LINEFEED':
+                return character.Character('\n')
+            elif name_upper == 'TAB':
+                return character.Character('\t')
+            elif name_upper == 'RETURN':
+                return character.Character('\r')
+            elif name_upper == 'PAGE':
+                return character.Character('\f')
+            elif name_upper == 'BACKSPACE':
+                return character.Character('\b')
+            elif name_upper == 'RUBOUT' or name_upper == 'DELETE':
+                return character.Character('\x7f')
+            elif name_upper == 'NULL' or name_upper == 'NUL':
+                return character.Character('\x00')
+            else:
+                # Unknown named char, use as-is if single
+                raise ValueError(f"Unknown character name: {name}")
+        else:
+            return character.Character(c)
+    
+    def _read_vector(self, stream):
+        """Read a vector literal #(...)."""
+        from fclpy.lispfunc.vectors import AdjustableVector
+        
+        result = []
+        while True:
+            # Skip whitespace
+            c = stream.read_char()
+            if not c:
+                raise ValueError("EOF in vector literal")
+            if c.isspace():
+                continue
+            if c == ')':
+                break
+            else:
+                stream.unread_char(c)
+                item = self._read_item(stream)
+                if item is not None:
+                    result.append(item)
+        
+        return AdjustableVector(result)
+    
+    def _read_feature_plus(self, stream):
+        """Read #+feature expr."""
+        feature = self._read_item(stream)
+        expr = self._read_item(stream)
+        # For now, always include the expression (assume feature is present)
+        # In a full implementation, would check *FEATURES*
+        return expr
+    
+    def _read_feature_minus(self, stream):
+        """Read #-feature expr."""
+        feature = self._read_item(stream)
+        expr = self._read_item(stream)
+        # For now, always skip the expression (assume feature is absent)
+        # In a full implementation, would check *FEATURES*
+        return None
+    
+    def _read_pathname_literal(self, stream):
+        """Read a pathname literal like #P\"path/to/file\"."""
+        from fclpy.lispfunc.pathnames import Pathname
+        
+        # Expect a string next
+        c = stream.read_char()
+        while c and c.isspace():
+            c = stream.read_char()
+        
+        if c != '"':
+            raise ValueError(f"Expected string after #P, got: {c}")
+        
+        # Read the string
+        path_str = self._read_string_literal(stream)
+        return Pathname(path_str)
 
 
 def get_current_readtable() -> Readtable:

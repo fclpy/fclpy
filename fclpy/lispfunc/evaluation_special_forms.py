@@ -440,6 +440,114 @@ def _store_special_declaration(env, spec):
         vars_to_declare = cdr(vars_to_declare)
 
 
+def eval_defvar(form, env):
+    """Evaluate DEFVAR special form.
+    
+    (DEFVAR name)           - declares special variable, binds to NIL if unbound
+    (DEFVAR name value)     - declares and initializes if unbound
+    (DEFVAR name value doc) - with documentation string
+    
+    DEFVAR only sets the initial value if the variable is not already bound.
+    This is in contrast to DEFPARAMETER which always sets the value.
+    
+    Returns the symbol name.
+    """
+    from .evaluation_core import eval as lisp_eval
+    
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("DEFVAR requires at least a variable name")
+    
+    name = car(args)
+    if not isinstance(name, lisptype.LispSymbol):
+        raise lisptype.LispNotImplementedError("DEFVAR: first argument must be a symbol")
+    
+    # Check if variable is already bound
+    current_value = env.find_variable(name)
+    is_already_bound = current_value is not None
+    
+    # Get the value form if present
+    rest_args = cdr(args)
+    has_value_form = _consp_internal(rest_args)
+    
+    if has_value_form and not is_already_bound:
+        # Has initial value and not already bound - evaluate and bind
+        value_form = car(rest_args)
+        value = lisp_eval(value_form, env)
+        env.add_variable(name, value)
+    elif not is_already_bound:
+        # No value form and not bound - bind to NIL
+        env.add_variable(name, lisptype.NIL)
+    # If already bound, do nothing to the value
+    
+    # Handle documentation string if present (third argument)
+    if has_value_form:
+        doc_args = cdr(rest_args)
+        if _consp_internal(doc_args):
+            docstring = car(doc_args)
+            if isinstance(docstring, str):
+                # Store documentation on symbol's property list
+                if not hasattr(name, 'plist'):
+                    name.plist = {}
+                name.plist['DOCUMENTATION'] = docstring
+                name.plist['VARIABLE-DOCUMENTATION'] = docstring
+    
+    # Mark as special variable
+    if not hasattr(env, '_special_variables'):
+        env._special_variables = {}
+    env._special_variables[name.name] = True
+    
+    return name
+
+
+def eval_defparameter(form, env):
+    """Evaluate DEFPARAMETER special form.
+    
+    (DEFPARAMETER name value)     - declares and always sets value
+    (DEFPARAMETER name value doc) - with documentation string
+    
+    Unlike DEFVAR, DEFPARAMETER always sets the value, even if already bound.
+    
+    Returns the symbol name.
+    """
+    from .evaluation_core import eval as lisp_eval
+    
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("DEFPARAMETER requires a variable name")
+    
+    name = car(args)
+    if not isinstance(name, lisptype.LispSymbol):
+        raise lisptype.LispNotImplementedError("DEFPARAMETER: first argument must be a symbol")
+    
+    # Get the value form (required for DEFPARAMETER)
+    rest_args = cdr(args)
+    if not _consp_internal(rest_args):
+        raise lisptype.LispNotImplementedError("DEFPARAMETER requires an initial value")
+    
+    value_form = car(rest_args)
+    value = lisp_eval(value_form, env)
+    env.add_variable(name, value)
+    
+    # Handle documentation string if present (third argument)
+    doc_args = cdr(rest_args)
+    if _consp_internal(doc_args):
+        docstring = car(doc_args)
+        if isinstance(docstring, str):
+            # Store documentation on symbol's property list
+            if not hasattr(name, 'plist'):
+                name.plist = {}
+            name.plist['DOCUMENTATION'] = docstring
+            name.plist['VARIABLE-DOCUMENTATION'] = docstring
+    
+    # Mark as special variable
+    if not hasattr(env, '_special_variables'):
+        env._special_variables = {}
+    env._special_variables[name.name] = True
+    
+    return name
+
+
 __all__ = [
     'eval_if',
     'eval_setq',
@@ -450,6 +558,8 @@ __all__ = [
     'eval_lambda',
     'eval_declare',
     'eval_declaim',
+    'eval_defvar',
+    'eval_defparameter',
     '_store_optimization_declaration',
     '_store_special_declaration',
 ]

@@ -154,7 +154,8 @@ def eval(form, env=None):
     # Import special form handlers lazily to avoid circular imports
     from .evaluation_special_forms import (
         eval_if, eval_setq, eval_defun, eval_defmacro, eval_macroexpand_1,
-        eval_macro_function, eval_lambda, eval_declare, eval_declaim
+        eval_macro_function, eval_lambda, eval_declare, eval_declaim,
+        eval_defvar, eval_defparameter
     )
     from .evaluation_control_flow import (
         eval_block, eval_return_from, eval_catch, eval_throw,
@@ -239,9 +240,10 @@ def eval(form, env=None):
                 return eval_prog1(form, env)
             elif operator.name == 'PROG2':
                 return eval_prog2(form, env)
-            # TODO: Implement DEFVAR / LET special forms directly; for now raise clearer error
             elif operator.name == 'DEFVAR':
-                raise lisptype.LispNotImplementedError('DEFVAR special form not yet implemented in evaluator')
+                return eval_defvar(form, env)
+            elif operator.name == 'DEFPARAMETER':
+                return eval_defparameter(form, env)
             elif operator.name == 'DEFUN':
                 return eval_defun(form, env)
             elif operator.name == 'LAMBDA':

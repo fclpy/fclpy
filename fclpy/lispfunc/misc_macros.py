@@ -91,9 +91,79 @@ def load_time_value(form, read_only_p=None):
 
 
 @_registry.cl_function('LOAD')
-def load(filespec, **kwargs):
-    """Load file (stub)."""
-    return filespec
+def load(filespec, verbose=None, print_p=None, if_does_not_exist=None, 
+         external_format=None):
+    """Load a Lisp file.
+    
+    Args:
+        filespec: Path to file (string or pathname)
+        verbose: If true, print loading messages
+        print_p: If true, print values of evaluated forms
+        if_does_not_exist: :ERROR (default), :LOAD (try anyway), or NIL (return NIL)
+        external_format: Character encoding (not fully supported)
+    
+    Returns:
+        T if successful, NIL otherwise
+    """
+    import os
+    import fclpy.state as state
+    from fclpy.lispfunc.pathnames import Pathname, truename
+    
+    # Get the environment
+    env = state.current_environment
+    if env is None:
+        raise lisptype.LispNotImplementedError("LOAD: No environment available")
+    
+    # Convert filespec to path string
+    if isinstance(filespec, Pathname):
+        path_str = filespec.original
+    else:
+        path_str = str(filespec)
+    
+    # Handle if-does-not-exist
+    if not os.path.exists(path_str):
+        if if_does_not_exist is lisptype.NIL or if_does_not_exist is None:
+            # Default behavior - raise error
+            raise FileNotFoundError(f"LOAD: File not found: {path_str}")
+        elif if_does_not_exist == lisptype.NIL:
+            return lisptype.NIL
+    
+    # Create pathname objects
+    pathname_obj = Pathname(path_str)
+    try:
+        truename_obj = truename(pathname_obj)
+    except FileNotFoundError:
+        truename_obj = pathname_obj  # Fall back to pathname if truename fails
+    
+    # Save old values of load variables
+    load_truename_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*LOAD-TRUENAME*')
+    load_pathname_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*LOAD-PATHNAME*')
+    
+    old_truename = env.find_variable(load_truename_sym)
+    old_pathname = env.find_variable(load_pathname_sym)
+    
+    try:
+        # Set load variables for this file
+        env.set_variable(load_truename_sym, truename_obj)
+        env.set_variable(load_pathname_sym, pathname_obj)
+        
+        # Actually load the file using runtime
+        import fclpy.runtime as runtime
+        is_verbose = verbose is True or verbose is lisptype.T
+        result = runtime.load_and_evaluate_file(path_str, env, verbose=is_verbose)
+        
+        return result
+    finally:
+        # Restore old values
+        if old_truename is not None:
+            env.set_variable(load_truename_sym, old_truename)
+        else:
+            env.set_variable(load_truename_sym, lisptype.NIL)
+        
+        if old_pathname is not None:
+            env.set_variable(load_pathname_sym, old_pathname)
+        else:
+            env.set_variable(load_pathname_sym, lisptype.NIL)
 
 
 @_registry.cl_function('LOAD-LOGICAL-PATHNAME-TRANSLATIONS')

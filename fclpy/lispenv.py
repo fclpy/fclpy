@@ -61,5 +61,40 @@ def setup_standard_environment():
     except Exception:
         # Defensive: if lisptype is not fully available yet, ignore
         pass
+    
+    # Initialize special variables for file loading (ANSI CL requirements)
+    try:
+        import os
+        # *LOAD-TRUENAME* - absolute truename of file being loaded (NIL if not loading)
+        load_truename_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*LOAD-TRUENAME*')
+        if state.current_environment.find_variable(load_truename_sym) is None:
+            state.current_environment.add_variable(load_truename_sym, fclpy.lisptype.NIL)
+        
+        # *LOAD-PATHNAME* - pathname of file being loaded (NIL if not loading)
+        load_pathname_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*LOAD-PATHNAME*')
+        if state.current_environment.find_variable(load_pathname_sym) is None:
+            state.current_environment.add_variable(load_pathname_sym, fclpy.lisptype.NIL)
+        
+        # *COMPILE-FILE-TRUENAME* - pathname of file being compiled (NIL if not compiling)
+        compile_file_truename_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*COMPILE-FILE-TRUENAME*')
+        if state.current_environment.find_variable(compile_file_truename_sym) is None:
+            state.current_environment.add_variable(compile_file_truename_sym, fclpy.lisptype.NIL)
+        
+        # *COMPILE-FILE-PATHNAME* - pathname of file being compiled (NIL if not compiling)
+        compile_file_pathname_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*COMPILE-FILE-PATHNAME*')
+        if state.current_environment.find_variable(compile_file_pathname_sym) is None:
+            state.current_environment.add_variable(compile_file_pathname_sym, fclpy.lisptype.NIL)
+        
+        # *DEFAULT-PATHNAME-DEFAULTS* - default pathname for pathname functions
+        # Initialize to current directory as a Pathname object
+        from fclpy.lispfunc.pathnames import Pathname
+        default_pathname_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*DEFAULT-PATHNAME-DEFAULTS*')
+        if state.current_environment.find_variable(default_pathname_sym) is None:
+            cwd_pathname = Pathname(os.getcwd())
+            state.current_environment.add_variable(default_pathname_sym, cwd_pathname)
+    except Exception:
+        # Defensive: if initialization fails, continue
+        pass
+    
     state.functions_loaded = True
     return state.current_environment
