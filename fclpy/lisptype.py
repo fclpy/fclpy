@@ -842,5 +842,47 @@ def resolve_environment(env=None):
         )
     return state.current_environment
 
-            
 
+class Restart:
+    """Represents a restart that can be invoked to recover from an error.
+    
+    A restart is a named function that can be called to handle a condition
+    and potentially continue execution from a different point.
+    
+    Attributes:
+        name: LispSymbol name of the restart
+        handler: Callable that implements the restart behavior
+        report: Optional callable that returns a string description
+    """
+    def __init__(self, name, handler, report=None):
+        """Initialize a restart.
+        
+        Args:
+            name: LispSymbol or string name of the restart
+            handler: Callable that takes arguments and implements restart behavior
+            report: Optional callable that returns a string description
+        """
+        self.name = name if isinstance(name, LispSymbol) else LispSymbol(name)
+        self.handler = handler
+        self.report = report
+    
+    def __repr__(self):
+        return f"#<RESTART {self.name.name if isinstance(self.name, LispSymbol) else self.name}>"
+
+
+class RestartException(Exception):
+    """Exception raised when a restart is invoked.
+    
+    Used to transfer control to the restart handler by unwinding the stack
+    to the point where the restart was established.
+    """
+    def __init__(self, restart_name, args=None):
+        """Initialize a restart exception.
+        
+        Args:
+            restart_name: Name of the restart being invoked
+            args: Arguments to pass to the restart handler
+        """
+        self.restart_name = restart_name
+        self.args = args or []
+        super().__init__(f"Restart invoked: {restart_name}")

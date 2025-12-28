@@ -253,6 +253,14 @@ def eval(form, env=None):
                 return eval_cerror(form, env)
             elif operator.name == 'WARN':
                 return eval_warn(form, env)
+            elif operator.name == 'RESTART-CASE':
+                return eval_restart_case(form, env)
+            elif operator.name == 'RESTART-BIND':
+                return eval_restart_bind(form, env)
+            elif operator.name == 'INVOKE-RESTART':
+                return eval_invoke_restart(form, env)
+            elif operator.name == 'ABORT':
+                return eval_abort(form, env)
             elif operator.name == 'TAGBODY':
                 return eval_tagbody(form, env)
             elif operator.name == 'GO':
@@ -1525,6 +1533,165 @@ def eval_warn(form, env):
     return lisptype.NIL
 
 
+def eval_restart_case(form, env):
+    """Implement RESTART-CASE special form.
+    
+    Syntax: (RESTART-CASE protected-form {restart-clause}*)
+    
+    Establishes named restarts with handlers that can be invoked during condition handling.
+    """
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("RESTART-CASE requires a protected form")
+    
+    protected_form = car(args)
+    restart_clauses = cdr(args)
+    
+    # Parse restart clauses into handlers
+    restarts = {}
+    current = restart_clauses
+    while _consp_internal(current):
+        clause = car(current)
+        if _consp_internal(clause):
+            restart_name = car(clause)
+            clause_body = cdr(clause)
+            
+            if isinstance(restart_name, lisptype.LispSymbol):
+                # Create handler that evaluates the clause body
+                def make_handler(body):
+                    def handler(*args):
+                        result = lisptype.NIL
+                        current_body = body
+                        while _consp_internal(current_body):
+                            result = eval(car(current_body), env)
+                            current_body = cdr(current_body)
+                        return result
+                    return handler
+                
+                restarts[restart_name.name] = make_handler(clause_body)
+        
+        current = cdr(current)
+    
+    # Push restarts onto stack
+    state.restart_stack.append(restarts)
+    
+    try:
+        # Evaluate protected form
+        result = eval(protected_form, env)
+        return result
+    except lisptype.RestartException as e:
+        # Restart was invoked
+        if e.restart_name in restarts:
+            handler = restarts[e.restart_name]
+            return handler(*e.args)
+        raise
+    finally:
+        # Pop restarts from stack
+        state.restart_stack.pop()
+
+
+def eval_restart_bind(form, env):
+    """Implement RESTART-BIND special form.
+    
+    Syntax: (RESTART-BIND ((name function) ...) {body}*)
+    
+    Binds restart functions for invocation.
+    """
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("RESTART-BIND requires bindings")
+    
+    binding_clauses = car(args)
+    body_forms = cdr(args)
+    
+    # Parse bindings
+    restarts = {}
+    current = binding_clauses
+    while _consp_internal(current):
+        binding = car(current)
+        if _consp_internal(binding) and _consp_internal(cdr(binding)):
+            restart_name = car(binding)
+            handler_form = car(cdr(binding))
+            
+            handler = eval(handler_form, env)
+            
+            if isinstance(restart_name, lisptype.LispSymbol):
+                restarts[restart_name.name] = handler
+        
+        current = cdr(current)
+    
+    # Push restarts onto stack
+    state.restart_stack.append(restarts)
+    
+    try:
+        # Evaluate body
+        result = lisptype.NIL
+        current = body_forms
+        while _consp_internal(current):
+            result = eval(car(current), env)
+            current = cdr(current)
+        return result
+    finally:
+        # Pop restarts from stack
+        state.restart_stack.pop()
+
+
+def eval_invoke_restart(form, env):
+    """Implement INVOKE-RESTART special form.
+    
+    Syntax: (INVOKE-RESTART restart-name &rest arguments)
+    
+    Invokes a restart by name.
+    """
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("INVOKE-RESTART requires a restart name")
+    
+    restart_name_form = car(args)
+    restart_args = cdr(args)
+    
+    # Evaluate restart name
+    if isinstance(restart_name_form, lisptype.LispSymbol):
+        restart_name = restart_name_form.name
+    else:
+        restart_name = str(eval(restart_name_form, env))
+    
+    # Evaluate arguments
+    evaluated_args = []
+    current = restart_args
+    while _consp_internal(current):
+        evaluated_args.append(eval(car(current), env))
+        current = cdr(current)
+    
+    # Search restart stack
+    for restarts in reversed(state.restart_stack):
+        if restart_name in restarts:
+            handler = restarts[restart_name]
+            result = handler(*evaluated_args) if evaluated_args else handler()
+            raise lisptype.RestartException(restart_name, [result])
+    
+    # Restart not found
+    raise lisptype.LispError(f"No restart named {restart_name}")
+
+
+def eval_abort(form, env):
+    """Implement ABORT special form.
+    
+    Syntax: (ABORT)
+    
+    Invokes the ABORT restart.
+    """
+    # Try to invoke ABORT restart
+    for restarts in reversed(state.restart_stack):
+        if 'ABORT' in restarts:
+            handler = restarts['ABORT']
+            result = handler()
+            raise lisptype.RestartException('ABORT', [result])
+    
+    # No ABORT restart found
+    raise lisptype.LispError("ABORT: No abort restart available")
+
+
 # Aliases for functions that may have different names in lispenv.py
 def apply_fn(function, *args):
     """Apply function (alias for apply)."""
@@ -2036,6 +2203,26 @@ def special_cerror(*args):
 def special_warn(*args):
     """WARN special form (handled by evaluator)."""
     raise lisptype.LispNotImplementedError('WARN (evaluated in evaluator)')
+
+@_registry.cl_special('RESTART-CASE')
+def special_restart_case(*args):
+    """RESTART-CASE special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('RESTART-CASE (evaluated in evaluator)')
+
+@_registry.cl_special('RESTART-BIND')
+def special_restart_bind(*args):
+    """RESTART-BIND special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('RESTART-BIND (evaluated in evaluator)')
+
+@_registry.cl_special('INVOKE-RESTART')
+def special_invoke_restart(*args):
+    """INVOKE-RESTART special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('INVOKE-RESTART (evaluated in evaluator)')
+
+@_registry.cl_special('ABORT')
+def special_abort(*args):
+    """ABORT special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('ABORT (evaluated in evaluator)')
 
 @_registry.cl_special('HANDLER-BIND')
 def special_handler_bind(*args):

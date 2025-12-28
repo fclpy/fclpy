@@ -16,3 +16,6 @@ current_environment = None
 
 # Flag used by lispenv.setup_standard_environment
 functions_loaded = False
+# Restart stack: list of dictionaries mapping restart names to functions
+# Each entry is a dict of {name: callable, name: callable, ...}
+restart_stack = []
