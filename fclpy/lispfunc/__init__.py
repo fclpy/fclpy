@@ -27,6 +27,7 @@ from .comparison import *
 from .characters import *
 from .io import *
 from .utilities import *
+from .classes import *
 
 # Import special operator functions explicitly (underscores prevent * import)
 from .math import (_s_plus_, _s_minus_, _s_star_, _s_slash_, _s_eq_, _s_lt_, _s_gt_, 
@@ -76,10 +77,6 @@ def adjustable_array_p(array):
 def allocate_instance(class_obj, **kwargs):
     """Allocate instance of class.""" 
     raise NotImplementedError("ALLOCATE-INSTANCE")
-
-def add_method(generic_function, method):
-    """Add method to generic function."""
-    raise NotImplementedError("ADD-METHOD")
 
 def aref(array, *subscripts):
     """Access array element."""
