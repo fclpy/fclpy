@@ -107,6 +107,20 @@ def null(obj):
 @_registry.cl_function('TYPEP')
 def typep(object, type_specifier):
     """Test if object is of given type."""
+    # Import classes here to avoid circular dependencies
+    from fclpy import classes
+    
+    # Handle LispClass type specifiers (user-defined classes)
+    if isinstance(type_specifier, classes.LispClass):
+        # Check if object is an instance of this class
+        if isinstance(object, classes.LispInstance):
+            # Check class hierarchy
+            for cls in object.lisp_class.get_linearized_superclasses():
+                if cls is type_specifier:
+                    return lisptype.T
+        return lisptype.NIL
+    
+    # Handle string or symbol type specifiers
     if isinstance(type_specifier, str):
         type_name = type_specifier.upper()
     elif hasattr(type_specifier, 'name'):
@@ -114,6 +128,7 @@ def typep(object, type_specifier):
     else:
         type_name = str(type_specifier).upper()
     
+    # Check for built-in types
     if type_name == 'T':
         return lisptype.T
     elif type_name == 'NULL':
@@ -137,7 +152,7 @@ def typep(object, type_specifier):
     elif type_name == 'RATIONAL':
         return lisptype.lisp_bool(isinstance(object, (int, float)))  # Python doesn't have rationals
     elif type_name == 'CHARACTER':
-        return lisptype.lisp_bool(isinstance(object, str) and len(object) == 1)
+        return lisptype.lisp_bool(isinstance(object, lisptype.Character) or (isinstance(object, str) and len(object) == 1))
     elif type_name == 'STRING':
         return lisptype.lisp_bool(isinstance(object, str))
     elif type_name == 'SYMBOL':
@@ -146,13 +161,38 @@ def typep(object, type_specifier):
         return lisptype.lisp_bool(isinstance(object, lisptype.lispKeyword))
     elif type_name == 'FUNCTION':
         return lisptype.lisp_bool(callable(object))
+    elif type_name == 'STANDARD-OBJECT' or type_name == 'INSTANCE':
+        return lisptype.lisp_bool(isinstance(object, classes.LispInstance))
+    elif type_name == 'VECTOR' or type_name == 'SIMPLE-VECTOR':
+        return lisptype.lisp_bool(isinstance(object, (list, tuple)))
+    elif type_name == 'ARRAY':
+        return lisptype.lisp_bool(isinstance(object, (list, tuple)))
+    elif type_name == 'HASH-TABLE':
+        return lisptype.lisp_bool(isinstance(object, dict))
     else:
+        # Try to find a user-defined class with this name
+        try:
+            cls = classes.find_class(type_name)
+            if cls and isinstance(object, classes.LispInstance):
+                # Check if object is instance of this class
+                for c in object.lisp_class.get_linearized_superclasses():
+                    if c is cls:
+                        return lisptype.T
+        except Exception:
+            pass
+        
         return lisptype.NIL
 
 
 @_registry.cl_function('TYPE-OF')
 def type_of(object):
     """Return type of object."""
+    from fclpy import classes
+    
+    # Check for user-defined instances first
+    if isinstance(object, classes.LispInstance):
+        return object.lisp_class.name
+    
     # null() and consp() return Lisp T/NIL objects, compare against lisptype.T
     if null(object) == lisptype.T:
         return lisptype.LispSymbol('NULL')
@@ -162,6 +202,8 @@ def type_of(object):
         return lisptype.LispSymbol('KEYWORD')
     elif isinstance(object, lisptype.LispSymbol):
         return lisptype.LispSymbol('SYMBOL')
+    elif isinstance(object, lisptype.Character):
+        return lisptype.LispSymbol('CHARACTER')
     elif isinstance(object, int):
         # Common Lisp often returns very specific integer types for small integers
         # e.g. 0 or 1 may be represented as BIT in some implementations. Return
