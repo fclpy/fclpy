@@ -1,17 +1,27 @@
 # Refactoring Plan: Large File Splitting
 
 ## Goal
-Refactor 6 large Python files into smaller modules (300-600 lines each) to improve maintainability and readability while keeping all tests passing.
+Refactor large Python files into smaller modules (300-600 lines each) to improve maintainability and readability while keeping all tests passing.
 
-## Current File Sizes
-- `lisptype.py`: 782 lines
-- `lispfunc/evaluation.py`: 2151 lines (LARGEST)
-- `lispfunc/io.py`: 631 lines
-- `lispfunc/math.py`: 778 lines
-- `lispfunc/sequences.py`: 1245 lines
-- `lispfunc/utilities.py`: 1528 lines
+## Current Status (December 28, 2025)
 
-**Total**: 6,915 lines across 6 files
+### ✅ COMPLETED Files (Already Split)
+- `lispfunc/io.py`: Split → io_read.py (196), io_write.py (479), io.py (55 re-exporter)
+- `lispfunc/math.py`: Split → math_arithmetic.py (509), math_advanced.py (302), math.py (52 re-exporter)
+- `lispfunc/sequences.py`: Split → sequences_*.py (multiple modules), sequences.py (50 re-exporter)
+- `lispfunc/utilities.py`: Split → utilities_*.py (multiple modules), utilities.py (297)
+- `lisptype.py`: Was 782 lines, now reorganized
+
+### 🔴 REMAINING Files (Need Refactoring)
+| File | Lines | Target | Priority |
+|------|-------|--------|----------|
+| `lispfunc/evaluation.py` | 2,151 | 5 files (300-500 each) | HIGH |
+| `lispfunc/utilities_misc.py` | 1,149 | 4 files (250-350 each) | HIGH |
+
+### ⚠️ IGNORED Files
+- `build/lib/fclpy/lispfunc.py` (1,978 lines) - Build artifact, auto-generated
+
+**Total Remaining**: 3,300 lines across 2 files
 
 ## Target Structure
 - Each file should be 300-600 lines
@@ -28,8 +38,8 @@ Refactor 6 large Python files into smaller modules (300-600 lines each) to impro
 - `lisptype_basic.py` (300-400 lines): LispObject, LispSymbol, LispCons, primitives
 - `lisptype_extended.py` (300-400 lines): Environment, Lambda, Macro, Stream, other complex types
 
-### 2. lispfunc/evaluation.py (2151 lines) → 4-5 files
-**Current**: All evaluation logic (HUGE file)
+### 2. lispfunc/evaluation.py (2151 lines) → 5 files [REMAINING]
+**Current**: All evaluation logic (LARGEST file - STILL NEEDS SPLITTING)
 **Proposal**:
 - `evaluation_core.py` (400-500 lines): eval(), apply(), core dispatch logic
 - `evaluation_special_forms.py` (400-500 lines): QUOTE, IF, DEFUN, DEFMACRO, DO, etc.
@@ -37,7 +47,15 @@ Refactor 6 large Python files into smaller modules (300-600 lines each) to impro
 - `evaluation_declarations.py` (200-300 lines): DECLARE, DECLAIM, optimization policies
 - `evaluation_debugging.py` (200-300 lines): TRACE, DEBUG, instrumentation
 
-### 3. lispfunc/io.py (631 lines) → 2 files
+### 3. lispfunc/utilities_misc.py (1149 lines) → 4 files [NEW - REMAINING]
+**Current**: Mixed utilities including CLOS, hash tables, packages, WITH macros
+**Proposal**:
+- `misc_hashtables.py` (250 lines): Hash table operations (MAKE-HASH-TABLE, GETHASH, REMHASH, etc.)
+- `misc_clos.py` (350 lines): CLOS class/instance/slot/method operations
+- `misc_packages.py` (280 lines): Package operations (MAKE-PACKAGE, USE-PACKAGE, etc.)
+- `misc_macros.py` (270 lines): WITH macros, declarations, debugging, system limits
+
+### 4. lispfunc/io.py (631 lines) → 2 files [✅ COMPLETED]
 **Current**: All I/O operations in one file
 **Proposal**:
 - `io_read.py` (300-350 lines): READ, READ-FROM-STRING, input operations

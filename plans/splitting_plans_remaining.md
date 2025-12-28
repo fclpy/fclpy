@@ -1,6 +1,19 @@
-# Task 2.3-2.6: Remaining Splitting Plans (Quick Reference)
+# Remaining Splitting Plans (Updated December 28, 2025)
 
-## 2.3: math.py Split → arithmetic + advanced
+## Status Summary
+
+### ✅ COMPLETED
+- 2.3: math.py → math_arithmetic.py (509), math_advanced.py (302)
+- 2.4: sequences.py → sequences_*.py (multiple modules)
+- 2.5: utilities.py → utilities_*.py (multiple modules)
+
+### 🔴 REMAINING
+- 2.6: evaluation.py (2151 lines) → 5 modules
+- 2.7: utilities_misc.py (1149 lines) → 4 modules [NEW]
+
+---
+
+## 2.3: math.py Split [✅ COMPLETED]
 
 **File**: 778 lines
 **Target**: 2 files (400-450 lines each)
@@ -26,44 +39,15 @@
 
 ---
 
-## 2.4: sequences.py Split → list+vector+string+functional
+## 2.4: sequences.py Split [✅ COMPLETED]
 
-**File**: 1245 lines
-**Target**: 4 files (300-450 lines each)
-
-### sequences_list.py (450 lines)
-- CAR, CDR, CONS, LIST, APPEND, REVERSE, NREVERSE
-- SORT, LENGTH, MEMBER, ASSOC, RASSOC
-- LAST, NTH, NTHCDR, COPY-LIST
-- List-specific SUBSEQ, REDUCE-list-specific logic
-
-### sequences_vector.py (310 lines)
-- MAKE-ARRAY, AREF, ASET, VECTOR, SVREF, SSET
-- Vector/array-specific operations
-- ELT (element access)
-- ARRAY-DIMENSION, ARRAY-DIMENSIONS
-
-### sequences_string.py (380 lines)
-- STRING-UPCASE, STRING-DOWNCASE
-- STRING-EQUAL, STRING-NOT-EQUAL, STRING-<, STRING->
-- CHAR-CODE, CODE-CHAR
-- CHAR-UPCASE, CHAR-DOWNCASE
-- String-specific SUBSEQ
-- CONCATENATE (strings)
-- COMMON-LISP:STRING type predicates
-
-### sequences_functional.py (300 lines)
-- MAP, MAPCAR, MAPLIST, MAPC, MAPL
-- FIND, POSITION, COUNT
-- SOME, EVERY, NOTANY, NOTEVERY
-- REMOVE, REMOVE-IF, DELETE, SUBSTITUTE
-- Functional programming helpers
-
-**All import**: fclpy.lisptype, registry, functools
+**Original**: 1245 lines → **Result**: Multiple modules including:
+- sequences_compose.py (351), sequences_search.py (345), sequences_higher.py (340)
+- sequences_modify.py (212), vectors.py (311), sequences.py (50 re-exporter)
 
 ---
 
-## 2.5: utilities.py Split → symbol+function+system+introspection+clos
+## 2.5: utilities.py Split [✅ COMPLETED]
 
 **File**: 1528 lines
 **Target**: 5 files (200-450 lines each)
@@ -105,9 +89,9 @@
 
 ---
 
-## 2.6: evaluation.py Split → core+special+control+loops+conditions
+## 2.6: evaluation.py Split [REMAINING - HIGHEST PRIORITY]
 
-**File**: 2151 lines - LARGEST
+**File**: 2151 lines - LARGEST FILE - STILL NEEDS SPLITTING
 **Target**: 5 files (200-500 lines each)
 
 ### evaluation_core.py (420 lines)
@@ -153,6 +137,48 @@
 
 ---
 
+## 2.7: utilities_misc.py Split [NEW - REMAINING]
+
+**File**: 1149 lines - NEEDS SPLITTING
+**Target**: 4 files (250-350 lines each)
+
+### misc_hashtables.py (250 lines)
+Lines 1-95:
+- make_hash_table, gethash, remhash, maphash, clrhash, sxhash
+- hash_table_count, hash_table_size, hash_table_test
+- hash_table_rehash_size, hash_table_rehash_threshold
+- Array operations: array_row_major_index, upgraded_array_element_type, etc.
+
+### misc_clos.py (350 lines)
+Lines 96-420:
+- CLOS class operations: find_class, make_instance, allocate_instance, etc.
+- Instance operations: initialize_instance, reinitialize_instance, etc.
+- Slot operations: slot_boundp, slot_exists_p, slot_value, slot_missing, etc.
+- Method operations: find_method, add_method, remove_method, defmethod, etc.
+- Generic function operations: ensure_generic_function, generic_function_*, etc.
+
+### misc_packages.py (280 lines)
+Lines 830-990:
+- Package operations: make_package, package_name, package_nicknames, rename_package
+- Package lists: package_use_list, package_used_by_list, package_shadowing_symbols
+- list_all_packages, unintern, unexport, shadowing_import, shadow
+- use_package, unuse_package
+- Macro expansion: macroexpand, macroexpand_1
+
+### misc_macros.py (270 lines)
+Lines 420-830, 990-1149:
+- WITH macros: with_accessors, with_compilation_unit, with_input_from_string, etc.
+- Miscellaneous utilities: complex_fn, load, describe, copy_tree, incf, etc.
+- Type designators: keyword_type, integer_type, fixnum_type, etc.
+- System limits: array_dimension_limit, call_arguments_limit, etc.
+- Stream predicates: echo_stream_p, broadcast_stream_p, file_stream_p, etc.
+- Debugging: break_fn, ed, dribble, disassemble, trace, untrace, etc.
+- Documentation: documentation, get_optimization_policy, is_variable_special
+
+**All import**: lisptype, registry, state (some functions)
+
+---
+
 ## Critical Cross-Cutting Concerns
 
 ### For All Files
@@ -178,40 +204,35 @@
 
 | Category | Files | Typical Size | Total |
 |----------|-------|--------------|-------|
-| Original | 6 | 782-2151 | 6,915 |
-| New modules | 14 | 200-500 | ~4,300 |
-| Re-exporters | 6 | 50 | 300 |
-| **Total** | **26** | **Avg 250** | **~11,515** |
+| Original | 2 | 1149-2151 | 3,300 |
+| New modules | 9 | 250-480 | ~2,900 |
+| Re-exporters | 2 | 50 | 100 |
+| **Total** | **13** | **Avg 250** | **~6,300** |
 
-Note: Growth from re-exporters is acceptable trade-off for maintainability.
+Note: Numbers reflect REMAINING work only.
 
 ---
 
 ## Implementation Sequence
 
-**Phase 1 (Foundation)**: Task 3
-- Refactor lisptype.py → 2 files
-- Test & commit
+**Phase 1-3**: ✅ COMPLETED
+- lisptype.py, io.py, math.py, sequences.py, utilities.py all split
 
-**Phase 2 (Independent, Parallel OK)**:  
-- Refactor io.py → 2 files
-- Refactor math.py → 2 files
-- Test & commit each
-
-**Phase 3 (Large files, Parallel OK)**:
-- Refactor sequences.py → 4 files
-- Refactor utilities.py → 5 files
-- Test & commit each
-
-**Phase 4 (Most complex, Do Last)**:
+**Phase 4 (Most complex, Do Next)**:
 - Refactor evaluation.py → 5 files
 - Comprehensive testing
 - Final validation
+
+**Phase 5 (Cleanup)**:
+- Refactor utilities_misc.py → 4 files
+- Test & commit
 
 ---
 
 ## Next Steps
 
-All splitting plans now complete. Ready to begin Task 3: Actual refactoring implementation.
+**REMAINING WORK**:
+1. Task 7B: Split utilities_misc.py (1149 lines) → 4 modules
+2. Task 8: Split evaluation.py (2151 lines) → 5 modules
 
-Start with lisptype.py (foundation), then proceed through phases.
+Start with utilities_misc.py (simpler), then tackle evaluation.py (most complex).

@@ -348,12 +348,83 @@ utilities_clos.py (200-250 lines):
                  └─→ state.py
 ```
 
-**Key Observations**:
-1. **lisptype.py is foundational** - Split it first, update all imports
-2. **evaluation.py is the hub** - Most complex, split last
-3. **io.py, math.py, sequences.py are independent** - Can split in parallel
-4. **utilities.py is mixed-bag** - Many unrelated functions, good refactoring candidate
-5. **Circular imports**: evaluation.py ↔ lispfunc (managed via late imports/function scope)
+**Key Observations** (Updated December 28, 2025):
+
+### ✅ COMPLETED
+1. **lisptype.py** - Reorganized
+2. **io.py** - Split into io_read.py + io_write.py
+3. **math.py** - Split into math_arithmetic.py + math_advanced.py
+4. **sequences.py** - Split into sequences_*.py modules
+5. **utilities.py** - Split into utilities_*.py modules
+
+### 🔴 REMAINING
+1. **evaluation.py is the hub** (2151 lines) - Most complex, split into 5 modules
+2. **utilities_misc.py is mixed-bag** (1149 lines) - Split into 4 modules
+
+### ⚠️ IGNORED
+- **build/lib/fclpy/lispfunc.py** (1978 lines) - Build artifact, auto-generated
+
+---
+
+## 7. lispfunc/utilities_misc.py (1149 lines) [NEW - NEEDS REFACTORING]
+
+**Purpose**: Mixed utility functions including hash tables, CLOS, packages, macros
+
+**Imports**:
+- `fclpy.lisptype`
+- `fclpy.state` (in some functions)
+- `.registry`
+
+**Key Functions** (100+ functions):
+- **Hash Tables** (lines 1-95): make_hash_table, gethash, remhash, maphash, clrhash, sxhash, hash_table_*
+- **CLOS Classes** (lines 96-250): find_class, make_instance, allocate_instance, class_of, class_name
+- **CLOS Slots** (lines 250-300): slot_boundp, slot_exists_p, slot_value, slot_missing
+- **CLOS Methods** (lines 300-420): find_method, add_method, defmethod, method_*, call_next_method
+- **WITH Macros** (lines 420-500): with_accessors, with_slots, with_open_stream, etc.
+- **Misc Utilities** (lines 500-700): complex_fn, load, describe, copy_tree, incf, rplaca, rplacd
+- **Type Designators** (lines 700-830): keyword_type, integer_type, fixnum_type, etc.
+- **Package Ops** (lines 830-1000): make_package, package_name, use_package, unintern, etc.
+- **System Limits** (lines 1000-1050): array_dimension_limit, call_arguments_limit
+- **Debugging** (lines 1150-1220): break_fn, trace, untrace, disassemble
+- **Documentation** (lines 1240-1320): documentation, get_optimization_policy, is_variable_special
+
+**Interdependencies**:
+- ✅ Mostly stub functions (low implementation complexity)
+- ✅ Depends on: lisptype, registry, state (minimal)
+- ✅ No circular dependencies
+
+**Suggested Split**:
+```
+misc_hashtables.py (250 lines):
+  - Hash table operations
+  - Array utilities
+  - Stream accessors
+
+misc_clos.py (350 lines):
+  - Class operations
+  - Instance operations
+  - Slot operations
+  - Method operations
+  - Generic function operations
+
+misc_packages.py (280 lines):
+  - Package creation and accessors
+  - Package lists
+  - Symbol import/export
+  - Macro expansion
+
+misc_macros.py (270 lines):
+  - WITH macros
+  - Miscellaneous utilities
+  - Type designators
+  - System limits
+  - Debugging tools
+  - Documentation functions
+```
+
+**Tests Affected**: Various tests that use these utility functions
+
+---
 
 ## Import Update Strategy
 

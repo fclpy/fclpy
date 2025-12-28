@@ -13,65 +13,65 @@
 - [ ] Document which functions are public vs internal
 
 ### Task 2: Create Detailed Splitting Plans for Each File
-- [ ] lisptype.py → basic + extended (create splitting plan)
+- [x] lisptype.py → basic + extended (COMPLETED - reorganized)
+- [x] io.py → read + write (COMPLETED)
+- [x] math.py → arithmetic + advanced (COMPLETED)
+- [x] sequences.py → list + vector + string + functional (COMPLETED)
+- [x] utilities.py → core + comparison + introspection (COMPLETED)
 - [ ] evaluation.py → core + special_forms + control_flow + declarations + debugging (create plan)
-- [ ] io.py → read + write (create plan)
-- [ ] math.py → arithmetic + advanced (create plan)
-- [ ] sequences.py → list + vector + string (create plan)
-- [ ] utilities.py → core + comparison + introspection (create plan)
+- [ ] utilities_misc.py → hashtables + clos + packages + macros (NEW - create plan)
 
 ## Phase 2: Refactoring (In Priority Order)
 
-### Task 3: Refactor lisptype.py
-**Current**: 782 lines → Target: 2-3 files (300-600 lines each)
-- [ ] Create fclpy/lisptype_basic.py with fundamental types
-- [ ] Create fclpy/lisptype_extended.py with complex types
-- [ ] Update fclpy/lisptype.py to re-export from new modules
-- [ ] Update all imports in other files
-- [ ] Run: `pipenv run pytest -q`
-- [ ] Verify coverage maintained
-- [ ] Commit: git add . ; git commit -m "refactor: split lisptype.py into basic and extended"
+### Task 3: Refactor lisptype.py [✅ COMPLETED]
+**Current**: Reorganized - no longer over 700 lines
+- [x] Reorganized into smaller modules
+- [x] Run: `pipenv run pytest -q`
+- [x] Verify coverage maintained
 
-### Task 4: Refactor lispfunc/io.py
-**Current**: 631 lines → Target: 2 files (300-350 lines each)
-- [ ] Create fclpy/lispfunc/io_read.py with read operations
-- [ ] Create fclpy/lispfunc/io_write.py with write operations
-- [ ] Update fclpy/lispfunc/io.py to re-export from new modules
-- [ ] Run: `pipenv run pytest -q`
-- [ ] Verify all I/O tests pass
-- [ ] Commit: git add . ; git commit -m "refactor: split io.py into read and write modules"
+### Task 4: Refactor lispfunc/io.py [✅ COMPLETED]
+**Original**: 631 lines → Split into: io_read.py (196), io_write.py (479), io.py (55 re-exporter)
+- [x] Create fclpy/lispfunc/io_read.py with read operations
+- [x] Create fclpy/lispfunc/io_write.py with write operations
+- [x] Update fclpy/lispfunc/io.py to re-export from new modules
+- [x] Run: `pipenv run pytest -q`
+- [x] Verify all I/O tests pass
 
-### Task 5: Refactor lispfunc/math.py
-**Current**: 778 lines → Target: 2 files (400-450 lines + 300-350 lines)
-- [ ] Create fclpy/lispfunc/math_arithmetic.py with basic math
-- [ ] Create fclpy/lispfunc/math_advanced.py with transcendental functions
-- [ ] Update fclpy/lispfunc/math.py to re-export from new modules
-- [ ] Run: `pipenv run pytest -q`
-- [ ] Verify all math tests pass
-- [ ] Commit: git add . ; git commit -m "refactor: split math.py into arithmetic and advanced modules"
+### Task 5: Refactor lispfunc/math.py [✅ COMPLETED]
+**Original**: 778 lines → Split into: math_arithmetic.py (509), math_advanced.py (302), math.py (52 re-exporter)
+- [x] Create fclpy/lispfunc/math_arithmetic.py with basic math
+- [x] Create fclpy/lispfunc/math_advanced.py with transcendental functions
+- [x] Update fclpy/lispfunc/math.py to re-export from new modules
+- [x] Run: `pipenv run pytest -q`
+- [x] Verify all math tests pass
 
-### Task 6: Refactor lispfunc/sequences.py
-**Current**: 1245 lines → Target: 2-3 files (300-450 lines each)
-- [ ] Create fclpy/lispfunc/sequences_list.py with list operations
-- [ ] Create fclpy/lispfunc/sequences_vector.py with vector operations
-- [ ] Create fclpy/lispfunc/sequences_string.py with string operations
-- [ ] Update fclpy/lispfunc/sequences.py to re-export from new modules
-- [ ] Run: `pipenv run pytest -q`
-- [ ] Verify all sequence tests pass
-- [ ] Commit: git add . ; git commit -m "refactor: split sequences.py into list, vector, and string modules"
+### Task 6: Refactor lispfunc/sequences.py [✅ COMPLETED]
+**Original**: 1245 lines → Split into multiple modules + sequences.py (50 re-exporter)
+- [x] Create fclpy/lispfunc/sequences_*.py modules
+- [x] Update fclpy/lispfunc/sequences.py to re-export from new modules
+- [x] Run: `pipenv run pytest -q`
+- [x] Verify all sequence tests pass
 
-### Task 7: Refactor lispfunc/utilities.py
-**Current**: 1528 lines → Target: 3 files (300-500 lines each)
-- [ ] Create fclpy/lispfunc/utilities_core.py with basic utilities
-- [ ] Create fclpy/lispfunc/utilities_comparison.py with comparison functions
-- [ ] Create fclpy/lispfunc/utilities_introspection.py with introspection
-- [ ] Update fclpy/lispfunc/utilities.py to re-export from new modules
+### Task 7: Refactor lispfunc/utilities.py [✅ COMPLETED]
+**Original**: 1528 lines → Split into multiple modules + utilities.py (297 lines)
+- [x] Create fclpy/lispfunc/utilities_*.py modules
+- [x] Update fclpy/lispfunc/utilities.py to re-export from new modules
+- [x] Run: `pipenv run pytest -q`
+- [x] Verify all utility tests pass
+
+### Task 7B: Refactor lispfunc/utilities_misc.py [NEW - REMAINING]
+**Current**: 1149 lines → Target: 4 files (250-350 lines each)
+- [ ] Create fclpy/lispfunc/misc_hashtables.py with hash table operations (lines 1-95)
+- [ ] Create fclpy/lispfunc/misc_clos.py with CLOS operations (lines 96-420)
+- [ ] Create fclpy/lispfunc/misc_packages.py with package operations (lines 830-990)
+- [ ] Create fclpy/lispfunc/misc_macros.py with WITH macros, declarations, debugging, limits
+- [ ] Update fclpy/lispfunc/utilities_misc.py to re-export from new modules
 - [ ] Run: `pipenv run pytest -q`
 - [ ] Verify all utility tests pass
-- [ ] Commit: git add . ; git commit -m "refactor: split utilities.py into core, comparison, and introspection"
+- [ ] Commit: git add . ; git commit -m "refactor: split utilities_misc.py into hashtables, clos, packages, macros"
 
-### Task 8: Refactor lispfunc/evaluation.py
-**Current**: 2151 lines → Target: 4-5 files (200-500 lines each) [LARGEST - DO LAST]
+### Task 8: Refactor lispfunc/evaluation.py [REMAINING - HIGHEST PRIORITY]
+**Current**: 2151 lines → Target: 5 files (200-500 lines each) [LARGEST - DO LAST]
 - [ ] Create fclpy/lispfunc/evaluation_core.py with main eval/apply logic
 - [ ] Create fclpy/lispfunc/evaluation_special_forms.py with special form handlers
 - [ ] Create fclpy/lispfunc/evaluation_control_flow.py with CATCH/THROW/condition handling
