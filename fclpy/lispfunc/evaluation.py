@@ -136,6 +136,10 @@ from .evaluation_stubs import (
     dotimes,
     loop_fn,
     load_fn,
+)
+
+# Re-export from evaluation_special_registrations
+from .evaluation_special_registrations import (
     function_fn,
     quote_fn,
     special_defmacro,
