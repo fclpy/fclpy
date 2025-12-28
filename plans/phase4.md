@@ -43,13 +43,21 @@
 - All 27 tests passing, 581 total tests passing
 
 ### Task 4: Add signaling functions
-- [ ] **Goal**: Functions to signal errors and warnings
-	- [ ] **Step 4.1**: Implement SIGNAL function (raises Python exception mapped to condition)
-	- [ ] **Step 4.2**: Implement ERROR function (signals error condition)
-	- [ ] **Step 4.3**: Implement CERROR function (error with built-in continue restart)
-	- [ ] **Step 4.4**: Implement WARN function (signals warning)
-	- [ ] **Step 4.5**: Write tests: capturing condition objects, continuing on CERROR
-	- [ ] **Step 4.6**: Run `pipenv run pytest -q`
+- [x] **Goal**: Functions to signal errors and warnings
+	- [x] **Step 4.1**: Implement SIGNAL function (raises Python exception mapped to condition)
+	- [x] **Step 4.2**: Implement ERROR function (signals error condition)
+	- [x] **Step 4.3**: Implement CERROR function (error with built-in continue restart)
+	- [x] **Step 4.4**: Implement WARN function (signals warning)
+	- [x] **Step 4.5**: Write tests: capturing condition objects, continuing on CERROR
+	- [x] **Step 4.6**: Run `pipenv run pytest -q`
+
+**COMPLETED**: Implemented all signaling functions with proper exception handling
+- ERROR: Non-recoverable error signaling, supports zero arguments
+- SIGNAL: Recoverable condition signaling, re-wraps nested errors
+- CERROR: Recoverable error with continue restart and format string support
+- WARN: Non-fatal warnings that return NIL (no interruption)
+- Exception catching/re-wrapping: SIGNAL/CERROR/WARN properly handle nested ERROR calls
+- All 17 new tests passing, 598 total tests passing
 
 ### Task 5: Add restart system
 - [ ] **Goal**: Allow recovery from errors with restarts
