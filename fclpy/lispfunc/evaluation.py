@@ -227,6 +227,10 @@ def eval(form, env=None):
                 return eval_quasiquote(form, env)
             elif operator.name == 'DEFMACRO':
                 return eval_defmacro(form, env)
+            elif operator.name == 'DECLARE':
+                return eval_declare(form, env)
+            elif operator.name == 'DECLAIM':
+                return eval_declaim(form, env)
             elif operator.name == 'MACROEXPAND-1':
                 return eval_macroexpand_1(form, env)
             elif operator.name == 'MACRO-FUNCTION':
@@ -765,6 +769,131 @@ def eval_lambda(form, env):
         return result
     
     return lambda_function
+
+
+def eval_declare(form, env):
+    """Evaluate DECLARE special form.
+    
+    DECLARE is used inside function/macro/block bodies to provide declarations.
+    This function stores declarations on the containing symbol's property list.
+    
+    Format: (DECLARE (declare-spec1) (declare-spec2) ...)
+    Common declare-specs: (OPTIMIZE ...) (SPECIAL var ...) (TYPE type var ...) (IGNORE var ...)
+    """
+    args = cdr(form)
+    
+    # Collect all declare-specs
+    result = None
+    while _consp_internal(args):
+        spec = car(args)
+        # Each spec is a list like (OPTIMIZE ...) or (SPECIAL x y z)
+        if _consp_internal(spec):
+            spec_type = car(spec)
+            if isinstance(spec_type, lisptype.LispSymbol):
+                spec_name = spec_type.name.upper()
+                
+                # Store declaration in a reserved property list key
+                if not hasattr(env, '_declarations'):
+                    env._declarations = {}
+                if spec_name not in env._declarations:
+                    env._declarations[spec_name] = []
+                env._declarations[spec_name].append(spec)
+        
+        args = cdr(args)
+    
+    # DECLARE returns NIL
+    return lisptype.NIL
+
+
+def eval_declaim(form, env):
+    """Evaluate DECLAIM special form (global declarations).
+    
+    DECLAIM provides global declarations that affect the entire program.
+    Stores declarations globally in the environment.
+    
+    Format: (DECLAIM (declare-spec1) (declare-spec2) ...)
+    """
+    args = cdr(form)
+    
+    # Get the global environment (root environment)
+    global_env = env
+    while global_env.parent is not None:
+        global_env = global_env.parent
+    
+    # Collect all declare-specs globally
+    result = None
+    while _consp_internal(args):
+        spec = car(args)
+        # Each spec is a list like (OPTIMIZE ...) or (SPECIAL x y z)
+        if _consp_internal(spec):
+            spec_type = car(spec)
+            if isinstance(spec_type, lisptype.LispSymbol):
+                spec_name = spec_type.name.upper()
+                
+                # Handle different declaration types
+                if spec_name == 'OPTIMIZE':
+                    # Store optimization settings globally
+                    _store_optimization_declaration(global_env, spec)
+                elif spec_name == 'SPECIAL':
+                    # Store special variable declarations globally
+                    _store_special_declaration(global_env, spec)
+                else:
+                    # Store other declarations
+                    if not hasattr(global_env, '_global_declarations'):
+                        global_env._global_declarations = {}
+                    if spec_name not in global_env._global_declarations:
+                        global_env._global_declarations[spec_name] = []
+                    global_env._global_declarations[spec_name].append(spec)
+        
+        args = cdr(args)
+    
+    # DECLAIM returns NIL
+    return lisptype.NIL
+
+
+def _store_optimization_declaration(env, spec):
+    """Helper to store OPTIMIZE declaration on environment."""
+    # OPTIMIZE spec format: (OPTIMIZE (quality level) ...)
+    # Qualities: SPEED, SAFETY, DEBUG, COMPILATION-SPEED, SPACE
+    # Levels: 0 (minimum) to 3 (maximum)
+    
+    if not hasattr(env, '_optimization_policy'):
+        env._optimization_policy = {
+            'speed': 1,
+            'safety': 1,
+            'debug': 1,
+            'compilation-speed': 1,
+            'space': 1
+        }
+    
+    # Parse (OPTIMIZE (quality level) ...)
+    specs = cdr(spec)  # Skip 'OPTIMIZE' keyword
+    while _consp_internal(specs):
+        item = car(specs)
+        if _consp_internal(item):
+            quality = car(item)
+            level = car(cdr(item))
+            
+            if isinstance(quality, lisptype.LispSymbol) and isinstance(level, int):
+                q_name = quality.name.lower().replace('-', '_')
+                env._optimization_policy[q_name] = max(0, min(3, level))
+        
+        specs = cdr(specs)
+
+
+def _store_special_declaration(env, spec):
+    """Helper to store SPECIAL declaration on environment."""
+    # SPECIAL spec format: (SPECIAL var1 var2 ...)
+    vars_to_declare = cdr(spec)  # Skip 'SPECIAL' keyword
+    
+    if not hasattr(env, '_special_variables'):
+        env._special_variables = {}
+    
+    while _consp_internal(vars_to_declare):
+        var = car(vars_to_declare)
+        if isinstance(var, lisptype.LispSymbol):
+            env._special_variables[var.name] = True
+        vars_to_declare = cdr(vars_to_declare)
 
 
 def eval_when(form, env):
@@ -2137,6 +2266,16 @@ def special_defmacro(*args):
     """DEFMACRO special form (handled by evaluator)."""
     raise lisptype.LispNotImplementedError('DEFMACRO (evaluated in evaluator)')
     return expression
+
+@_registry.cl_special('DECLARE')
+def special_declare(*args):
+    """DECLARE special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('DECLARE (evaluated in evaluator)')
+
+@_registry.cl_special('DECLAIM')
+def special_declaim(*args):
+    """DECLAIM special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('DECLAIM (evaluated in evaluator)')
 
 # Register remaining special forms as stubs; real semantics handled in eval dispatcher.
 @_registry.cl_special('IF')
