@@ -1,23 +1,24 @@
-﻿"""I/O and stream operations - file handling, string operations, formatting (re-exporter).
+"""I/O functions - input/output, streams, files, and printing.
 
-This module provides backward compatibility by re-exporting all symbols from:
-- io_read: Stream input and character reading
-- io_write: Stream output, printing, pathnames, and file operations
-
-All existing code importing from io continues to work unchanged.
+This module re-exports I/O functions from specialized submodules:
+- io_read: Input operations, character reading, readtables
+- io_write: Output operations, printing, pathnames, file operations
 """
 
-# Re-export all symbols from read and write modules
-from .io_read import *  # noqa: F401, F403
-from .io_write import *  # noqa: F401, F403
+from .io_read import *
+from .io_write import *
 
-# Explicit exports for clarity
+# Add special symbol-safe name for PRINT (expected by __init__)
+_s_print_ = print_fn
+
+# Comprehensive exports for backward compatibility
 __all__ = [
     # From io_read
     'readtablep', 'streamp', 'input_stream_p', 'interactive_stream_p',
     'read_line', 'read_char', 'read_byte', 'peek_char', 'unread_char',
-    'listen', 'clear_input', 'read', 'read_char_no_hang',
-    'read_delimited_list', 'read_from_string', 'read_preserving_whitespace',
+    'listen', 'clear_input',
+    'read', 'read_char_no_hang', 'read_delimited_list',
+    'read_from_string', 'read_preserving_whitespace',
     'make_string_input_stream',
     'copy_readtable', 'readtable_case',
     'get_macro_character', 'set_macro_character',
@@ -27,31 +28,32 @@ __all__ = [
     # From io_write
     'clear_output', 'output_stream_p', 'open_stream_p',
     'write_char', 'write_string', 'write_line', 'write_byte', 'write',
-    'prin1_to_string', 'princ_to_string', 'write_to_string',
     'print_fn', 'prin1', 'princ', 'terpri', 'fresh_line',
     'finish_output', 'force_output',
+    'prin1_to_string', 'princ_to_string', 'write_to_string',
     'make_string_output_stream', 'get_output_stream_string',
     'make_broadcast_stream', 'make_concatenated_stream',
     'make_echo_stream', 'make_synonym_stream', 'make_two_way_stream',
-    'copy_pprint_dispatch', 'pprint', 'pprint_dispatch',
-    'pprint_exit_if_list_exhausted', 'pprint_indent', 'pprint_linear',
-    'pprint_logical_block', 'pprint_newline', 'pprint_pop', 'pprint_tab',
-    'pprint_tabular', 'pprint_fill', 'set_pprint_dispatch',
+    'pprint', 'pprint_dispatch', 'pprint_logical_block', 'pprint_newline',
+    'pprint_fill', 'pprint_exit_if_list_exhausted', 'pprint_indent',
+    'pprint_linear', 'pprint_pop', 'pprint_tab', 'pprint_tabular',
+    'set_pprint_dispatch', 'copy_pprint_dispatch',
     'format_fn', 'formatter',
     'pathname', 'pathnamep', 'pathname_host', 'pathname_device',
-    'pathname_directory', 'pathname_name', 'pathname_type',
-    'pathname_version', 'make_pathname', 'namestring',
-    'directory_namestring', 'host_namestring', 'file_namestring',
-    'enough_namestring', 'parse_namestring', 'merge_pathnames',
-    'wild_pathname_p', 'pathname_match_p', 'translate_pathname',
-    'logical_pathname', 'translate_logical_pathname', 'truename',
-    'open_fn', 'close_fn', 'stream_element_type', 'stream_external_format',
-    'probe_file', 'delete_file', 'rename_file', 'file_author',
-    'file_length', 'file_position', 'file_string_length',
+    'pathname_directory', 'pathname_name', 'pathname_type', 'pathname_version',
+    'make_pathname', 'namestring', 'directory_namestring', 'host_namestring',
+    'file_namestring', 'enough_namestring', 'parse_namestring',
+    'merge_pathnames', 'wild_pathname_p', 'pathname_match_p',
+    'translate_pathname', 'logical_pathname', 'translate_logical_pathname',
+    'truename',
+    'open_fn', 'close_fn', 'probe_file', 'delete_file', 'rename_file',
+    'file_author', 'file_length', 'file_position', 'file_string_length',
     'file_write_date', 'compile_file', 'compile_file_pathname',
+    'stream_element_type', 'stream_external_format',
     'simple_condition_format_arguments', 'simple_condition_format_control',
     'end_of_file', 'file_error', 'file_error_pathname',
-    'error',
-    'y_or_n_p', 'yes_or_no_p',
-    'with_open_file', 'with_open_stream', 'with_output_to_string'
+    'error', 'y_or_n_p', 'yes_or_no_p',
+    'with_open_file', 'with_open_stream', 'with_output_to_string',
+    # Symbol-safe names for operators
+    '_s_print_',
 ]
