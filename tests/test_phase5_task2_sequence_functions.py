@@ -2,6 +2,28 @@
 
 import pytest
 from fclpy.lispfunc.sequences import find, find_if, find_if_not, position, position_if, position_if_not, remove, remove_if, remove_if_not, map_fn, reduce_fn, count, count_if
+import fclpy.lisptype as lisptype
+
+
+def cons_to_list(val):
+    """Convert a Lisp cons list to Python list for comparison.
+    
+    If val is already a Python list/tuple, return as list.
+    If val is NIL, return empty list.
+    If val is a cons list, convert to Python list.
+    """
+    if isinstance(val, (list, tuple)):
+        return list(val)
+    if val is None or val == lisptype.NIL:
+        return []
+    if isinstance(val, lisptype.lispCons):
+        result = []
+        cur = val
+        while cur is not None and cur != lisptype.NIL and isinstance(cur, lisptype.lispCons):
+            result.append(cur.car)
+            cur = cur.cdr
+        return result
+    return [val]
 
 
 class TestFindFunction:
@@ -154,14 +176,14 @@ class TestMapFunction:
         """Test MAP with single sequence."""
         seq = [1, 2, 3]
         result = map_fn('LIST', lambda x: x * 2, seq)
-        assert result == [2, 4, 6]
+        assert cons_to_list(result) == [2, 4, 6]
     
     def test_map_multiple_sequences(self):
         """Test MAP with multiple sequences."""
         seq1 = [1, 2, 3]
         seq2 = [10, 20, 30]
         result = map_fn('LIST', lambda x, y: x + y, seq1, seq2)
-        assert result == [11, 22, 33]
+        assert cons_to_list(result) == [11, 22, 33]
     
     def test_map_none_result_type(self):
         """Test MAP with None result type (for side effects)."""
@@ -174,9 +196,10 @@ class TestMapFunction:
         seq1 = [1, 2, 3, 4]
         seq2 = [10, 20]
         result = map_fn('LIST', lambda x, y: x + y, seq1, seq2)
+        result_list = cons_to_list(result)
         # Should use minimum length
-        assert len(result) == 2
-        assert result == [11, 22]
+        assert len(result_list) == 2
+        assert result_list == [11, 22]
 
 
 class TestReduceFunction:
@@ -264,8 +287,9 @@ class TestSequenceFunctionsIntegration:
         seq = [1, 2, 3, 4]
         # Map doubles, then reduce to sum
         doubled = map_fn('LIST', lambda x: x * 2, seq)
+        doubled_list = cons_to_list(doubled)
         total = reduce_fn(lambda x, y: x + y, doubled)
-        assert doubled == [2, 4, 6, 8]
+        assert doubled_list == [2, 4, 6, 8]
         assert total == 20
     
     def test_find_if_and_remove(self):

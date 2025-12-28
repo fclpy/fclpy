@@ -428,6 +428,106 @@ def eval_multiple_value_bind(form, env):
     return result
 
 
+def eval_handler_bind(form, env):
+    """Implement HANDLER-BIND special form.
+    
+    Syntax: (HANDLER-BIND (binding*) form*)
+    
+    Where each binding is: (condition-type handler-function)
+    
+    Establishes condition handlers for the dynamic extent of the body forms.
+    If a condition matching one of the types is signaled, the corresponding
+    handler function is called.
+    
+    For now, this is a minimal implementation that just evaluates the body,
+    without actually setting up handlers (since full condition system isn't complete).
+    """
+    from .evaluation_core import eval
+    
+    args = cdr(form)
+    
+    # First arg is the bindings list
+    if not _consp_internal(args):
+        # No bindings and no body - return NIL
+        return lisptype.NIL
+    
+    bindings = car(args)
+    body = cdr(args)
+    
+    # For now, we just evaluate the body without setting up handlers
+    # A full implementation would:
+    # 1. Parse the binding clauses to extract condition types and handler functions
+    # 2. Push the handlers onto a handler stack
+    # 3. Evaluate the body
+    # 4. Pop the handlers
+    
+    # Note: bindings might be NIL (empty) which is common for #+/-sbcl conditional code
+    # that excludes certain bindings for non-SBCL implementations
+    
+    # Evaluate body forms and return last result
+    result = lisptype.NIL
+    while _consp_internal(body):
+        result = eval(car(body), env)
+        body = cdr(body)
+    
+    return result
+
+
+def eval_handler_case(form, env):
+    """Implement HANDLER-CASE special form.
+    
+    Syntax: (HANDLER-CASE expression
+              (condition-type ([var]) form*) ...)
+    
+    Evaluates expression. If a condition of one of the specified types is signaled,
+    control transfers to the corresponding handler clause and the forms are evaluated.
+    
+    For now, this is a minimal implementation.
+    """
+    from .evaluation_core import eval
+    
+    args = cdr(form)
+    
+    if not _consp_internal(args):
+        return lisptype.NIL
+    
+    expression = car(args)
+    clauses = cdr(args)
+    
+    try:
+        # Try to evaluate the expression
+        return eval(expression, env)
+    except lisptype.LispError as e:
+        # Check if any clause handles this error
+        current = clauses
+        while _consp_internal(current):
+            clause = car(current)
+            if _consp_internal(clause):
+                condition_type = car(clause)
+                # Check if this is the ERROR type
+                if isinstance(condition_type, lisptype.LispSymbol):
+                    if condition_type.name.upper() == 'ERROR':
+                        # This clause handles errors
+                        var_list = car(cdr(clause))
+                        clause_body = cdr(cdr(clause))
+                        
+                        # Create new environment with optional error variable
+                        new_env = lisptype.Environment(parent=env)
+                        if _consp_internal(var_list):
+                            var = car(var_list)
+                            new_env.add_variable(var, str(e))
+                        
+                        # Evaluate clause body
+                        result = lisptype.NIL
+                        while _consp_internal(clause_body):
+                            result = eval(car(clause_body), new_env)
+                            clause_body = cdr(clause_body)
+                        return result
+            current = cdr(current)
+        # No handler found, re-raise
+        raise
+
+
 __all__ = [
     'eval_signal',
     'eval_error',
@@ -440,4 +540,6 @@ __all__ = [
     'eval_multiple_value_setq',
     'eval_multiple_value_call',
     'eval_multiple_value_bind',
+    'eval_handler_bind',
+    'eval_handler_case',
 ]

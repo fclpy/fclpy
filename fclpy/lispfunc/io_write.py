@@ -401,16 +401,34 @@ def file_write_date(pathspec):
 
 @_registry.cl_function('COMPILE-FILE')
 def compile_file(input_file, output_file=None, **kwargs):
-    """Compile file."""
-    return str(input_file), [], []  # Simplified
+    """Compile file.
+    
+    In FCLpy, we don't actually compile - we just load the file.
+    Returns: (output-truename, warnings-p, failure-p)
+    """
+    return str(input_file), lisptype.NIL, lisptype.NIL  # Simplified
 
 
 @_registry.cl_function('COMPILE-FILE-PATHNAME')
 def compile_file_pathname(input_file, output_file=None, **kwargs):
-    """Get compiled file pathname."""
+    """Get compiled file pathname.
+    
+    Returns the pathname that COMPILE-FILE would produce for the given input file.
+    Since FCLpy doesn't actually compile to a different file, we just return
+    a .fasl extension version of the input file.
+    """
+    from fclpy.lispfunc.pathnames import Pathname
     import os
-    base = os.path.splitext(str(input_file))[0]
-    return base + ".fasl"  # Simplified
+    
+    # Convert to string if needed
+    if isinstance(input_file, Pathname):
+        input_str = str(input_file)
+    else:
+        input_str = str(input_file)
+    
+    base = os.path.splitext(input_str)[0]
+    result = base + ".fasl"
+    return Pathname(result)
 
 
 # Condition operations

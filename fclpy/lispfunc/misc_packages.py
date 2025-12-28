@@ -5,11 +5,75 @@ import fclpy.state as state
 from fclpy.lispfunc import registry as _registry
 
 
+def _parse_keyword_args(args):
+    """Parse Lisp-style keyword arguments into Python dict.
+    
+    Converts (value1 :key1 val1 :key2 val2 ...) into
+    {'key1': val1, 'key2': val2, ...}
+    """
+    result = {}
+    positional = []
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        # Check if this is a keyword argument
+        is_keyword = False
+        key = None
+        if isinstance(arg, lisptype.lispKeyword):
+            is_keyword = True
+            key = arg.name.lower()
+        elif isinstance(arg, lisptype.LispSymbol) and arg.name.startswith(':'):
+            is_keyword = True
+            key = arg.name[1:].lower()
+        
+        if is_keyword and key and i + 1 < len(args):
+            result[key] = args[i + 1]
+            i += 2
+        else:
+            positional.append(arg)
+            i += 1
+    
+    return positional, result
+
+
 # --- Package operations (advanced) ---
 @_registry.cl_function('MAKE-PACKAGE')
-def make_package(name, nicknames=None, use=None):
-    """Create a new package."""
-    return lisptype.make_package(str(name))
+def make_package(*args):
+    """Create a new package.
+    
+    Handles both:
+    - (make-package name)
+    - (make-package name :nicknames list :use list)
+    """
+    positional, kwargs = _parse_keyword_args(args)
+    
+    if not positional:
+        raise ValueError("MAKE-PACKAGE requires a name")
+    
+    name = str(positional[0])
+    nicknames = kwargs.get('nicknames', None)
+    use = kwargs.get('use', None)
+    
+    # Convert nicknames and use to Python lists if they're Lisp lists
+    if nicknames is not None and nicknames != lisptype.NIL:
+        if isinstance(nicknames, lisptype.lispCons):
+            nick_list = []
+            cur = nicknames
+            while cur is not None and cur != lisptype.NIL and isinstance(cur, lisptype.lispCons):
+                nick_list.append(str(cur.car) if cur.car else None)
+                cur = cur.cdr
+            nicknames = [n for n in nick_list if n]
+        elif isinstance(nicknames, (list, tuple)):
+            nicknames = [str(n) for n in nicknames if n]
+    
+    # Create the package
+    pkg = lisptype.make_package(name)
+    
+    # Store nicknames if provided
+    if nicknames:
+        pkg.nicknames = nicknames
+    
+    return pkg
 
 
 @_registry.cl_function('PACKAGE-NAME')

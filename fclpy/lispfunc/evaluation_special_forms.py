@@ -55,8 +55,19 @@ def eval_setq(form, env):
 
 
 def eval_defun(form, env):
-    """Evaluate DEFUN special form."""
-    from .evaluation_core import eval
+    """Evaluate DEFUN special form.
+    
+    DEFUN defines a function in the GLOBAL environment, not the local one.
+    This is standard Common Lisp behavior - DEFUN creates top-level function bindings.
+    
+    Supports:
+    - Required parameters
+    - &optional parameters with default values
+    - &rest parameter for collecting remaining arguments
+    - &key parameters for keyword arguments
+    """
+    from .evaluation_core import eval, parse_lambda_list
+    import fclpy.state as state
     
     args = cdr(form)
     if not _consp_internal(args) or not _consp_internal(cdr(args)):
@@ -78,19 +89,121 @@ def eval_defun(form, env):
             docstring = first_form
             actual_body = cdr(body)
     
+    # Parse the lambda list
+    parsed = parse_lambda_list(param_list)
+    required_params = parsed['required']
+    optional_params = parsed['optional']
+    rest_param = parsed['rest']
+    keyword_params = parsed['keyword']
+    aux_params = parsed.get('aux', [])
+    
     # Create function closure
+    # The closure captures the current lexical environment for variable lookups
     def user_function(*call_args):
         # Create new environment for function execution
         func_env = lisptype.Environment(env)
         
-        # Bind parameters
-        params = param_list
-        for i, arg in enumerate(call_args):
-            if _consp_internal(params):
-                param = car(params)
-                if isinstance(param, lisptype.LispSymbol):
-                    func_env.add_variable(param, arg)
-                params = cdr(params)
+        arg_index = 0
+        
+        # Bind required parameters
+        for param in required_params:
+            if arg_index < len(call_args):
+                func_env.add_variable(param, call_args[arg_index])
+                arg_index += 1
+            else:
+                func_env.add_variable(param, lisptype.NIL)
+        
+        # Bind optional parameters
+        for param_spec in optional_params:
+            if _consp_internal(param_spec):
+                param = car(param_spec)
+                default_form = car(cdr(param_spec))
+            else:
+                param = param_spec
+                default_form = None
+            
+            if arg_index < len(call_args):
+                func_env.add_variable(param, call_args[arg_index])
+                arg_index += 1
+            else:
+                # Use default value if provided, otherwise NIL
+                if default_form is not None:
+                    default_value = eval(default_form, func_env)
+                    func_env.add_variable(param, default_value)
+                else:
+                    func_env.add_variable(param, lisptype.NIL)
+        
+        # Collect remaining positional arguments for &rest
+        remaining_positional = []
+        
+        # Find where keyword arguments start
+        keyword_start = arg_index
+        for i in range(arg_index, len(call_args)):
+            if isinstance(call_args[i], lisptype.lispKeyword):
+                keyword_start = i
+                break
+            remaining_positional.append(call_args[i])
+            arg_index = i + 1
+        
+        # Bind &rest parameter if present
+        if rest_param:
+            # Rest gets all remaining positional args as a list
+            if remaining_positional:
+                rest_list = lisptype.NIL
+                for item in reversed(remaining_positional):
+                    rest_list = lisptype.lispCons(item, rest_list)
+                func_env.add_variable(rest_param, rest_list)
+            else:
+                func_env.add_variable(rest_param, lisptype.NIL)
+        
+        # Bind keyword parameters
+        # First, initialize all keyword params to their defaults or NIL
+        for param_spec in keyword_params:
+            if _consp_internal(param_spec):
+                param = car(param_spec)
+                default_form = car(cdr(param_spec))
+            else:
+                param = param_spec
+                default_form = None
+            
+            # Default value
+            if default_form is not None:
+                default_value = eval(default_form, func_env)
+                func_env.add_variable(param, default_value)
+            else:
+                func_env.add_variable(param, lisptype.NIL)
+        
+        # Now process actual keyword arguments from the call
+        i = keyword_start
+        while i < len(call_args) - 1:
+            key = call_args[i]
+            value = call_args[i + 1]
+            
+            if isinstance(key, lisptype.lispKeyword):
+                key_name = key.name.upper()
+                # Find matching parameter
+                for param_spec in keyword_params:
+                    if _consp_internal(param_spec):
+                        param = car(param_spec)
+                    else:
+                        param = param_spec
+                    
+                    if isinstance(param, lisptype.LispSymbol) and param.name.upper() == key_name:
+                        func_env.add_variable(param, value)
+                        break
+                i += 2
+            else:
+                i += 1
+        
+        # Bind &aux parameters
+        for param_spec in aux_params:
+            if _consp_internal(param_spec):
+                param = car(param_spec)
+                init_form = car(cdr(param_spec))
+                init_value = eval(init_form, func_env)
+                func_env.add_variable(param, init_value)
+            else:
+                func_env.add_variable(param_spec, lisptype.NIL)
         
         # Execute body
         result = None
@@ -101,8 +214,19 @@ def eval_defun(form, env):
         
         return result
     
-    # Add function to environment
-    env.add_function(func_name, user_function)
+    # Find the global/root environment for defining the function
+    # DEFUN always creates global function bindings
+    global_env = env
+    while global_env.parent is not None:
+        global_env = global_env.parent
+    
+    # Add function to the GLOBAL environment (not local)
+    global_env.add_function(func_name, user_function)
+    
+    # Also add to the current environment for immediate visibility
+    # (this helps when the function is called later in the same file)
+    if env is not global_env:
+        env.add_function(func_name, user_function)
     
     # Store docstring on the function symbol's property list
     if docstring:
@@ -487,6 +611,9 @@ def eval_defvar(form, env):
     DEFVAR only sets the initial value if the variable is not already bound.
     This is in contrast to DEFPARAMETER which always sets the value.
     
+    DEFVAR defines variables in the GLOBAL environment, not the local one.
+    This is standard Common Lisp behavior.
+    
     Returns the symbol name.
     """
     from .evaluation_core import eval as lisp_eval
@@ -499,7 +626,12 @@ def eval_defvar(form, env):
     if not isinstance(name, lisptype.LispSymbol):
         raise lisptype.LispNotImplementedError("DEFVAR: first argument must be a symbol")
     
-    # Check if variable is already bound
+    # Find the global/root environment for defining the variable
+    global_env = env
+    while global_env.parent is not None:
+        global_env = global_env.parent
+    
+    # Check if variable is already bound (in any environment)
     current_value = env.find_variable(name)
     is_already_bound = current_value is not None
     
@@ -508,13 +640,13 @@ def eval_defvar(form, env):
     has_value_form = _consp_internal(rest_args)
     
     if has_value_form and not is_already_bound:
-        # Has initial value and not already bound - evaluate and bind
+        # Has initial value and not already bound - evaluate and bind globally
         value_form = car(rest_args)
         value = lisp_eval(value_form, env)
-        env.add_variable(name, value)
+        global_env.add_variable(name, value)
     elif not is_already_bound:
-        # No value form and not bound - bind to NIL
-        env.add_variable(name, lisptype.NIL)
+        # No value form and not bound - bind to NIL globally
+        global_env.add_variable(name, lisptype.NIL)
     # If already bound, do nothing to the value
     
     # Handle documentation string if present (third argument)
@@ -529,10 +661,10 @@ def eval_defvar(form, env):
                 name.plist['DOCUMENTATION'] = docstring
                 name.plist['VARIABLE-DOCUMENTATION'] = docstring
     
-    # Mark as special variable
-    if not hasattr(env, '_special_variables'):
-        env._special_variables = {}
-    env._special_variables[name.name] = True
+    # Mark as special variable in global environment
+    if not hasattr(global_env, '_special_variables'):
+        global_env._special_variables = {}
+    global_env._special_variables[name.name] = True
     
     return name
 
@@ -544,6 +676,9 @@ def eval_defparameter(form, env):
     (DEFPARAMETER name value doc) - with documentation string
     
     Unlike DEFVAR, DEFPARAMETER always sets the value, even if already bound.
+    
+    DEFPARAMETER defines variables in the GLOBAL environment, not the local one.
+    This is standard Common Lisp behavior.
     
     Returns the symbol name.
     """
@@ -557,6 +692,11 @@ def eval_defparameter(form, env):
     if not isinstance(name, lisptype.LispSymbol):
         raise lisptype.LispNotImplementedError("DEFPARAMETER: first argument must be a symbol")
     
+    # Find the global/root environment for defining the variable
+    global_env = env
+    while global_env.parent is not None:
+        global_env = global_env.parent
+    
     # Get the value form (required for DEFPARAMETER)
     rest_args = cdr(args)
     if not _consp_internal(rest_args):
@@ -564,7 +704,7 @@ def eval_defparameter(form, env):
     
     value_form = car(rest_args)
     value = lisp_eval(value_form, env)
-    env.add_variable(name, value)
+    global_env.add_variable(name, value)
     
     # Handle documentation string if present (third argument)
     doc_args = cdr(rest_args)
@@ -577,10 +717,10 @@ def eval_defparameter(form, env):
             name.plist['DOCUMENTATION'] = docstring
             name.plist['VARIABLE-DOCUMENTATION'] = docstring
     
-    # Mark as special variable
-    if not hasattr(env, '_special_variables'):
-        env._special_variables = {}
-    env._special_variables[name.name] = True
+    # Mark as special variable in global environment
+    if not hasattr(global_env, '_special_variables'):
+        global_env._special_variables = {}
+    global_env._special_variables[name.name] = True
     
     return name
 

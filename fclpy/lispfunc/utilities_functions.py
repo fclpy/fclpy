@@ -9,8 +9,33 @@ from fclpy.lispfunc import registry as _registry
 # --- Function binding and definition ---
 @_registry.cl_function('FBOUNDP')
 def fboundp(symbol):
-    """Test if symbol has function binding."""
-    raise lisptype.LispNotImplementedError("FBOUNDP")
+    """Test if symbol has function binding.
+    
+    Returns T if the symbol has a global function definition, NIL otherwise.
+    """
+    if not isinstance(symbol, lisptype.LispSymbol):
+        # Try to convert to symbol
+        if isinstance(symbol, str):
+            symbol = lisptype.LispSymbol(symbol.upper())
+        else:
+            return lisptype.NIL
+    
+    # Check in current environment's function bindings
+    env = state.current_environment
+    if env is not None:
+        func = env.find_func(symbol)
+        if func is not None:
+            return lisptype.T
+    
+    # Check in function registry
+    try:
+        py_name = _registry.get_function_py_name(symbol.name)
+        if py_name:
+            return lisptype.T
+    except Exception:
+        pass
+    
+    return lisptype.NIL
 
 
 @_registry.cl_function('FMAKUNBOUND')

@@ -105,6 +105,70 @@ def setup_standard_environment():
                             fclpy.lisptype.lispCons(cl_feature,
                             fclpy.lisptype.lispCons(ansi_cl_feature, fclpy.lisptype.NIL)))
             state.current_environment.add_variable(features_sym, features_list)
+        
+        # Standard I/O stream variables
+        import sys
+        from fclpy.lispfunc.streams import Stream
+        
+        # *STANDARD-INPUT* - The stream from which input is read by default
+        standard_input_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*STANDARD-INPUT*')
+        if state.current_environment.find_variable(standard_input_sym) is None:
+            stdin_stream = Stream('*STANDARD-INPUT*', sys.stdin, 'input')
+            state.current_environment.add_variable(standard_input_sym, stdin_stream)
+        
+        # *STANDARD-OUTPUT* - The stream to which output is sent by default
+        standard_output_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*STANDARD-OUTPUT*')
+        if state.current_environment.find_variable(standard_output_sym) is None:
+            stdout_stream = Stream('*STANDARD-OUTPUT*', sys.stdout, 'output')
+            state.current_environment.add_variable(standard_output_sym, stdout_stream)
+        
+        # *ERROR-OUTPUT* - The stream for error output
+        error_output_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*ERROR-OUTPUT*')
+        if state.current_environment.find_variable(error_output_sym) is None:
+            stderr_stream = Stream('*ERROR-OUTPUT*', sys.stderr, 'output')
+            state.current_environment.add_variable(error_output_sym, stderr_stream)
+        
+        # *TRACE-OUTPUT* - The stream for trace output
+        trace_output_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*TRACE-OUTPUT*')
+        if state.current_environment.find_variable(trace_output_sym) is None:
+            state.current_environment.add_variable(trace_output_sym, stdout_stream)
+        
+        # *DEBUG-IO* - The stream for interactive debugging
+        debug_io_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*DEBUG-IO*')
+        if state.current_environment.find_variable(debug_io_sym) is None:
+            state.current_environment.add_variable(debug_io_sym, stdout_stream)
+        
+        # *QUERY-IO* - The stream for user queries
+        query_io_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*QUERY-IO*')
+        if state.current_environment.find_variable(query_io_sym) is None:
+            state.current_environment.add_variable(query_io_sym, stdout_stream)
+        
+        # *TERMINAL-IO* - The stream connected to the user's terminal
+        terminal_io_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*TERMINAL-IO*')
+        if state.current_environment.find_variable(terminal_io_sym) is None:
+            state.current_environment.add_variable(terminal_io_sym, stdout_stream)
+        
+        # Printer/reader control variables
+        # *LOAD-VERBOSE* - whether LOAD should print messages
+        load_verbose_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*LOAD-VERBOSE*')
+        if state.current_environment.find_variable(load_verbose_sym) is None:
+            state.current_environment.add_variable(load_verbose_sym, fclpy.lisptype.NIL)
+        
+        # *LOAD-PRINT* - whether LOAD should print values
+        load_print_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*LOAD-PRINT*')
+        if state.current_environment.find_variable(load_print_sym) is None:
+            state.current_environment.add_variable(load_print_sym, fclpy.lisptype.NIL)
+        
+        # *COMPILE-VERBOSE* - whether COMPILE-FILE should print messages
+        compile_verbose_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*COMPILE-VERBOSE*')
+        if state.current_environment.find_variable(compile_verbose_sym) is None:
+            state.current_environment.add_variable(compile_verbose_sym, fclpy.lisptype.NIL)
+        
+        # *COMPILE-PRINT* - whether COMPILE-FILE should print values
+        compile_print_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*COMPILE-PRINT*')
+        if state.current_environment.find_variable(compile_print_sym) is None:
+            state.current_environment.add_variable(compile_print_sym, fclpy.lisptype.NIL)
+            
     except Exception:
         # Defensive: if initialization fails, continue
         pass

@@ -362,6 +362,9 @@ class Readtable:
         elif sub_char.upper() == 'O':
             # Octal number: #o17 -> 15
             return self._read_radix_number(stream, 8)
+        elif sub_char == ':':
+            # Uninterned symbol: #:foo -> symbol not interned in any package
+            return self._read_uninterned_symbol(stream)
         elif sub_char in '0123456789':
             # Could be array rank, reader label, etc.
             # For now, read the number and check what follows
@@ -477,21 +480,99 @@ class Readtable:
         
         return AdjustableVector(result)
     
+    def _check_feature(self, feature):
+        """Check if a feature expression is satisfied.
+        
+        Feature can be:
+        - A symbol: check if it's in *FEATURES*
+        - (AND feature1 feature2 ...): all features must be present
+        - (OR feature1 feature2 ...): any feature must be present
+        - (NOT feature): feature must be absent
+        """
+        import fclpy.state as state
+        import fclpy.lisptype as lisptype
+        
+        # Get *FEATURES* list
+        features_list = []
+        if state.current_environment:
+            features_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*FEATURES*')
+            features = state.current_environment.find_variable(features_sym)
+            if features and features is not lisptype.NIL:
+                # Convert to list of uppercase names
+                current = features
+                while hasattr(current, 'car') and hasattr(current, 'cdr'):
+                    item = current.car
+                    if isinstance(item, lisptype.lispKeyword):
+                        features_list.append(item.name.upper())
+                    elif isinstance(item, lisptype.LispSymbol):
+                        features_list.append(item.name.upper())
+                    current = current.cdr
+                    if current is lisptype.NIL:
+                        break
+        
+        # Handle different feature expression types
+        if isinstance(feature, lisptype.lispKeyword):
+            return feature.name.upper() in features_list
+        elif isinstance(feature, lisptype.LispSymbol):
+            return feature.name.upper() in features_list
+        elif hasattr(feature, 'car') and hasattr(feature, 'cdr'):
+            # It's a cons - check for AND, OR, NOT
+            operator = feature.car
+            if isinstance(operator, lisptype.LispSymbol):
+                op_name = operator.name.upper()
+                if op_name == 'AND':
+                    # All sub-features must be present
+                    current = feature.cdr
+                    while hasattr(current, 'car') and hasattr(current, 'cdr') and current is not lisptype.NIL:
+                        if not self._check_feature(current.car):
+                            return False
+                        current = current.cdr
+                    return True
+                elif op_name == 'OR':
+                    # Any sub-feature must be present
+                    current = feature.cdr
+                    while hasattr(current, 'car') and hasattr(current, 'cdr') and current is not lisptype.NIL:
+                        if self._check_feature(current.car):
+                            return True
+                        current = current.cdr
+                    return False
+                elif op_name == 'NOT':
+                    # Feature must be absent
+                    sub_feature = feature.cdr
+                    if hasattr(sub_feature, 'car'):
+                        sub_feature = sub_feature.car
+                    return not self._check_feature(sub_feature)
+        
+        # Unknown feature expression - default to absent
+        return False
+    
     def _read_feature_plus(self, stream):
-        """Read #+feature expr."""
+        """Read #+feature expr.
+        
+        Includes the expression only if feature is present in *FEATURES*.
+        """
         feature = self._read_item(stream)
         expr = self._read_item(stream)
-        # For now, always include the expression (assume feature is present)
-        # In a full implementation, would check *FEATURES*
-        return expr
+        
+        if self._check_feature(feature):
+            return expr
+        else:
+            # Feature not present - skip the expression
+            return None
     
     def _read_feature_minus(self, stream):
-        """Read #-feature expr."""
+        """Read #-feature expr.
+        
+        Includes the expression only if feature is NOT present in *FEATURES*.
+        """
         feature = self._read_item(stream)
         expr = self._read_item(stream)
-        # For now, always skip the expression (assume feature is absent)
-        # In a full implementation, would check *FEATURES*
-        return None
+        
+        if not self._check_feature(feature):
+            return expr
+        else:
+            # Feature is present - skip the expression
+            return None
     
     def _read_pathname_literal(self, stream):
         """Read a pathname literal like #P\"path/to/file\"."""
@@ -564,6 +645,38 @@ class Readtable:
             return -value if negative else value
         except ValueError:
             raise ValueError(f"Invalid radix-{radix} number: {token}")
+
+    def _read_uninterned_symbol(self, stream):
+        """Read an uninterned symbol like #:foo.
+        
+        Uninterned symbols are not part of any package. Each time #:foo is read,
+        a fresh symbol with name "FOO" is created that has no home package.
+        
+        Args:
+            stream: Input stream
+            
+        Returns:
+            A new uninterned LispSymbol
+        """
+        from . import lisptype
+        
+        # Read the symbol name
+        token = ''
+        while True:
+            c = stream.read_char()
+            if not c or c.isspace() or c in '()':
+                if c:
+                    stream.unread_char(c)
+                break
+            token += c
+        
+        if not token:
+            raise ValueError("Empty symbol name after #:")
+        
+        # Create an uninterned symbol (not in any package)
+        # Use uppercase for consistency with CL standard
+        name = token.upper()
+        return lisptype.LispSymbol(name, package=None)
 
 
 def get_current_readtable() -> Readtable:

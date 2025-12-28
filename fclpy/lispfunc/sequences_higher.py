@@ -6,10 +6,33 @@ from . import registry as _registry
 import fclpy.lisptype as lisptype
 
 
+def _cons_to_list(seq):
+    """Convert a Lisp cons list to a Python list.
+    
+    If seq is already a Python list/tuple, return it as-is.
+    If seq is NIL, return empty list.
+    If seq is a cons list, convert to Python list.
+    """
+    if isinstance(seq, (list, tuple)):
+        return list(seq)
+    if seq is None or seq == lisptype.NIL:
+        return []
+    if isinstance(seq, lisptype.lispCons):
+        result = []
+        cur = seq
+        while cur is not None and cur != lisptype.NIL and isinstance(cur, lisptype.lispCons):
+            result.append(cur.car)
+            cur = cur.cdr
+        return result
+    # Single element - wrap in list
+    return [seq]
+
+
 # Association list operations
 @_registry.cl_function('ADJOIN')
 def adjoin(x, seq, test=lambda x, y: x is y):
     """Tests whether item is the same as an existing element of list."""
+    seq = _cons_to_list(seq)
     return seq if any(map(functools.partial(test, x), seq)) else cons(x, seq)
 
 
@@ -36,9 +59,13 @@ def every(predicate, *sequences):
     """Test if predicate is true for every element."""
     if not sequences:
         return lisptype.T
-    min_len = min(len(seq) for seq in sequences)
+    # Convert all sequences to Python lists to handle lispCons
+    py_seqs = [_cons_to_list(seq) for seq in sequences]
+    if not py_seqs or not all(py_seqs):
+        return lisptype.T
+    min_len = min(len(seq) for seq in py_seqs)
     for i in range(min_len):
-        args = [seq[i] for seq in sequences]
+        args = [seq[i] for seq in py_seqs]
         if not predicate(*args):
             return lisptype.NIL
     return lisptype.T
@@ -49,9 +76,13 @@ def some(predicate, *sequences):
     """Test if predicate is true for some element."""
     if not sequences:
         return lisptype.NIL
-    min_len = min(len(seq) for seq in sequences)
+    # Convert all sequences to Python lists to handle lispCons
+    py_seqs = [_cons_to_list(seq) for seq in sequences]
+    if not py_seqs or not all(py_seqs):
+        return lisptype.NIL
+    min_len = min(len(seq) for seq in py_seqs)
     for i in range(min_len):
-        args = [seq[i] for seq in sequences]
+        args = [seq[i] for seq in py_seqs]
         if predicate(*args):
             return lisptype.T
     return lisptype.NIL
@@ -78,17 +109,28 @@ def map_fn(result_type, function, *sequences):
     if not sequences:
         return []
     
-    min_len = min(len(seq) for seq in sequences)
+    # Convert all sequences to Python lists to handle lispCons
+    py_seqs = [_cons_to_list(seq) for seq in sequences]
+    if not py_seqs or not all(py_seqs):
+        if result_type is None:
+            return None
+        return []
+    
+    min_len = min(len(seq) for seq in py_seqs)
     results = []
     
     for i in range(min_len):
-        args = [seq[i] for seq in sequences]
+        args = [seq[i] for seq in py_seqs]
         results.append(function(*args))
     
     if result_type is None:
         return None
     elif result_type == 'LIST':
-        return results
+        # Return as Lisp cons list
+        result = lisptype.NIL
+        for elem in reversed(results):
+            result = lisptype.lispCons(elem, result)
+        return result
     else:
         return results
 
@@ -140,15 +182,18 @@ def mapl(function, *lists):
 @_registry.cl_function('REDUCE')
 def reduce_fn(function, sequence, **kwargs):
     """Reduce sequence using function."""
-    if not sequence:
+    # Convert sequence to Python list to handle lispCons
+    py_seq = _cons_to_list(sequence)
+    
+    if not py_seq:
         if 'initial_value' in kwargs:
             return kwargs['initial_value']
         return function()
     
-    result = sequence[0] if 'initial_value' not in kwargs else kwargs['initial_value']
+    result = py_seq[0] if 'initial_value' not in kwargs else kwargs['initial_value']
     start_idx = 1 if 'initial_value' not in kwargs else 0
     
-    for item in sequence[start_idx:]:
+    for item in py_seq[start_idx:]:
         result = function(result, item)
     return result
 

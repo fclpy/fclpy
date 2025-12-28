@@ -164,12 +164,13 @@ def eval(form, env=None):
     from .evaluation_loops_conditionals import (
         eval_when, eval_unless, eval_cond, eval_and, eval_or,
         eval_progn, eval_prog1, eval_prog2, eval_let, eval_letstar, eval_quasiquote,
-        eval_loop
+        eval_loop, eval_eval_when
     )
     from .evaluation_conditions import (
         eval_signal, eval_error, eval_cerror, eval_warn,
         eval_restart_case, eval_restart_bind, eval_invoke_restart, eval_abort,
-        eval_multiple_value_call, eval_multiple_value_bind
+        eval_multiple_value_call, eval_multiple_value_bind,
+        eval_handler_bind, eval_handler_case
     )
     
     env = resolve_environment(env)
@@ -230,6 +231,8 @@ def eval(form, env=None):
                 return eval_when(form, env)
             elif operator.name == 'UNLESS':
                 return eval_unless(form, env)
+            elif operator.name == 'EVAL-WHEN':
+                return eval_eval_when(form, env)
             elif operator.name == 'COND':
                 return eval_cond(form, env)
             elif operator.name == 'AND':
@@ -296,6 +299,10 @@ def eval(form, env=None):
                 return eval_invoke_restart(form, env)
             elif operator.name == 'ABORT':
                 return eval_abort(form, env)
+            elif operator.name == 'HANDLER-BIND':
+                return eval_handler_bind(form, env)
+            elif operator.name == 'HANDLER-CASE':
+                return eval_handler_case(form, env)
             elif operator.name == 'TAGBODY':
                 return eval_tagbody(form, env)
             elif operator.name == 'GO':

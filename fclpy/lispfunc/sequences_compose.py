@@ -53,35 +53,60 @@ def nreverse(sequence):
 
 @_registry.cl_function('APPEND')
 def append(*args):
-    """Append sequences together."""
+    """Append sequences together.
+    
+    In Common Lisp, APPEND copies all arguments except the last,
+    then returns the last argument. The result shares structure 
+    with the last argument.
+    """
     if len(args) < 1:
         return lisptype.NIL
-    # Build a Lisp proper list for all but last arg, then splice the last
+    
+    # Collect all elements
     head_elems = []
+    
+    # Process all arguments except the last
     for seq in args[:-1]:
         if seq is None or seq == lisptype.NIL:
             continue
         if isinstance(seq, lisptype.lispCons):
-            # convert cons list to Python list
+            # Convert cons list to Python list
             cur = seq
             while cur is not None and cur != lisptype.NIL and isinstance(cur, lisptype.lispCons):
                 head_elems.append(cur.car)
                 cur = cur.cdr
+        elif isinstance(seq, (list, tuple)):
+            head_elems.extend(seq)
         else:
-            head_elems.extend(list(seq))
-    # If no head elements, just return last
+            # Single element
+            head_elems.append(seq)
+    
+    # Handle the last argument - this needs special treatment
     last_part = args[-1]
+    
     if not head_elems:
+        # No elements from previous args, just return last
         return last_part
-    # Build cons chain
-    # Represent as Python list for simplicity (avoids cons type checking issues)
-    result_list = list(head_elems)
-    # If last_part is a Lisp list, attempt to extend, else append
-    if isinstance(last_part, list):
-        result_list.extend(last_part)
+    
+    # Convert last_part to elements list if it's a Lisp cons list
+    if isinstance(last_part, lisptype.lispCons):
+        cur = last_part
+        while cur is not None and cur != lisptype.NIL and isinstance(cur, lisptype.lispCons):
+            head_elems.append(cur.car)
+            cur = cur.cdr
+    elif isinstance(last_part, (list, tuple)):
+        head_elems.extend(last_part)
+    elif last_part is None or last_part == lisptype.NIL:
+        pass  # NIL at the end is fine
     else:
-        result_list.append(last_part)
-    return result_list
+        head_elems.append(last_part)
+    
+    # Build proper Lisp cons list from elements
+    result = lisptype.NIL
+    for elem in reversed(head_elems):
+        result = lisptype.lispCons(elem, result)
+    
+    return result
 
 
 @_registry.cl_function('NCONC')

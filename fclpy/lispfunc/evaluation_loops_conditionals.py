@@ -51,6 +51,60 @@ def eval_unless(form, env):
         return None
 
 
+def eval_eval_when(form, env):
+    """Evaluate EVAL-WHEN special form.
+    
+    (EVAL-WHEN (situation*) form*)
+    
+    Situations can be:
+    - :COMPILE-TOPLEVEL (or COMPILE) - evaluate at compile time
+    - :LOAD-TOPLEVEL (or LOAD) - evaluate at load time  
+    - :EXECUTE (or EVAL) - evaluate at execution time
+    
+    For an interpreter, we evaluate if :EXECUTE or :LOAD-TOPLEVEL is present.
+    """
+    from .evaluation_core import eval
+    
+    args = cdr(form)
+    if not _consp_internal(args):
+        return lisptype.NIL
+    
+    situations = car(args)
+    body = cdr(args)
+    
+    # Check if any relevant situation applies
+    # For an interpreter at runtime, :EXECUTE and :LOAD-TOPLEVEL apply
+    should_execute = False
+    current = situations
+    while _consp_internal(current):
+        sit = car(current)
+        if isinstance(sit, lisptype.lispKeyword):
+            sit_name = sit.name.upper()
+        elif isinstance(sit, lisptype.LispSymbol):
+            sit_name = sit.name.upper()
+        else:
+            sit_name = str(sit).upper()
+        
+        # :EXECUTE means "at runtime" - always applies for interpreter
+        # :LOAD-TOPLEVEL means "when loading" - applies when loading files
+        if sit_name in ('EXECUTE', ':EXECUTE', 'EVAL', 'LOAD-TOPLEVEL', ':LOAD-TOPLEVEL', 'LOAD'):
+            should_execute = True
+            break
+        current = cdr(current)
+    
+    if should_execute:
+        # Evaluate body forms, return value of last
+        result = lisptype.NIL
+        current = body
+        while _consp_internal(current):
+            result = eval(car(current), env)
+            current = cdr(current)
+        return result
+    else:
+        # Don't evaluate, return NIL
+        return lisptype.NIL
+
+
 def eval_cond(form, env):
     """Evaluate COND special form."""
     from .evaluation_core import eval

@@ -327,12 +327,62 @@ def member_if_not(predicate, list_seq, key=None):
 
 
 @_registry.cl_function('ASSOC')
-def assoc(item, alist):
-    """Find association with key equal to item."""
-    for pair in alist:
-        if pair and pair[0] == item:
-            return pair
-    return None
+def assoc(item, alist, test=None, test_not=None, key=None):
+    """Find association with key equal to item.
+    
+    Keyword arguments:
+    - :test - equality test function (default is EQL)
+    - :test-not - inequality test function
+    - :key - function to apply to each key before testing
+    """
+    import fclpy.lisptype as lisptype
+    
+    # Handle :key parameter
+    key_fn = key if callable(key) else None
+    
+    # Determine comparison function
+    if test is not None and callable(test):
+        test_fn = test
+    elif test_not is not None and callable(test_not):
+        test_fn = lambda a, b: not test_not(a, b)
+    else:
+        # Default to EQL
+        test_fn = lambda a, b: a == b
+    
+    # Iterate through alist
+    current = alist
+    while current is not None and current is not lisptype.NIL:
+        if hasattr(current, 'car') and hasattr(current, 'cdr'):
+            pair = current.car
+            if pair is not None and pair is not lisptype.NIL:
+                if hasattr(pair, 'car'):
+                    pair_key = pair.car
+                else:
+                    pair_key = pair[0] if len(pair) > 0 else None
+                
+                # Apply key function if provided
+                test_key = key_fn(pair_key) if key_fn else pair_key
+                
+                if test_fn(item, test_key):
+                    return pair
+            current = current.cdr
+        elif isinstance(current, (list, tuple)):
+            for pair in current:
+                if pair:
+                    if hasattr(pair, 'car'):
+                        pair_key = pair.car
+                    else:
+                        pair_key = pair[0] if len(pair) > 0 else None
+                    
+                    test_key = key_fn(pair_key) if key_fn else pair_key
+                    
+                    if test_fn(item, test_key):
+                        return pair
+            break
+        else:
+            break
+    
+    return lisptype.NIL
 
 
 @_registry.cl_function('ASSOC-IF')
