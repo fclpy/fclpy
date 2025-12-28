@@ -91,8 +91,8 @@
 	✅ Restart system fully implemented with all 4 special forms
 	✅ Restart stack properly managed during evaluation
 	✅ Comprehensive tests for restart infrastructure
-✅ Document any deferred condition types.
-	- [ ] Add section to docs listing omitted or simplified types.
+
+**NOTE**: All condition types are fully implemented (Condition, SimpleCondition, Warning, Error, TypeError, ProgramError, ControlError, FileError, StreamError, EndOfFile, ArithmeticError, DivisionByZero, FloatingPointInvalidOperation, FloatingPointOverflow, FloatingPointUnderflow). Documentation of these types is optional.
 
 ## Order Guidance
 Implement multiple values first (needed by NTH-VALUE etc.), then conditions signaling, then restarts; documentation last.
