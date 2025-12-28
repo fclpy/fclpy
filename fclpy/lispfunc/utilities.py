@@ -1911,3 +1911,31 @@ def room(option=None):
 @_registry.cl_function('STEP')
 def step(form):
     return form
+@_registry.cl_function('DOCUMENTATION')
+def documentation(symbol, doc_type=None):
+    """Return documentation string for a function, macro, or variable.
+    
+    (DOCUMENTATION symbol 'FUNCTION) - get function/macro documentation
+    (DOCUMENTATION symbol 'VARIABLE) - get variable documentation (stub)
+    (DOCUMENTATION symbol 'TYPE) - get type documentation (stub)
+    (DOCUMENTATION symbol 'STRUCTURE) - get structure documentation (stub)
+    
+    Returns NIL if no documentation is available.
+    """
+    if not isinstance(symbol, lisptype.LispSymbol):
+        return lisptype.NIL
+    
+    # Default doc_type is FUNCTION
+    if doc_type is None or (isinstance(doc_type, lisptype.LispSymbol) and doc_type.name == 'FUNCTION'):
+        # Look for documentation in the symbol's property list
+        if hasattr(symbol, 'plist') and isinstance(symbol.plist, dict):
+            doc = symbol.plist.get('DOCUMENTATION')
+            if doc:
+                return doc
+    elif isinstance(doc_type, lisptype.LispSymbol):
+        doc_type_name = doc_type.name.upper()
+        if doc_type_name in ('VARIABLE', 'TYPE', 'STRUCTURE', 'SETF'):
+            # TODO: Implement documentation for other types
+            pass
+    
+    return lisptype.NIL

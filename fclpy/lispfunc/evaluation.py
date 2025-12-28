@@ -353,6 +353,15 @@ def eval_defun(form, env):
     if not isinstance(func_name, lisptype.LispSymbol):
         raise lisptype.LispNotImplementedError("DEFUN: function name must be a symbol")
     
+    # Extract docstring if present (first form in body can be a string)
+    docstring = None
+    actual_body = body
+    if _consp_internal(body):
+        first_form = car(body)
+        if isinstance(first_form, str):
+            docstring = first_form
+            actual_body = cdr(body)
+    
     # Create function closure
     def user_function(*call_args):
         # Create new environment for function execution
@@ -369,7 +378,7 @@ def eval_defun(form, env):
         
         # Execute body
         result = None
-        current_body = body
+        current_body = actual_body
         while _consp_internal(current_body):
             result = eval(car(current_body), func_env)
             current_body = cdr(current_body)
@@ -378,6 +387,13 @@ def eval_defun(form, env):
     
     # Add function to environment
     env.add_function(func_name, user_function)
+    
+    # Store docstring on the function symbol's property list
+    if docstring:
+        if not hasattr(func_name, 'plist'):
+            func_name.plist = {}
+        func_name.plist['DOCUMENTATION'] = docstring
+    
     return func_name
 
 
@@ -398,6 +414,15 @@ def eval_defmacro(form, env):
 
     if not isinstance(macro_name, lisptype.LispSymbol):
         raise lisptype.LispNotImplementedError("DEFMACRO: macro name must be a symbol")
+
+    # Extract docstring if present (first form in body can be a string)
+    docstring = None
+    actual_body = body
+    if _consp_internal(body):
+        first_form = car(body)
+        if isinstance(first_form, str):
+            docstring = first_form
+            actual_body = cdr(body)
 
     # Build parameter symbols list
     params = []
@@ -421,12 +446,12 @@ def eval_defmacro(form, env):
                 macro_env.add_variable(param, lisptype.NIL)
 
         # If no body, return NIL
-        if not _consp_internal(body):
+        if not _consp_internal(actual_body):
             return lisptype.NIL
 
         # Evaluate body forms in macro environment, return last result
         result = lisptype.NIL
-        cur_body = body
+        cur_body = actual_body
         while _consp_internal(cur_body):
             result = eval(car(cur_body), macro_env)
             cur_body = cdr(cur_body)
@@ -436,6 +461,13 @@ def eval_defmacro(form, env):
     # Mark as macro and register in environment
     setattr(macro_callable, '__is_macro__', True)
     env.add_function(macro_name, macro_callable)
+    
+    # Store docstring on the macro symbol's property list
+    if docstring:
+        if not hasattr(macro_name, 'plist'):
+            macro_name.plist = {}
+        macro_name.plist['DOCUMENTATION'] = docstring
+    
     return macro_name
 
 
