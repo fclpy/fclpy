@@ -1,4 +1,4 @@
-"""Adjustable vectors for Phase 5."""
+"""Adjustable vectors and multi-dimensional arrays for Phase 5."""
 
 import fclpy.lisptype as lisptype
 from . import registry as _registry
@@ -80,19 +80,103 @@ class AdjustableVector:
         return True
 
 
+class Array:
+    """Multi-dimensional array supporting row-major indexing."""
+    
+    def __init__(self, dimensions, initial_element=None):
+        """Create multi-dimensional array.
+        
+        Args:
+            dimensions: Tuple/list of dimension sizes, e.g., (2, 3) for 2x3
+            initial_element: Element to fill with
+        """
+        if isinstance(dimensions, int):
+            dimensions = (dimensions,)
+        
+        self.dimensions = tuple(dimensions) if isinstance(dimensions, (list, tuple)) else (dimensions,)
+        self.rank = len(self.dimensions)
+        
+        # Calculate total size
+        self.total_size = 1
+        for d in self.dimensions:
+            self.total_size *= d
+        
+        # Store data in flat array (row-major order)
+        self.data = [initial_element] * self.total_size
+    
+    def _compute_index(self, indices):
+        """Compute flat index from multi-dimensional indices (row-major).
+        
+        For 2D: index = row * columns + col
+        For 3D: index = plane * (rows * cols) + row * cols + col
+        """
+        if not isinstance(indices, (tuple, list)):
+            indices = (indices,)
+        
+        if len(indices) != self.rank:
+            raise IndexError(f"Expected {self.rank} indices, got {len(indices)}")
+        
+        # Check bounds
+        for i, idx in enumerate(indices):
+            if idx < 0 or idx >= self.dimensions[i]:
+                raise IndexError(f"Index {idx} out of bounds for dimension {i} (size {self.dimensions[i]})")
+        
+        # Compute row-major index
+        flat_index = 0
+        multiplier = 1
+        for i in range(self.rank - 1, -1, -1):
+            flat_index += indices[i] * multiplier
+            multiplier *= self.dimensions[i]
+        
+        return flat_index
+    
+    def __getitem__(self, indices):
+        """Get element at multi-dimensional index."""
+        flat_index = self._compute_index(indices)
+        return self.data[flat_index]
+    
+    def __setitem__(self, indices, value):
+        """Set element at multi-dimensional index."""
+        flat_index = self._compute_index(indices)
+        self.data[flat_index] = value
+    
+    def __repr__(self):
+        """String representation."""
+        return f"#(ARRAY {self.dimensions})"
+    
+    def to_list(self):
+        """Convert to nested lists (if not 1D)."""
+        if self.rank == 1:
+            return list(self.data)
+        elif self.rank == 2:
+            # 2D: return list of lists
+            rows, cols = self.dimensions
+            result = []
+            for r in range(rows):
+                row = []
+                for c in range(cols):
+                    row.append(self.data[r * cols + c])
+                result.append(row)
+            return result
+        else:
+            # For higher dimensions, just return flat
+            return list(self.data)
+
+
 @_registry.cl_function('MAKE-ARRAY')
 def make_array(dimensions, initial_element=None, adjustable=False, fill_pointer=None, **kwargs):
-    """Make an array (vector for now).
+    """Make an array (vector for 1D, Array for multi-dimensional).
     
     Args:
-        dimensions: Integer for 1D, tuple for multi-dimensional
+        dimensions: Integer for 1D, tuple/list for multi-dimensional
         initial_element: Initial value for elements
-        adjustable: If True, create adjustable vector
+        adjustable: If True, create adjustable vector (1D only)
         fill_pointer: For adjustable vectors, set fill-pointer
     
     Returns:
-        Vector or AdjustableVector
+        Vector (list), AdjustableVector, or Array
     """
+    # Handle 1D arrays (vectors)
     if isinstance(dimensions, int):
         if adjustable:
             adj_vec = AdjustableVector(capacity=dimensions, 
@@ -101,15 +185,13 @@ def make_array(dimensions, initial_element=None, adjustable=False, fill_pointer=
             return adj_vec
         else:
             return [initial_element] * dimensions
-    else:
-        # Multi-dimensional - for now just create 1D with product of dimensions
-        total_size = 1
-        if isinstance(dimensions, (list, tuple)):
-            for d in dimensions:
-                total_size *= d
-        if adjustable:
-            return AdjustableVector(capacity=total_size, initial_element=initial_element)
-        return [initial_element] * total_size
+    
+    # Handle multi-dimensional arrays
+    if isinstance(dimensions, (list, tuple)):
+        return Array(dimensions, initial_element=initial_element)
+    
+    # Fallback
+    return [initial_element]
 
 
 @_registry.cl_function('AREF')
@@ -118,26 +200,24 @@ def aref(array, *indices):
     
     For 1D: AREF array index
     For 2D: AREF array row column
+    For 3D: AREF array plane row column
     """
-    if isinstance(array, AdjustableVector):
+    if isinstance(array, Array):
+        # Multi-dimensional array
+        return array[indices]
+    elif isinstance(array, AdjustableVector):
+        # 1D adjustable vector
         if len(indices) == 1:
             return array[indices[0]]
         else:
-            # Multi-dimensional - compute linear index
-            # Simplified: assume row-major order
-            shape = getattr(array, 'shape', None)
-            if shape:
-                index = 0
-                multiplier = 1
-                for i in range(len(indices) - 1, -1, -1):
-                    index += indices[i] * multiplier
-                    multiplier *= shape[i]
-                return array.data[index]
-            return None
+            raise IndexError(f"Adjustable vector is 1D, got {len(indices)} indices")
     else:
-        # Regular list
+        # Regular list (1D)
         if len(indices) == 1:
-            return array[indices[0]]
+            try:
+                return array[indices[0]]
+            except (IndexError, TypeError):
+                return None
         else:
             return None
 
@@ -185,16 +265,54 @@ def adjustable_array_p(array):
 @_registry.cl_function('ARRAY-DIMENSION')
 def array_dimension(array, axis):
     """Get dimension of array along axis."""
-    if isinstance(array, AdjustableVector):
+    if isinstance(array, Array):
+        if axis < 0 or axis >= array.rank:
+            raise IndexError(f"Axis {axis} out of range for rank {array.rank}")
+        return array.dimensions[axis]
+    elif isinstance(array, AdjustableVector):
         if axis == 0:
             return array.fill_pointer
         else:
-            return 1
+            raise IndexError(f"Axis {axis} out of range for 1D array")
     else:
+        # Regular list
         if axis == 0:
             return len(array)
         else:
-            return 1
+            raise IndexError(f"Axis {axis} out of range for 1D array")
+
+
+@_registry.cl_function('ARRAY-DIMENSIONS')
+def array_dimensions(array):
+    """Get all dimensions of array as list."""
+    if isinstance(array, Array):
+        return list(array.dimensions)
+    elif isinstance(array, AdjustableVector):
+        return [array.fill_pointer]
+    else:
+        # Regular list
+        return [len(array)]
+
+
+@_registry.cl_function('ARRAY-RANK')
+def array_rank(array):
+    """Get rank (number of dimensions) of array."""
+    if isinstance(array, Array):
+        return array.rank
+    else:
+        # Vectors have rank 1
+        return 1
+
+
+@_registry.cl_function('ARRAY-TOTAL-SIZE')
+def array_total_size(array):
+    """Get total number of elements in array."""
+    if isinstance(array, Array):
+        return array.total_size
+    elif isinstance(array, AdjustableVector):
+        return array.fill_pointer
+    else:
+        return len(array)
 
 
 @_registry.cl_function('FILL-POINTER')
