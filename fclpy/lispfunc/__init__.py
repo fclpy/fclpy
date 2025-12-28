@@ -18,6 +18,7 @@ All functions are re-exported from this module for compatibility.
 from .core import *
 from .math import *
 from .sequences import *
+from .vectors import *
 from .evaluation import *
 from .comparison import *
 from .characters import *
@@ -47,12 +48,13 @@ from ..readtable import get_macro_character, set_macro_character, set_dispatch_m
 
 # Register functions into the builtin registry so lispenv can populate from it.
 from . import registry as _registry
-from . import core as _core_mod, math as _math_mod, sequences as _sequences_mod, evaluation as _evaluation_mod, comparison as _comparison_mod, characters as _characters_mod, io as _io_mod, utilities as _utilities_mod
+from . import core as _core_mod, math as _math_mod, sequences as _sequences_mod, vectors as _vectors_mod, evaluation as _evaluation_mod, comparison as _comparison_mod, characters as _characters_mod, io as _io_mod, utilities as _utilities_mod
 
 # Register modules (this will not overwrite explicit decorator registrations)
 _registry.register_module(_core_mod)
 _registry.register_module(_math_mod)
 _registry.register_module(_sequences_mod)
+_registry.register_module(_vectors_mod)
 _registry.register_module(_evaluation_mod)
 _registry.register_module(_comparison_mod)
 _registry.register_module(_characters_mod)
