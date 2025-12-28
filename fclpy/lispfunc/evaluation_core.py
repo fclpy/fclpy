@@ -155,7 +155,7 @@ def eval(form, env=None):
     from .evaluation_special_forms import (
         eval_if, eval_setq, eval_defun, eval_defmacro, eval_macroexpand_1,
         eval_macro_function, eval_lambda, eval_declare, eval_declaim,
-        eval_defvar, eval_defparameter
+        eval_defvar, eval_defparameter, eval_defstruct
     )
     from .evaluation_control_flow import (
         eval_block, eval_return_from, eval_catch, eval_throw,
@@ -244,6 +244,8 @@ def eval(form, env=None):
                 return eval_defvar(form, env)
             elif operator.name == 'DEFPARAMETER':
                 return eval_defparameter(form, env)
+            elif operator.name == 'DEFSTRUCT':
+                return eval_defstruct(form, env)
             elif operator.name == 'DEFUN':
                 return eval_defun(form, env)
             elif operator.name == 'LAMBDA':
