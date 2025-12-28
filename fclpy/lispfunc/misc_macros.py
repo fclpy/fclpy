@@ -156,13 +156,21 @@ def load(filespec, verbose=None, print_p=None, if_does_not_exist=None,
                     path_str = os.path.join(default_dir, path_str)
                     path_str = os.path.normpath(path_str)
     
-    # Handle if-does-not-exist
+    # Handle if-does-not-exist: try .lsp if .fasl not found (for FCLpy)
     if not os.path.exists(path_str):
-        if if_does_not_exist is lisptype.NIL or if_does_not_exist is None:
-            # Default behavior - raise error
-            raise FileNotFoundError(f"LOAD: File not found: {path_str}")
-        elif if_does_not_exist == lisptype.NIL:
-            return lisptype.NIL
+        # If looking for a .fasl file, try .lsp instead (FCLpy doesn't compile)
+        if path_str.endswith('.fasl'):
+            source_path = path_str[:-5] + '.lsp'
+            if os.path.exists(source_path):
+                path_str = source_path
+        
+        # Still not found?
+        if not os.path.exists(path_str):
+            if if_does_not_exist is lisptype.NIL or if_does_not_exist is None:
+                # Default behavior - raise error
+                raise FileNotFoundError(f"LOAD: File not found: {path_str}")
+            elif if_does_not_exist == lisptype.NIL:
+                return lisptype.NIL
     
     # Create pathname objects
     pathname_obj = Pathname(path_str)

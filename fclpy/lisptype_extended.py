@@ -217,6 +217,11 @@ class Package(lispT):
         self.symbols = {}  # Map from symbol name to LispSymbol
         self.external_symbols = set()  # Set of exported symbol names
     
+    @property
+    def use_list(self):
+        """Alias for use_packages for compatibility with package functions."""
+        return self.use_packages
+    
     def intern(self, name, external=False):
         """Intern a symbol in this package.
 
@@ -323,7 +328,25 @@ def make_package(name, use_packages=None, nick_names=None):
     Returns:
         Package object
     """
-    return Package(name, use_packages=use_packages, nick_names=nick_names)
+    import fclpy.state as state
+    
+    # Normalize name to uppercase
+    name_upper = name.upper() if isinstance(name, str) else str(name).upper()
+    
+    # Check if package already exists
+    existing = find_package(name_upper)
+    if existing is not None:
+        return existing
+    
+    # Create new package
+    pkg = Package(name_upper, use_packages=use_packages, nick_names=nick_names)
+    
+    # Register in state.packages
+    if not hasattr(state, 'packages'):
+        state.packages = {}
+    state.packages[name_upper] = pkg
+    
+    return pkg
 
 
 def find_package(name):
@@ -335,13 +358,28 @@ def find_package(name):
     Returns:
         Package object or None if not found
     """
-    # Check built-in packages
-    if name == "KEYWORD":
+    import fclpy.state as state
+    
+    # Normalize to uppercase
+    name_upper = name.upper() if isinstance(name, str) else str(name).upper()
+    
+    # Check built-in packages first
+    if name_upper == "KEYWORD":
         return KEYWORD_PACKAGE
-    if name == "COMMON-LISP" or name == "CL":
+    if name_upper == "COMMON-LISP" or name_upper == "CL":
         return COMMON_LISP_PACKAGE
-    if name == "COMMON-LISP-USER" or name == "CL-USER":
+    if name_upper == "COMMON-LISP-USER" or name_upper == "CL-USER":
         return COMMON_LISP_USER_PACKAGE
+    
+    # Check dynamically created packages
+    if hasattr(state, 'packages') and state.packages:
+        # Check by exact name
+        if name_upper in state.packages:
+            return state.packages[name_upper]
+        # Check by nickname
+        for pkg_name, pkg in state.packages.items():
+            if hasattr(pkg, 'nick_names') and name_upper in [n.upper() if isinstance(n, str) else str(n).upper() for n in pkg.nick_names]:
+                return pkg
     
     return None
 

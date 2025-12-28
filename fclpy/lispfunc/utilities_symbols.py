@@ -66,11 +66,32 @@ def in_package(name):
 @_registry.cl_function('IMPORT')
 def import_symbol(symbols, package=None):
     """Import symbols into a package."""
+    import fclpy.state as state  # Re-import to ensure we have the same state module
+    
     if not isinstance(symbols, (list, tuple)):
         symbols = [symbols]
-    pkg = lisptype.COMMON_LISP_USER_PACKAGE if package is None else (package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)))
+    
+    # Determine the target package
+    if package is None:
+        pkg = lisptype.COMMON_LISP_USER_PACKAGE
+    elif isinstance(package, lisptype.Package):
+        pkg = package
+    else:
+        # Handle keywords and symbols - extract the name
+        if isinstance(package, lisptype.lispKeyword):
+            pkg_name = package.name  # Keyword names don't include the colon
+        elif isinstance(package, lisptype.LispSymbol):
+            pkg_name = package.name
+            if pkg_name.startswith(':'):
+                pkg_name = pkg_name[1:]  # Remove leading colon if present
+        else:
+            pkg_name = str(package)
+            if pkg_name.startswith(':'):
+                pkg_name = pkg_name[1:]  # Remove leading colon
+        pkg = lisptype.find_package(pkg_name)
+    
     if pkg is None:
-        raise lisptype.LispNotImplementedError("IMPORT: unknown package")
+        raise lisptype.LispNotImplementedError(f"IMPORT: unknown package '{pkg_name}'")
     for s in symbols:
         name = s.name if hasattr(s, 'name') else str(s)
         pkg.intern_symbol(name, external=True)

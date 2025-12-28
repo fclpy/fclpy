@@ -403,10 +403,25 @@ def file_write_date(pathspec):
 def compile_file(input_file, output_file=None, **kwargs):
     """Compile file.
     
-    In FCLpy, we don't actually compile - we just load the file.
-    Returns: (output-truename, warnings-p, failure-p)
+    In FCLpy, we don't actually compile - we just return success.
+    The file will be interpreted when loaded.
+    
+    Returns: MultipleValues(output-truename, warnings-p, failure-p)
+      - output-truename: The file that would be loaded (same as input in FCLpy)
+      - warnings-p: NIL (no warnings)
+      - failure-p: NIL (no failure)
     """
-    return str(input_file), lisptype.NIL, lisptype.NIL  # Simplified
+    from fclpy.lispfunc.pathnames import Pathname
+    
+    # Convert to pathname if needed
+    if isinstance(input_file, Pathname):
+        output_path = input_file
+    else:
+        output_path = Pathname(str(input_file))
+    
+    # Return multiple values: output-truename, warnings-p, failure-p
+    # In FCLpy, we "compile" by returning the source file path with no failures
+    return lisptype.MultipleValues(output_path, lisptype.NIL, lisptype.NIL)
 
 
 @_registry.cl_function('COMPILE-FILE-PATHNAME')
@@ -414,8 +429,8 @@ def compile_file_pathname(input_file, output_file=None, **kwargs):
     """Get compiled file pathname.
     
     Returns the pathname that COMPILE-FILE would produce for the given input file.
-    Since FCLpy doesn't actually compile to a different file, we just return
-    a .fasl extension version of the input file.
+    Returns a .fasl extension version of the input file. The load function
+    will handle loading the source if the .fasl doesn't exist.
     """
     from fclpy.lispfunc.pathnames import Pathname
     import os

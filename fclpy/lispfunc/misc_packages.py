@@ -45,12 +45,26 @@ def make_package(*args):
     - (make-package name)
     - (make-package name :nicknames list :use list)
     """
-    positional, kwargs = _parse_keyword_args(args)
-    
-    if not positional:
+    if not args:
         raise ValueError("MAKE-PACKAGE requires a name")
     
-    name = str(positional[0])
+    # First argument is always the package name (positional)
+    name_arg = args[0]
+    
+    # Remaining arguments are keyword args
+    remaining_args = args[1:] if len(args) > 1 else []
+    _, kwargs = _parse_keyword_args(remaining_args)
+    if isinstance(name_arg, lisptype.lispKeyword):
+        name = name_arg.name  # Keywords store name without colon
+    elif isinstance(name_arg, lisptype.LispSymbol):
+        name = name_arg.name
+        if name.startswith(':'):
+            name = name[1:]  # Remove leading colon
+    else:
+        name = str(name_arg)
+        if name.startswith(':'):
+            name = name[1:]  # Remove leading colon
+    
     nicknames = kwargs.get('nicknames', None)
     use = kwargs.get('use', None)
     
@@ -60,7 +74,16 @@ def make_package(*args):
             nick_list = []
             cur = nicknames
             while cur is not None and cur != lisptype.NIL and isinstance(cur, lisptype.lispCons):
-                nick_list.append(str(cur.car) if cur.car else None)
+                item = cur.car
+                if isinstance(item, lisptype.lispKeyword):
+                    nick_list.append(item.name)
+                elif isinstance(item, lisptype.LispSymbol):
+                    n = item.name
+                    if n.startswith(':'):
+                        n = n[1:]
+                    nick_list.append(n)
+                else:
+                    nick_list.append(str(item) if item else None)
                 cur = cur.cdr
             nicknames = [n for n in nick_list if n]
         elif isinstance(nicknames, (list, tuple)):
@@ -71,7 +94,7 @@ def make_package(*args):
     
     # Store nicknames if provided
     if nicknames:
-        pkg.nicknames = nicknames
+        pkg.nick_names = nicknames  # Use nick_names to match Package class
     
     return pkg
 

@@ -2,232 +2,278 @@
 
 ## Current State Analysis
 
-### What FCLPY Has
+### What FCLPY Has (Updated Dec 29, 2025)
 1. **CLI exists** (`run.py`): Can load and evaluate Lisp files
 2. **Basic evaluation works**: `(+ 1 2)` → `3`
-3. **Package system**: `IN-PACKAGE` function works
-4. **Many CL functions**: 825+ function bindings registered
-5. **File loading**: `load_and_evaluate_file()` in runtime.py
+3. **Package system**: `IN-PACKAGE`, `MAKE-PACKAGE`, `FIND-PACKAGE`, `USE-PACKAGE` work
+4. **Many CL functions**: 925+ tests passing
+5. **File loading**: `LOAD` function works with `*LOAD-TRUENAME*` and `*LOAD-PATHNAME*`
+6. **Special forms**: DEFVAR, DEFPARAMETER, LET, LET*, HANDLER-BIND, HANDLER-CASE, IGNORE-ERRORS implemented
+7. **Compile stubs**: `COMPILE-FILE`, `COMPILE-FILE-PATHNAME` return appropriate values
+8. **Package registration**: Dynamic packages stored in `state.packages`
 
-### What ANSI Test Suite Requires
-The test suite (`ansi-test/`) needs:
+### Recent Progress (Dec 29, 2025)
+- ✅ `rt.lsp` loads successfully (58 expressions)
+- ✅ `rt-package.lsp` loads successfully  
+- ✅ `cl-test-package.lsp` loads successfully
+- ✅ `init.lsp` loads first 56 expressions before hitting DEFTEST errors
+- ✅ Fixed `MAKE-PACKAGE` keyword argument parsing (first arg was being treated as keyword)
+- ✅ Package `CL-TEST` created and uses `REGRESSION-TEST`
+- ✅ `DEFTEST` macro defined in `REGRESSION-TEST` package
 
-1. **RT (Regression Test) framework** - `rt.lsp` provides DEFTEST macro
-2. **Special variables**:
-   - `*LOAD-TRUENAME*` - pathname of file being loaded
-   - `*COMPILE-FILE-TRUENAME*` - pathname of file being compiled
-   - `*DEFAULT-PATHNAME-DEFAULTS*` - default pathname
-   - `*LOAD-PATHNAME*` - logical pathname being loaded
-3. **Pathname operations**: `MAKE-PATHNAME`, `MERGE-PATHNAMES`, `PATHNAME-DIRECTORY` (partially implemented)
-4. **DEFVAR special form** - currently raises `LispNotImplementedError`
-5. **LET/LET*** - need to verify working
-6. **HANDLER-BIND** - for error handling
-7. **DECLAIM/DECLARE** - for declarations
-8. **LOOP macro** - partially implemented
-9. **Multiple values** - `VALUES`, `MULTIPLE-VALUE-BIND`
-10. **Condition system** - `SIGNAL`, `ERROR`, `HANDLER-CASE`
+### Current Blocker: Package-Aware Reader
+The main issue preventing full ANSI test loading:
+
+**Problem**: When reading `DEFTEST` in code, the reader creates an unqualified symbol. When evaluating, we look in the environment but NOT in USE'd packages.
+
+**Expected Behavior** (Real Common Lisp):
+1. `*PACKAGE*` is set to `CL-TEST` 
+2. `CL-TEST` uses `REGRESSION-TEST`
+3. Reader sees `DEFTEST`, looks in `CL-TEST` first
+4. Not found → looks in USE'd packages → finds in `REGRESSION-TEST`
+5. Symbol resolves to `REGRESSION-TEST:DEFTEST`
+
+**Current Behavior**:
+1. Reader creates plain `LispSymbol("DEFTEST")` 
+2. Evaluator looks in environment bindings
+3. Not found → "Unbound variable: DEFTEST" error
+
+### What Still Needs Implementation
+1. **Package-aware symbol interning** - Reader must check `*PACKAGE*` and USE'd packages
+2. **Reader dispatch characters** - `#c` (complex), `#*` (bit-vector) not implemented
+3. **Various minor issues** - Type comparisons, some arithmetic edge cases
 
 ---
 
 ## Implementation Plan
 
-### Phase 1: Critical Infrastructure (Priority: HIGH)
+### Phase 1: Critical Infrastructure ✅ COMPLETED
 
-#### Task 1.1: Implement DEFVAR special form
-- Currently raises `LispNotImplementedError`
-- Need to bind variable in environment with initial value
-- Support documentation string
+#### Task 1.1: ✅ Implement DEFVAR special form
+#### Task 1.2: ✅ Add *LOAD-TRUENAME* and *LOAD-PATHNAME* 
+#### Task 1.3: ✅ Add *DEFAULT-PATHNAME-DEFAULTS*
+#### Task 1.4: ✅ Verify/fix file LOAD function
 
-#### Task 1.2: Add *LOAD-TRUENAME* and *LOAD-PATHNAME* 
-- Set before loading a file
-- Restore after loading
-- Need to be dynamic variables
+### Phase 2: RT Framework Support ✅ COMPLETED
 
-#### Task 1.3: Add *DEFAULT-PATHNAME-DEFAULTS*
-- Initialize to current directory
-- Used by pathname functions
+#### Task 2.1: ✅ Ensure DEFMACRO works correctly
+#### Task 2.2: ✅ Verify MAKE-HASH-TABLE and hash operations
+#### Task 2.3: ✅ Ensure LOOP basics work
+#### Task 2.4: ✅ Verify HANDLER-BIND/HANDLER-CASE
 
-#### Task 1.4: Verify/fix file LOAD function
-- Currently `runtime.load_and_evaluate_file()` exists
-- Need `(LOAD filename)` Lisp function
-- Set `*LOAD-TRUENAME*` during load
+### Phase 3: Package System Integration (Priority: HIGH) - IN PROGRESS
 
-### Phase 2: RT Framework Support (Priority: HIGH)
+#### Task 3.1: ✅ Fix MAKE-PACKAGE keyword parsing
+- First argument was being treated as keyword when it was `:CL-TEST`
+- Fixed to always treat first arg as positional
 
-#### Task 2.1: Ensure DEFMACRO works correctly
-- RT framework heavily uses macros
-- `DEFTEST` is a macro
+#### Task 3.2: ✅ Package registration in state.packages
+- `make_package` now registers in `state.packages`
+- `find_package` checks `state.packages`
 
-#### Task 2.2: Verify MAKE-HASH-TABLE and hash operations
-- RT uses hash tables for test registry
+#### Task 3.3: 🔲 Implement package-aware reader (BLOCKER)
+**This is the critical next step.**
 
-#### Task 2.3: Ensure LOOP basics work
-- RT uses LOOP for iterating tests
+The reader (`lispreader.py`) needs to:
+1. Track current `*PACKAGE*` during reading
+2. When reading an unqualified symbol like `DEFTEST`:
+   - Look in current package's symbols
+   - Look in current package's USE-list packages (external symbols)
+   - Intern appropriately
+3. Handle package prefixes like `RT:DEFTEST` or `CL:CAR`
 
-#### Task 2.4: Verify HANDLER-BIND/HANDLER-CASE
-- Needed for `*CATCH-ERRORS*` functionality
+**Implementation approach:**
+```python
+# In lispreader.py or a new package_reader.py
+def intern_symbol_for_read(name, current_package):
+    """Intern a symbol during reading, respecting USE'd packages."""
+    # 1. Check if symbol exists in current package
+    sym, status = current_package.find_symbol(name)
+    if sym is not None:
+        return sym
+    
+    # 2. Check USE'd packages for exported symbol
+    for used_pkg in current_package.use_packages:
+        sym, status = used_pkg.find_symbol(name)
+        if sym is not None and status == ':EXTERNAL':
+            return sym
+    
+    # 3. Not found - intern in current package
+    return current_package.intern_symbol(name)
+```
 
-### Phase 3: Core CL Features for Tests (Priority: MEDIUM)
+#### Task 3.4: 🔲 Handle package-qualified symbols in reader
+- Parse `PKG:SYMBOL` (external) and `PKG::SYMBOL` (internal)
+- Look up package, find/intern symbol appropriately
 
-#### Task 3.1: FLET/LABELS local functions
-- Many tests use local function bindings
+### Phase 4: Reader Enhancements (Priority: MEDIUM)
 
-#### Task 3.2: MULTIPLE-VALUE-BIND
-- Tests check multiple return values
+#### Task 4.1: 🔲 Implement #c reader macro (complex numbers)
+- `#c(1 2)` → `(complex 1 2)` → `1+2i`
 
-#### Task 3.3: Complete FORMAT function
-- Tests produce formatted output
+#### Task 4.2: 🔲 Implement #* reader macro (bit-vectors)  
+- `#*101` → bit vector
 
-#### Task 3.4: COMPILE-FILE basics (can be stub)
-- Test suite has compile-and-load.lsp
-- Stub that just loads would work initially
+#### Task 4.3: 🔲 Implement #. reader macro (read-time eval)
+- `#.(+ 1 2)` → `3` at read time
 
-### Phase 4: Test Runner Integration (Priority: MEDIUM)
+### Phase 5: Test Runner Integration (Priority: LOW)
 
-#### Task 4.1: Create fclpy-specific init file
-- Like `init.lsp` but for fclpy
-- Disable tests known to fail
-- Set up expected-failures
-
-#### Task 4.2: Add `--load` CLI option
-- Load multiple files in sequence
-- Support for `(load "file.lsp")` calls
-
-#### Task 4.3: Create test runner script
-- Python script to run ansi-test
-- Capture results
-- Generate report
+#### Task 5.1: 🔲 Create fclpy-specific init file
+#### Task 5.2: 🔲 Add `--load` CLI option for multiple files
+#### Task 5.3: 🔲 Create test runner script with reporting
 
 ---
 
 ## Detailed Implementation Steps
 
-### Step 1: Implement DEFVAR (evaluation_special_forms.py)
+### Step 1: Package-Aware Reader (NEXT PRIORITY)
+
+The reader needs to be updated to handle package context. Key files:
+- `fclpy/lispreader.py` - Main reader implementation
+- `fclpy/readtable.py` - Readtable and macro characters
+
+**Changes needed in `lispreader.py`:**
 
 ```python
-def eval_defvar(form, env):
-    """Evaluate DEFVAR special form.
+class LispReader:
+    def __init__(self, get_macro_func, stream):
+        self.get_macro_func = get_macro_func
+        self.stream = stream
+        # Add package awareness
+        self._current_package = None  # Will be set from state
     
-    (DEFVAR name)           - declares special variable
-    (DEFVAR name value)     - declares and initializes
-    (DEFVAR name value doc) - with documentation
-    """
-    args = cdr(form)
-    name = car(args)
+    def read_symbol(self, first_char):
+        """Read a symbol, handling package prefixes."""
+        name = self._read_symbol_name(first_char)
+        
+        # Check for package prefix
+        if ':' in name:
+            return self._parse_package_qualified_symbol(name)
+        
+        # Unqualified symbol - use current package context
+        return self._intern_in_current_package(name)
     
-    # Get current value if exists
-    current = env.find_variable(name)
-    
-    if _consp_internal(cdr(args)) and current is None:
-        # Has initial value and not already bound
-        value_form = car(cdr(args))
-        value = eval(value_form, env)
-        env.add_variable(name, value)
-    elif current is None:
-        # Just declare, bind to NIL
-        env.add_variable(name, lisptype.NIL)
-    
-    return name
+    def _intern_in_current_package(self, name):
+        """Intern symbol respecting USE'd packages."""
+        import fclpy.state as state
+        pkg = getattr(state, 'current_package', None)
+        if pkg is None:
+            # Fallback to COMMON-LISP-USER
+            pkg = lisptype.COMMON_LISP_USER_PACKAGE
+        
+        # Check current package
+        sym, status = pkg.find_symbol(name)
+        if sym is not None:
+            return sym
+        
+        # Check USE'd packages for external symbol
+        for used_pkg in getattr(pkg, 'use_packages', []):
+            sym, status = used_pkg.find_symbol(name) 
+            if sym is not None and status == ':EXTERNAL':
+                return sym
+        
+        # Not found - intern in current package
+        return pkg.intern_symbol(name)
 ```
 
-### Step 2: Add special variables to lispenv.py
+### Step 2: Package find_symbol to check external symbols
+
+Update `Package.find_symbol` to properly indicate external vs internal:
 
 ```python
-def setup_standard_environment():
-    # ... existing code ...
+def find_symbol(self, name):
+    """Find symbol, checking this package and USE'd packages."""
+    # Check own symbols first
+    if name in self.symbols:
+        status = ':EXTERNAL' if name in self.external_symbols else ':INTERNAL'
+        return (self.symbols[name], status)
     
-    # Add special variables
-    env.add_variable(LispSymbol('*LOAD-TRUENAME*'), NIL)
-    env.add_variable(LispSymbol('*LOAD-PATHNAME*'), NIL)
-    env.add_variable(LispSymbol('*COMPILE-FILE-TRUENAME*'), NIL)
-    env.add_variable(LispSymbol('*DEFAULT-PATHNAME-DEFAULTS*'), 
-                     make_pathname_from_string(os.getcwd()))
+    # Check USE'd packages (only external symbols)
+    for pkg in self.use_packages:
+        if name in pkg.external_symbols:
+            return (pkg.symbols[name], ':INHERITED')
+    
+    return (None, None)
 ```
 
-### Step 3: Update LOAD function (create if not exists)
+### Step 3: Ensure DEFTEST is exported from REGRESSION-TEST
 
-```python
-@_registry.cl_function('LOAD')
-def load_file(filespec, verbose=None, print_p=None, if_does_not_exist=None, external_format=None):
-    """Load a Lisp file."""
-    from fclpy import state
-    
-    # Save old values
-    old_truename = state.current_environment.find_variable(LispSymbol('*LOAD-TRUENAME*'))
-    
-    # Set new values
-    pathname = make_pathname(filespec)
-    truename = truename_fn(pathname)
-    state.current_environment.set_variable(LispSymbol('*LOAD-TRUENAME*'), truename)
-    
-    try:
-        # Load and evaluate file
-        result = runtime.load_and_evaluate_file(str(pathname), state.current_environment)
-        return result
-    finally:
-        # Restore old values
-        state.current_environment.set_variable(LispSymbol('*LOAD-TRUENAME*'), old_truename)
-```
+When rt.lsp defines DEFTEST, it needs to be exported. Check that the
+`export` function in `misc_packages.py` properly adds to `external_symbols`.
 
 ---
 
 ## Testing Strategy
 
-### Milestone 1: Load rt.lsp successfully
+### ✅ Milestone 1: Load rt.lsp successfully
 ```bash
 pipenv run python run.py ../ansi-test/rt.lsp
+# PASSED - 58 expressions loaded
 ```
 
-### Milestone 2: Load init.lsp successfully
+### ✅ Milestone 2: Load package setup files
+```bash
+# rt-package.lsp - PASSED
+# cl-test-package.lsp - PASSED (after MAKE-PACKAGE fix)
+```
+
+### 🔲 Milestone 3: Load init.lsp without DEFTEST errors
 ```bash
 pipenv run python run.py ../ansi-test/init.lsp
+# Currently: 56 expressions before "Unbound variable: DEFTEST"
+# Target: All expressions load, DEFTEST resolves correctly
 ```
 
-### Milestone 3: Run a single test
+### 🔲 Milestone 4: Run a single test
 ```bash
 # After loading init.lsp
 (rt:do-test 'cl-test::+.1)
 ```
 
-### Milestone 4: Run test category
+### 🔲 Milestone 5: Run test category
 ```bash
 pipenv run python run.py ../ansi-test/numbers/plus.lsp
 ```
 
 ---
 
-## Estimated Effort
+## Estimated Remaining Effort
 
-| Phase | Tasks | Estimated Time |
-|-------|-------|----------------|
-| Phase 1 | Critical Infrastructure | 4-6 hours |
-| Phase 2 | RT Framework Support | 4-6 hours |
-| Phase 3 | Core CL Features | 8-12 hours |
-| Phase 4 | Test Runner Integration | 2-4 hours |
+| Phase | Tasks | Status | Estimated Time |
+|-------|-------|--------|----------------|
+| Phase 1 | Critical Infrastructure | ✅ DONE | - |
+| Phase 2 | RT Framework Support | ✅ DONE | - |
+| Phase 3 | Package-Aware Reader | 🔲 IN PROGRESS | 4-6 hours |
+| Phase 4 | Reader Enhancements | 🔲 TODO | 2-4 hours |
+| Phase 5 | Test Runner Integration | 🔲 TODO | 2-4 hours |
 
-**Total: 18-28 hours**
-
----
-
-## Quick Start (Minimum Viable)
-
-To get *something* running quickly:
-
-1. Implement `DEFVAR` in evaluator
-2. Add `*LOAD-TRUENAME*`, `*DEFAULT-PATHNAME-DEFAULTS*`
-3. Create/fix `LOAD` function with truename binding
-4. Try loading `rt.lsp` and see what errors occur
-5. Fix errors iteratively
-
-This approach will reveal exactly what's missing faster than theoretical analysis.
+**Remaining: 8-14 hours**
 
 ---
 
-## Files to Modify
+## Quick Next Steps
 
-1. `fclpy/lispfunc/evaluation_special_forms.py` - Add eval_defvar
-2. `fclpy/lispfunc/evaluation_core.py` - Wire up DEFVAR dispatcher
-3. `fclpy/lispenv.py` - Add special variables to standard environment
-4. `fclpy/lispfunc/io.py` or new file - Add/fix LOAD function
-5. `fclpy/lispfunc/pathnames.py` - Ensure TRUENAME works
-6. `run.py` - Add options for ANSI test suite running
+1. **Implement package-aware symbol interning in reader** (BLOCKER)
+   - Modify `LispReader` to check `*PACKAGE*` and USE'd packages
+   - Handle `:` package prefix syntax
+   
+2. **Test with init.lsp again**
+   - Should now find `DEFTEST` in `REGRESSION-TEST` package
+   
+3. **Fix any remaining reader dispatch issues**
+   - `#c` for complex numbers
+   - `#*` for bit-vectors
+
+---
+
+## Files to Modify (Updated)
+
+1. ~~`fclpy/lispfunc/evaluation_special_forms.py`~~ ✅ Done
+2. ~~`fclpy/lispfunc/evaluation_core.py`~~ ✅ Done  
+3. ~~`fclpy/lispenv.py`~~ ✅ Done
+4. ~~`fclpy/lispfunc/misc_macros.py`~~ ✅ Done (LOAD function)
+5. ~~`fclpy/lispfunc/misc_packages.py`~~ ✅ Done (MAKE-PACKAGE fix)
+6. **`fclpy/lispreader.py`** - Add package-aware symbol interning (NEXT)
+7. **`fclpy/readtable.py`** - Add #c, #* dispatch macros
+8. `run.py` - Add options for ANSI test suite running

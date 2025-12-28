@@ -528,6 +528,39 @@ def eval_handler_case(form, env):
         raise
 
 
+def eval_ignore_errors(form, env):
+    """Implement IGNORE-ERRORS special form.
+    
+    Syntax: (IGNORE-ERRORS form*)
+    
+    Evaluates the body forms in sequence. If any form signals an error,
+    execution stops and IGNORE-ERRORS returns two values: NIL and the
+    condition object. If no error occurs, returns the primary value of
+    the last form and NIL.
+    
+    Returns: MultipleValues(primary-value, condition-or-nil)
+    """
+    from .evaluation_core import eval
+    
+    args = cdr(form)
+    
+    try:
+        # Evaluate body forms
+        result = lisptype.NIL
+        while _consp_internal(args):
+            result = eval(car(args), env)
+            args = cdr(args)
+        
+        # Success: return primary value and NIL
+        return lisptype.MultipleValues(result, lisptype.NIL)
+    
+    except Exception as e:
+        # Error occurred: return NIL and the condition
+        # Convert Python exception to a string representation
+        condition = str(e) if not isinstance(e, lisptype.LispError) else e
+        return lisptype.MultipleValues(lisptype.NIL, condition)
+
+
 __all__ = [
     'eval_signal',
     'eval_error',
@@ -542,4 +575,5 @@ __all__ = [
     'eval_multiple_value_bind',
     'eval_handler_bind',
     'eval_handler_case',
+    'eval_ignore_errors',
 ]

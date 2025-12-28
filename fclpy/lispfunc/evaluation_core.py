@@ -170,7 +170,7 @@ def eval(form, env=None):
         eval_signal, eval_error, eval_cerror, eval_warn,
         eval_restart_case, eval_restart_bind, eval_invoke_restart, eval_abort,
         eval_multiple_value_call, eval_multiple_value_bind,
-        eval_handler_bind, eval_handler_case
+        eval_handler_bind, eval_handler_case, eval_ignore_errors
     )
     
     env = resolve_environment(env)
@@ -303,6 +303,8 @@ def eval(form, env=None):
                 return eval_handler_bind(form, env)
             elif operator.name == 'HANDLER-CASE':
                 return eval_handler_case(form, env)
+            elif operator.name == 'IGNORE-ERRORS':
+                return eval_ignore_errors(form, env)
             elif operator.name == 'TAGBODY':
                 return eval_tagbody(form, env)
             elif operator.name == 'GO':
