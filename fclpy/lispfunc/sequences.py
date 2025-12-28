@@ -305,68 +305,176 @@ def member_if_not(predicate, list_seq, key=None):
 
 @_registry.cl_function('FIND')
 def find(item, sequence, **kwargs):
-    """Find item in sequence."""
-    for x in sequence:
-        if x == item:
-            return x
+    """Find item in sequence.
+    
+    Supports:
+      :key - function to apply to each element before comparison
+      :test - comparison function (default is eql)
+      :start - start index
+      :end - end index
+    """
+    start = kwargs.get('start', 0)
+    end = kwargs.get('end', len(sequence))
+    key = kwargs.get('key', None)
+    test = kwargs.get('test', lambda x, y: x == y)
+    
+    iterator = iterate(sequence, start=start, end=end, key=key, test=test)
+    for element in iterator:
+        if iterator.matches(element, item):
+            return element
     return None
 
 
 @_registry.cl_function('FIND-IF')
 def find_if(predicate, sequence, **kwargs):
-    """Find item satisfying predicate."""
-    for x in sequence:
-        if predicate(x):
-            return x
+    """Find item satisfying predicate.
+    
+    Supports:
+      :key - function to apply to each element before testing
+      :start - start index
+      :end - end index
+    """
+    start = kwargs.get('start', 0)
+    end = kwargs.get('end', len(sequence))
+    key = kwargs.get('key', None)
+    
+    iterator = iterate(sequence, start=start, end=end, key=key)
+    for element in iterator:
+        test_value = iterator.get_value(element)
+        if predicate(test_value):
+            return element
     return None
 
 
 @_registry.cl_function('FIND-IF-NOT')
 def find_if_not(predicate, sequence, **kwargs):
-    """Find item not satisfying predicate."""
-    for x in sequence:
-        if not predicate(x):
-            return x
+    """Find item not satisfying predicate.
+    
+    Supports:
+      :key - function to apply to each element before testing
+      :start - start index
+      :end - end index
+    """
+    start = kwargs.get('start', 0)
+    end = kwargs.get('end', len(sequence))
+    key = kwargs.get('key', None)
+    
+    iterator = iterate(sequence, start=start, end=end, key=key)
+    for element in iterator:
+        test_value = iterator.get_value(element)
+        if not predicate(test_value):
+            return element
     return None
 
 
 @_registry.cl_function('POSITION')
 def position(item, sequence, **kwargs):
-    """Find position of item."""
-    try:
-        return sequence.index(item)
-    except ValueError:
-        return None
+    """Find position of item.
+    
+    Supports:
+      :key - function to apply to each element before comparison
+      :test - comparison function (default is eql)
+      :start - start index
+      :end - end index
+    """
+    start = kwargs.get('start', 0)
+    end = kwargs.get('end', len(sequence))
+    key = kwargs.get('key', None)
+    test = kwargs.get('test', lambda x, y: x == y)
+    
+    for i in range(start, min(end, len(sequence))):
+        element = sequence[i]
+        test_val = key(element) if key else element
+        if test(test_val, item):
+            return i
+    return None
 
 
 @_registry.cl_function('POSITION-IF')
 def position_if(predicate, sequence, **kwargs):
-    """Find position of item satisfying predicate."""
-    for i, x in enumerate(sequence):
-        if predicate(x):
+    """Find position of item satisfying predicate.
+    
+    Supports:
+      :key - function to apply to each element before testing
+      :start - start index
+      :end - end index
+    """
+    start = kwargs.get('start', 0)
+    end = kwargs.get('end', len(sequence))
+    key = kwargs.get('key', None)
+    
+    for i in range(start, min(end, len(sequence))):
+        element = sequence[i]
+        test_val = key(element) if key else element
+        if predicate(test_val):
             return i
     return None
 
 
 @_registry.cl_function('POSITION-IF-NOT')
 def position_if_not(predicate, sequence, **kwargs):
-    """Find position of item not satisfying predicate."""
-    for i, x in enumerate(sequence):
-        if not predicate(x):
+    """Find position of item not satisfying predicate.
+    
+    Supports:
+      :key - function to apply to each element before testing
+      :start - start index
+      :end - end index
+    """
+    start = kwargs.get('start', 0)
+    end = kwargs.get('end', len(sequence))
+    key = kwargs.get('key', None)
+    
+    for i in range(start, min(end, len(sequence))):
+        element = sequence[i]
+        test_val = key(element) if key else element
+        if not predicate(test_val):
             return i
     return None
 
 
 @_registry.cl_function('COUNT')
 def count(item, sequence, **kwargs):
-    """Count occurrences of item."""
-    return sum(1 for x in sequence if x == item)
+    """Count occurrences of item.
+    
+    Supports:
+      :key - function to apply to each element before comparison
+      :test - comparison function (default is eql)
+      :start - start index
+      :end - end index
+    """
+    start = kwargs.get('start', 0)
+    end = kwargs.get('end', len(sequence))
+    key = kwargs.get('key', None)
+    test = kwargs.get('test', lambda x, y: x == y)
+    
+    iterator = iterate(sequence, start=start, end=end, key=key, test=test)
+    count_val = 0
+    for element in iterator:
+        if iterator.matches(element, item):
+            count_val += 1
+    return count_val
 
 
 @_registry.cl_function('COUNT-IF')
 def count_if(predicate, sequence, **kwargs):
-    """Count items satisfying predicate."""
-    return sum(1 for x in sequence if predicate(x))
+    """Count items satisfying predicate.
+    
+    Supports:
+      :key - function to apply to each element before testing
+      :start - start index
+      :end - end index
+    """
+    start = kwargs.get('start', 0)
+    end = kwargs.get('end', len(sequence))
+    key = kwargs.get('key', None)
+    
+    iterator = iterate(sequence, start=start, end=end, key=key)
+    count_val = 0
+    for element in iterator:
+        test_value = iterator.get_value(element)
+        if predicate(test_value):
+            count_val += 1
+    return count_val
 
 
 @_registry.cl_function('COUNT-IF-NOT')
@@ -632,20 +740,99 @@ def replace(sequence1, sequence2, **kwargs):
 
 @_registry.cl_function('REMOVE')
 def remove(item, sequence, **kwargs):
-    """Remove item from sequence."""
-    return [x for x in sequence if x != item]
+    """Remove item from sequence.
+    
+    Supports:
+      :key - function to apply to each element before comparison
+      :test - comparison function (default is eql)
+      :start - start index
+      :end - end index
+    """
+    start = kwargs.get('start', 0)
+    end = kwargs.get('end', len(sequence))
+    key = kwargs.get('key', None)
+    test = kwargs.get('test', lambda x, y: x == y)
+    
+    result = []
+    iterator = iterate(sequence, start=start, end=end, key=key, test=test)
+    
+    # Add elements before start
+    result.extend(sequence[:start])
+    
+    # Filter and add elements in range
+    for element in iterator:
+        if not iterator.matches(element, item):
+            result.append(element)
+    
+    # Add elements after end
+    if end < len(sequence):
+        result.extend(sequence[end:])
+    
+    return result
 
 
 @_registry.cl_function('REMOVE-IF')
 def remove_if(test, sequence, **kwargs):
-    """Remove elements satisfying test."""
-    return [x for x in sequence if not test(x)]
+    """Remove elements satisfying test.
+    
+    Supports:
+      :key - function to apply to each element before testing
+      :start - start index
+      :end - end index
+    """
+    start = kwargs.get('start', 0)
+    end = kwargs.get('end', len(sequence))
+    key = kwargs.get('key', None)
+    
+    result = []
+    iterator = iterate(sequence, start=start, end=end, key=key)
+    
+    # Add elements before start
+    result.extend(sequence[:start])
+    
+    # Filter and add elements in range
+    for element in iterator:
+        test_value = iterator.get_value(element)
+        if not test(test_value):
+            result.append(element)
+    
+    # Add elements after end
+    if end < len(sequence):
+        result.extend(sequence[end:])
+    
+    return result
 
 
 @_registry.cl_function('REMOVE-IF-NOT')
 def remove_if_not(test, sequence, **kwargs):
-    """Remove elements not satisfying test."""
-    return [x for x in sequence if test(x)]
+    """Remove elements not satisfying test.
+    
+    Supports:
+      :key - function to apply to each element before testing
+      :start - start index
+      :end - end index
+    """
+    start = kwargs.get('start', 0)
+    end = kwargs.get('end', len(sequence))
+    key = kwargs.get('key', None)
+    
+    result = []
+    iterator = iterate(sequence, start=start, end=end, key=key)
+    
+    # Add elements before start
+    result.extend(sequence[:start])
+    
+    # Filter and add elements in range
+    for element in iterator:
+        test_value = iterator.get_value(element)
+        if test(test_value):
+            result.append(element)
+    
+    # Add elements after end
+    if end < len(sequence):
+        result.extend(sequence[end:])
+    
+    return result
 
 
 @_registry.cl_function('DELETE')
