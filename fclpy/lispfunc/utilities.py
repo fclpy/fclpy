@@ -293,4 +293,7 @@ __all__ = [
     'make_load_form_saving_slots',
     'fill_pointer',
     'documentation',
+    'get_optimization_policy',
+    'is_variable_special',
 ]
+

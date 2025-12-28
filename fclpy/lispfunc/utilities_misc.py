@@ -1263,6 +1263,75 @@ def documentation(symbol, doc_type=None):
     return lisptype.NIL
 
 
+def get_optimization_policy(env=None):
+    """Get the current optimization policy from the environment.
+    
+    Returns a dictionary with keys: speed, safety, debug, compilation-speed, space
+    Each value is 0-3 (minimum to maximum).
+    """
+    if env is None:
+        try:
+            import fclpy.state as _state
+            import fclpy.lispenv as lispenv
+            env = _state.current_environment
+            if env is None:
+                env = lispenv.setup_standard_environment()
+        except Exception:
+            pass
+    
+    # Find root environment if we have one
+    if env is not None:
+        root_env = env
+        while root_env.parent is not None:
+            root_env = root_env.parent
+        
+        # Return optimization policy if it exists
+        if hasattr(root_env, '_optimization_policy'):
+            return root_env._optimization_policy
+    
+    # Return default policy
+    return {
+        'speed': 1,
+        'safety': 1,
+        'debug': 1,
+        'compilation-speed': 1,
+        'space': 1
+    }
+
+
+def is_variable_special(symbol, env=None):
+    """Check if a symbol is declared as special.
+    
+    Returns True if the symbol is in the global special variables list.
+    """
+    if not isinstance(symbol, lisptype.LispSymbol):
+        return False
+    
+    if env is None:
+        try:
+            import fclpy.state as _state
+            import fclpy.lispenv as lispenv
+            env = _state.current_environment
+            if env is None:
+                env = lispenv.setup_standard_environment()
+        except Exception:
+            pass
+    
+    if env is None:
+        return False
+    
+    # Find root environment
+    root_env = env
+    while root_env.parent is not None:
+        root_env = root_env.parent
+    
+    # Check if symbol is in special variables
+    if hasattr(root_env, '_special_variables'):
+        return symbol.name in root_env._special_variables
+    
+    return False
+
+
 __all__ = [
     'make_hash_table',
     'gethash',
@@ -1446,4 +1515,6 @@ __all__ = [
     'make_load_form_saving_slots',
     'fill_pointer',
     'documentation',
+    'get_optimization_policy',
+    'is_variable_special',
 ]
