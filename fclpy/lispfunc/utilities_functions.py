@@ -289,6 +289,134 @@ def lambda_parameters_limit():
     return 64
 
 
+@_registry.cl_function('COERCE')
+def coerce(object, result_type):
+    """Coerce object to the specified type.
+    
+    Supports:
+    - (COERCE sequence 'LIST) - converts sequence to list
+    - (COERCE list 'VECTOR) - converts list to vector
+    - (COERCE sequence 'STRING) - converts sequence of characters to string  
+    - (COERCE character 'CHARACTER) - identity for characters
+    - (COERCE number 'FLOAT) - converts integer to float
+    - (COERCE number 'SINGLE-FLOAT) - converts to single-precision float
+    - (COERCE number 'DOUBLE-FLOAT) - converts to double-precision float
+    - (COERCE x 'T) - identity coercion
+    - (COERCE object 'FUNCTION) - coerce to function
+    """
+    # Get the type name as a string for comparison
+    type_name = result_type
+    if isinstance(result_type, lisptype.LispSymbol):
+        type_name = result_type.name
+    elif hasattr(result_type, '__name__'):
+        type_name = result_type.__name__
+    
+    # Normalize type name to uppercase string
+    if isinstance(type_name, str):
+        type_name = type_name.upper()
+    
+    # T - identity coercion (always works)
+    if type_name == 'T':
+        return object
+    
+    # LIST - convert sequence to list
+    if type_name == 'LIST':
+        if isinstance(object, list):
+            return object
+        elif isinstance(object, str):
+            return list(object)
+        elif isinstance(object, tuple):
+            return list(object)
+        elif hasattr(object, '__iter__'):
+            return list(object)
+        else:
+            raise lisptype.LispTypeError(f"COERCE: cannot convert {type(object).__name__} to LIST",
+                                        expected_type="LIST",
+                                        actual_value=object)
+    
+    # VECTOR or SIMPLE-VECTOR - convert sequence to vector (list in Python)
+    if type_name in ('VECTOR', 'SIMPLE-VECTOR'):
+        if isinstance(object, (list, tuple)):
+            return list(object)
+        elif isinstance(object, str):
+            return list(object)
+        elif hasattr(object, '__iter__'):
+            return list(object)
+        else:
+            raise lisptype.LispTypeError(f"COERCE: cannot convert {type(object).__name__} to VECTOR",
+                                        expected_type="VECTOR",
+                                        actual_value=object)
+    
+    # STRING - convert sequence of characters to string
+    if type_name == 'STRING':
+        if isinstance(object, str):
+            return object
+        elif isinstance(object, (list, tuple)):
+            # Sequence of characters
+            return ''.join(str(c) for c in object)
+        elif isinstance(object, lisptype.LispSymbol):
+            return object.name
+        elif hasattr(object, '__iter__'):
+            return ''.join(str(c) for c in object)
+        else:
+            raise lisptype.LispTypeError(f"COERCE: cannot convert {type(object).__name__} to STRING",
+                                        expected_type="STRING",
+                                        actual_value=object)
+    
+    # CHARACTER - must already be a character
+    if type_name == 'CHARACTER':
+        if isinstance(object, str) and len(object) == 1:
+            return object
+        else:
+            raise lisptype.LispTypeError(f"COERCE: cannot convert to CHARACTER",
+                                        expected_type="CHARACTER",
+                                        actual_value=object)
+    
+    # FLOAT, SINGLE-FLOAT, DOUBLE-FLOAT - convert number to float
+    if type_name in ('FLOAT', 'SINGLE-FLOAT', 'SHORT-FLOAT', 'DOUBLE-FLOAT', 'LONG-FLOAT'):
+        if isinstance(object, (int, float)):
+            return float(object)
+        else:
+            raise lisptype.LispTypeError(f"COERCE: cannot convert {type(object).__name__} to FLOAT",
+                                        expected_type="FLOAT",
+                                        actual_value=object)
+    
+    # COMPLEX - convert to complex number
+    if type_name == 'COMPLEX':
+        if isinstance(object, complex):
+            return object
+        elif isinstance(object, (int, float)):
+            return complex(object, 0)
+        else:
+            raise lisptype.LispTypeError(f"COERCE: cannot convert to COMPLEX",
+                                        expected_type="COMPLEX",
+                                        actual_value=object)
+    
+    # FUNCTION - coerce to function (e.g., from symbol)
+    if type_name == 'FUNCTION':
+        if callable(object):
+            return object
+        elif isinstance(object, lisptype.LispSymbol):
+            # Try to get function definition
+            env = state.current_environment
+            if env is not None:
+                func = env.find_func(object)
+                if func is not None:
+                    return func
+            raise lisptype.LispTypeError(f"COERCE: undefined function {object.name}",
+                                        expected_type="FUNCTION",
+                                        actual_value=object)
+        else:
+            raise lisptype.LispTypeError(f"COERCE: cannot convert to FUNCTION",
+                                        expected_type="FUNCTION",
+                                        actual_value=object)
+    
+    # If we get here, the type is not supported
+    raise lisptype.LispTypeError(f"COERCE: unsupported result type {result_type}",
+                                expected_type="LIST, VECTOR, STRING, CHARACTER, FLOAT, COMPLEX, FUNCTION, or T",
+                                actual_value=result_type)
+
+
 __all__ = [
     'fboundp',
     'fmakunbound',
@@ -314,4 +442,5 @@ __all__ = [
     'inline',
     'lambda_list_keywords',
     'lambda_parameters_limit',
+    'coerce',
 ]

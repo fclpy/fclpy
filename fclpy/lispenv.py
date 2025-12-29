@@ -168,6 +168,18 @@ def setup_standard_environment():
         compile_print_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*COMPILE-PRINT*')
         if state.current_environment.find_variable(compile_print_sym) is None:
             state.current_environment.add_variable(compile_print_sym, fclpy.lisptype.NIL)
+        
+        # *READTABLE* - the current readtable used for reading
+        from fclpy.readtable import get_current_readtable
+        readtable_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*READTABLE*')
+        if state.current_environment.find_variable(readtable_sym) is None:
+            state.current_environment.add_variable(readtable_sym, get_current_readtable())
+        
+        # *PACKAGE* - current package (if not already set from state)
+        package_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*PACKAGE*')
+        if state.current_environment.find_variable(package_sym) is None:
+            current_pkg = getattr(state, 'current_package', None) or fclpy.lisptype.COMMON_LISP_USER_PACKAGE
+            state.current_environment.add_variable(package_sym, current_pkg)
             
     except Exception:
         # Defensive: if initialization fails, continue

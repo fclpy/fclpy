@@ -164,7 +164,7 @@ def eval(form, env=None):
     )
     from .evaluation_loops_conditionals import (
         eval_when, eval_unless, eval_cond, eval_and, eval_or,
-        eval_progn, eval_prog1, eval_prog2, eval_let, eval_letstar, eval_quasiquote,
+        eval_progn, eval_locally, eval_prog1, eval_prog2, eval_let, eval_letstar, eval_quasiquote,
         eval_loop, eval_eval_when, eval_do, eval_do_star, eval_dolist, eval_dotimes
     )
     from .evaluation_conditions import (
@@ -224,6 +224,8 @@ def eval(form, env=None):
                 return eval_setq(form, env)
             elif operator.name == 'PROGN':
                 return eval_progn(form, env)
+            elif operator.name == 'LOCALLY':
+                return eval_locally(form, env)
             elif operator.name == 'LET':
                 return eval_let(form, env)
             elif operator.name == 'LET*':

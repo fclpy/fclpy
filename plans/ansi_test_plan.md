@@ -8,11 +8,24 @@
 3. **Package system**: `IN-PACKAGE`, `MAKE-PACKAGE`, `FIND-PACKAGE`, `USE-PACKAGE` work
 4. **Many CL functions**: 1152 tests passing
 5. **File loading**: `LOAD` function works with `*LOAD-TRUENAME*` and `*LOAD-PATHNAME*`
-6. **Special forms**: DEFVAR, DEFPARAMETER, LET, LET*, HANDLER-BIND, HANDLER-CASE, IGNORE-ERRORS implemented
+6. **Special forms**: DEFVAR, DEFPARAMETER, LET, LET*, HANDLER-BIND, HANDLER-CASE, IGNORE-ERRORS, LOCALLY implemented
 7. **Compile stubs**: `COMPILE-FILE`, `COMPILE-FILE-PATHNAME` return appropriate values
 8. **Package registration**: Dynamic packages stored in `state.packages`
+9. **Reader enhancements**: D/F/S/L exponent markers, #c complex numbers
+10. **Type coercion**: COERCE function for type conversion
+11. **String creation**: MAKE-STRING function
 
-### Recent Progress (Dec 29, 2025)
+### Recent Progress (Dec 29, 2025 - Session 2)
+- ✅ Implemented LOCALLY special form (evaluates body, skips declarations)
+- ✅ Implemented MAKE-STRING function with :initial-element support
+- ✅ Added D/F/S/L exponent marker support in tokenizer, reader, and readtable
+- ✅ Fixed CONCATENATE to handle LispSymbol result types
+- ✅ Implemented COERCE function for type conversions
+- ✅ Added *READTABLE* special variable to environment
+- ✅ Added *PACKAGE* special variable to environment initialization
+- ✅ Fixed _read_number in readtable.py to handle CL exponent markers
+
+### Previous Progress (Dec 29, 2025 - Session 1)
 - ✅ `rt.lsp` loads successfully (58 expressions)
 - ✅ `rt-package.lsp` loads successfully  
 - ✅ `cl-test-package.lsp` loads successfully
@@ -157,36 +170,64 @@ After all fixes:
 - Properly distinguishes file vs directory defaults
 - Correct relative path joining
 
-### Phase 5: Reader Enhancements (Priority: MEDIUM) - TODO
+### Phase 5: Reader Enhancements ✅ MOSTLY COMPLETED
 
-#### Task 5.1: 🔲 Implement #c reader macro (complex numbers)
-- `#c(1 2)` → `(complex 1 2)` → `1+2i`
+#### Task 5.1: ✅ Implement #c reader macro (complex numbers)
+- `#c(1 2)` → complex number 1+2i
+- Fixed _read_number in readtable.py to handle D/F/S/L exponent markers
 
 #### Task 5.2: 🔲 Implement #* reader macro (bit-vectors)  
-- `#*101` → bit vector
+- `#*101` → bit vector (partial support exists)
 
 #### Task 5.3: 🔲 Implement #. reader macro (read-time eval)
 - `#.(+ 1 2)` → `3` at read time
 
-#### Task 5.4: 🔲 Implement D exponent marker for floats
+#### Task 5.4: ✅ Implement D exponent marker for floats
 - `1.5D0` → double-float 1.5
+- Added support in tokenizer.py, reader.py, lispreader.py, and readtable.py
 
-### Phase 6: Missing Functions (Priority: MEDIUM) - TODO
+### Phase 6: Missing Functions ✅ MOSTLY COMPLETED
 
-#### Task 6.1: 🔲 Implement LOCALLY special form
+#### Task 6.1: ✅ Implement LOCALLY special form
 - `(locally (declare ...) body...)` → evaluates body
+- Skips DECLARE forms, evaluates remaining body
 
-#### Task 6.2: 🔲 Implement MAKE-STRING function
+#### Task 6.2: ✅ Implement MAKE-STRING function
 - `(make-string 5 :initial-element #\x)` → "xxxxx"
+- Handles character codes and NIL
 
 #### Task 6.3: 🔲 Extend MAKE-ARRAY for all options
-- Various element-type and other keyword args
+- Various element-type and other keyword args (many errors still)
+
+#### Task 6.4: ✅ Implement COERCE function
+- Type conversion for LIST, VECTOR, STRING, FLOAT, COMPLEX, FUNCTION
+
+#### Task 6.5: ✅ Add *READTABLE* special variable
+- Added to environment initialization in lispenv.py
 
 ### Phase 7: Test Runner Integration (Priority: LOW) - TODO
 
 #### Task 7.1: 🔲 Create fclpy-specific init file
 #### Task 7.2: 🔲 Add `--load` CLI option for multiple files
 #### Task 7.3: 🔲 Create test runner script with reporting
+
+---
+
+## Remaining Issues (from init.lsp loading)
+
+The following errors still occur when loading init.lsp:
+
+1. **MAKE-ARRAY signature**: `make_array() takes from 1 to 4 positional arguments but 7 were given`
+   - Need to support more keyword arguments in MAKE-ARRAY
+
+2. **Package-level function access**: Functions like COERCE show as "unbound" in CL-TEST package
+   - May need to ensure COMMON-LISP package is properly USE'd
+
+3. **Reader parsing errors**: "Unmatched closing parenthesis" errors
+   - Some complex #C() constructs may fail parsing
+
+4. **Type symbols**: BASE-CHAR, COMPILED-FUNCTION, STREAM, etc. undefined
+   - Need type specifier symbols registered
 
 ---
 

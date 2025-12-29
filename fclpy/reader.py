@@ -145,7 +145,12 @@ class Reader:
             return int(token.value)
         elif token.type == TokenType.FLOAT:
             self._consume_token()
-            return float(token.value)
+            # Normalize Common Lisp exponent markers (D, F, S, L) to E for Python
+            # 1.5D2 -> 1.5E2, 3.14F0 -> 3.14E0, etc.
+            normalized = token.value
+            for marker in 'dDfFsSsLl':
+                normalized = normalized.replace(marker, 'e')
+            return float(normalized)
         elif token.type in (TokenType.HEX_NUMBER, TokenType.BINARY_NUMBER, TokenType.OCTAL_NUMBER):
             # Radix numbers are already converted to integers by the tokenizer
             self._consume_token()

@@ -292,6 +292,7 @@ class Tokenizer:
     def _read_number(self, start_line: int, start_col: int) -> Optional[Token]:
         """Read a number token (integer, float, or ratio)."""
         num_str = ""
+        is_float = False
         
         # Handle leading sign
         if self._peek() in '+-':
@@ -313,15 +314,19 @@ class Tokenizer:
             num_str += self._advance()  # consume '.'
             while self._peek() and self._peek().isdigit():
                 num_str += self._advance()
-            return Token(TokenType.FLOAT, num_str, start_line, start_col)
+            is_float = True
         
-        # Check for exponent notation
-        if self._peek() and self._peek() in 'eEfFdDsS':
+        # Check for exponent notation (e.g., 1E10, 1.5D2, 3.14f0)
+        # Common Lisp exponent markers: E (default), D (double), F (single), S (short), L (long)
+        if self._peek() and self._peek() in 'eEfFdDsSlL':
             num_str += self._advance()
             if self._peek() in '+-':
                 num_str += self._advance()
             while self._peek() and self._peek().isdigit():
                 num_str += self._advance()
+            is_float = True
+        
+        if is_float:
             return Token(TokenType.FLOAT, num_str, start_line, start_col)
         
         return Token(TokenType.INTEGER, num_str, start_line, start_col)

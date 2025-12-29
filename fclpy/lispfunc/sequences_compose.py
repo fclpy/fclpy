@@ -142,14 +142,40 @@ def revappend(list1, list2):
 @_registry.cl_function('CONCATENATE')
 def concatenate(result_type, *sequences):
     """Concatenate sequences."""
-    if result_type == 'LIST' or result_type == list:
+    # Get the type name as a string for comparison
+    type_name = result_type
+    if isinstance(result_type, lisptype.LispSymbol):
+        type_name = result_type.name
+    elif hasattr(result_type, '__name__'):
+        type_name = result_type.__name__
+    
+    # Normalize type name to uppercase string
+    if isinstance(type_name, str):
+        type_name = type_name.upper()
+    
+    if type_name == 'LIST' or result_type == list:
         result = []
         for seq in sequences:
             result.extend(seq)
         return result
-    elif result_type == 'STRING' or result_type == str:
-        return ''.join(str(seq) for seq in sequences)
-    elif result_type == 'VECTOR' or result_type == 'SIMPLE-VECTOR':
+    elif type_name == 'STRING' or result_type == str:
+        # For STRING result, concatenate all elements as strings
+        result_parts = []
+        for seq in sequences:
+            if isinstance(seq, str):
+                result_parts.append(seq)
+            else:
+                # For non-string sequences, convert each element to a character
+                for elem in seq:
+                    if isinstance(elem, str) and len(elem) == 1:
+                        result_parts.append(elem)
+                    elif isinstance(elem, int):
+                        # Could be a character code
+                        result_parts.append(chr(elem))
+                    else:
+                        result_parts.append(str(elem))
+        return ''.join(result_parts)
+    elif type_name in ('VECTOR', 'SIMPLE-VECTOR'):
         result = []
         for seq in sequences:
             result.extend(seq)

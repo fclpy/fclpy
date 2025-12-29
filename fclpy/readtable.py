@@ -183,11 +183,20 @@ class Readtable:
             return int(token)
         except ValueError:
             try:
+                # Try standard Python float first
                 return float(token)
             except ValueError:
-                # Not a number, treat as symbol (intern into user package)
-                from . import lisptype
-                return lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol(token)
+                # Try to handle Common Lisp exponent markers (D, F, S, L)
+                # Normalize exponent markers to E for Python
+                normalized = token.upper()
+                for marker in 'DFSL':
+                    normalized = normalized.replace(marker, 'E')
+                try:
+                    return float(normalized)
+                except ValueError:
+                    # Not a number, treat as symbol (intern into user package)
+                    from . import lisptype
+                    return lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol(token)
     
     def _read_string_literal(self, stream):
         """Read a string literal (already consumed opening quote)"""

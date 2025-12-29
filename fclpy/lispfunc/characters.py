@@ -367,6 +367,43 @@ def simple_string_p(object):
     return lisptype.lisp_bool(isinstance(object, str))
 
 
+@_registry.cl_function('MAKE-STRING')
+def make_string(size, initial_element=None, element_type=None):
+    """Create a string of the given size.
+    
+    Args:
+        size: Length of the string to create
+        initial_element: Character to fill the string with (default is space)
+        element_type: Element type (ignored, always CHARACTER)
+    
+    Returns:
+        A string of length size filled with initial_element
+    
+    Examples:
+        (make-string 5) => "     "
+        (make-string 3 :initial-element #\\x) => "xxx"
+    """
+    if not isinstance(size, int) or size < 0:
+        raise lisptype.LispTypeError("MAKE-STRING: size must be a non-negative integer",
+                                    expected_type="(INTEGER 0 *)",
+                                    actual_value=size)
+    
+    # Default initial element is space
+    if initial_element is None or initial_element is lisptype.NIL:
+        fill_char = ' '
+    elif isinstance(initial_element, str) and len(initial_element) == 1:
+        fill_char = initial_element
+    elif isinstance(initial_element, int):
+        # Character code - convert to character
+        fill_char = chr(initial_element)
+    else:
+        raise lisptype.LispTypeError("MAKE-STRING: initial-element must be a character",
+                                    expected_type="CHARACTER",
+                                    actual_value=initial_element)
+    
+    return fill_char * size
+
+
 @_registry.cl_function('STRING-CAPITALIZE')
 def string_capitalize(string, start=0, end=None):
     """Capitalize string."""

@@ -177,6 +177,41 @@ def eval_progn(form, env):
     return result
 
 
+def eval_locally(form, env):
+    """Evaluate LOCALLY special form.
+    
+    (LOCALLY declaration* form*)
+    
+    LOCALLY is like PROGN but can include declarations at the start.
+    The declarations affect only the body forms within the LOCALLY.
+    For now, we skip declarations and just evaluate the body forms.
+    """
+    from .evaluation_core import eval
+    
+    args = cdr(form)
+    result = lisptype.NIL
+    
+    # Skip DECLARE forms at the start
+    while _consp_internal(args):
+        first = car(args)
+        # Check if this is a DECLARE form
+        if (_consp_internal(first) and 
+            isinstance(car(first), lisptype.LispSymbol) and 
+            car(first).name == 'DECLARE'):
+            # Skip this declaration
+            args = cdr(args)
+        else:
+            # Not a declaration, start evaluating body
+            break
+    
+    # Evaluate remaining body forms
+    while _consp_internal(args):
+        result = eval(car(args), env)
+        args = cdr(args)
+    
+    return result
+
+
 def eval_let(form, env):
     """Evaluate LET special form with parallel binding semantics.
     
@@ -1005,6 +1040,7 @@ __all__ = [
     'eval_and',
     'eval_or',
     'eval_progn',
+    'eval_locally',
     'eval_let',
     'eval_letstar',
     'eval_quasiquote',

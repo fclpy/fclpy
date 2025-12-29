@@ -239,6 +239,16 @@ def set_syntax_from_char(to_char, from_char, to_readtable=None, from_readtable=N
     return lisptype.T
 
 
+@_registry.cl_function('*READTABLE*')
+def get_readtable_var():
+    """Get the value of *READTABLE* (current readtable).
+    
+    Returns the current readtable used for reading Lisp expressions.
+    """
+    from ..readtable import get_current_readtable
+    return get_current_readtable()
+
+
 def with_input_from_string(var_string_options, *body):
     """Execute with input from string."""
     # Simplified - just execute body
@@ -258,5 +268,6 @@ __all__ = [
     'get_macro_character', 'set_macro_character',
     'get_dispatch_macro_character', 'set_dispatch_macro_character',
     'make_dispatch_macro_character', 'set_syntax_from_char',
+    'get_readtable_var',
     'with_input_from_string'
 ]

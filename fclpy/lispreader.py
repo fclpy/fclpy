@@ -119,9 +119,15 @@ class LispReader():
         # Try to parse as integer
         if _re.match(r"^[+-]?\d+$", token):
             return int(token)
-        # Try to parse as float
-        elif _re.match(r"^[+-]?\d*\.\d+$", token):
-            return float(token)
+        # Try to parse as float (including exponent markers D, E, F, S, L)
+        # Patterns: 1.5, 1.5E10, 1.5D2, 1E10, 1D2, etc.
+        float_pattern = r"^[+-]?(\d+\.?\d*|\d*\.\d+)([DEFSLdefsl][+-]?\d+)?$"
+        if _re.match(float_pattern, token):
+            # Normalize exponent markers (D, F, S, L) to E for Python
+            normalized = token.upper()
+            for marker in 'DFSL':
+                normalized = normalized.replace(marker, 'E')
+            return float(normalized)
         # Otherwise it's a symbol
         # Keywords start with ':' and should be read as keywords interned in KEYWORD package
         if token.startswith(":"):
