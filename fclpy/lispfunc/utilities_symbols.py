@@ -147,16 +147,21 @@ def find_all_symbols(name):
 
 @_registry.cl_function('EXPORT')
 def export(symbols, package=None):
-    """Export symbols from a package."""
+    """Export symbols from a package.
+    
+    Makes symbols accessible to other packages that USE this package.
+    """
     if not isinstance(symbols, (list, tuple)):
         symbols = [symbols]
     pkg = package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)) if package else getattr(state, 'current_package', None)
     if pkg is None:
         pkg = lisptype.COMMON_LISP_USER_PACKAGE
     for s in symbols:
-        sym = intern(s.name if hasattr(s, 'name') else str(s), pkg)
-        if hasattr(sym, 'external'):
-            sym.external = True
+        sym_name = s.name if hasattr(s, 'name') else str(s)
+        # Intern the symbol if not already present, then export it
+        sym = pkg.intern_symbol(sym_name)
+        # Add to package's external_symbols set
+        pkg.export_symbol(sym_name)
     return lisptype.T
 
 

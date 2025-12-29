@@ -227,7 +227,14 @@ class Readtable:
         return lisptype.lispCons(quote_sym, lisptype.lispCons(expr, lisptype.NIL))
     
     def _read_symbol(self, first_char, stream):
-        """Read a symbol token"""
+        """Read a symbol token with package awareness.
+        
+        When reading an unqualified symbol:
+        1. Check current *PACKAGE* (from state.current_package)
+        2. Look for existing symbol in current package
+        3. Look for exported symbol in USE'd packages
+        4. If not found, intern in current package
+        """
         token = first_char
         while True:
             c = stream.read_char()
@@ -237,12 +244,72 @@ class Readtable:
                 break
             token += c
         from . import lisptype
+        from . import state
+        
         # If symbol starts with a leading colon, treat it as a keyword
         if token.startswith(':'):
             # Create a keyword with the name after the colon
             name = token[1:]
             return lisptype.lispKeyword(name.upper())
-        return lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol(token)
+        
+        # Handle package-qualified symbols (PKG:SYM or PKG::SYM)
+        if ':' in token and not token.startswith(':'):
+            return self._read_package_qualified_symbol(token)
+        
+        # Get current package
+        current_pkg = getattr(state, 'current_package', None)
+        if current_pkg is None:
+            current_pkg = lisptype.COMMON_LISP_USER_PACKAGE
+        
+        name_upper = token.upper()
+        
+        # First check if symbol exists in current package
+        sym, status = current_pkg.find_symbol(name_upper)
+        if sym is not None:
+            return sym
+        
+        # Check USE'd packages for exported symbols
+        for used_pkg in getattr(current_pkg, 'use_packages', []):
+            # Handle both Package objects and package names
+            if isinstance(used_pkg, str):
+                used_pkg = lisptype.find_package(used_pkg)
+            if used_pkg is not None:
+                # Only look for external symbols in USE'd packages
+                if name_upper in getattr(used_pkg, 'external_symbols', set()):
+                    sym = used_pkg.symbols.get(name_upper)
+                    if sym is not None:
+                        return sym
+        
+        # Not found - intern in current package
+        return current_pkg.intern_symbol(token)
+    
+    def _read_package_qualified_symbol(self, token):
+        """Read a package-qualified symbol like PKG:SYM or PKG::SYM.
+        
+        Single colon (PKG:SYM) means external symbol access.
+        Double colon (PKG::SYM) means internal symbol access.
+        """
+        from . import lisptype
+        
+        if '::' in token:
+            # Internal symbol access
+            parts = token.split('::', 1)
+            pkg_name = parts[0].upper()
+            sym_name = parts[1].upper() if len(parts) > 1 else ''
+        else:
+            # External symbol access
+            parts = token.split(':', 1)
+            pkg_name = parts[0].upper()
+            sym_name = parts[1].upper() if len(parts) > 1 else ''
+        
+        # Find the package
+        pkg = lisptype.find_package(pkg_name)
+        if pkg is None:
+            # Package not found - create it as a fallback
+            pkg = lisptype.make_package(pkg_name)
+        
+        # Intern the symbol in that package
+        return pkg.intern_symbol(sym_name)
     
     def _skip_comment(self, stream):
         """Skip a comment to end of line"""
@@ -368,6 +435,9 @@ class Readtable:
         elif sub_char.upper() == 'C':
             # Complex number: #C(real imag) or #c(real imag)
             return self._read_complex_number(stream)
+        elif sub_char == '*':
+            # Bit vector: #*101 -> bit vector with elements 1, 0, 1
+            return self._read_bit_vector(stream)
         elif sub_char in '0123456789':
             # Could be array rank, reader label, etc.
             # For now, read the number and check what follows
@@ -742,6 +812,42 @@ class Readtable:
             raise ValueError(f"Imaginary part must be a number, got {type(imag_part).__name__}")
         
         return complex(real_part, imag_part)
+
+    def _read_bit_vector(self, stream):
+        """Read a bit vector literal #*101.
+        
+        The syntax is #*bits where bits is a sequence of 0 and 1 characters.
+        #*101 creates a bit vector with elements [1, 0, 1].
+        #* creates an empty bit vector.
+        
+        Args:
+            stream: Input stream
+            
+        Returns:
+            A list representing a bit vector (to be enhanced with proper bit-vector type)
+        """
+        bits = []
+        while True:
+            c = stream.read_char()
+            if not c:
+                break
+            if c == '0':
+                bits.append(0)
+            elif c == '1':
+                bits.append(1)
+            elif c.isspace() or c in '()':
+                # End of bit vector
+                if c:
+                    stream.unread_char(c)
+                break
+            else:
+                # Any non-0/1 character ends the bit vector
+                stream.unread_char(c)
+                break
+        
+        # Return as a list of integers (proper bit-vector type could be added later)
+        # For ANSI compatibility, we just need this to not throw an error
+        return bits
 
 
 def get_current_readtable() -> Readtable:
