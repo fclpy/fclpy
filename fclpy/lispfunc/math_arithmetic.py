@@ -179,7 +179,8 @@ def rationalize(x):
 @_registry.cl_function('NUMBERP')
 def numberp(obj):
     """Test if object is a number."""
-    return lisptype.lisp_bool(isinstance(obj, (int, float, complex)))
+    from fractions import Fraction
+    return lisptype.lisp_bool(isinstance(obj, (int, float, complex, Fraction)))
 
 
 @_registry.cl_function('INTEGERP')
@@ -208,8 +209,9 @@ def realp(obj):
 
 @_registry.cl_function('RATIONALP')
 def rationalp(obj):
-    """Test if object is a rational number."""
-    return isinstance(obj, (int, float))  # In Python, floats are used for rationals
+    """Test if object is a rational number (integer or ratio)."""
+    from fractions import Fraction
+    return isinstance(obj, (int, Fraction))
 
 
 # Complex number operations
@@ -609,14 +611,39 @@ def _s_star_(*args):
 
 @_registry.cl_function('/')
 def _s_slash_(*args):
-    """Division operator (/)."""
+    """Division operator (/).
+    
+    When dividing integers, returns an exact ratio (Fraction) if result is not exact.
+    Automatically reduces fractions and normalizes signs.
+    """
+    from fractions import Fraction
+    
     if not args:
         raise ValueError("/ requires at least one argument")
     if len(args) == 1:
-        return 1 / args[0]
+        # Reciprocal: (/ x) = 1/x
+        x = args[0]
+        if isinstance(x, int) and x != 0:
+            return Fraction(1, x)
+        return 1 / x
+    
     result = args[0]
     for x in args[1:]:
-        result /= x
+        # If both are integers and division is not exact, return a Fraction
+        if isinstance(result, int) and isinstance(x, int) and x != 0:
+            # Use Fraction for exact rational arithmetic
+            result = Fraction(result, x)
+        elif isinstance(result, Fraction) and isinstance(x, int) and x != 0:
+            result = result / x
+        elif isinstance(result, Fraction) and isinstance(x, Fraction):
+            result = result / x
+        else:
+            result = result / x
+    
+    # If result is a Fraction with denominator 1, return as integer
+    if isinstance(result, Fraction) and result.denominator == 1:
+        return result.numerator
+    
     return result
 
 

@@ -127,32 +127,142 @@ def quit(code=0):
 
 
 # --- Random number generation ---
+
+class RandomState:
+    """A random state object for Common Lisp random number generation.
+    
+    Wraps Python's random.Random to provide reproducible sequences.
+    """
+    
+    def __init__(self, seed=None):
+        """Create a new random state.
+        
+        Args:
+            seed: Optional seed value. If None, uses system entropy.
+                  If True, creates a new random seed.
+                  If another RandomState, copies its state.
+        """
+        import random as rnd
+        self._random = rnd.Random()
+        if seed is None:
+            # Use system entropy - None already does this in Python's Random
+            pass
+        elif seed is True or seed is lisptype.T:
+            # Create a new random seed using OS entropy + high-res counter
+            import os
+            import time
+            # Use combination of OS random bytes and high-resolution time
+            entropy = os.urandom(16) + str(time.perf_counter_ns()).encode()
+            self._random.seed(entropy)
+        elif isinstance(seed, RandomState):
+            # Copy state from another RandomState
+            self._random.setstate(seed._random.getstate())
+        elif isinstance(seed, (int, float)):
+            self._random.seed(seed)
+        elif isinstance(seed, tuple):
+            # Try to restore from state tuple
+            try:
+                self._random.setstate(seed)
+            except (TypeError, ValueError):
+                pass
+    
+    def getstate(self):
+        """Get the internal state for later restoration."""
+        return self._random.getstate()
+    
+    def setstate(self, state):
+        """Restore state from a previously saved state."""
+        self._random.setstate(state)
+    
+    def randrange(self, limit):
+        """Return random integer in [0, limit)."""
+        return self._random.randrange(limit)
+    
+    def random(self):
+        """Return random float in [0.0, 1.0)."""
+        return self._random.random()
+    
+    def __repr__(self):
+        return "#<RANDOM-STATE>"
+    
+    def __str__(self):
+        return "#<RANDOM-STATE>"
+
+
+# Global default random state
+_DEFAULT_RANDOM_STATE = RandomState()
+
+
 @_registry.cl_function('RANDOM')
 def random(limit, state=None):
-    """Generate random number up to limit."""
-    import random as rnd
+    """Generate random number up to limit.
+    
+    Args:
+        limit: Upper bound (exclusive). Must be positive integer or float.
+        state: Optional random state to use. If None, uses *RANDOM-STATE*.
+    
+    Returns:
+        Random integer in [0, limit) if limit is integer.
+        Random float in [0.0, limit) if limit is float.
+    """
+    rs = state if isinstance(state, RandomState) else _DEFAULT_RANDOM_STATE
+    
     if isinstance(limit, int):
-        return rnd.randrange(limit)
+        if limit <= 0:
+            raise lisptype.LispError("RANDOM: limit must be positive")
+        return rs.randrange(limit)
     elif isinstance(limit, float):
-        return rnd.random() * limit
+        if limit <= 0:
+            raise lisptype.LispError("RANDOM: limit must be positive")
+        return rs.random() * limit
     else:
         raise lisptype.LispNotImplementedError("RANDOM: invalid limit type")
 
 
 @_registry.cl_function('MAKE-RANDOM-STATE')
 def make_random_state(state=None):
-    """Make random state object."""
-    import random as rnd
-    new_state = rnd.getstate()
-    if state is not None:
-        rnd.setstate(state)
-    return new_state
+    """Make random state object.
+    
+    Args:
+        state: Controls how to initialize:
+            - NIL or omitted: Copy current *RANDOM-STATE*
+            - T: Create fresh state from entropy
+            - RandomState: Copy that state
+    
+    Returns:
+        A new RandomState object.
+    """
+    if state is None or state is lisptype.NIL:
+        # Copy the default random state
+        return RandomState(_DEFAULT_RANDOM_STATE)
+    elif state is True or state is lisptype.T:
+        # Create a truly random new state
+        return RandomState(True)
+    elif isinstance(state, RandomState):
+        # Copy the provided state
+        return RandomState(state)
+    else:
+        raise lisptype.LispError("MAKE-RANDOM-STATE: invalid state argument")
 
 
 @_registry.cl_function('RANDOM-STATE-P')
 def random_state_p(object):
     """Test if object is random state."""
-    return lisptype.lisp_bool(isinstance(object, tuple) and len(object) >= 2)
+    return lisptype.lisp_bool(isinstance(object, RandomState))
+
+
+def get_random_state():
+    """Get the current *RANDOM-STATE* value."""
+    return _DEFAULT_RANDOM_STATE
+
+
+def set_random_state(state):
+    """Set the *RANDOM-STATE* value."""
+    global _DEFAULT_RANDOM_STATE
+    if isinstance(state, RandomState):
+        _DEFAULT_RANDOM_STATE = state
+    else:
+        raise lisptype.LispError("*RANDOM-STATE* must be a RandomState object")
 
 
 __all__ = [
@@ -177,4 +287,7 @@ __all__ = [
     'random',
     'make_random_state',
     'random_state_p',
+    'RandomState',
+    'get_random_state',
+    'set_random_state',
 ]

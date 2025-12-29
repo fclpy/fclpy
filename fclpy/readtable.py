@@ -365,6 +365,9 @@ class Readtable:
         elif sub_char == ':':
             # Uninterned symbol: #:foo -> symbol not interned in any package
             return self._read_uninterned_symbol(stream)
+        elif sub_char.upper() == 'C':
+            # Complex number: #C(real imag) or #c(real imag)
+            return self._read_complex_number(stream)
         elif sub_char in '0123456789':
             # Could be array rank, reader label, etc.
             # For now, read the number and check what follows
@@ -677,6 +680,68 @@ class Readtable:
         # Use uppercase for consistency with CL standard
         name = token.upper()
         return lisptype.LispSymbol(name, package=None)
+
+    def _read_complex_number(self, stream):
+        """Read a complex number literal #C(real imag).
+        
+        The syntax is #C(real imag) or #c(real imag) where real and imag
+        are real numbers (integers, ratios, or floats).
+        
+        Args:
+            stream: Input stream
+            
+        Returns:
+            A Python complex number
+        """
+        from fractions import Fraction
+        
+        # Skip whitespace
+        while True:
+            c = stream.read_char()
+            if not c:
+                raise ValueError("EOF after #C")
+            if not c.isspace():
+                break
+        
+        # Expect opening paren
+        if c != '(':
+            raise ValueError(f"Expected ( after #C, got {c!r}")
+        
+        # Read real part
+        real_part = self._read_item(stream)
+        if real_part is None:
+            raise ValueError("Expected real part in #C(...)")
+        
+        # Read imaginary part
+        imag_part = self._read_item(stream)
+        if imag_part is None:
+            raise ValueError("Expected imaginary part in #C(...)")
+        
+        # Skip whitespace and find closing paren
+        while True:
+            c = stream.read_char()
+            if not c:
+                raise ValueError("EOF in #C(...)")
+            if c.isspace():
+                continue
+            if c == ')':
+                break
+            else:
+                raise ValueError(f"Expected ) in #C(...), got {c!r}")
+        
+        # Convert Fraction to float for complex construction
+        if isinstance(real_part, Fraction):
+            real_part = float(real_part)
+        if isinstance(imag_part, Fraction):
+            imag_part = float(imag_part)
+        
+        # Ensure both parts are numeric
+        if not isinstance(real_part, (int, float)):
+            raise ValueError(f"Real part must be a number, got {type(real_part).__name__}")
+        if not isinstance(imag_part, (int, float)):
+            raise ValueError(f"Imaginary part must be a number, got {type(imag_part).__name__}")
+        
+        return complex(real_part, imag_part)
 
 
 def get_current_readtable() -> Readtable:

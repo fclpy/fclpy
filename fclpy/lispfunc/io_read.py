@@ -149,10 +149,9 @@ def read_preserving_whitespace(stream=None, eof_error_p=True, eof_value=None, re
 
 @_registry.cl_function('MAKE-STRING-INPUT-STREAM')
 def make_string_input_stream(string, start=0, end=None):
-    """Make string input stream."""
-    if end is None:
-        end = len(string)
-    return string[start:end]  # Simplified
+    """Make string input stream - delegates to streams.py."""
+    from .streams import make_string_input_stream as _make_sis
+    return _make_sis(string, start, end)
 
 
 @_registry.cl_function('COPY-READTABLE')

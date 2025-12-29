@@ -416,3 +416,194 @@ def open_stream_p(stream):
     if isinstance(stream, Stream):
         return lisptype.lisp_bool(stream.is_open())
     return lisptype.NIL
+
+
+# String Stream Classes for Task 8.8
+
+class StringInputStream(Stream):
+    """Input stream that reads from a string."""
+    
+    def __init__(self, string, start=0, end=None):
+        """Create a string input stream.
+        
+        Args:
+            string: The string to read from
+            start: Starting index (default 0)
+            end: Ending index (default len(string))
+        """
+        if end is None:
+            end = len(string)
+        self.string = string[start:end]
+        self.position = 0
+        # Create a StringIO for the underlying file object
+        file_obj = _io.StringIO(self.string)
+        super().__init__("<string-input-stream>", file_obj, 'input', 'character')
+    
+    def read_char(self):
+        """Read a single character from the string."""
+        if self.position >= len(self.string):
+            return None
+        char = self.string[self.position]
+        self.position += 1
+        return char
+    
+    def unread_char(self, char):
+        """Unread a character (put it back)."""
+        if self.position > 0:
+            self.position -= 1
+    
+    def peek_char(self):
+        """Look at next character without consuming it."""
+        if self.position >= len(self.string):
+            return None
+        return self.string[self.position]
+    
+    def listen(self):
+        """Check if characters are available."""
+        return self.position < len(self.string)
+    
+    def __repr__(self):
+        return f"<StringInputStream pos={self.position} len={len(self.string)}>"
+
+
+class StringOutputStream(Stream):
+    """Output stream that writes to a string."""
+    
+    def __init__(self, element_type='character'):
+        """Create a string output stream.
+        
+        Args:
+            element_type: Type of elements ('character' or 'base-char')
+        """
+        self._buffer = _io.StringIO()
+        super().__init__("<string-output-stream>", self._buffer, 'output', element_type)
+    
+    def write_char(self, char):
+        """Write a single character to the stream."""
+        if isinstance(char, lisptype.Character):
+            char = chr(char.code)
+        elif not isinstance(char, str) or len(char) != 1:
+            char = str(char)[:1] if str(char) else ''
+        self._buffer.write(char)
+        self.position += 1
+        return char
+    
+    def write_sequence(self, sequence):
+        """Write a string or sequence to the stream."""
+        if isinstance(sequence, str):
+            self._buffer.write(sequence)
+            self.position += len(sequence)
+        elif isinstance(sequence, (list, tuple)):
+            text = ''.join(str(c) for c in sequence)
+            self._buffer.write(text)
+            self.position += len(text)
+        return sequence
+    
+    def get_string(self):
+        """Get the accumulated string and clear the buffer."""
+        value = self._buffer.getvalue()
+        # Reset the buffer for continued use
+        self._buffer.seek(0)
+        self._buffer.truncate(0)
+        self.position = 0
+        return value
+    
+    def peek_string(self):
+        """Get the accumulated string without clearing the buffer."""
+        return self._buffer.getvalue()
+    
+    def __repr__(self):
+        return f"<StringOutputStream len={self.position}>"
+
+
+@_registry.cl_function('MAKE-STRING-INPUT-STREAM')
+def make_string_input_stream(string, start=0, end=None):
+    """Create a string input stream.
+    
+    Creates an input stream from which characters can be read.
+    The characters are taken from the string between start and end.
+    
+    Args:
+        string: The string to read from
+        start: Starting index (default 0)
+        end: Ending index (default len(string))
+    
+    Returns:
+        A StringInputStream object
+    
+    Example:
+        (make-string-input-stream \"hello world\")
+        (make-string-input-stream \"hello world\" 0 5)
+    """
+    if not isinstance(string, str):
+        raise TypeError(f"Expected string, got {type(string)}")
+    if end is None:
+        end = len(string)
+    return StringInputStream(string, start, end)
+
+
+@_registry.cl_function('MAKE-STRING-OUTPUT-STREAM')
+def make_string_output_stream(element_type='character'):
+    """Create a string output stream.
+    
+    Creates an output stream that accumulates characters written to it.
+    Use GET-OUTPUT-STREAM-STRING to retrieve the accumulated string.
+    
+    Args:
+        element_type: Type of stream elements (default 'character')
+    
+    Returns:
+        A StringOutputStream object
+    
+    Example:
+        (let ((s (make-string-output-stream)))
+          (write-char #\\H s)
+          (write-string \"ello\" s)
+          (get-output-stream-string s))  ; Returns \"Hello\"
+    """
+    return StringOutputStream(element_type)
+
+
+@_registry.cl_function('GET-OUTPUT-STREAM-STRING')
+def get_output_stream_string(stream):
+    """Get the accumulated string from a string output stream.
+    
+    Returns all characters that have been written to the stream since
+    creation or the last call to GET-OUTPUT-STREAM-STRING.
+    After this call, the stream's buffer is cleared.
+    
+    Args:
+        stream: A StringOutputStream
+    
+    Returns:
+        String containing all accumulated characters
+    
+    Example:
+        (let ((s (make-string-output-stream)))
+          (format s \"Hello ~A\" \"World\")
+          (get-output-stream-string s))  ; Returns \"Hello World\"
+    """
+    if isinstance(stream, StringOutputStream):
+        return stream.get_string()
+    elif isinstance(stream, str):
+        # Legacy compatibility: if stream is a string, just return it
+        return stream
+    elif hasattr(stream, 'getvalue'):
+        # Python StringIO
+        return stream.getvalue()
+    else:
+        raise TypeError(f"Expected StringOutputStream, got {type(stream)}")
+
+
+# Stream predicate
+
+@_registry.cl_function('STRING-INPUT-STREAM-P')
+def string_input_stream_p(obj):
+    """Test if object is a string input stream."""
+    return lisptype.lisp_bool(isinstance(obj, StringInputStream))
+
+
+@_registry.cl_function('STRING-OUTPUT-STREAM-P')
+def string_output_stream_p(obj):
+    """Test if object is a string output stream."""
+    return lisptype.lisp_bool(isinstance(obj, StringOutputStream))

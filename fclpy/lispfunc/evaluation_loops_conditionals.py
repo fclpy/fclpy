@@ -1,7 +1,7 @@
 """Loops and conditionals: WHEN, COND, AND, OR, PROGN, LET, quasiquote."""
 
 import fclpy.lisptype as lisptype
-from .core import car, cdr, _consp_internal
+from .core import car, cdr, _consp_internal, cons
 from . import registry as _registry
 
 

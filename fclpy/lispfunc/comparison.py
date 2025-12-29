@@ -109,6 +109,11 @@ def typep(object, type_specifier):
     """Test if object is of given type."""
     # Import classes here to avoid circular dependencies
     from fclpy import classes
+    from fractions import Fraction
+    
+    # Constants for fixnum boundary (2^29 is common choice for 32-bit-like semantics)
+    FIXNUM_MAX = 2**29 - 1
+    FIXNUM_MIN = -2**29
     
     # Handle LispClass type specifiers (user-defined classes)
     if isinstance(type_specifier, classes.LispClass):
@@ -140,17 +145,25 @@ def typep(object, type_specifier):
     elif type_name == 'LIST':
         return lisptype.lisp_bool(null(object) == lisptype.T or consp(object) == lisptype.T)
     elif type_name == 'NUMBER':
-        return lisptype.lisp_bool(isinstance(object, (int, float, complex)))
+        return lisptype.lisp_bool(isinstance(object, (int, float, complex, Fraction)))
     elif type_name == 'INTEGER':
         return lisptype.lisp_bool(isinstance(object, int))
+    elif type_name == 'FIXNUM':
+        # Fixnum: integers within machine word range
+        return lisptype.lisp_bool(isinstance(object, int) and FIXNUM_MIN <= object <= FIXNUM_MAX)
+    elif type_name == 'BIGNUM':
+        # Bignum: integers outside fixnum range
+        return lisptype.lisp_bool(isinstance(object, int) and (object < FIXNUM_MIN or object > FIXNUM_MAX))
     elif type_name == 'FLOAT' or type_name == 'SINGLE-FLOAT' or type_name == 'DOUBLE-FLOAT':
         return lisptype.lisp_bool(isinstance(object, float))
     elif type_name == 'COMPLEX':
         return lisptype.lisp_bool(isinstance(object, complex))
     elif type_name == 'REAL':
-        return lisptype.lisp_bool(isinstance(object, (int, float)))
+        return lisptype.lisp_bool(isinstance(object, (int, float, Fraction)))
     elif type_name == 'RATIONAL':
-        return lisptype.lisp_bool(isinstance(object, (int, float)))  # Python doesn't have rationals
+        return lisptype.lisp_bool(isinstance(object, (int, Fraction)))
+    elif type_name == 'RATIO':
+        return lisptype.lisp_bool(isinstance(object, Fraction))
     elif type_name == 'CHARACTER':
         return lisptype.lisp_bool(isinstance(object, lisptype.Character) or (isinstance(object, str) and len(object) == 1))
     elif type_name == 'STRING':
