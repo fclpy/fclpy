@@ -2,8 +2,43 @@
 
 import io as _io
 import os
+import sys
 import fclpy.lisptype as lisptype
 from . import registry as _registry
+
+
+# === Standard Stream Variables ===
+# These provide Lisp-level access to standard I/O streams
+
+@_registry.cl_function('*STANDARD-INPUT*')
+def get_standard_input():
+    """Get the value of *STANDARD-INPUT*."""
+    return sys.stdin
+
+
+@_registry.cl_function('*STANDARD-OUTPUT*')
+def get_standard_output():
+    """Get the value of *STANDARD-OUTPUT*."""
+    return sys.stdout
+
+
+@_registry.cl_function('*ERROR-OUTPUT*')
+def get_error_output():
+    """Get the value of *ERROR-OUTPUT*."""
+    return sys.stderr
+
+
+@_registry.cl_function('*TERMINAL-IO*')
+def get_terminal_io():
+    """Get the value of *TERMINAL-IO* (combined terminal stream)."""
+    # Return stdout as a simple approximation
+    return sys.stdout
+
+
+@_registry.cl_function('*QUERY-IO*')
+def get_query_io():
+    """Get the value of *QUERY-IO* (query/response stream)."""
+    return sys.stdout
 
 
 class Stream:
@@ -401,6 +436,78 @@ def stream_position(stream):
         raise TypeError(f"Expected Stream, got {type(stream)}")
     
     return stream.get_position()
+
+
+@_registry.cl_function('SET-STREAM-POSITION')
+def set_stream_position(stream, position):
+    """Set the current position in a stream.
+    
+    Args:
+        stream: Stream to modify
+        position: New position (integer, or :START, :END)
+    
+    Returns:
+        New position, or NIL if positioning not supported
+    """
+    if not isinstance(stream, Stream):
+        raise TypeError(f"Expected Stream, got {type(stream)}")
+    
+    if hasattr(stream, 'file') and stream.file is not None:
+        if position == ':START' or (hasattr(position, 'name') and position.name == 'START'):
+            stream.file.seek(0)
+            return 0
+        elif position == ':END' or (hasattr(position, 'name') and position.name == 'END'):
+            stream.file.seek(0, 2)
+            return stream.file.tell()
+        else:
+            stream.file.seek(int(position))
+            return int(position)
+    return lisptype.NIL
+
+
+@_registry.cl_function('READ-SEQUENCE')
+def read_sequence(sequence, stream, start=0, end=None):
+    """Read elements from stream into sequence.
+    
+    Args:
+        sequence: Mutable sequence (string or list) to fill
+        stream: Stream to read from
+        start: Starting index in sequence (default 0)
+        end: Ending index (exclusive, default length of sequence)
+    
+    Returns:
+        Index of position where reading stopped
+    """
+    if end is None:
+        if isinstance(sequence, str):
+            end = len(sequence)
+        elif isinstance(sequence, list):
+            end = len(sequence)
+        else:
+            end = start
+    
+    if not isinstance(stream, Stream):
+        # Try reading from file-like object
+        if hasattr(stream, 'read'):
+            chars = stream.read(end - start)
+            for i, c in enumerate(chars):
+                if start + i >= end:
+                    break
+                if isinstance(sequence, list):
+                    sequence[start + i] = c
+            return start + len(chars)
+        raise TypeError(f"Expected Stream, got {type(stream)}")
+    
+    position = start
+    while position < end:
+        char = stream.read_char()
+        if char is None:
+            break
+        if isinstance(sequence, list):
+            sequence[position] = char
+        position += 1
+    
+    return position
 
 
 @_registry.cl_function('OPEN-STREAM-P')

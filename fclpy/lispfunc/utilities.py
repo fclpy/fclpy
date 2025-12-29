@@ -201,7 +201,7 @@ __all__ = [
     'inspect_object',
     'type_fn',
     'copy_tree',
-    'incf',
+    # 'incf' removed - now a special form
     'octets_to_string',
     'string_to_octets',
     'get',

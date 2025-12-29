@@ -155,7 +155,8 @@ def eval(form, env=None):
     from .evaluation_special_forms import (
         eval_if, eval_setq, eval_defun, eval_defmacro, eval_macroexpand_1,
         eval_macro_function, eval_lambda, eval_declare, eval_declaim,
-        eval_defvar, eval_defparameter, eval_defstruct, eval_pop
+        eval_defvar, eval_defparameter, eval_defstruct, eval_pop,
+        eval_incf, eval_decf
     )
     from .evaluation_control_flow import (
         eval_block, eval_return_from, eval_catch, eval_throw,
@@ -164,7 +165,7 @@ def eval(form, env=None):
     from .evaluation_loops_conditionals import (
         eval_when, eval_unless, eval_cond, eval_and, eval_or,
         eval_progn, eval_prog1, eval_prog2, eval_let, eval_letstar, eval_quasiquote,
-        eval_loop, eval_eval_when
+        eval_loop, eval_eval_when, eval_do, eval_do_star, eval_dolist, eval_dotimes
     )
     from .evaluation_conditions import (
         eval_signal, eval_error, eval_cerror, eval_warn,
@@ -309,6 +310,18 @@ def eval(form, env=None):
                 return eval_tagbody(form, env)
             elif operator.name == 'GO':
                 return eval_go(form, env)
+            elif operator.name == 'INCF':
+                return eval_incf(form, env)
+            elif operator.name == 'DECF':
+                return eval_decf(form, env)
+            elif operator.name == 'DO':
+                return eval_do(form, env)
+            elif operator.name == 'DO*':
+                return eval_do_star(form, env)
+            elif operator.name == 'DOLIST':
+                return eval_dolist(form, env)
+            elif operator.name == 'DOTIMES':
+                return eval_dotimes(form, env)
         
         # Macro handling: if operator names a macro function, expand first
         if isinstance(operator, lisptype.LispSymbol):

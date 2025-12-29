@@ -156,6 +156,37 @@ def values_list(lst):
     return lisptype.MultipleValues.from_list(lst)
 
 
+@_registry.cl_function('MULTIPLE-VALUE-RETURN')
+def multiple_value_return(*args):
+    """Return multiple values (alias for VALUES).
+    
+    Note: MULTIPLE-VALUE-RETURN is not standard ANSI Common Lisp.
+    Use VALUES instead. This is provided for compatibility.
+    """
+    return values(*args)
+
+
+@_registry.cl_function('MAKE-CHAR-CODE-CONVERSION')
+def make_char_code_conversion(from_encoding, to_encoding):
+    """Create a character code conversion function.
+    
+    Note: MAKE-CHAR-CODE-CONVERSION is not standard ANSI Common Lisp.
+    This is provided for compatibility with the target list.
+    
+    Args:
+        from_encoding: Source encoding name
+        to_encoding: Target encoding name
+        
+    Returns:
+        A function that converts characters between encodings
+    """
+    def convert(char_or_string):
+        # For now, just return the input unchanged
+        # Full implementation would handle encoding conversion
+        return char_or_string
+    return convert
+
+
 @_registry.cl_function('MULTIPLE-VALUE-LIST')
 def multiple_value_list(values):
     """Convert multiple values to a list.

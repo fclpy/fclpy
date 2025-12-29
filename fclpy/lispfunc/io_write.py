@@ -122,6 +122,79 @@ def get_printer_setting(name):
         raise lisptype.LispError(f"Unknown printer variable: {name}")
 
 
+# === Registered Printer Control Variable Accessors ===
+# These provide Lisp-level access to *PRINT-...* variables
+
+@_registry.cl_function('*PRINT-LEVEL*')
+def get_print_level():
+    """Get the value of *PRINT-LEVEL*."""
+    v = _printer_settings.print_level
+    return lisptype.NIL if v is None else v
+
+
+@_registry.cl_function('*PRINT-LENGTH*')
+def get_print_length():
+    """Get the value of *PRINT-LENGTH*."""
+    v = _printer_settings.print_length
+    return lisptype.NIL if v is None else v
+
+
+@_registry.cl_function('*PRINT-BASE*')
+def get_print_base():
+    """Get the value of *PRINT-BASE*."""
+    return _printer_settings.print_base
+
+
+@_registry.cl_function('*PRINT-RADIX*')
+def get_print_radix():
+    """Get the value of *PRINT-RADIX*."""
+    return lisptype.T if _printer_settings.print_radix else lisptype.NIL
+
+
+@_registry.cl_function('*PRINT-CASE*')
+def get_print_case():
+    """Get the value of *PRINT-CASE*."""
+    case_val = _printer_settings.print_case
+    from .core import intern_keyword
+    return intern_keyword(case_val)
+
+
+@_registry.cl_function('*PRINT-CIRCLE*')
+def get_print_circle():
+    """Get the value of *PRINT-CIRCLE*."""
+    return lisptype.T if _printer_settings.print_circle else lisptype.NIL
+
+
+@_registry.cl_function('*PRINT-GENSYM*')
+def get_print_gensym():
+    """Get the value of *PRINT-GENSYM*."""
+    return lisptype.T if _printer_settings.print_gensym else lisptype.NIL
+
+
+@_registry.cl_function('*PRINT-ARRAY*')
+def get_print_array():
+    """Get the value of *PRINT-ARRAY*."""
+    return lisptype.T if _printer_settings.print_array else lisptype.NIL
+
+
+@_registry.cl_function('*PRINT-READABLY*')
+def get_print_readably():
+    """Get the value of *PRINT-READABLY*."""
+    return lisptype.T if _printer_settings.print_readably else lisptype.NIL
+
+
+@_registry.cl_function('*PRINT-ESCAPE*')
+def get_print_escape():
+    """Get the value of *PRINT-ESCAPE*."""
+    return lisptype.T if _printer_settings.print_escape else lisptype.NIL
+
+
+@_registry.cl_function('*PRINT-PRETTY*')
+def get_print_pretty():
+    """Get the value of *PRINT-PRETTY*."""
+    return lisptype.T if _printer_settings.print_pretty else lisptype.NIL
+
+
 def _print_with_limits(obj, current_level=0, current_length_tracker=None):
     """Print object respecting *PRINT-LEVEL* and *PRINT-LENGTH*.
     

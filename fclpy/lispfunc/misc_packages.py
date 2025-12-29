@@ -155,6 +155,41 @@ def package_shadowing_symbols(package):
     return syms
 
 
+@_registry.cl_function('PACKAGE-EXTERNAL-SYMBOLS')
+def package_external_symbols(package):
+    """Get external symbols in package.
+    
+    Returns a list of symbols that are exported from the package.
+    """
+    pkg = package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)) if package else getattr(state, 'current_package', None)
+    if pkg is None:
+        return []
+    syms = []
+    external_names = getattr(pkg, 'external_symbols', set())
+    for name in external_names:
+        s = pkg.symbols.get(name)
+        if s is not None:
+            syms.append(s)
+    return syms
+
+
+@_registry.cl_function('PACKAGE-INTERNAL-SYMBOLS')
+def package_internal_symbols(package):
+    """Get internal (non-exported) symbols in package.
+    
+    Returns a list of symbols that are in the package but not exported.
+    """
+    pkg = package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)) if package else getattr(state, 'current_package', None)
+    if pkg is None:
+        return []
+    syms = []
+    external_names = getattr(pkg, 'external_symbols', set())
+    for name, sym in pkg.symbols.items():
+        if name not in external_names:
+            syms.append(sym)
+    return syms
+
+
 @_registry.cl_function('LIST-ALL-PACKAGES')
 def list_all_packages():
     """List all known packages."""

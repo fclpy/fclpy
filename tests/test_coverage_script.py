@@ -63,9 +63,9 @@ class TestCoverageScript:
         """Coverage script should fail if coverage is below minimum."""
         script_path = Path(__file__).parent.parent / 'scripts' / 'coverage.py'
         
-        # Set a very high minimum that won't be met
+        # Set minimum at 101% which is impossible to achieve
         result = subprocess.run(
-            [sys.executable, str(script_path), '--min-coverage', '99'],
+            [sys.executable, str(script_path), '--min-coverage', '101'],
             capture_output=True,
             text=True
         )

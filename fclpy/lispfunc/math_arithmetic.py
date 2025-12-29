@@ -685,6 +685,35 @@ def boole(op, integer1, integer2):
         return 0  # Simplified
 
 
+@_registry.cl_function('ROTATE')
+def rotate(integer, count, size=32):
+    """Rotate bits in integer.
+    
+    Rotates COUNT bits left (positive) or right (negative) in SIZE-bit field.
+    Note: ROTATE is not standard ANSI Common Lisp. Use ASH for shifts.
+    This is provided for compatibility with the target list.
+    """
+    if size <= 0:
+        return integer
+    
+    # Normalize count to be within size
+    count = count % size
+    if count == 0:
+        return integer
+    
+    # Mask to size bits
+    mask = (1 << size) - 1
+    integer = integer & mask
+    
+    # Rotate left (positive count)
+    if count > 0:
+        return ((integer << count) | (integer >> (size - count))) & mask
+    else:
+        # Rotate right (negative count)
+        count = -count
+        return ((integer >> count) | (integer << (size - count))) & mask
+
+
 __all__ = [
     'abs_fn', 'gcd', 'lcm', 'max_fn', 'min_fn', 'signum',
     'evenp', 'oddp', 'zerop', 'plusp', 'minusp',

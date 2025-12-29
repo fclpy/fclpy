@@ -607,6 +607,19 @@ class FloatingPointUnderflow(ArithmeticError):
     pass
 
 
+class SimpleError(Error):
+    """Simple error condition with format control and arguments.
+    
+    This is used for errors created with SIMPLE-ERROR type specifier.
+    """
+    def __init__(self, format_control="", format_arguments=None, message="", **kwargs):
+        if not message and format_control:
+            message = format_control
+        super().__init__(message, **kwargs)
+        self._slots['format-control'] = format_control
+        self._slots['format-arguments'] = format_arguments or []
+
+
 def resolve_environment(env=None):
     """Resolve an environment argument, using current environment if needed.
     

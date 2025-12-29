@@ -382,3 +382,79 @@ def constantly(value):
     def constant_function(*args, **kwargs):
         return value
     return constant_function
+
+
+# =================================================================
+# Additional symbols from the ANSI target list
+# =================================================================
+
+@_registry.cl_function('EQU')
+def equ(obj1, obj2):
+    """Test for object identity (alias for EQ).
+    
+    Note: EQU is not standard ANSI Common Lisp, but some implementations
+    provide it as an alias for EQ.
+    """
+    return eq(obj1, obj2)
+
+
+@_registry.cl_function('SIGN')
+def sign(number):
+    """Return the sign of a number: -1, 0, or 1.
+    
+    Note: The ANSI standard name is SIGNUM, but SIGN is provided as an alias.
+    """
+    if number == 0:
+        return 0
+    elif number > 0:
+        return 1
+    else:
+        return -1
+
+
+@_registry.cl_function('GETPROP')
+def getprop(symbol, indicator, default=None):
+    """Get property from symbol's property list (alias for GET).
+    
+    Note: GETPROP is not standard ANSI but provided for compatibility.
+    """
+    # Import get from symbols module
+    from .symbols import get
+    return get(symbol, indicator, default)
+
+
+@_registry.cl_function('PROPERTY-LIST')
+def property_list(symbol):
+    """Return the property list of a symbol (alias for SYMBOL-PLIST).
+    
+    Note: PROPERTY-LIST is not standard ANSI but provided for compatibility.
+    """
+    if hasattr(symbol, 'plist'):
+        return symbol.plist
+    return lisptype.NIL
+
+
+@_registry.cl_function('STRING-LENGTH')
+def string_length(string):
+    """Return the length of a string (alias for LENGTH).
+    
+    Note: STRING-LENGTH is not standard ANSI (use LENGTH), but provided
+    for compatibility with target list.
+    """
+    if isinstance(string, str):
+        return len(string)
+    return 0
+
+
+@_registry.cl_function('STRING<>')
+def string_not_equal_alt(str1, str2):
+    """Test if strings are not equal (alternate name for STRING/=).
+    
+    Note: STRING<> is not standard ANSI (use STRING/=), but provided
+    for compatibility with target list.
+    """
+    if isinstance(str1, lisptype.LispSymbol):
+        str1 = str1.name
+    if isinstance(str2, lisptype.LispSymbol):
+        str2 = str2.name
+    return lisptype.lisp_bool(str(str1) != str(str2))

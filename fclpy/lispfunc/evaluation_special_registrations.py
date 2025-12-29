@@ -183,6 +183,181 @@ def special_ignorable(*args):
     raise lisptype.LispNotImplementedError('IGNORABLE (evaluated in evaluator)')
 
 
+# Additional special forms handled by evaluator but not previously registered
+@_registry.cl_special('LET*')
+def special_let_star(*args):
+    """LET* special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('LET* (evaluated in evaluator)')
+
+
+@_registry.cl_special('UNLESS')
+def special_unless(*args):
+    """UNLESS special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('UNLESS (evaluated in evaluator)')
+
+
+@_registry.cl_special('PROGN')
+def special_progn(*args):
+    """PROGN special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('PROGN (evaluated in evaluator)')
+
+
+@_registry.cl_special('AND')
+def special_and(*args):
+    """AND special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('AND (evaluated in evaluator)')
+
+
+@_registry.cl_special('OR')
+def special_or(*args):
+    """OR special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('OR (evaluated in evaluator)')
+
+
+@_registry.cl_special('PROG1')
+def special_prog1(*args):
+    """PROG1 special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('PROG1 (evaluated in evaluator)')
+
+
+@_registry.cl_special('PROG2')
+def special_prog2(*args):
+    """PROG2 special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('PROG2 (evaluated in evaluator)')
+
+
+@_registry.cl_special('DEFPARAMETER')
+def special_defparameter(*args):
+    """DEFPARAMETER special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('DEFPARAMETER (evaluated in evaluator)')
+
+
+@_registry.cl_special('DEFSTRUCT')
+def special_defstruct(*args):
+    """DEFSTRUCT special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('DEFSTRUCT (evaluated in evaluator)')
+
+
+@_registry.cl_special('LOOP')
+def special_loop(*args):
+    """LOOP special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('LOOP (evaluated in evaluator)')
+
+
+@_registry.cl_special('POP')
+def special_pop(*args):
+    """POP special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('POP (evaluated in evaluator)')
+
+
+@_registry.cl_special('LAMBDA')
+def special_lambda(*args):
+    """LAMBDA special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('LAMBDA (evaluated in evaluator)')
+
+
+@_registry.cl_special('QUASIQUOTE')
+def special_quasiquote(*args):
+    """QUASIQUOTE special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('QUASIQUOTE (evaluated in evaluator)')
+
+
+@_registry.cl_special('MACROEXPAND-1')
+def special_macroexpand_1(*args):
+    """MACROEXPAND-1 special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('MACROEXPAND-1 (evaluated in evaluator)')
+
+
+@_registry.cl_special('MACRO-FUNCTION')
+def special_macro_function(*args):
+    """MACRO-FUNCTION special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('MACRO-FUNCTION (evaluated in evaluator)')
+
+
+@_registry.cl_special('BLOCK')
+def special_block(*args):
+    """BLOCK special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('BLOCK (evaluated in evaluator)')
+
+
+@_registry.cl_special('RETURN-FROM')
+def special_return_from(*args):
+    """RETURN-FROM special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('RETURN-FROM (evaluated in evaluator)')
+
+
+@_registry.cl_special('CATCH')
+def special_catch(*args):
+    """CATCH special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('CATCH (evaluated in evaluator)')
+
+
+@_registry.cl_special('THROW')
+def special_throw(*args):
+    """THROW special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('THROW (evaluated in evaluator)')
+
+
+@_registry.cl_special('UNWIND-PROTECT')
+def special_unwind_protect(*args):
+    """UNWIND-PROTECT special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('UNWIND-PROTECT (evaluated in evaluator)')
+
+
+@_registry.cl_special('IGNORE-ERRORS')
+def special_ignore_errors(*args):
+    """IGNORE-ERRORS special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('IGNORE-ERRORS (evaluated in evaluator)')
+
+
+@_registry.cl_special('TAGBODY')
+def special_tagbody(*args):
+    """TAGBODY special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('TAGBODY (evaluated in evaluator)')
+
+
+@_registry.cl_special('GO')
+def special_go(*args):
+    """GO special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('GO (evaluated in evaluator)')
+
+
+@_registry.cl_special('INCF')
+def special_incf(*args):
+    """INCF special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('INCF (evaluated in evaluator)')
+
+
+@_registry.cl_special('DECF')
+def special_decf(*args):
+    """DECF special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('DECF (evaluated in evaluator)')
+
+
+@_registry.cl_special('DO')
+def special_do(*args):
+    """DO special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('DO (evaluated in evaluator)')
+
+
+@_registry.cl_special('DO*')
+def special_do_star(*args):
+    """DO* special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('DO* (evaluated in evaluator)')
+
+
+@_registry.cl_special('DOLIST')
+def special_dolist(*args):
+    """DOLIST special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('DOLIST (evaluated in evaluator)')
+
+
+@_registry.cl_special('DOTIMES')
+def special_dotimes(*args):
+    """DOTIMES special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('DOTIMES (evaluated in evaluator)')
+
+
 __all__ = [
     'function_fn',
     'quote_fn',
@@ -213,4 +388,34 @@ __all__ = [
     'special_inline',
     'special_ignore',
     'special_ignorable',
+    # New registrations
+    'special_let_star',
+    'special_unless',
+    'special_progn',
+    'special_and',
+    'special_or',
+    'special_prog1',
+    'special_prog2',
+    'special_defparameter',
+    'special_defstruct',
+    'special_loop',
+    'special_pop',
+    'special_lambda',
+    'special_quasiquote',
+    'special_macroexpand_1',
+    'special_macro_function',
+    'special_block',
+    'special_return_from',
+    'special_catch',
+    'special_throw',
+    'special_unwind_protect',
+    'special_ignore_errors',
+    'special_tagbody',
+    'special_go',
+    'special_incf',
+    'special_decf',
+    'special_do',
+    'special_do_star',
+    'special_dolist',
+    'special_dotimes',
 ]

@@ -712,6 +712,267 @@ def eval_loop(form, env):
     return result
 
 
+def eval_do(form, env):
+    """Evaluate DO special form.
+    
+    (DO ((var init [step])*)
+        (end-test result-form*)
+        declaration*
+        {tag | statement}*)
+    
+    DO evaluates init forms in parallel (like LET) and binds variables.
+    """
+    from .evaluation_core import eval
+    
+    args = cdr(form)
+    if not _consp_internal(args):
+        return lisptype.NIL
+    
+    # Parse variable bindings
+    var_list = car(args)
+    args = cdr(args)
+    
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("DO requires end-test clause")
+    
+    # Parse end-test clause  
+    end_clause = car(args)
+    body = cdr(args)
+    
+    if not _consp_internal(end_clause):
+        raise lisptype.LispNotImplementedError("DO end-test must be a list")
+    
+    end_test = car(end_clause)
+    result_forms = cdr(end_clause)
+    
+    # Create new environment
+    loop_env = lisptype.Environment(env)
+    
+    # Parse var specs and evaluate init forms IN PARALLEL (collect first)
+    var_specs = []
+    current = var_list
+    while _consp_internal(current):
+        spec = car(current)
+        if isinstance(spec, lisptype.LispSymbol):
+            var_specs.append((spec, lisptype.NIL, None))
+        elif _consp_internal(spec):
+            var = car(spec)
+            init_form = car(cdr(spec)) if _consp_internal(cdr(spec)) else lisptype.NIL
+            step_form = car(cdr(cdr(spec))) if _consp_internal(cdr(cdr(spec))) else None
+            var_specs.append((var, init_form, step_form))
+        current = cdr(current)
+    
+    # Evaluate all init forms first (parallel binding like LET)
+    init_values = [eval(init_form, env) for var, init_form, _ in var_specs]
+    
+    # Bind variables
+    for (var, _, _), value in zip(var_specs, init_values):
+        loop_env.set_variable(var, value)
+    
+    # Main loop
+    while True:
+        # Check end-test
+        if lisptype.is_truthy(eval(end_test, loop_env)):
+            # Evaluate result forms and return last value
+            result = lisptype.NIL
+            current = result_forms
+            while _consp_internal(current):
+                result = eval(car(current), loop_env)
+                current = cdr(current)
+            return result
+        
+        # Execute body
+        current = body
+        while _consp_internal(current):
+            eval(car(current), loop_env)
+            current = cdr(current)
+        
+        # Update variables (evaluate all step forms first, then update)
+        new_values = []
+        for var, _, step_form in var_specs:
+            if step_form is not None:
+                new_values.append((var, eval(step_form, loop_env)))
+        
+        for var, value in new_values:
+            loop_env.set_variable(var, value)
+
+
+def eval_do_star(form, env):
+    """Evaluate DO* special form.
+    
+    (DO* ((var init [step])*)
+         (end-test result-form*)
+         declaration*
+         {tag | statement}*)
+    
+    DO* evaluates init forms sequentially (like LET*) and binds variables.
+    """
+    from .evaluation_core import eval
+    
+    args = cdr(form)
+    if not _consp_internal(args):
+        return lisptype.NIL
+    
+    # Parse variable bindings
+    var_list = car(args)
+    args = cdr(args)
+    
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("DO* requires end-test clause")
+    
+    # Parse end-test clause  
+    end_clause = car(args)
+    body = cdr(args)
+    
+    if not _consp_internal(end_clause):
+        raise lisptype.LispNotImplementedError("DO* end-test must be a list")
+    
+    end_test = car(end_clause)
+    result_forms = cdr(end_clause)
+    
+    # Create new environment
+    loop_env = lisptype.Environment(env)
+    
+    # Parse var specs and evaluate init forms SEQUENTIALLY (like LET*)
+    var_specs = []
+    current = var_list
+    while _consp_internal(current):
+        spec = car(current)
+        if isinstance(spec, lisptype.LispSymbol):
+            loop_env.set_variable(spec, lisptype.NIL)
+            var_specs.append((spec, None))
+        elif _consp_internal(spec):
+            var = car(spec)
+            init_form = car(cdr(spec)) if _consp_internal(cdr(spec)) else lisptype.NIL
+            step_form = car(cdr(cdr(spec))) if _consp_internal(cdr(cdr(spec))) else None
+            # Evaluate in current loop_env (sequential)
+            init_value = eval(init_form, loop_env)
+            loop_env.set_variable(var, init_value)
+            var_specs.append((var, step_form))
+        current = cdr(current)
+    
+    # Main loop
+    while True:
+        # Check end-test
+        if lisptype.is_truthy(eval(end_test, loop_env)):
+            # Evaluate result forms and return last value
+            result = lisptype.NIL
+            current = result_forms
+            while _consp_internal(current):
+                result = eval(car(current), loop_env)
+                current = cdr(current)
+            return result
+        
+        # Execute body
+        current = body
+        while _consp_internal(current):
+            eval(car(current), loop_env)
+            current = cdr(current)
+        
+        # Update variables sequentially
+        for var, step_form in var_specs:
+            if step_form is not None:
+                new_value = eval(step_form, loop_env)
+                loop_env.set_variable(var, new_value)
+
+
+def eval_dolist(form, env):
+    """Evaluate DOLIST special form.
+    
+    (DOLIST (var list-form [result-form]) declaration* {tag | statement}*)
+    """
+    from .evaluation_core import eval
+    
+    args = cdr(form)
+    if not _consp_internal(args):
+        return lisptype.NIL
+    
+    # Parse (var list-form [result-form])
+    var_clause = car(args)
+    body = cdr(args)
+    
+    if not _consp_internal(var_clause):
+        raise lisptype.LispNotImplementedError("DOLIST requires (var list-form) clause")
+    
+    var = car(var_clause)
+    list_form = car(cdr(var_clause)) if _consp_internal(cdr(var_clause)) else lisptype.NIL
+    result_form = car(cdr(cdr(var_clause))) if _consp_internal(cdr(cdr(var_clause))) else lisptype.NIL
+    
+    # Evaluate list
+    lst = eval(list_form, env)
+    
+    # Create loop environment
+    loop_env = lisptype.Environment(env)
+    loop_env.set_variable(var, lisptype.NIL)
+    
+    # Iterate over list
+    current_list = lst
+    while _consp_internal(current_list):
+        loop_env.set_variable(var, car(current_list))
+        
+        # Execute body
+        current = body
+        while _consp_internal(current):
+            eval(car(current), loop_env)
+            current = cdr(current)
+        
+        current_list = cdr(current_list)
+    
+    # Set var to NIL for result form
+    loop_env.set_variable(var, lisptype.NIL)
+    
+    # Evaluate and return result form
+    return eval(result_form, loop_env)
+
+
+def eval_dotimes(form, env):
+    """Evaluate DOTIMES special form.
+    
+    (DOTIMES (var count-form [result-form]) declaration* {tag | statement}*)
+    """
+    from .evaluation_core import eval
+    
+    args = cdr(form)
+    if not _consp_internal(args):
+        return lisptype.NIL
+    
+    # Parse (var count-form [result-form])
+    var_clause = car(args)
+    body = cdr(args)
+    
+    if not _consp_internal(var_clause):
+        raise lisptype.LispNotImplementedError("DOTIMES requires (var count-form) clause")
+    
+    var = car(var_clause)
+    count_form = car(cdr(var_clause)) if _consp_internal(cdr(var_clause)) else 0
+    result_form = car(cdr(cdr(var_clause))) if _consp_internal(cdr(cdr(var_clause))) else lisptype.NIL
+    
+    # Evaluate count
+    count = eval(count_form, env)
+    if not isinstance(count, (int, float)):
+        count = 0
+    count = int(count)
+    
+    # Create loop environment
+    loop_env = lisptype.Environment(env)
+    
+    # Iterate count times
+    for i in range(count):
+        loop_env.set_variable(var, i)
+        
+        # Execute body
+        current = body
+        while _consp_internal(current):
+            eval(car(current), loop_env)
+            current = cdr(current)
+    
+    # Set var to count for result form
+    loop_env.set_variable(var, count)
+    
+    # Evaluate and return result form
+    return eval(result_form, loop_env)
+
+
 __all__ = [
     'eval_when',
     'eval_unless',
@@ -725,4 +986,8 @@ __all__ = [
     'eval_prog1',
     'eval_prog2',
     'eval_loop',
+    'eval_do',
+    'eval_do_star',
+    'eval_dolist',
+    'eval_dotimes',
 ]

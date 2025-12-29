@@ -4,6 +4,17 @@ import fclpy.lisptype as lisptype
 from . import registry as _registry
 
 
+# === Reader Control Variables ===
+# Global read base (default 10)
+_read_base = 10
+
+
+@_registry.cl_function('*READ-BASE*')
+def get_read_base():
+    """Get the value of *READ-BASE*."""
+    return _read_base
+
+
 @_registry.cl_function('READTABLEP')
 def readtablep(obj):
     """Test if object is a readtable."""

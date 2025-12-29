@@ -54,6 +54,80 @@ def eval_setq(form, env):
     return result
 
 
+def eval_incf(form, env):
+    """Evaluate INCF special form - increment a place.
+    
+    (INCF place) increments place by 1
+    (INCF place delta) increments place by delta
+    
+    Currently only supports simple variable places, not general setf-able places.
+    """
+    from .evaluation_core import eval
+    
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("INCF requires at least 1 argument")
+    
+    place = car(args)
+    
+    # Get delta (default 1)
+    delta_form = car(cdr(args)) if _consp_internal(cdr(args)) else 1
+    if delta_form != 1:
+        delta = eval(delta_form, env)
+    else:
+        delta = 1
+    
+    # Handle simple variable case
+    if isinstance(place, lisptype.LispSymbol):
+        # Use find_variable (not lookup) to get the current binding
+        if env.has_variable(place):
+            current_value = env.find_variable(place)
+        else:
+            current_value = 0
+        new_value = current_value + delta
+        env.set_variable(place, new_value)
+        return new_value
+    else:
+        raise lisptype.LispNotImplementedError(f"INCF: complex places not yet supported: {place}")
+
+
+def eval_decf(form, env):
+    """Evaluate DECF special form - decrement a place.
+    
+    (DECF place) decrements place by 1
+    (DECF place delta) decrements place by delta
+    
+    Currently only supports simple variable places, not general setf-able places.
+    """
+    from .evaluation_core import eval
+    
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("DECF requires at least 1 argument")
+    
+    place = car(args)
+    
+    # Get delta (default 1)
+    delta_form = car(cdr(args)) if _consp_internal(cdr(args)) else 1
+    if delta_form != 1:
+        delta = eval(delta_form, env)
+    else:
+        delta = 1
+    
+    # Handle simple variable case
+    if isinstance(place, lisptype.LispSymbol):
+        # Use find_variable (not lookup) to get the current binding
+        if env.has_variable(place):
+            current_value = env.find_variable(place)
+        else:
+            current_value = 0
+        new_value = current_value - delta
+        env.set_variable(place, new_value)
+        return new_value
+    else:
+        raise lisptype.LispNotImplementedError(f"DECF: complex places not yet supported: {place}")
+
+
 def eval_defun(form, env):
     """Evaluate DEFUN special form.
     

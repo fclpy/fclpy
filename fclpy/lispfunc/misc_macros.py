@@ -277,6 +277,40 @@ def inspect_object(obj):
     return describe(obj)
 
 
+@_registry.cl_function('DESCRIBE-OBJECT')
+def describe_object(obj, stream=None):
+    """Print description of object to stream.
+    
+    This is the generic function called by DESCRIBE. Users can add methods
+    for their own classes to customize the description output.
+    """
+    if stream is None:
+        stream = True  # *standard-output*
+    info = describe(obj)
+    # Format output (simplified version)
+    return info
+
+
+@_registry.cl_function('PRINT-OBJECT')
+def print_object(obj, stream=None):
+    """Print object to stream.
+    
+    This is the primary interface to the Lisp printer. Users can add methods
+    for their own classes to customize print output.
+    """
+    if stream is None:
+        stream = True  # *standard-output*
+    # Return the string representation
+    return repr(obj) if hasattr(obj, '__repr__') else str(obj)
+
+
+@_registry.cl_function('CONDITION-P')
+def condition_p(obj):
+    """Test if object is a condition."""
+    from fclpy.lisptype_extended import Condition
+    return lisptype.lisp_bool(isinstance(obj, Condition))
+
+
 @_registry.cl_function('TYPE')
 def type_fn(object):
     """Get type of object."""
@@ -291,13 +325,8 @@ def copy_tree(obj):
     return obj
 
 
-@_registry.cl_function('INCF')
-def incf(place, delta=1):
-    """Increment numeric value."""
-    try:
-        return place + delta
-    except Exception:
-        return place
+# Note: INCF is now implemented as a special form in evaluation_special_forms.py
+# The old function-based INCF has been removed as it didn't properly modify places.
 
 
 @_registry.cl_function('OCTETS-TO-STRING')
@@ -500,6 +529,55 @@ def floating_point_overflow_type():
 def floating_point_underflow_type():
     """Get FLOATING-POINT-UNDERFLOW type designator."""
     return 'FLOATING-POINT-UNDERFLOW'
+
+
+# --- Type designators from ANSI target list ---
+@_registry.cl_function('BIT-VECTOR')
+def bit_vector_type():
+    """Get BIT-VECTOR type designator."""
+    return 'BIT-VECTOR'
+
+
+@_registry.cl_function('SIMPLE-BIT-VECTOR')
+def simple_bit_vector_type():
+    """Get SIMPLE-BIT-VECTOR type designator."""
+    return 'SIMPLE-BIT-VECTOR'
+
+
+@_registry.cl_function('SIMPLE-VECTOR')
+def simple_vector_type():
+    """Get SIMPLE-VECTOR type designator."""
+    return 'SIMPLE-VECTOR'
+
+
+@_registry.cl_function('SIMPLE-STRING')
+def simple_string_type():
+    """Get SIMPLE-STRING type designator."""
+    return 'SIMPLE-STRING'
+
+
+@_registry.cl_function('TYPE-ERROR')
+def type_error_type():
+    """Get TYPE-ERROR type designator."""
+    return 'TYPE-ERROR'
+
+
+@_registry.cl_function('SIMPLE-ERROR')
+def simple_error_type():
+    """Get SIMPLE-ERROR type designator."""
+    return 'SIMPLE-ERROR'
+
+
+@_registry.cl_function('CLASS')
+def class_type():
+    """Get CLASS type designator."""
+    return 'CLASS'
+
+
+@_registry.cl_function('METHOD-COMBINATION')
+def method_combination_type():
+    """Get METHOD-COMBINATION type designator."""
+    return 'METHOD-COMBINATION'
 
 
 @_registry.cl_function('ARITHMETIC-ERROR-OPERANDS')
@@ -1111,7 +1189,7 @@ __all__ = [
     'inspect_object',
     'type_fn',
     'copy_tree',
-    'incf',
+    # Note: 'incf' removed - now a special form in evaluation_special_forms.py
     'octets_to_string',
     'string_to_octets',
     'get',

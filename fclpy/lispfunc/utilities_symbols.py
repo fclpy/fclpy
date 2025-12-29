@@ -50,6 +50,12 @@ def gensym(prefix="G"):
 
 
 # --- Package operations ---
+@_registry.cl_function('*PACKAGE*')
+def get_current_package():
+    """Get the value of *PACKAGE* (current package)."""
+    return getattr(state, 'current_package', None) or lisptype.COMMON_LISP_USER_PACKAGE
+
+
 @_registry.cl_function('IN-PACKAGE')
 def in_package(name):
     """Set current package and return it."""

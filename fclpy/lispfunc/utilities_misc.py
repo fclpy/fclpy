@@ -122,7 +122,7 @@ from .misc_macros import (
     inspect_object,
     type_fn,
     copy_tree,
-    incf,
+    # Note: incf removed - now a special form in evaluation_special_forms.py
     octets_to_string,
     string_to_octets,
     get,
@@ -294,7 +294,7 @@ __all__ = [
     'inspect_object',
     'type_fn',
     'copy_tree',
-    'incf',
+    # 'incf' removed - now a special form
     'octets_to_string',
     'string_to_octets',
     'get',

@@ -110,15 +110,15 @@ class TestLoopRepeat:
 
 
 class TestLoopWhileUntil:
-    """Test LOOP WHILE and UNTIL patterns - SKIPPED due to INCF issues."""
+    """Test LOOP WHILE and UNTIL patterns."""
     
-    @pytest.mark.skip(reason="INCF/WHILE interaction causes hang - test WHILE separately")
     def test_while(self):
-        """Test WHILE loop with state tracking."""
+        """Test WHILE loop with state tracking using INCF (now a proper special form)."""
         env = setup_env()
         # Set up a counter and accumulate while under limit
         read_and_eval("(defvar *counter* 0)", env)
         read_and_eval("(defvar *result* nil)", env)
+        # INCF is now a proper special form that modifies the place
         read_and_eval("""
             (loop while (< *counter* 3) 
                   do (setq *result* (cons *counter* *result*))
