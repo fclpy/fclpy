@@ -180,6 +180,205 @@ def setup_standard_environment():
         if state.current_environment.find_variable(package_sym) is None:
             current_pkg = getattr(state, 'current_package', None) or fclpy.lisptype.COMMON_LISP_USER_PACKAGE
             state.current_environment.add_variable(package_sym, current_pkg)
+        
+        # === Numeric Constants (ANSI CL required) ===
+        import math
+        
+        # Integer limits
+        most_positive_fixnum_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('MOST-POSITIVE-FIXNUM')
+        if state.current_environment.find_variable(most_positive_fixnum_sym) is None:
+            state.current_environment.add_variable(most_positive_fixnum_sym, 2**63 - 1)
+        
+        most_negative_fixnum_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('MOST-NEGATIVE-FIXNUM')
+        if state.current_environment.find_variable(most_negative_fixnum_sym) is None:
+            state.current_environment.add_variable(most_negative_fixnum_sym, -(2**63))
+        
+        # PI constant
+        pi_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('PI')
+        if state.current_environment.find_variable(pi_sym) is None:
+            state.current_environment.add_variable(pi_sym, math.pi)
+        
+        # Float limits - single-float (Python float = IEEE double, but we expose as single for simplicity)
+        most_positive_single_float_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('MOST-POSITIVE-SINGLE-FLOAT')
+        if state.current_environment.find_variable(most_positive_single_float_sym) is None:
+            state.current_environment.add_variable(most_positive_single_float_sym, 3.4028235e+38)
+        
+        least_positive_single_float_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('LEAST-POSITIVE-SINGLE-FLOAT')
+        if state.current_environment.find_variable(least_positive_single_float_sym) is None:
+            state.current_environment.add_variable(least_positive_single_float_sym, 1.4e-45)
+        
+        least_positive_normalized_single_float_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('LEAST-POSITIVE-NORMALIZED-SINGLE-FLOAT')
+        if state.current_environment.find_variable(least_positive_normalized_single_float_sym) is None:
+            state.current_environment.add_variable(least_positive_normalized_single_float_sym, 1.17549435e-38)
+        
+        most_negative_single_float_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('MOST-NEGATIVE-SINGLE-FLOAT')
+        if state.current_environment.find_variable(most_negative_single_float_sym) is None:
+            state.current_environment.add_variable(most_negative_single_float_sym, -3.4028235e+38)
+        
+        least_negative_single_float_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('LEAST-NEGATIVE-SINGLE-FLOAT')
+        if state.current_environment.find_variable(least_negative_single_float_sym) is None:
+            state.current_environment.add_variable(least_negative_single_float_sym, -1.4e-45)
+        
+        least_negative_normalized_single_float_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('LEAST-NEGATIVE-NORMALIZED-SINGLE-FLOAT')
+        if state.current_environment.find_variable(least_negative_normalized_single_float_sym) is None:
+            state.current_environment.add_variable(least_negative_normalized_single_float_sym, -1.17549435e-38)
+        
+        # Float limits - double-float (Python float is IEEE double)
+        most_positive_double_float_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('MOST-POSITIVE-DOUBLE-FLOAT')
+        if state.current_environment.find_variable(most_positive_double_float_sym) is None:
+            state.current_environment.add_variable(most_positive_double_float_sym, 1.7976931348623157e+308)
+        
+        least_positive_double_float_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('LEAST-POSITIVE-DOUBLE-FLOAT')
+        if state.current_environment.find_variable(least_positive_double_float_sym) is None:
+            state.current_environment.add_variable(least_positive_double_float_sym, 5e-324)
+        
+        least_positive_normalized_double_float_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('LEAST-POSITIVE-NORMALIZED-DOUBLE-FLOAT')
+        if state.current_environment.find_variable(least_positive_normalized_double_float_sym) is None:
+            state.current_environment.add_variable(least_positive_normalized_double_float_sym, 2.2250738585072014e-308)
+        
+        most_negative_double_float_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('MOST-NEGATIVE-DOUBLE-FLOAT')
+        if state.current_environment.find_variable(most_negative_double_float_sym) is None:
+            state.current_environment.add_variable(most_negative_double_float_sym, -1.7976931348623157e+308)
+        
+        least_negative_double_float_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('LEAST-NEGATIVE-DOUBLE-FLOAT')
+        if state.current_environment.find_variable(least_negative_double_float_sym) is None:
+            state.current_environment.add_variable(least_negative_double_float_sym, -5e-324)
+        
+        least_negative_normalized_double_float_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('LEAST-NEGATIVE-NORMALIZED-DOUBLE-FLOAT')
+        if state.current_environment.find_variable(least_negative_normalized_double_float_sym) is None:
+            state.current_environment.add_variable(least_negative_normalized_double_float_sym, -2.2250738585072014e-308)
+        
+        # Short-float (same as single in our implementation)
+        most_positive_short_float_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('MOST-POSITIVE-SHORT-FLOAT')
+        if state.current_environment.find_variable(most_positive_short_float_sym) is None:
+            state.current_environment.add_variable(most_positive_short_float_sym, 3.4028235e+38)
+        
+        least_positive_short_float_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('LEAST-POSITIVE-SHORT-FLOAT')
+        if state.current_environment.find_variable(least_positive_short_float_sym) is None:
+            state.current_environment.add_variable(least_positive_short_float_sym, 1.4e-45)
+        
+        least_positive_normalized_short_float_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('LEAST-POSITIVE-NORMALIZED-SHORT-FLOAT')
+        if state.current_environment.find_variable(least_positive_normalized_short_float_sym) is None:
+            state.current_environment.add_variable(least_positive_normalized_short_float_sym, 1.17549435e-38)
+        
+        most_negative_short_float_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('MOST-NEGATIVE-SHORT-FLOAT')
+        if state.current_environment.find_variable(most_negative_short_float_sym) is None:
+            state.current_environment.add_variable(most_negative_short_float_sym, -3.4028235e+38)
+        
+        least_negative_short_float_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('LEAST-NEGATIVE-SHORT-FLOAT')
+        if state.current_environment.find_variable(least_negative_short_float_sym) is None:
+            state.current_environment.add_variable(least_negative_short_float_sym, -1.4e-45)
+        
+        least_negative_normalized_short_float_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('LEAST-NEGATIVE-NORMALIZED-SHORT-FLOAT')
+        if state.current_environment.find_variable(least_negative_normalized_short_float_sym) is None:
+            state.current_environment.add_variable(least_negative_normalized_short_float_sym, -1.17549435e-38)
+        
+        # Long-float (same as double in our implementation)
+        most_positive_long_float_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('MOST-POSITIVE-LONG-FLOAT')
+        if state.current_environment.find_variable(most_positive_long_float_sym) is None:
+            state.current_environment.add_variable(most_positive_long_float_sym, 1.7976931348623157e+308)
+        
+        least_positive_long_float_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('LEAST-POSITIVE-LONG-FLOAT')
+        if state.current_environment.find_variable(least_positive_long_float_sym) is None:
+            state.current_environment.add_variable(least_positive_long_float_sym, 5e-324)
+        
+        least_positive_normalized_long_float_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('LEAST-POSITIVE-NORMALIZED-LONG-FLOAT')
+        if state.current_environment.find_variable(least_positive_normalized_long_float_sym) is None:
+            state.current_environment.add_variable(least_positive_normalized_long_float_sym, 2.2250738585072014e-308)
+        
+        most_negative_long_float_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('MOST-NEGATIVE-LONG-FLOAT')
+        if state.current_environment.find_variable(most_negative_long_float_sym) is None:
+            state.current_environment.add_variable(most_negative_long_float_sym, -1.7976931348623157e+308)
+        
+        least_negative_long_float_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('LEAST-NEGATIVE-LONG-FLOAT')
+        if state.current_environment.find_variable(least_negative_long_float_sym) is None:
+            state.current_environment.add_variable(least_negative_long_float_sym, -5e-324)
+        
+        least_negative_normalized_long_float_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('LEAST-NEGATIVE-NORMALIZED-LONG-FLOAT')
+        if state.current_environment.find_variable(least_negative_normalized_long_float_sym) is None:
+            state.current_environment.add_variable(least_negative_normalized_long_float_sym, -2.2250738585072014e-308)
+        
+        # Float epsilon values
+        single_float_epsilon_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('SINGLE-FLOAT-EPSILON')
+        if state.current_environment.find_variable(single_float_epsilon_sym) is None:
+            state.current_environment.add_variable(single_float_epsilon_sym, 1.1920929e-7)
+        
+        single_float_negative_epsilon_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('SINGLE-FLOAT-NEGATIVE-EPSILON')
+        if state.current_environment.find_variable(single_float_negative_epsilon_sym) is None:
+            state.current_environment.add_variable(single_float_negative_epsilon_sym, 5.9604645e-8)
+        
+        double_float_epsilon_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('DOUBLE-FLOAT-EPSILON')
+        if state.current_environment.find_variable(double_float_epsilon_sym) is None:
+            state.current_environment.add_variable(double_float_epsilon_sym, 2.220446049250313e-16)
+        
+        double_float_negative_epsilon_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('DOUBLE-FLOAT-NEGATIVE-EPSILON')
+        if state.current_environment.find_variable(double_float_negative_epsilon_sym) is None:
+            state.current_environment.add_variable(double_float_negative_epsilon_sym, 1.1102230246251565e-16)
+        
+        short_float_epsilon_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('SHORT-FLOAT-EPSILON')
+        if state.current_environment.find_variable(short_float_epsilon_sym) is None:
+            state.current_environment.add_variable(short_float_epsilon_sym, 1.1920929e-7)
+        
+        short_float_negative_epsilon_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('SHORT-FLOAT-NEGATIVE-EPSILON')
+        if state.current_environment.find_variable(short_float_negative_epsilon_sym) is None:
+            state.current_environment.add_variable(short_float_negative_epsilon_sym, 5.9604645e-8)
+        
+        long_float_epsilon_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('LONG-FLOAT-EPSILON')
+        if state.current_environment.find_variable(long_float_epsilon_sym) is None:
+            state.current_environment.add_variable(long_float_epsilon_sym, 2.220446049250313e-16)
+        
+        long_float_negative_epsilon_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('LONG-FLOAT-NEGATIVE-EPSILON')
+        if state.current_environment.find_variable(long_float_negative_epsilon_sym) is None:
+            state.current_environment.add_variable(long_float_negative_epsilon_sym, 1.1102230246251565e-16)
+        
+        # === Array and Character Limits (ANSI CL constants) ===
+        # CHAR-CODE-LIMIT - upper exclusive bound for character codes
+        char_code_limit_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('CHAR-CODE-LIMIT')
+        if state.current_environment.find_variable(char_code_limit_sym) is None:
+            state.current_environment.add_variable(char_code_limit_sym, 1114112)  # Unicode max + 1
+        
+        # ARRAY-DIMENSION-LIMIT - exclusive upper bound for array dimension
+        array_dimension_limit_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('ARRAY-DIMENSION-LIMIT')
+        if state.current_environment.find_variable(array_dimension_limit_sym) is None:
+            state.current_environment.add_variable(array_dimension_limit_sym, 2**31)
+        
+        # ARRAY-RANK-LIMIT - exclusive upper bound for array rank
+        array_rank_limit_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('ARRAY-RANK-LIMIT')
+        if state.current_environment.find_variable(array_rank_limit_sym) is None:
+            state.current_environment.add_variable(array_rank_limit_sym, 64)
+        
+        # ARRAY-TOTAL-SIZE-LIMIT - exclusive upper bound for total elements
+        array_total_size_limit_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('ARRAY-TOTAL-SIZE-LIMIT')
+        if state.current_environment.find_variable(array_total_size_limit_sym) is None:
+            state.current_environment.add_variable(array_total_size_limit_sym, 2**31)
+        
+        # CALL-ARGUMENTS-LIMIT - exclusive upper bound for function arguments
+        call_arguments_limit_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('CALL-ARGUMENTS-LIMIT')
+        if state.current_environment.find_variable(call_arguments_limit_sym) is None:
+            state.current_environment.add_variable(call_arguments_limit_sym, 2**20)
+        
+        # LAMBDA-PARAMETERS-LIMIT - exclusive upper bound for lambda parameters
+        lambda_parameters_limit_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('LAMBDA-PARAMETERS-LIMIT')
+        if state.current_environment.find_variable(lambda_parameters_limit_sym) is None:
+            state.current_environment.add_variable(lambda_parameters_limit_sym, 2**20)
+        
+        # MULTIPLE-VALUES-LIMIT - exclusive upper bound for number of multiple values
+        multiple_values_limit_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('MULTIPLE-VALUES-LIMIT')
+        if state.current_environment.find_variable(multiple_values_limit_sym) is None:
+            state.current_environment.add_variable(multiple_values_limit_sym, 2**20)
+        
+        # LAMBDA-LIST-KEYWORDS - list of lambda list keyword symbols
+        lambda_list_keywords_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('LAMBDA-LIST-KEYWORDS')
+        if state.current_environment.find_variable(lambda_list_keywords_sym) is None:
+            # Create a list of lambda list keywords
+            keywords = ['&ALLOW-OTHER-KEYS', '&AUX', '&BODY', '&ENVIRONMENT', '&KEY',
+                       '&OPTIONAL', '&REST', '&WHOLE']
+            keyword_syms = [fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol(k) for k in keywords]
+            # Build list from end
+            keywords_list = fclpy.lisptype.NIL
+            for k in reversed(keyword_syms):
+                keywords_list = fclpy.lisptype.lispCons(k, keywords_list)
+            state.current_environment.add_variable(lambda_list_keywords_sym, keywords_list)
             
     except Exception:
         # Defensive: if initialization fails, continue

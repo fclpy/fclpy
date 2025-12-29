@@ -179,6 +179,19 @@ class Readtable:
                     stream.unread_char(c)
                 break
             token += c
+        
+        # Try to parse as ratio (e.g., 1/2, -3/4)
+        if '/' in token:
+            parts = token.split('/')
+            if len(parts) == 2:
+                try:
+                    from fractions import Fraction
+                    numerator = int(parts[0])
+                    denominator = int(parts[1])
+                    return Fraction(numerator, denominator)
+                except (ValueError, ZeroDivisionError):
+                    pass  # Not a valid ratio, fall through
+        
         try:
             return int(token)
         except ValueError:

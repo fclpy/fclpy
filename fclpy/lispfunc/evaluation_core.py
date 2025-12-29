@@ -343,12 +343,68 @@ def eval(form, env=None):
         func = eval(operator, env)
         if not callable(func):
             raise lisptype.LispNotImplementedError(f"Not a function: {operator}")
+        
+        # Evaluate arguments and separate positional from keyword args
         eval_args = []
+        kwargs = {}
         current = args
         while _consp_internal(current):
-            eval_args.append(eval(car(current), env))
+            arg_val = eval(car(current), env)
+            
+            # Check if this is a keyword argument (keyword followed by value)
+            if isinstance(arg_val, lisptype.lispKeyword):
+                # Get the next argument as the value
+                current = cdr(current)
+                if _consp_internal(current):
+                    key_val = eval(car(current), env)
+                    # Convert keyword name to Python kwarg name
+                    # :initial-element -> initial_element
+                    py_key = arg_val.name.lower().replace('-', '_')
+                    kwargs[py_key] = key_val
+                else:
+                    # Keyword at end with no value - pass as positional
+                    eval_args.append(arg_val)
+            else:
+                eval_args.append(arg_val)
+            
             current = cdr(current)
-        return func(*eval_args)
+        
+        # Try to call function with keyword args if present
+        if kwargs:
+            # Check if the function accepts **kwargs or has matching parameters
+            import inspect
+            try:
+                sig = inspect.signature(func)
+                accepts_kwargs = any(
+                    p.kind == inspect.Parameter.VAR_KEYWORD 
+                    for p in sig.parameters.values()
+                )
+                accepts_var_positional = any(
+                    p.kind == inspect.Parameter.VAR_POSITIONAL
+                    for p in sig.parameters.values()
+                )
+                
+                # If function has *args but not **kwargs, pass everything positionally
+                if accepts_var_positional and not accepts_kwargs:
+                    # Convert kwargs back to positional args (keyword, value pairs)
+                    for key, val in kwargs.items():
+                        # Convert key back to keyword symbol
+                        keyword_sym = lisptype.intern_keyword(key.upper().replace('_', '-'))
+                        eval_args.append(keyword_sym)
+                        eval_args.append(val)
+                    return func(*eval_args)
+                
+                # If function has specific parameters, use kwargs
+                return func(*eval_args, **kwargs)
+            except (ValueError, TypeError):
+                # Signature inspection failed, try positionally
+                for key, val in kwargs.items():
+                    keyword_sym = lisptype.intern_keyword(key.upper().replace('_', '-'))
+                    eval_args.append(keyword_sym)
+                    eval_args.append(val)
+                return func(*eval_args)
+        else:
+            return func(*eval_args)
     
     return form
 

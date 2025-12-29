@@ -396,6 +396,9 @@ def make_string(size, initial_element=None, element_type=None):
     elif isinstance(initial_element, int):
         # Character code - convert to character
         fill_char = chr(initial_element)
+    elif isinstance(initial_element, lisptype.Character):
+        # Character object
+        fill_char = initial_element.char
     else:
         raise lisptype.LispTypeError("MAKE-STRING: initial-element must be a character",
                                     expected_type="CHARACTER",

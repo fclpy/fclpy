@@ -141,10 +141,51 @@ def read_delimited_list(char, stream=None, recursive_p=None):
 
 @_registry.cl_function('READ-FROM-STRING')
 def read_from_string(string, eof_error_p=True, eof_value=None, start=0, end=None, preserve_whitespace=None):
-    """READ-FROM-STRING: Parse first form from substring; simplified returns slice."""
+    """READ-FROM-STRING: Parse first form from substring.
+    
+    Returns the first Lisp object parsed from STRING[START:END].
+    Returns two values: the object read and the position where reading stopped.
+    """
+    import io as _io
+    from fclpy import lispreader
+    from fclpy.readtable import get_current_readtable
+    
     if end is None:
         end = len(string)
-    return string[start:end]  # Simplified placeholder
+    
+    substring = string[start:end]
+    
+    if not substring.strip():
+        if eof_error_p:
+            raise lisptype.LispEndOfFileError(None, "READ-FROM-STRING: empty string")
+        return eof_value
+    
+    try:
+        # Create a stream from the substring
+        string_io = _io.StringIO(substring)
+        stream = lispreader.LispStream(string_io)
+        
+        # Create reader using centralized readtable
+        readtable = get_current_readtable()
+        reader = lispreader.LispReader(readtable.get_macro_character, stream)
+        
+        # Read one expression
+        result = reader.read_1()
+        
+        if result is None:
+            if eof_error_p:
+                raise lisptype.LispEndOfFileError(None, "READ-FROM-STRING: unexpected EOF")
+            return eof_value
+        
+        # Return the parsed object
+        # Note: In full CL, this returns multiple values (object, position)
+        # For now we just return the object
+        return result
+        
+    except EOFError:
+        if eof_error_p:
+            raise lisptype.LispEndOfFileError(None, "READ-FROM-STRING: unexpected EOF")
+        return eof_value
 
 
 @_registry.cl_function('READ-PRESERVING-WHITESPACE')
