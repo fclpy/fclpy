@@ -81,6 +81,7 @@ __all__ = [
     'inline',
     'lambda_list_keywords',
     'lambda_parameters_limit',
+    'coerce',  # Type coercion function
     
     # Error handling (utilities_errors)
     'define_condition',

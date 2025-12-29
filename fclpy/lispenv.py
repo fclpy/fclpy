@@ -28,7 +28,7 @@ def setup_standard_environment():
         _registry = None
 
     if _registry:
-        # Functions
+        # Functions - intern into COMMON-LISP package and export
         for lisp_name, meta in _registry.function_registry.items():
             # meta is now a RegistryEntry, not a dict
             py_name = meta.py_name if hasattr(meta, 'py_name') else (meta.get('py_name') if isinstance(meta, dict) else None)
@@ -36,17 +36,19 @@ def setup_standard_environment():
                 continue
             fn = getattr(lispfunc, py_name, None)
             if fn:
-                # Intern the symbol into the COMMON-LISP-USER package so
-                # environment bindings and reader-produced symbols share identity.
-                sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol(lisp_name)
+                # Intern the symbol into the COMMON-LISP package and export it
+                # so other packages that use CL can access it
+                sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol(lisp_name)
+                fclpy.lisptype.COMMON_LISP_PACKAGE.export_symbol(sym)
                 if state.current_environment.find_func(sym) is None:
                     state.current_environment.add_function(sym, fn)
-        # Specials
+        # Specials - intern into COMMON-LISP package and export
         for lisp_name, meta in _registry.special_registry.items():
             # meta is now a RegistryEntry, not a dict
             py_name = meta.py_name if hasattr(meta, 'py_name') else (meta.get('py_name') if isinstance(meta, dict) else None)
             fn = getattr(lispfunc, py_name, None) if py_name else None
-            sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol(lisp_name)
+            sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol(lisp_name)
+            fclpy.lisptype.COMMON_LISP_PACKAGE.export_symbol(sym)
             if state.current_environment.find_func(sym) is None:
                 state.current_environment.add_function(sym, fn or (lambda *a: f"SPECIAL:{lisp_name}"))
 
@@ -55,7 +57,8 @@ def setup_standard_environment():
     # than resolving to function bindings when no variable binding exists.
     try:
         for name, val in (('T', fclpy.lisptype.T), ('NIL', fclpy.lisptype.NIL)):
-            sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol(name)
+            sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol(name)
+            fclpy.lisptype.COMMON_LISP_PACKAGE.export_symbol(sym)
             if state.current_environment.find_variable(sym) is None:
                 state.current_environment.add_variable(sym, val)
     except Exception:

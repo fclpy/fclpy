@@ -344,21 +344,41 @@ def eval(form, env=None):
         if not callable(func):
             raise lisptype.LispNotImplementedError(f"Not a function: {operator}")
         
-        # Evaluate arguments and separate positional from keyword args
+        # Check if function has only *args (no named parameters after first)
+        # If so, just pass all arguments positionally
+        import inspect
+        try:
+            sig = inspect.signature(func)
+            params = list(sig.parameters.values())
+            
+            # Check if function accepts varargs (*args) and has no named keyword params
+            has_var_positional = any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in params)
+            has_named_keyword_params = any(
+                p.kind in (inspect.Parameter.KEYWORD_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+                and p.default is not inspect.Parameter.empty
+                for p in params
+            )
+            
+            use_kwargs = has_named_keyword_params and not has_var_positional
+        except (ValueError, TypeError):
+            # Can't inspect, default to positional only
+            use_kwargs = False
+        
+        # Evaluate arguments
         eval_args = []
         kwargs = {}
         current = args
+        
         while _consp_internal(current):
             arg_val = eval(car(current), env)
             
-            # Check if this is a keyword argument (keyword followed by value)
-            if isinstance(arg_val, lisptype.lispKeyword):
+            # Only try to detect keyword arguments if function accepts them as **kwargs
+            if use_kwargs and isinstance(arg_val, lisptype.lispKeyword):
                 # Get the next argument as the value
                 current = cdr(current)
                 if _consp_internal(current):
                     key_val = eval(car(current), env)
                     # Convert keyword name to Python kwarg name
-                    # :initial-element -> initial_element
                     py_key = arg_val.name.lower().replace('-', '_')
                     kwargs[py_key] = key_val
                 else:
@@ -369,40 +389,9 @@ def eval(form, env=None):
             
             current = cdr(current)
         
-        # Try to call function with keyword args if present
+        # Call function
         if kwargs:
-            # Check if the function accepts **kwargs or has matching parameters
-            import inspect
-            try:
-                sig = inspect.signature(func)
-                accepts_kwargs = any(
-                    p.kind == inspect.Parameter.VAR_KEYWORD 
-                    for p in sig.parameters.values()
-                )
-                accepts_var_positional = any(
-                    p.kind == inspect.Parameter.VAR_POSITIONAL
-                    for p in sig.parameters.values()
-                )
-                
-                # If function has *args but not **kwargs, pass everything positionally
-                if accepts_var_positional and not accepts_kwargs:
-                    # Convert kwargs back to positional args (keyword, value pairs)
-                    for key, val in kwargs.items():
-                        # Convert key back to keyword symbol
-                        keyword_sym = lisptype.intern_keyword(key.upper().replace('_', '-'))
-                        eval_args.append(keyword_sym)
-                        eval_args.append(val)
-                    return func(*eval_args)
-                
-                # If function has specific parameters, use kwargs
-                return func(*eval_args, **kwargs)
-            except (ValueError, TypeError):
-                # Signature inspection failed, try positionally
-                for key, val in kwargs.items():
-                    keyword_sym = lisptype.intern_keyword(key.upper().replace('_', '-'))
-                    eval_args.append(keyword_sym)
-                    eval_args.append(val)
-                return func(*eval_args)
+            return func(*eval_args, **kwargs)
         else:
             return func(*eval_args)
     
