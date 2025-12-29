@@ -128,9 +128,61 @@ class LispReader():
             # strip leading ':' and return a keyword object (keywords are self-evaluating)
             name = token[1:]
             return lisptype.lispKeyword(name.upper())
-        # Otherwise intern into the COMMON-LISP-USER package so repeated reads
-        # of the same name return the identical Python object.
-        return lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol(token)
+        
+        # Handle package-qualified symbols (PKG:SYM or PKG::SYM)
+        if ':' in token and not token.startswith(':'):
+            return self._read_package_qualified_symbol(token)
+        
+        # Get current package from state
+        from . import state
+        current_pkg = getattr(state, 'current_package', None)
+        if current_pkg is None:
+            current_pkg = lisptype.COMMON_LISP_USER_PACKAGE
+        
+        name_upper = token.upper()
+        
+        # First check if symbol exists in current package
+        sym, status = current_pkg.find_symbol(name_upper)
+        if sym is not None:
+            return sym
+        
+        # Check USE'd packages for exported symbols
+        for used_pkg in getattr(current_pkg, 'use_packages', []):
+            # Handle both Package objects and package names
+            if isinstance(used_pkg, str):
+                used_pkg = lisptype.find_package(used_pkg)
+            if used_pkg is not None:
+                # Only look for external symbols in USE'd packages
+                if name_upper in getattr(used_pkg, 'external_symbols', set()):
+                    sym = used_pkg.symbols.get(name_upper)
+                    if sym is not None:
+                        return sym
+        
+        # Not found - intern in current package
+        return current_pkg.intern_symbol(token)
+    
+    def _read_package_qualified_symbol(self, token):
+        """Read a package-qualified symbol like PKG:SYM or PKG::SYM."""
+        if '::' in token:
+            # Internal symbol access
+            parts = token.split('::', 1)
+            pkg_name = parts[0].upper()
+            sym_name = parts[1].upper() if len(parts) > 1 else ''
+        else:
+            # External symbol access
+            parts = token.split(':', 1)
+            pkg_name = parts[0].upper()
+            sym_name = parts[1].upper() if len(parts) > 1 else ''
+        
+        # Find the package
+        pkg = lisptype.find_package(pkg_name)
+        if pkg is None:
+            # Package not found - create it as a fallback
+            pkg = lisptype.make_package(pkg_name)
+        
+        # Intern the symbol in that package
+        return pkg.intern_symbol(sym_name)
+    
     def valid_char(self,c):
         return c is not None
     

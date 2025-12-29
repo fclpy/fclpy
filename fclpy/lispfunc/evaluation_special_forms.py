@@ -806,8 +806,18 @@ def eval_defstruct(form, env):
     (DEFSTRUCT (name option...) slot...)
     
     DEFSTRUCT does not evaluate its arguments - they are literal specifications.
+    DEFSTRUCT creates GLOBAL function bindings like DEFUN does.
     """
     import fclpy.state as state
+    
+    # Get current package for interning accessor symbols
+    current_pkg = getattr(state, 'current_package', None) or lisptype.COMMON_LISP_USER_PACKAGE
+    
+    # Find the global/root environment for defining functions
+    # DEFSTRUCT always creates global function bindings (like DEFUN)
+    global_env = env
+    while global_env.parent is not None:
+        global_env = global_env.parent
     
     args = cdr(form)
     if not _consp_internal(args):
@@ -848,24 +858,37 @@ def eval_defstruct(form, env):
                     opt_name_str = str(opt_name).upper()
                 
                 if opt_name_str == 'CONC-NAME' or opt_name_str == ':CONC-NAME':
-                    if opt_value is None or opt_value == lisptype.NIL:
+                    # Check for NIL value (can be None, the NIL constant, or a symbol named "NIL")
+                    is_nil = (opt_value is None or 
+                              opt_value == lisptype.NIL or
+                              (isinstance(opt_value, lisptype.LispSymbol) and opt_value.name == 'NIL'))
+                    if is_nil:
                         conc_name = ''  # No prefix
                     elif isinstance(opt_value, lisptype.LispSymbol):
                         conc_name = opt_value.name
                     else:
                         conc_name = str(opt_value)
                 elif opt_name_str == 'CONSTRUCTOR' or opt_name_str == ':CONSTRUCTOR':
-                    if opt_value is None or opt_value == lisptype.NIL:
+                    is_nil = (opt_value is None or 
+                              opt_value == lisptype.NIL or
+                              (isinstance(opt_value, lisptype.LispSymbol) and opt_value.name == 'NIL'))
+                    if is_nil:
                         constructor_name = None
                     elif isinstance(opt_value, lisptype.LispSymbol):
                         constructor_name = opt_value.name
                 elif opt_name_str == 'COPIER' or opt_name_str == ':COPIER':
-                    if opt_value is None or opt_value == lisptype.NIL:
+                    is_nil = (opt_value is None or 
+                              opt_value == lisptype.NIL or
+                              (isinstance(opt_value, lisptype.LispSymbol) and opt_value.name == 'NIL'))
+                    if is_nil:
                         copier_name = None
                     elif isinstance(opt_value, lisptype.LispSymbol):
                         copier_name = opt_value.name
                 elif opt_name_str == 'PREDICATE' or opt_name_str == ':PREDICATE':
-                    if opt_value is None or opt_value == lisptype.NIL:
+                    is_nil = (opt_value is None or 
+                              opt_value == lisptype.NIL or
+                              (isinstance(opt_value, lisptype.LispSymbol) and opt_value.name == 'NIL'))
+                    if is_nil:
                         predicate_name = None
                     elif isinstance(opt_value, lisptype.LispSymbol):
                         predicate_name = opt_value.name
@@ -957,8 +980,8 @@ def eval_defstruct(form, env):
                     i += 1
             return StructureInstance(struct_class_name, slot_defs, **result_kwargs)
         
-        constructor_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol(constructor_name)
-        env.add_function(constructor_sym, constructor_wrapper)
+        constructor_sym = current_pkg.intern_symbol(constructor_name)
+        global_env.add_function(constructor_sym, constructor_wrapper)
     
     # Create copier function
     if copier_name:
@@ -969,8 +992,8 @@ def eval_defstruct(form, env):
             new_struct._slots = dict(struct._slots)
             return new_struct
         
-        copier_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol(copier_name)
-        env.add_function(copier_sym, copy_structure)
+        copier_sym = current_pkg.intern_symbol(copier_name)
+        global_env.add_function(copier_sym, copy_structure)
     
     # Create predicate function
     if predicate_name:
@@ -979,8 +1002,8 @@ def eval_defstruct(form, env):
                 return lisptype.T
             return lisptype.NIL
         
-        predicate_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol(predicate_name)
-        env.add_function(predicate_sym, is_structure)
+        predicate_sym = current_pkg.intern_symbol(predicate_name)
+        global_env.add_function(predicate_sym, is_structure)
     
     # Create accessor functions for each slot
     for slot_name, _ in slot_defs:
@@ -994,8 +1017,8 @@ def eval_defstruct(form, env):
                 raise TypeError(f"Not a {struct_class_name}: {struct}")
             return getter
         
-        accessor_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol(accessor_name)
-        env.add_function(accessor_sym, make_getter(slot_name))
+        accessor_sym = current_pkg.intern_symbol(accessor_name)
+        global_env.add_function(accessor_sym, make_getter(slot_name))
         
         # Create setter (for SETF)
         def make_setter(sn):
@@ -1007,8 +1030,8 @@ def eval_defstruct(form, env):
             return setter
         
         setter_name = 'SET-' + accessor_name
-        setter_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol(setter_name)
-        env.add_function(setter_sym, make_setter(slot_name))
+        setter_sym = current_pkg.intern_symbol(setter_name)
+        global_env.add_function(setter_sym, make_setter(slot_name))
     
     return struct_name
 

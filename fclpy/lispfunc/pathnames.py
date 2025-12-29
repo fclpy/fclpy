@@ -37,6 +37,15 @@ class Pathname:
         """Return repr."""
         return f"Pathname({self.original!r})"
     
+    def __fspath__(self):
+        """Return the file system path representation.
+        
+        This implements the os.PathLike protocol, allowing Pathname objects
+        to be used directly with Python's os functions (os.path.exists, 
+        os.remove, open(), etc.)
+        """
+        return self.original
+    
     def to_list(self):
         """Convert to list representation for Lisp."""
         return [
@@ -434,6 +443,10 @@ def make_pathname_function(*args, host=None, device=None, directory=None, name=N
 def merge_pathnames(pathname, defaults=None):
     """Merge pathname with defaults.
     
+    In Common Lisp, MERGE-PATHNAMES fills in missing pathname components
+    from defaults. For relative pathnames, the directory is appended to
+    the defaults' directory.
+    
     Args:
         pathname: Pathname to merge
         defaults: Default pathname to use for missing components
@@ -454,18 +467,39 @@ def merge_pathnames(pathname, defaults=None):
     elif not isinstance(defaults, Pathname):
         raise TypeError(f"Expected Pathname, got {type(defaults)}")
     
-    # Use pathname components, fill in from defaults
-    directory = pathname.directory or defaults.directory
-    name = pathname.name or defaults.name
+    # Get the pathname's original path for analysis
+    pathname_str = pathname.original
+    defaults_str = defaults.original
     
-    parts = []
-    if directory:
-        parts.append(directory)
-    if name:
-        parts.append(name)
+    # Check if pathname is just a relative path (no absolute component)
+    if not os.path.isabs(pathname_str):
+        # For relative paths, join with the defaults base directory
+        # Determine the base directory from defaults:
+        # 1. If defaults ends with / or \, it's explicitly a directory
+        # 2. If defaults is an existing directory, use it as-is
+        # 3. If defaults is an existing file, use its parent directory
+        # 4. Otherwise, if defaults has a file extension, treat as file (use parent)
+        # 5. Otherwise, treat as directory
+        if defaults_str.endswith('/') or defaults_str.endswith('\\'):
+            base = defaults_str.rstrip('/\\')
+        elif os.path.isdir(defaults_str):
+            base = defaults_str
+        elif os.path.isfile(defaults_str):
+            # defaults is a file - use its parent directory
+            base = os.path.dirname(defaults_str)
+        elif '.' in os.path.basename(defaults_str):
+            # Has extension, likely a file - use parent directory
+            base = os.path.dirname(defaults_str)
+        else:
+            # No extension, treat as directory
+            base = defaults_str
+        
+        # Join the relative pathname to the base
+        result = os.path.join(base, pathname_str)
+        return Pathname(os.path.normpath(result))
     
-    path_str = os.path.join(*parts) if parts else "."
-    return Pathname(path_str)
+    # For absolute paths, just use the pathname as-is
+    return pathname
 
 
 @_registry.cl_function('FILE-WRITE-DATE')

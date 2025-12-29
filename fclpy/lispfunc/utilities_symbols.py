@@ -62,9 +62,26 @@ def in_package(name):
     if isinstance(name, lisptype.Package):
         state.current_package = name
         return name
-    pkg = lisptype.find_package(str(name))
+    # Handle keywords  
+    if isinstance(name, lisptype.lispKeyword):
+        pkg_name = name.name
+    elif isinstance(name, lisptype.LispSymbol):
+        pkg_name = name.name
+        if pkg_name.startswith(':'):
+            pkg_name = pkg_name[1:]
+    else:
+        pkg_name = str(name)
+        if pkg_name.startswith(':'):
+            pkg_name = pkg_name[1:]
+    
+    pkg = lisptype.find_package(pkg_name)
     if pkg is None:
-        pkg = lisptype.make_package(str(name))
+        # Create package - by default new packages USE COMMON-LISP
+        pkg = lisptype.make_package(pkg_name)
+        # Add COMMON-LISP to use list by default
+        cl_pkg = lisptype.COMMON_LISP_PACKAGE
+        if cl_pkg and cl_pkg not in pkg.use_packages:
+            pkg.use_packages.append(cl_pkg)
     state.current_package = pkg
     return pkg
 
@@ -151,7 +168,10 @@ def export(symbols, package=None):
     
     Makes symbols accessible to other packages that USE this package.
     """
-    if not isinstance(symbols, (list, tuple)):
+    # Handle lispCons (Lisp list) by converting to Python list
+    if isinstance(symbols, lisptype.lispCons):
+        symbols = list(symbols)  # lispCons is iterable
+    elif not isinstance(symbols, (list, tuple)):
         symbols = [symbols]
     pkg = package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)) if package else getattr(state, 'current_package', None)
     if pkg is None:

@@ -68,7 +68,7 @@ def make_package(*args):
     nicknames = kwargs.get('nicknames', None)
     use = kwargs.get('use', None)
     
-    # Convert nicknames and use to Python lists if they're Lisp lists
+    # Convert nicknames to Python list if it's a Lisp list
     if nicknames is not None and nicknames != lisptype.NIL:
         if isinstance(nicknames, lisptype.lispCons):
             nick_list = []
@@ -89,12 +89,41 @@ def make_package(*args):
         elif isinstance(nicknames, (list, tuple)):
             nicknames = [str(n) for n in nicknames if n]
     
+    # Convert use to Python list if it's a Lisp list
+    use_list = []
+    if use is not None and use != lisptype.NIL:
+        if isinstance(use, lisptype.lispCons):
+            cur = use
+            while cur is not None and cur != lisptype.NIL and isinstance(cur, lisptype.lispCons):
+                item = cur.car
+                if isinstance(item, lisptype.lispKeyword):
+                    use_list.append(item.name)
+                elif isinstance(item, lisptype.LispSymbol):
+                    n = item.name
+                    if n.startswith(':'):
+                        n = n[1:]
+                    use_list.append(n)
+                elif isinstance(item, lisptype.Package):
+                    use_list.append(item.name)
+                else:
+                    use_list.append(str(item) if item else None)
+                cur = cur.cdr
+            use_list = [n for n in use_list if n]
+        elif isinstance(use, (list, tuple)):
+            use_list = [str(n) for n in use if n]
+    
     # Create the package
     pkg = lisptype.make_package(name)
     
     # Store nicknames if provided
     if nicknames:
         pkg.nick_names = nicknames  # Use nick_names to match Package class
+    
+    # Add USE'd packages
+    for use_pkg_name in use_list:
+        use_pkg = lisptype.find_package(use_pkg_name)
+        if use_pkg and use_pkg not in pkg.use_packages:
+            pkg.use_packages.append(use_pkg)
     
     return pkg
 
@@ -245,7 +274,10 @@ def shadow(symbols, package=None):
 @_registry.cl_function('USE-PACKAGE')
 def use_package(packages, package=None):
     """Install packages into use-list."""
-    if not isinstance(packages, (list, tuple)):
+    # Handle lispCons (Lisp list)
+    if isinstance(packages, lisptype.lispCons):
+        packages = list(packages)
+    elif not isinstance(packages, (list, tuple)):
         packages = [packages]
     target = package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)) if package else getattr(state, 'current_package', None)
     if target is None:
@@ -254,23 +286,26 @@ def use_package(packages, package=None):
         pkgobj = p if isinstance(p, lisptype.Package) else lisptype.find_package(str(p))
         if pkgobj is None:
             pkgobj = lisptype.make_package(str(p))
-        if pkgobj not in target.use_list:
-            target.use_list.append(pkgobj)
+        if pkgobj not in target.use_packages:
+            target.use_packages.append(pkgobj)
     return lisptype.T
 
 
 @_registry.cl_function('UNUSE-PACKAGE')
 def unuse_package(packages, package=None):
     """Remove packages from use-list."""
-    if not isinstance(packages, (list, tuple)):
+    # Handle lispCons (Lisp list)
+    if isinstance(packages, lisptype.lispCons):
+        packages = list(packages)
+    elif not isinstance(packages, (list, tuple)):
         packages = [packages]
     target = package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)) if package else getattr(state, 'current_package', None)
     if target is None:
         return lisptype.NIL
     for p in packages:
         pkgobj = p if isinstance(p, lisptype.Package) else lisptype.find_package(str(p))
-        if pkgobj in target.use_list:
-            target.use_list.remove(pkgobj)
+        if pkgobj in target.use_packages:
+            target.use_packages.remove(pkgobj)
     return lisptype.T
 
 

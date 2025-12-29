@@ -268,8 +268,9 @@ class Package(lispT):
         """Find a symbol in this package.
         
         Returns a tuple of (symbol, status) where status is one of:
-        - ':INTERNAL' if symbol exists but not exported
-        - ':EXTERNAL' if symbol exists and is exported
+        - ':INTERNAL' if symbol exists in this package but not exported
+        - ':EXTERNAL' if symbol exists in this package and is exported
+        - ':INHERITED' if symbol is inherited from a used package
         - (None, None) if symbol not found
         
         Args:
@@ -278,12 +279,25 @@ class Package(lispT):
         Returns:
             Tuple of (LispSymbol or None, status string or None)
         """
+        # First check this package's own symbols
         symbol = self.symbols.get(name, None)
-        if symbol is None:
-            return (None, None)
+        if symbol is not None:
+            status = ':EXTERNAL' if name in self.external_symbols else ':INTERNAL'
+            return (symbol, status)
         
-        status = ':EXTERNAL' if name in self.external_symbols else ':INTERNAL'
-        return (symbol, status)
+        # Check inherited symbols from used packages
+        for used_pkg in getattr(self, 'use_packages', []):
+            # Handle both Package objects and package names
+            if isinstance(used_pkg, str):
+                used_pkg = find_package(used_pkg)
+            if used_pkg is not None and hasattr(used_pkg, 'external_symbols'):
+                # Only look at external symbols of used packages
+                if name in used_pkg.external_symbols:
+                    sym = used_pkg.symbols.get(name)
+                    if sym is not None:
+                        return (sym, ':INHERITED')
+        
+        return (None, None)
     
     def export_symbol(self, name):
         """Export a symbol from this package.
@@ -330,8 +344,10 @@ def make_package(name, use_packages=None, nick_names=None):
     """
     import fclpy.state as state
     
-    # Normalize name to uppercase
+    # Normalize name to uppercase and strip leading colon (for keywords)
     name_upper = name.upper() if isinstance(name, str) else str(name).upper()
+    if name_upper.startswith(':'):
+        name_upper = name_upper[1:]
     
     # Check if package already exists
     existing = find_package(name_upper)
@@ -360,8 +376,10 @@ def find_package(name):
     """
     import fclpy.state as state
     
-    # Normalize to uppercase
+    # Normalize to uppercase and strip leading colon (for keywords)
     name_upper = name.upper() if isinstance(name, str) else str(name).upper()
+    if name_upper.startswith(':'):
+        name_upper = name_upper[1:]
     
     # Check built-in packages first
     if name_upper == "KEYWORD":

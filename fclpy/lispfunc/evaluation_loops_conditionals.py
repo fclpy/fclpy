@@ -211,12 +211,21 @@ def eval_let(form, env):
         current = cdr(current)
     
     # Now bind all variables in new environment
+    # Track special variables that need special handling
+    import fclpy.state as state
+    old_package = None
+    has_package_binding = False
+    
     for var, value in bindings_list:
         if isinstance(var, lisptype.LispSymbol):
             let_env.add_variable(var, value)
+            # Handle *PACKAGE* special variable - update state.current_package
+            if var.name == '*PACKAGE*' and isinstance(value, lisptype.Package):
+                old_package = getattr(state, 'current_package', None)
+                state.current_package = value
+                has_package_binding = True
     
     # Update state.current_environment for functions that need it (like LOAD)
-    import fclpy.state as state
     old_env = state.current_environment
     state.current_environment = let_env
     
@@ -232,6 +241,9 @@ def eval_let(form, env):
     finally:
         # Restore the previous environment
         state.current_environment = old_env
+        # Restore *PACKAGE* if it was dynamically bound
+        if has_package_binding and old_package is not None:
+            state.current_package = old_package
 
 
 def eval_letstar(form, env):
@@ -254,6 +266,11 @@ def eval_letstar(form, env):
     # Create new environment for LET* scope
     letstar_env = lisptype.Environment(env)
     
+    # Track special variables that need special handling
+    import fclpy.state as state
+    old_package = getattr(state, 'current_package', None)
+    has_package_binding = False
+    
     # Process bindings sequentially - each can see previous ones
     current = bindings_form
     while _consp_internal(current):
@@ -265,10 +282,15 @@ def eval_letstar(form, env):
             value = eval(init_form, letstar_env)
             if isinstance(var, lisptype.LispSymbol):
                 letstar_env.add_variable(var, value)
+                # Handle *PACKAGE* special variable - update state.current_package
+                if var.name == '*PACKAGE*' and isinstance(value, lisptype.Package):
+                    if not has_package_binding:
+                        old_package = getattr(state, 'current_package', None)
+                        has_package_binding = True
+                    state.current_package = value
         current = cdr(current)
     
     # Update state.current_environment for functions that need it (like LOAD)
-    import fclpy.state as state
     old_env = state.current_environment
     state.current_environment = letstar_env
     
@@ -284,6 +306,9 @@ def eval_letstar(form, env):
     finally:
         # Restore the previous environment
         state.current_environment = old_env
+        # Restore *PACKAGE* if it was dynamically bound
+        if has_package_binding:
+            state.current_package = old_package
 
 
 def eval_quasiquote(form, env):
