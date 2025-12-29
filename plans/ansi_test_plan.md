@@ -2,7 +2,7 @@
 
 ## Current State Analysis
 
-### What FCLPY Has (Updated Dec 29, 2025)
+### What FCLPY Has (Updated Dec 30, 2025)
 1. **CLI exists** (`run.py`): Can load and evaluate Lisp files
 2. **Basic evaluation works**: `(+ 1 2)` → `3`
 3. **Package system**: `IN-PACKAGE`, `MAKE-PACKAGE`, `FIND-PACKAGE`, `USE-PACKAGE` work
@@ -11,11 +11,26 @@
 6. **Special forms**: DEFVAR, DEFPARAMETER, LET, LET*, HANDLER-BIND, HANDLER-CASE, IGNORE-ERRORS, LOCALLY implemented
 7. **Compile stubs**: `COMPILE-FILE`, `COMPILE-FILE-PATHNAME` return appropriate values
 8. **Package registration**: Dynamic packages stored in `state.packages`
-9. **Reader enhancements**: D/F/S/L exponent markers, #c complex numbers
-10. **Type coercion**: COERCE function for type conversion
+9. **Reader enhancements**: D/F/S/L exponent markers, #c complex numbers, ratio parsing
+10. **Type coercion**: COERCE function for type conversion (including SIMPLE-STRING, BASE-STRING)
 11. **String creation**: MAKE-STRING function
+12. **Symbol inheritance**: Functions registered in COMMON-LISP package and exported
+13. **Type specifier symbols**: NUMBER, STREAM, etc. available as self-evaluating symbols
+14. **Array creation**: MAKE-ARRAY handles lispCons dimension lists
 
-### Recent Progress (Dec 29, 2025 - Session 2)
+### Recent Progress (Dec 30, 2025 - Session 3)
+- ✅ Fixed keyword argument handling in evaluator (don't convert kwargs for *args functions)
+- ✅ Moved function symbol registration from CL-USER to COMMON-LISP package
+- ✅ Added export_symbol calls for all registered functions
+- ✅ Fixed READ-FROM-STRING to use LispReader instead of string slice
+- ✅ Added ratio parsing to _read_number (#C(1/2 1/3) now works)
+- ✅ Added Character object support to MAKE-STRING
+- ✅ Fixed MAKE-ARRAY to handle lispCons dimension lists
+- ✅ Added type specifier symbols (NUMBER, STREAM, BASE-CHAR, etc.)
+- ✅ Added SIMPLE-STRING, BASE-STRING, SIMPLE-BASE-STRING to COERCE
+- ✅ All 50+ numeric constants now in COMMON-LISP package
+
+### Previous Progress (Dec 29, 2025 - Session 2)
 - ✅ Implemented LOCALLY special form (evaluates body, skips declarations)
 - ✅ Implemented MAKE-STRING function with :initial-element support
 - ✅ Added D/F/S/L exponent marker support in tokenizer, reader, and readtable
