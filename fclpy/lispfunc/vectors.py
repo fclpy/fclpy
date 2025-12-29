@@ -168,7 +168,7 @@ def make_array(dimensions, initial_element=None, adjustable=False, fill_pointer=
     """Make an array (vector for 1D, Array for multi-dimensional).
     
     Args:
-        dimensions: Integer for 1D, tuple/list for multi-dimensional
+        dimensions: Integer for 1D, list/tuple/lispCons for multi-dimensional
         initial_element: Initial value for elements
         adjustable: If True, create adjustable vector (1D only)
         fill_pointer: For adjustable vectors, set fill-pointer
@@ -176,6 +176,15 @@ def make_array(dimensions, initial_element=None, adjustable=False, fill_pointer=
     Returns:
         Vector (list), AdjustableVector, or Array
     """
+    # Convert Lisp list to Python list if needed
+    if isinstance(dimensions, lisptype.lispCons):
+        dim_list = []
+        current = dimensions
+        while isinstance(current, lisptype.lispCons):
+            dim_list.append(current.car)
+            current = current.cdr
+        dimensions = dim_list
+    
     # Handle 1D arrays (vectors)
     if isinstance(dimensions, int):
         if adjustable:
@@ -188,6 +197,15 @@ def make_array(dimensions, initial_element=None, adjustable=False, fill_pointer=
     
     # Handle multi-dimensional arrays
     if isinstance(dimensions, (list, tuple)):
+        # Single element list is treated as 1D array
+        if len(dimensions) == 1:
+            dim = dimensions[0]
+            if adjustable:
+                return AdjustableVector(capacity=dim, 
+                                       initial_element=initial_element,
+                                       fill_pointer=fill_pointer)
+            else:
+                return [initial_element] * dim
         return Array(dimensions, initial_element=initial_element)
     
     # Fallback

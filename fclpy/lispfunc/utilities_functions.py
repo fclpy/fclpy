@@ -347,13 +347,35 @@ def coerce(object, result_type):
                                         expected_type="VECTOR",
                                         actual_value=object)
     
-    # STRING - convert sequence of characters to string
-    if type_name == 'STRING':
+    # STRING, SIMPLE-STRING, BASE-STRING, SIMPLE-BASE-STRING - convert sequence of characters to string
+    if type_name in ('STRING', 'SIMPLE-STRING', 'BASE-STRING', 'SIMPLE-BASE-STRING'):
         if isinstance(object, str):
             return object
         elif isinstance(object, (list, tuple)):
-            # Sequence of characters
-            return ''.join(str(c) for c in object)
+            # Sequence of characters - need to extract char from Character objects
+            chars = []
+            for c in object:
+                if isinstance(c, lisptype.Character):
+                    chars.append(c.char)
+                elif isinstance(c, str) and len(c) == 1:
+                    chars.append(c)
+                else:
+                    chars.append(str(c))
+            return ''.join(chars)
+        elif isinstance(object, lisptype.lispCons):
+            # Lisp list of characters
+            chars = []
+            current = object
+            while isinstance(current, lisptype.lispCons):
+                c = current.car
+                if isinstance(c, lisptype.Character):
+                    chars.append(c.char)
+                elif isinstance(c, str) and len(c) == 1:
+                    chars.append(c)
+                else:
+                    chars.append(str(c))
+                current = current.cdr
+            return ''.join(chars)
         elif isinstance(object, lisptype.LispSymbol):
             return object.name
         elif hasattr(object, '__iter__'):

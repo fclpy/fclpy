@@ -382,6 +382,55 @@ def setup_standard_environment():
             for k in reversed(keyword_syms):
                 keywords_list = fclpy.lisptype.lispCons(k, keywords_list)
             state.current_environment.add_variable(lambda_list_keywords_sym, keywords_list)
+        
+        # === Type Specifier Symbols (ANSI CL type system) ===
+        # These symbols should evaluate to themselves - they are used as type specifiers
+        # Note: We EXCLUDE type names that are also function names (LIST, CONS, etc.)
+        # Those work as types when quoted: (typep x 'list), not (typep x list)
+        type_symbols = [
+            # Basic types (excluding LIST, CONS which are functions)
+            'NULL', 'ATOM',
+            # Numeric types  
+            'NUMBER', 'REAL', 'RATIONAL', 'INTEGER', 'FIXNUM', 'BIGNUM',
+            'RATIO', 'FLOAT', 'SHORT-FLOAT', 'SINGLE-FLOAT', 'DOUBLE-FLOAT', 'LONG-FLOAT',
+            'COMPLEX', 'BIT',
+            # Character types
+            'CHARACTER', 'BASE-CHAR', 'STANDARD-CHAR', 'EXTENDED-CHAR',
+            # Sequence types (excluding STRING, VECTOR which may be functions)
+            'SEQUENCE', 'SIMPLE-STRING', 'BASE-STRING', 'SIMPLE-BASE-STRING',
+            'SIMPLE-VECTOR', 'BIT-VECTOR', 'SIMPLE-BIT-VECTOR',
+            'ARRAY', 'SIMPLE-ARRAY',
+            # Function types
+            'COMPILED-FUNCTION',
+            # Other built-in types (excluding PATHNAME which is a function)
+            'HASH-TABLE', 'PACKAGE', 'LOGICAL-PATHNAME',
+            'STREAM', 'FILE-STREAM', 'STRING-STREAM', 'BROADCAST-STREAM',
+            'CONCATENATED-STREAM', 'ECHO-STREAM', 'SYNONYM-STREAM', 'TWO-WAY-STREAM',
+            'RANDOM-STATE', 'READTABLE', 'RESTART',
+            # Structure/class types
+            'STRUCTURE-OBJECT', 'STANDARD-OBJECT', 'CLASS', 'STRUCTURE-CLASS',
+            'STANDARD-CLASS', 'BUILT-IN-CLASS', 'METHOD', 'STANDARD-METHOD',
+            'METHOD-COMBINATION', 'GENERIC-FUNCTION', 'STANDARD-GENERIC-FUNCTION',
+            # Condition types
+            'CONDITION', 'SIMPLE-WARNING', 'STYLE-WARNING',
+            'SERIOUS-CONDITION', 'SIMPLE-ERROR', 'CELL-ERROR',
+            'TYPE-ERROR', 'SIMPLE-TYPE-ERROR', 'PARSE-ERROR', 'PROGRAM-ERROR',
+            'CONTROL-ERROR', 'PACKAGE-ERROR', 'STREAM-ERROR', 'END-OF-FILE',
+            'FILE-ERROR', 'PRINT-NOT-READABLE', 'READER-ERROR',
+            'ARITHMETIC-ERROR', 'DIVISION-BY-ZERO', 'FLOATING-POINT-OVERFLOW',
+            'FLOATING-POINT-UNDERFLOW', 'FLOATING-POINT-INEXACT',
+            'FLOATING-POINT-INVALID-OPERATION', 'STORAGE-CONDITION',
+            'UNBOUND-SLOT', 'UNBOUND-VARIABLE',
+            # Boolean
+            'BOOLEAN',
+        ]
+        
+        for type_name in type_symbols:
+            sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol(type_name)
+            fclpy.lisptype.COMMON_LISP_PACKAGE.export_symbol(sym)
+            # Type symbols evaluate to themselves
+            if state.current_environment.find_variable(sym) is None:
+                state.current_environment.add_variable(sym, sym)
             
     except Exception:
         # Defensive: if initialization fails, continue
