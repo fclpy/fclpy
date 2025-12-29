@@ -1,7 +1,7 @@
 {
     "_meta": {
         "hash": {
-            "sha256": "412304c6d3538ebd531b687688869424c76174308866ad9a8fa6fd02139c164b"
+            "sha256": "0027c95fff09f6d2717bf5dd1f6e4d8f222970d866fbb97da109b6ca99f9f85e"
         },
         "pipfile-spec": 6,
         "requires": {
@@ -15,7 +15,13 @@
             }
         ]
     },
-    "default": {},
+    "default": {
+        "fclpy": {
+            "editable": true,
+            "file": ".",
+            "markers": "python_version >= '3.7'"
+        }
+    },
     "develop": {
         "backports.tarfile": {
             "hashes": [

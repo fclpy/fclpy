@@ -54,7 +54,12 @@ class LispReader():
                 # get_macro_character returns (function, non_terminating_p)
                 if isinstance(macro_func, tuple):
                     macro_func = macro_func[0]
-                return macro_func(x, self.stream)
+                result = macro_func(x, self.stream)
+                # If macro returns None (e.g., comments), continue reading
+                if result is None:
+                    toss = True
+                else:
+                    return result
             elif self.single_escape_character(x):
                 y = self.stream.read_char()
                 if y is None or self.stream.eof():

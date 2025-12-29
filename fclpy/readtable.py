@@ -78,6 +78,24 @@ class Readtable:
         """Set the readtable case (:UPCASE, :DOWNCASE, :PRESERVE, :INVERT)."""
         self._case = case
     
+    def copy(self) -> 'Readtable':
+        """Create a copy of this readtable.
+        
+        The copy has the same macro characters and dispatch characters,
+        but modifying the copy does not affect the original.
+        
+        Returns:
+            A new Readtable instance with copied settings.
+        """
+        new_rt = Readtable.__new__(Readtable)
+        # Create shallow copies of the dictionaries
+        new_rt._macro_characters = dict(self._macro_characters)
+        new_rt._dispatch_macro_characters = {
+            k: dict(v) for k, v in self._dispatch_macro_characters.items()
+        }
+        new_rt._case = self._case
+        return new_rt
+    
     # Simple macro character implementations that don't create circular dependencies
     def _left_paren_reader(self, char, stream):
         """Read a list starting with ("""
@@ -286,8 +304,444 @@ class Readtable:
             return lisptype.lispCons(sym, lisptype.lispCons(expr, lisptype.NIL))
     
     def _sharp_reader(self, char, stream):
-        """Handle dispatch macro characters starting with #."""
-        raise RuntimeError("_sharp_reader should not be called directly")
+        """Handle dispatch macro characters starting with #.
+        
+        This reads the next character and dispatches to the appropriate
+        sub-character handler, or handles built-in # constructs.
+        """
+        sub_char = stream.read_char()
+        if not sub_char:
+            raise ValueError("EOF after #")
+        
+        sub_char_upper = sub_char.upper()
+        
+        # Check for registered dispatch macro character
+        dispatch_table = self._dispatch_macro_characters.get('#', {})
+        if sub_char_upper in dispatch_table:
+            return dispatch_table[sub_char_upper](sub_char, stream)
+        
+        # Handle built-in # constructs
+        if sub_char == '|':
+            # Block comment #| ... |#
+            self._skip_block_comment(stream)
+            # Block comments don't return a value, continue reading
+            return None
+        elif sub_char == "'":
+            # Function shorthand: #'x -> (FUNCTION x)
+            expr = self._read_item(stream)
+            from . import lisptype
+            func_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol("FUNCTION")
+            return lisptype.lispCons(func_sym, lisptype.lispCons(expr, lisptype.NIL))
+        elif sub_char == '\\':
+            # Character literal: #\x
+            return self._read_character_literal(stream)
+        elif sub_char == '(':
+            # Vector literal: #(...)
+            return self._read_vector(stream)
+        elif sub_char == '+':
+            # Feature expression #+feature form
+            return self._read_feature_plus(stream)
+        elif sub_char == '-':
+            # Feature expression #-feature form
+            return self._read_feature_minus(stream)
+        elif sub_char == '.':
+            # Read-time evaluation: #.(form)
+            expr = self._read_item(stream)
+            # In a full implementation, this would evaluate at read time
+            # For now, just return the form as-is
+            return expr
+        elif sub_char.upper() == 'P':
+            # Pathname literal: #P"path" or #p"path"
+            return self._read_pathname_literal(stream)
+        elif sub_char.upper() == 'X':
+            # Hexadecimal number: #xFF -> 255
+            return self._read_radix_number(stream, 16)
+        elif sub_char.upper() == 'B':
+            # Binary number: #b1010 -> 10
+            return self._read_radix_number(stream, 2)
+        elif sub_char.upper() == 'O':
+            # Octal number: #o17 -> 15
+            return self._read_radix_number(stream, 8)
+        elif sub_char == ':':
+            # Uninterned symbol: #:foo -> symbol not interned in any package
+            return self._read_uninterned_symbol(stream)
+        elif sub_char.upper() == 'C':
+            # Complex number: #C(real imag) or #c(real imag)
+            return self._read_complex_number(stream)
+        elif sub_char in '0123456789':
+            # Could be array rank, reader label, etc.
+            # For now, read the number and check what follows
+            num = sub_char
+            while True:
+                c = stream.read_char()
+                if c and c.isdigit():
+                    num += c
+                elif c == '=':
+                    # Reader label: #n=expr
+                    expr = self._read_item(stream)
+                    return expr
+                elif c == '#':
+                    # Reader reference: #n#
+                    return None  # Placeholder
+                elif c == 'A' or c == 'a':
+                    # Array: #nA(...)
+                    return self._read_item(stream)  # Return nested structure
+                else:
+                    if c:
+                        stream.unread_char(c)
+                    break
+            return None
+        else:
+            raise ValueError(f"Unknown # dispatch character: #{sub_char}")
+    
+    def _skip_block_comment(self, stream):
+        """Skip a block comment #| ... |# with nesting support."""
+        depth = 1
+        prev_char = None
+        
+        while depth > 0:
+            c = stream.read_char()
+            if not c:
+                raise ValueError("EOF in block comment")
+            
+            if prev_char == '|' and c == '#':
+                depth -= 1
+                prev_char = None
+            elif prev_char == '#' and c == '|':
+                depth += 1
+                prev_char = None
+            else:
+                prev_char = c
+    
+    def _read_character_literal(self, stream):
+        r"""Read a character literal like #\A or #\Space."""
+        from . import character
+        
+        c = stream.read_char()
+        if not c:
+            raise ValueError("EOF in character literal")
+        
+        # Check for named characters
+        if c.isalpha():
+            # Might be a named character like #\Space or #\Newline
+            name = c
+            while True:
+                next_c = stream.read_char()
+                if next_c and (next_c.isalnum() or next_c == '-'):
+                    name += next_c
+                else:
+                    if next_c:
+                        stream.unread_char(next_c)
+                    break
+            
+            # Check for named characters
+            name_upper = name.upper()
+            if len(name) == 1:
+                # Single character
+                return character.Character(name)
+            elif name_upper == 'SPACE':
+                return character.Character(' ')
+            elif name_upper == 'NEWLINE' or name_upper == 'LINEFEED':
+                return character.Character('\n')
+            elif name_upper == 'TAB':
+                return character.Character('\t')
+            elif name_upper == 'RETURN':
+                return character.Character('\r')
+            elif name_upper == 'PAGE':
+                return character.Character('\f')
+            elif name_upper == 'BACKSPACE':
+                return character.Character('\b')
+            elif name_upper == 'RUBOUT' or name_upper == 'DELETE':
+                return character.Character('\x7f')
+            elif name_upper == 'NULL' or name_upper == 'NUL':
+                return character.Character('\x00')
+            else:
+                # Unknown named char, use as-is if single
+                raise ValueError(f"Unknown character name: {name}")
+        else:
+            return character.Character(c)
+    
+    def _read_vector(self, stream):
+        """Read a vector literal #(...)."""
+        from fclpy.lispfunc.vectors import AdjustableVector
+        
+        result = []
+        while True:
+            # Skip whitespace
+            c = stream.read_char()
+            if not c:
+                raise ValueError("EOF in vector literal")
+            if c.isspace():
+                continue
+            if c == ')':
+                break
+            else:
+                stream.unread_char(c)
+                item = self._read_item(stream)
+                if item is not None:
+                    result.append(item)
+        
+        return AdjustableVector(result)
+    
+    def _check_feature(self, feature):
+        """Check if a feature expression is satisfied.
+        
+        Feature can be:
+        - A symbol: check if it's in *FEATURES*
+        - (AND feature1 feature2 ...): all features must be present
+        - (OR feature1 feature2 ...): any feature must be present
+        - (NOT feature): feature must be absent
+        """
+        import fclpy.state as state
+        import fclpy.lisptype as lisptype
+        
+        # Get *FEATURES* list
+        features_list = []
+        if state.current_environment:
+            features_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*FEATURES*')
+            features = state.current_environment.find_variable(features_sym)
+            if features and features is not lisptype.NIL:
+                # Convert to list of uppercase names
+                current = features
+                while hasattr(current, 'car') and hasattr(current, 'cdr'):
+                    item = current.car
+                    if isinstance(item, lisptype.lispKeyword):
+                        features_list.append(item.name.upper())
+                    elif isinstance(item, lisptype.LispSymbol):
+                        features_list.append(item.name.upper())
+                    current = current.cdr
+                    if current is lisptype.NIL:
+                        break
+        
+        # Handle different feature expression types
+        if isinstance(feature, lisptype.lispKeyword):
+            return feature.name.upper() in features_list
+        elif isinstance(feature, lisptype.LispSymbol):
+            return feature.name.upper() in features_list
+        elif hasattr(feature, 'car') and hasattr(feature, 'cdr'):
+            # It's a cons - check for AND, OR, NOT
+            operator = feature.car
+            if isinstance(operator, lisptype.LispSymbol):
+                op_name = operator.name.upper()
+                if op_name == 'AND':
+                    # All sub-features must be present
+                    current = feature.cdr
+                    while hasattr(current, 'car') and hasattr(current, 'cdr') and current is not lisptype.NIL:
+                        if not self._check_feature(current.car):
+                            return False
+                        current = current.cdr
+                    return True
+                elif op_name == 'OR':
+                    # Any sub-feature must be present
+                    current = feature.cdr
+                    while hasattr(current, 'car') and hasattr(current, 'cdr') and current is not lisptype.NIL:
+                        if self._check_feature(current.car):
+                            return True
+                        current = current.cdr
+                    return False
+                elif op_name == 'NOT':
+                    # Feature must be absent
+                    sub_feature = feature.cdr
+                    if hasattr(sub_feature, 'car'):
+                        sub_feature = sub_feature.car
+                    return not self._check_feature(sub_feature)
+        
+        # Unknown feature expression - default to absent
+        return False
+    
+    def _read_feature_plus(self, stream):
+        """Read #+feature expr.
+        
+        Includes the expression only if feature is present in *FEATURES*.
+        """
+        feature = self._read_item(stream)
+        expr = self._read_item(stream)
+        
+        if self._check_feature(feature):
+            return expr
+        else:
+            # Feature not present - skip the expression
+            return None
+    
+    def _read_feature_minus(self, stream):
+        """Read #-feature expr.
+        
+        Includes the expression only if feature is NOT present in *FEATURES*.
+        """
+        feature = self._read_item(stream)
+        expr = self._read_item(stream)
+        
+        if not self._check_feature(feature):
+            return expr
+        else:
+            # Feature is present - skip the expression
+            return None
+    
+    def _read_pathname_literal(self, stream):
+        """Read a pathname literal like #P\"path/to/file\"."""
+        from fclpy.lispfunc.pathnames import Pathname
+        
+        # Expect a string next
+        c = stream.read_char()
+        while c and c.isspace():
+            c = stream.read_char()
+        
+        if c != '"':
+            raise ValueError(f"Expected string after #P, got: {c}")
+        
+        # Read the string
+        path_str = self._read_string_literal(stream)
+        return Pathname(path_str)
+    
+    def _read_radix_number(self, stream, radix):
+        """Read a number in the specified radix (base).
+        
+        Examples:
+            #xFF -> 255 (radix 16)
+            #b1010 -> 10 (radix 2)  
+            #o17 -> 15 (radix 8)
+        
+        Args:
+            stream: Input stream
+            radix: The base (2 for binary, 8 for octal, 16 for hex)
+            
+        Returns:
+            Integer value
+        """
+        # Define valid digit characters for each radix
+        if radix == 2:
+            valid_chars = '01'
+        elif radix == 8:
+            valid_chars = '01234567'
+        elif radix == 16:
+            valid_chars = '0123456789abcdefABCDEF'
+        else:
+            valid_chars = '0123456789'
+        
+        # Read the number token
+        token = ''
+        negative = False
+        
+        # Check for sign
+        c = stream.read_char()
+        if c == '-':
+            negative = True
+            c = stream.read_char()
+        elif c == '+':
+            c = stream.read_char()
+        
+        # Read digits
+        while c and (c in valid_chars):
+            token += c
+            c = stream.read_char()
+        
+        # Put back the last character if it's not EOF
+        if c:
+            stream.unread_char(c)
+        
+        if not token:
+            raise ValueError(f"No digits found for radix-{radix} number")
+        
+        # Parse the number
+        try:
+            value = int(token, radix)
+            return -value if negative else value
+        except ValueError:
+            raise ValueError(f"Invalid radix-{radix} number: {token}")
+
+    def _read_uninterned_symbol(self, stream):
+        """Read an uninterned symbol like #:foo.
+        
+        Uninterned symbols are not part of any package. Each time #:foo is read,
+        a fresh symbol with name "FOO" is created that has no home package.
+        
+        Args:
+            stream: Input stream
+            
+        Returns:
+            A new uninterned LispSymbol
+        """
+        from . import lisptype
+        
+        # Read the symbol name
+        token = ''
+        while True:
+            c = stream.read_char()
+            if not c or c.isspace() or c in '()':
+                if c:
+                    stream.unread_char(c)
+                break
+            token += c
+        
+        if not token:
+            raise ValueError("Empty symbol name after #:")
+        
+        # Create an uninterned symbol (not in any package)
+        # Use uppercase for consistency with CL standard
+        name = token.upper()
+        return lisptype.LispSymbol(name, package=None)
+
+    def _read_complex_number(self, stream):
+        """Read a complex number literal #C(real imag).
+        
+        The syntax is #C(real imag) or #c(real imag) where real and imag
+        are real numbers (integers, ratios, or floats).
+        
+        Args:
+            stream: Input stream
+            
+        Returns:
+            A Python complex number
+        """
+        from fractions import Fraction
+        
+        # Skip whitespace
+        while True:
+            c = stream.read_char()
+            if not c:
+                raise ValueError("EOF after #C")
+            if not c.isspace():
+                break
+        
+        # Expect opening paren
+        if c != '(':
+            raise ValueError(f"Expected ( after #C, got {c!r}")
+        
+        # Read real part
+        real_part = self._read_item(stream)
+        if real_part is None:
+            raise ValueError("Expected real part in #C(...)")
+        
+        # Read imaginary part
+        imag_part = self._read_item(stream)
+        if imag_part is None:
+            raise ValueError("Expected imaginary part in #C(...)")
+        
+        # Skip whitespace and find closing paren
+        while True:
+            c = stream.read_char()
+            if not c:
+                raise ValueError("EOF in #C(...)")
+            if c.isspace():
+                continue
+            if c == ')':
+                break
+            else:
+                raise ValueError(f"Expected ) in #C(...), got {c!r}")
+        
+        # Convert Fraction to float for complex construction
+        if isinstance(real_part, Fraction):
+            real_part = float(real_part)
+        if isinstance(imag_part, Fraction):
+            imag_part = float(imag_part)
+        
+        # Ensure both parts are numeric
+        if not isinstance(real_part, (int, float)):
+            raise ValueError(f"Real part must be a number, got {type(real_part).__name__}")
+        if not isinstance(imag_part, (int, float)):
+            raise ValueError(f"Imaginary part must be a number, got {type(imag_part).__name__}")
+        
+        return complex(real_part, imag_part)
 
 
 def get_current_readtable() -> Readtable:

@@ -18,11 +18,17 @@ All functions are re-exported from this module for compatibility.
 from .core import *
 from .math import *
 from .sequences import *
+from .vectors import *
+from .streams import *
+from .pathnames import *
+from .hashtables import *
 from .evaluation import *
 from .comparison import *
 from .characters import *
 from .io import *
 from .utilities import *
+from .classes import *
+from .misc_macros import *
 
 # Import special operator functions explicitly (underscores prevent * import)
 from .math import (_s_plus_, _s_minus_, _s_star_, _s_slash_, _s_eq_, _s_lt_, _s_gt_, 
@@ -47,12 +53,13 @@ from ..readtable import get_macro_character, set_macro_character, set_dispatch_m
 
 # Register functions into the builtin registry so lispenv can populate from it.
 from . import registry as _registry
-from . import core as _core_mod, math as _math_mod, sequences as _sequences_mod, evaluation as _evaluation_mod, comparison as _comparison_mod, characters as _characters_mod, io as _io_mod, utilities as _utilities_mod
+from . import core as _core_mod, math as _math_mod, sequences as _sequences_mod, vectors as _vectors_mod, evaluation as _evaluation_mod, comparison as _comparison_mod, characters as _characters_mod, io as _io_mod, utilities as _utilities_mod
 
 # Register modules (this will not overwrite explicit decorator registrations)
 _registry.register_module(_core_mod)
 _registry.register_module(_math_mod)
 _registry.register_module(_sequences_mod)
+_registry.register_module(_vectors_mod)
 _registry.register_module(_evaluation_mod)
 _registry.register_module(_comparison_mod)
 _registry.register_module(_characters_mod)
@@ -71,10 +78,6 @@ def adjustable_array_p(array):
 def allocate_instance(class_obj, **kwargs):
     """Allocate instance of class.""" 
     raise NotImplementedError("ALLOCATE-INSTANCE")
-
-def add_method(generic_function, method):
-    """Add method to generic function."""
-    raise NotImplementedError("ADD-METHOD")
 
 def aref(array, *subscripts):
     """Access array element."""

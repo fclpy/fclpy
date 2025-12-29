@@ -25,8 +25,10 @@ def test_predicates_return_lisp_booleans():
     assert eq(1, 1) == lisptype.T
     assert eq(1, 2) == lisptype.NIL
 
-    # pathnamep should recognize strings as pathname
-    assert pathnamep("/tmp/file") == lisptype.T
+    # pathnamep should recognize Pathname objects (not strings)
+    from fclpy.lispfunc.pathnames import Pathname
+    assert pathnamep(Pathname("/tmp/file")) == lisptype.T
+    assert pathnamep("/tmp/file") == lisptype.NIL  # strings are NOT pathnames
 
     # pathname_match_p should compare names using lisp_bool
     assert pathname_match_p("a","a") == lisptype.T

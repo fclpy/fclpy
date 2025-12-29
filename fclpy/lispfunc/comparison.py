@@ -107,6 +107,25 @@ def null(obj):
 @_registry.cl_function('TYPEP')
 def typep(object, type_specifier):
     """Test if object is of given type."""
+    # Import classes here to avoid circular dependencies
+    from fclpy import classes
+    from fractions import Fraction
+    
+    # Constants for fixnum boundary (2^29 is common choice for 32-bit-like semantics)
+    FIXNUM_MAX = 2**29 - 1
+    FIXNUM_MIN = -2**29
+    
+    # Handle LispClass type specifiers (user-defined classes)
+    if isinstance(type_specifier, classes.LispClass):
+        # Check if object is an instance of this class
+        if isinstance(object, classes.LispInstance):
+            # Check class hierarchy
+            for cls in object.lisp_class.get_linearized_superclasses():
+                if cls is type_specifier:
+                    return lisptype.T
+        return lisptype.NIL
+    
+    # Handle string or symbol type specifiers
     if isinstance(type_specifier, str):
         type_name = type_specifier.upper()
     elif hasattr(type_specifier, 'name'):
@@ -114,6 +133,7 @@ def typep(object, type_specifier):
     else:
         type_name = str(type_specifier).upper()
     
+    # Check for built-in types
     if type_name == 'T':
         return lisptype.T
     elif type_name == 'NULL':
@@ -125,19 +145,27 @@ def typep(object, type_specifier):
     elif type_name == 'LIST':
         return lisptype.lisp_bool(null(object) == lisptype.T or consp(object) == lisptype.T)
     elif type_name == 'NUMBER':
-        return lisptype.lisp_bool(isinstance(object, (int, float, complex)))
+        return lisptype.lisp_bool(isinstance(object, (int, float, complex, Fraction)))
     elif type_name == 'INTEGER':
         return lisptype.lisp_bool(isinstance(object, int))
+    elif type_name == 'FIXNUM':
+        # Fixnum: integers within machine word range
+        return lisptype.lisp_bool(isinstance(object, int) and FIXNUM_MIN <= object <= FIXNUM_MAX)
+    elif type_name == 'BIGNUM':
+        # Bignum: integers outside fixnum range
+        return lisptype.lisp_bool(isinstance(object, int) and (object < FIXNUM_MIN or object > FIXNUM_MAX))
     elif type_name == 'FLOAT' or type_name == 'SINGLE-FLOAT' or type_name == 'DOUBLE-FLOAT':
         return lisptype.lisp_bool(isinstance(object, float))
     elif type_name == 'COMPLEX':
         return lisptype.lisp_bool(isinstance(object, complex))
     elif type_name == 'REAL':
-        return lisptype.lisp_bool(isinstance(object, (int, float)))
+        return lisptype.lisp_bool(isinstance(object, (int, float, Fraction)))
     elif type_name == 'RATIONAL':
-        return lisptype.lisp_bool(isinstance(object, (int, float)))  # Python doesn't have rationals
+        return lisptype.lisp_bool(isinstance(object, (int, Fraction)))
+    elif type_name == 'RATIO':
+        return lisptype.lisp_bool(isinstance(object, Fraction))
     elif type_name == 'CHARACTER':
-        return lisptype.lisp_bool(isinstance(object, str) and len(object) == 1)
+        return lisptype.lisp_bool(isinstance(object, lisptype.Character) or (isinstance(object, str) and len(object) == 1))
     elif type_name == 'STRING':
         return lisptype.lisp_bool(isinstance(object, str))
     elif type_name == 'SYMBOL':
@@ -146,13 +174,38 @@ def typep(object, type_specifier):
         return lisptype.lisp_bool(isinstance(object, lisptype.lispKeyword))
     elif type_name == 'FUNCTION':
         return lisptype.lisp_bool(callable(object))
+    elif type_name == 'STANDARD-OBJECT' or type_name == 'INSTANCE':
+        return lisptype.lisp_bool(isinstance(object, classes.LispInstance))
+    elif type_name == 'VECTOR' or type_name == 'SIMPLE-VECTOR':
+        return lisptype.lisp_bool(isinstance(object, (list, tuple)))
+    elif type_name == 'ARRAY':
+        return lisptype.lisp_bool(isinstance(object, (list, tuple)))
+    elif type_name == 'HASH-TABLE':
+        return lisptype.lisp_bool(isinstance(object, dict))
     else:
+        # Try to find a user-defined class with this name
+        try:
+            cls = classes.find_class(type_name)
+            if cls and isinstance(object, classes.LispInstance):
+                # Check if object is instance of this class
+                for c in object.lisp_class.get_linearized_superclasses():
+                    if c is cls:
+                        return lisptype.T
+        except Exception:
+            pass
+        
         return lisptype.NIL
 
 
 @_registry.cl_function('TYPE-OF')
 def type_of(object):
     """Return type of object."""
+    from fclpy import classes
+    
+    # Check for user-defined instances first
+    if isinstance(object, classes.LispInstance):
+        return object.lisp_class.name
+    
     # null() and consp() return Lisp T/NIL objects, compare against lisptype.T
     if null(object) == lisptype.T:
         return lisptype.LispSymbol('NULL')
@@ -162,6 +215,8 @@ def type_of(object):
         return lisptype.LispSymbol('KEYWORD')
     elif isinstance(object, lisptype.LispSymbol):
         return lisptype.LispSymbol('SYMBOL')
+    elif isinstance(object, lisptype.Character):
+        return lisptype.LispSymbol('CHARACTER')
     elif isinstance(object, int):
         # Common Lisp often returns very specific integer types for small integers
         # e.g. 0 or 1 may be represented as BIT in some implementations. Return
@@ -327,3 +382,79 @@ def constantly(value):
     def constant_function(*args, **kwargs):
         return value
     return constant_function
+
+
+# =================================================================
+# Additional symbols from the ANSI target list
+# =================================================================
+
+@_registry.cl_function('EQU')
+def equ(obj1, obj2):
+    """Test for object identity (alias for EQ).
+    
+    Note: EQU is not standard ANSI Common Lisp, but some implementations
+    provide it as an alias for EQ.
+    """
+    return eq(obj1, obj2)
+
+
+@_registry.cl_function('SIGN')
+def sign(number):
+    """Return the sign of a number: -1, 0, or 1.
+    
+    Note: The ANSI standard name is SIGNUM, but SIGN is provided as an alias.
+    """
+    if number == 0:
+        return 0
+    elif number > 0:
+        return 1
+    else:
+        return -1
+
+
+@_registry.cl_function('GETPROP')
+def getprop(symbol, indicator, default=None):
+    """Get property from symbol's property list (alias for GET).
+    
+    Note: GETPROP is not standard ANSI but provided for compatibility.
+    """
+    # Import get from symbols module
+    from .symbols import get
+    return get(symbol, indicator, default)
+
+
+@_registry.cl_function('PROPERTY-LIST')
+def property_list(symbol):
+    """Return the property list of a symbol (alias for SYMBOL-PLIST).
+    
+    Note: PROPERTY-LIST is not standard ANSI but provided for compatibility.
+    """
+    if hasattr(symbol, 'plist'):
+        return symbol.plist
+    return lisptype.NIL
+
+
+@_registry.cl_function('STRING-LENGTH')
+def string_length(string):
+    """Return the length of a string (alias for LENGTH).
+    
+    Note: STRING-LENGTH is not standard ANSI (use LENGTH), but provided
+    for compatibility with target list.
+    """
+    if isinstance(string, str):
+        return len(string)
+    return 0
+
+
+@_registry.cl_function('STRING<>')
+def string_not_equal_alt(str1, str2):
+    """Test if strings are not equal (alternate name for STRING/=).
+    
+    Note: STRING<> is not standard ANSI (use STRING/=), but provided
+    for compatibility with target list.
+    """
+    if isinstance(str1, lisptype.LispSymbol):
+        str1 = str1.name
+    if isinstance(str2, lisptype.LispSymbol):
+        str2 = str2.name
+    return lisptype.lisp_bool(str(str1) != str(str2))

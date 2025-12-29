@@ -1,0 +1,1079 @@
+"""Special forms: QUOTE, IF, DEFUN, DEFMACRO, LAMBDA, declarations.
+
+This module contains handlers for special forms that don't fall into
+control flow, loops/conditionals, or condition handling categories.
+"""
+
+import fclpy.lisptype as lisptype
+import fclpy.state as state
+from .core import car, cdr, _consp_internal, cons
+from . import registry as _registry
+
+
+def eval_if(form, env):
+    """Evaluate IF special form."""
+    # Import eval lazily to avoid circular imports
+    from .evaluation_core import eval
+    
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("IF requires at least 2 arguments")
+    
+    test_form = car(args)
+    then_form = car(cdr(args))
+    else_form = car(cdr(cdr(args))) if _consp_internal(cdr(cdr(args))) else None
+    
+    test_result = eval(test_form, env)
+    if test_result is not None and test_result != lisptype.NIL:
+        return eval(then_form, env)
+    elif else_form is not None:
+        return eval(else_form, env)
+    else:
+        return None
+
+
+def eval_setq(form, env):
+    """Evaluate SETQ special form."""
+    from .evaluation_core import eval
+    
+    args = cdr(form)
+    result = None
+
+    while _consp_internal(args) and _consp_internal(cdr(args)):
+        var = car(args)
+        value_form = car(cdr(args))
+
+        if not isinstance(var, lisptype.LispSymbol):
+            raise lisptype.LispNotImplementedError("SETQ: variable must be a symbol")
+
+        result = eval(value_form, env)
+        env.set_variable(var, result)
+
+        args = cdr(cdr(args))
+
+    return result
+
+
+def eval_incf(form, env):
+    """Evaluate INCF special form - increment a place.
+    
+    (INCF place) increments place by 1
+    (INCF place delta) increments place by delta
+    
+    Currently only supports simple variable places, not general setf-able places.
+    """
+    from .evaluation_core import eval
+    
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("INCF requires at least 1 argument")
+    
+    place = car(args)
+    
+    # Get delta (default 1)
+    delta_form = car(cdr(args)) if _consp_internal(cdr(args)) else 1
+    if delta_form != 1:
+        delta = eval(delta_form, env)
+    else:
+        delta = 1
+    
+    # Handle simple variable case
+    if isinstance(place, lisptype.LispSymbol):
+        # Use find_variable (not lookup) to get the current binding
+        if env.has_variable(place):
+            current_value = env.find_variable(place)
+        else:
+            current_value = 0
+        new_value = current_value + delta
+        env.set_variable(place, new_value)
+        return new_value
+    else:
+        raise lisptype.LispNotImplementedError(f"INCF: complex places not yet supported: {place}")
+
+
+def eval_decf(form, env):
+    """Evaluate DECF special form - decrement a place.
+    
+    (DECF place) decrements place by 1
+    (DECF place delta) decrements place by delta
+    
+    Currently only supports simple variable places, not general setf-able places.
+    """
+    from .evaluation_core import eval
+    
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("DECF requires at least 1 argument")
+    
+    place = car(args)
+    
+    # Get delta (default 1)
+    delta_form = car(cdr(args)) if _consp_internal(cdr(args)) else 1
+    if delta_form != 1:
+        delta = eval(delta_form, env)
+    else:
+        delta = 1
+    
+    # Handle simple variable case
+    if isinstance(place, lisptype.LispSymbol):
+        # Use find_variable (not lookup) to get the current binding
+        if env.has_variable(place):
+            current_value = env.find_variable(place)
+        else:
+            current_value = 0
+        new_value = current_value - delta
+        env.set_variable(place, new_value)
+        return new_value
+    else:
+        raise lisptype.LispNotImplementedError(f"DECF: complex places not yet supported: {place}")
+
+
+def eval_defun(form, env):
+    """Evaluate DEFUN special form.
+    
+    DEFUN defines a function in the GLOBAL environment, not the local one.
+    This is standard Common Lisp behavior - DEFUN creates top-level function bindings.
+    
+    Supports:
+    - Required parameters
+    - &optional parameters with default values
+    - &rest parameter for collecting remaining arguments
+    - &key parameters for keyword arguments
+    """
+    from .evaluation_core import eval, parse_lambda_list
+    import fclpy.state as state
+    
+    args = cdr(form)
+    if not _consp_internal(args) or not _consp_internal(cdr(args)):
+        raise lisptype.LispNotImplementedError("DEFUN requires at least 2 arguments")
+    
+    func_name = car(args)
+    param_list = car(cdr(args))
+    body = cdr(cdr(args))
+    
+    if not isinstance(func_name, lisptype.LispSymbol):
+        raise lisptype.LispNotImplementedError("DEFUN: function name must be a symbol")
+    
+    # Extract docstring if present (first form in body can be a string)
+    docstring = None
+    actual_body = body
+    if _consp_internal(body):
+        first_form = car(body)
+        if isinstance(first_form, str):
+            docstring = first_form
+            actual_body = cdr(body)
+    
+    # Parse the lambda list
+    parsed = parse_lambda_list(param_list)
+    required_params = parsed['required']
+    optional_params = parsed['optional']
+    rest_param = parsed['rest']
+    keyword_params = parsed['keyword']
+    aux_params = parsed.get('aux', [])
+    
+    # Create function closure
+    # The closure captures the current lexical environment for variable lookups
+    def user_function(*call_args):
+        # Create new environment for function execution
+        func_env = lisptype.Environment(env)
+        
+        arg_index = 0
+        
+        # Bind required parameters
+        for param in required_params:
+            if arg_index < len(call_args):
+                func_env.add_variable(param, call_args[arg_index])
+                arg_index += 1
+            else:
+                func_env.add_variable(param, lisptype.NIL)
+        
+        # Bind optional parameters
+        for param_spec in optional_params:
+            if _consp_internal(param_spec):
+                param = car(param_spec)
+                default_form = car(cdr(param_spec))
+            else:
+                param = param_spec
+                default_form = None
+            
+            if arg_index < len(call_args):
+                func_env.add_variable(param, call_args[arg_index])
+                arg_index += 1
+            else:
+                # Use default value if provided, otherwise NIL
+                if default_form is not None:
+                    default_value = eval(default_form, func_env)
+                    func_env.add_variable(param, default_value)
+                else:
+                    func_env.add_variable(param, lisptype.NIL)
+        
+        # Collect remaining positional arguments for &rest
+        remaining_positional = []
+        
+        # Find where keyword arguments start
+        keyword_start = arg_index
+        for i in range(arg_index, len(call_args)):
+            if isinstance(call_args[i], lisptype.lispKeyword):
+                keyword_start = i
+                break
+            remaining_positional.append(call_args[i])
+            arg_index = i + 1
+        
+        # Bind &rest parameter if present
+        if rest_param:
+            # Rest gets all remaining positional args as a list
+            if remaining_positional:
+                rest_list = lisptype.NIL
+                for item in reversed(remaining_positional):
+                    rest_list = lisptype.lispCons(item, rest_list)
+                func_env.add_variable(rest_param, rest_list)
+            else:
+                func_env.add_variable(rest_param, lisptype.NIL)
+        
+        # Bind keyword parameters
+        # First, initialize all keyword params to their defaults or NIL
+        for param_spec in keyword_params:
+            if _consp_internal(param_spec):
+                param = car(param_spec)
+                default_form = car(cdr(param_spec))
+            else:
+                param = param_spec
+                default_form = None
+            
+            # Default value
+            if default_form is not None:
+                default_value = eval(default_form, func_env)
+                func_env.add_variable(param, default_value)
+            else:
+                func_env.add_variable(param, lisptype.NIL)
+        
+        # Now process actual keyword arguments from the call
+        i = keyword_start
+        while i < len(call_args) - 1:
+            key = call_args[i]
+            value = call_args[i + 1]
+            
+            if isinstance(key, lisptype.lispKeyword):
+                key_name = key.name.upper()
+                # Find matching parameter
+                for param_spec in keyword_params:
+                    if _consp_internal(param_spec):
+                        param = car(param_spec)
+                    else:
+                        param = param_spec
+                    
+                    if isinstance(param, lisptype.LispSymbol) and param.name.upper() == key_name:
+                        func_env.add_variable(param, value)
+                        break
+                i += 2
+            else:
+                i += 1
+        
+        # Bind &aux parameters
+        for param_spec in aux_params:
+            if _consp_internal(param_spec):
+                param = car(param_spec)
+                init_form = car(cdr(param_spec))
+                init_value = eval(init_form, func_env)
+                func_env.add_variable(param, init_value)
+            else:
+                func_env.add_variable(param_spec, lisptype.NIL)
+        
+        # Execute body
+        result = None
+        current_body = actual_body
+        while _consp_internal(current_body):
+            result = eval(car(current_body), func_env)
+            current_body = cdr(current_body)
+        
+        return result
+    
+    # Find the global/root environment for defining the function
+    # DEFUN always creates global function bindings
+    global_env = env
+    while global_env.parent is not None:
+        global_env = global_env.parent
+    
+    # Add function to the GLOBAL environment (not local)
+    global_env.add_function(func_name, user_function)
+    
+    # Also add to the current environment for immediate visibility
+    # (this helps when the function is called later in the same file)
+    if env is not global_env:
+        env.add_function(func_name, user_function)
+    
+    # Store docstring on the function symbol's property list
+    if docstring:
+        if not hasattr(func_name, 'plist'):
+            func_name.plist = {}
+        func_name.plist['DOCUMENTATION'] = docstring
+    
+    return func_name
+
+
+def eval_defmacro(form, env):
+    """Evaluate DEFMACRO special form: register a macro in the environment.
+
+    This creates a Python callable that evaluates the macro body in an
+    environment where the parameters are bound to the arguments. This allows
+    QUASIQUOTE/UNQUOTE to work correctly in macro templates.
+    """
+    from .evaluation_core import eval
+    
+    args = cdr(form)
+    if not _consp_internal(args) or not _consp_internal(cdr(args)):
+        raise lisptype.LispNotImplementedError("DEFMACRO requires a name, lambda-list and body")
+
+    macro_name = car(args)
+    lambda_list = car(cdr(args))
+    body = cdr(cdr(args))
+
+    if not isinstance(macro_name, lisptype.LispSymbol):
+        raise lisptype.LispNotImplementedError("DEFMACRO: macro name must be a symbol")
+
+    # Extract docstring if present (first form in body can be a string)
+    docstring = None
+    actual_body = body
+    if _consp_internal(body):
+        first_form = car(body)
+        if isinstance(first_form, str):
+            docstring = first_form
+            actual_body = cdr(body)
+
+    # Parse lambda list to handle &optional, &rest, &key, etc.
+    from .evaluation_core import parse_lambda_list
+    parsed_params = parse_lambda_list(lambda_list)
+    
+    required_params = parsed_params.get('required', [])
+    optional_params = parsed_params.get('optional', [])
+    rest_param = parsed_params.get('rest', None)
+    keyword_params = parsed_params.get('keyword', [])
+
+    # Create the macro callable
+    def macro_callable(*call_args):
+        # Create a new environment extending the definition environment
+        macro_env = lisptype.Environment(parent=env)
+        
+        arg_idx = 0
+        
+        # Bind required parameters
+        for param in required_params:
+            if arg_idx < len(call_args):
+                macro_env.add_variable(param, call_args[arg_idx])
+                arg_idx += 1
+            else:
+                macro_env.add_variable(param, lisptype.NIL)
+        
+        # Bind optional parameters
+        for param in optional_params:
+            if isinstance(param, lisptype.LispSymbol):
+                # Simple optional (name)
+                if arg_idx < len(call_args):
+                    macro_env.add_variable(param, call_args[arg_idx])
+                    arg_idx += 1
+                else:
+                    macro_env.add_variable(param, lisptype.NIL)
+            elif _consp_internal(param):
+                # Optional with default (name default)
+                opt_name = car(param)
+                opt_default = car(cdr(param)) if _consp_internal(cdr(param)) else lisptype.NIL
+                if arg_idx < len(call_args):
+                    macro_env.add_variable(opt_name, call_args[arg_idx])
+                    arg_idx += 1
+                else:
+                    macro_env.add_variable(opt_name, eval(opt_default, macro_env))
+        
+        # Bind &rest parameter to remaining arguments as a list
+        if rest_param:
+            remaining_args = call_args[arg_idx:]
+            if remaining_args:
+                # Convert to Lisp list
+                rest_list = lisptype.NIL
+                for arg in reversed(remaining_args):
+                    rest_list = cons(arg, rest_list)
+                macro_env.add_variable(rest_param, rest_list)
+            else:
+                macro_env.add_variable(rest_param, lisptype.NIL)
+        
+        # TODO: Handle &key parameters properly
+
+        # If no body, return NIL
+        if not _consp_internal(actual_body):
+            return lisptype.NIL
+
+        # Evaluate body forms in macro environment, return last result
+        result = lisptype.NIL
+        cur_body = actual_body
+        while _consp_internal(cur_body):
+            result = eval(car(cur_body), macro_env)
+            cur_body = cdr(cur_body)
+        
+        return result
+
+    # Mark as macro and register in environment
+    setattr(macro_callable, '__is_macro__', True)
+    env.add_function(macro_name, macro_callable)
+    
+    # Store docstring on the macro symbol's property list
+    if docstring:
+        if not hasattr(macro_name, 'plist'):
+            macro_name.plist = {}
+        macro_name.plist['DOCUMENTATION'] = docstring
+    
+    return macro_name
+
+
+def eval_macroexpand_1(form, env):
+    """Evaluate MACROEXPAND-1 special form.
+    
+    (MACROEXPAND-1 form) - expand a macro call one level.
+    If form is a macro call, expands the macro and returns the expansion.
+    Otherwise returns form unchanged.
+    """
+    from .evaluation_core import eval
+    
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("MACROEXPAND-1 requires 1 argument")
+    
+    form_to_expand_raw = car(args)
+    
+    # If the form is (QUOTE x), evaluate it to get x
+    # Otherwise, use the form as-is
+    if _consp_internal(form_to_expand_raw) and isinstance(car(form_to_expand_raw), lisptype.LispSymbol) and car(form_to_expand_raw).name == 'QUOTE':
+        form_to_expand = eval(form_to_expand_raw, env)
+    else:
+        form_to_expand = form_to_expand_raw
+    
+    # Only cons cells can be macro calls
+    if not _consp_internal(form_to_expand):
+        return form_to_expand
+    
+    operator = car(form_to_expand)
+    if not isinstance(operator, lisptype.LispSymbol):
+        return form_to_expand
+    
+    # Try to find the operator function
+    macro_func = env.find_func(operator)
+    if not macro_func or not callable(macro_func):
+        return form_to_expand
+    
+    # Check if it's actually a macro
+    if not getattr(macro_func, '__is_macro__', False):
+        return form_to_expand
+    
+    # Call the macro with unevaluated arguments
+    args_list = []
+    current = cdr(form_to_expand)
+    while _consp_internal(current):
+        args_list.append(car(current))
+        current = cdr(current)
+    
+    # If there's a non-nil tail, that's an error, but for now just ignore it
+    try:
+        return macro_func(*args_list)
+    except Exception:
+        # If macro expansion fails, return form unchanged
+        return form_to_expand
+
+
+def eval_macro_function(form, env):
+    """Evaluate MACRO-FUNCTION special form.
+    
+    (MACRO-FUNCTION symbol) - return the macro function for a symbol, or NIL if not a macro.
+    """
+    from .evaluation_core import eval
+    
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("MACRO-FUNCTION requires 1 argument")
+    
+    symbol_form = car(args)
+    
+    # The symbol form might be quoted, so we need to evaluate it to get the symbol
+    # Or it might already be a symbol
+    if isinstance(symbol_form, lisptype.LispSymbol):
+        symbol = symbol_form
+    else:
+        # Try evaluating it
+        symbol = eval(symbol_form, env)
+    
+    if not isinstance(symbol, lisptype.LispSymbol):
+        return lisptype.NIL
+    
+    # Try to find the function
+    func = env.find_func(symbol)
+    if not func or not callable(func):
+        return lisptype.NIL
+    
+    # Check if it's a macro
+    if getattr(func, '__is_macro__', False):
+        return func
+    
+    return lisptype.NIL
+
+
+def eval_lambda(form, env):
+    """Evaluate LAMBDA special form."""
+    from .evaluation_core import eval
+    
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("LAMBDA requires at least 1 argument")
+    
+    param_list = car(args)
+    body = cdr(args)
+    
+    # Create function closure
+    def lambda_function(*call_args):
+        # Create new environment for function execution
+        func_env = lisptype.Environment(env)
+        
+        # Bind parameters
+        params = param_list
+        for i, arg in enumerate(call_args):
+            if _consp_internal(params):
+                param = car(params)
+                if isinstance(param, lisptype.LispSymbol):
+                    func_env.add_variable(param, arg)
+                params = cdr(params)
+        
+        # Execute body
+        result = None
+        current_body = body
+        while _consp_internal(current_body):
+            result = eval(car(current_body), func_env)
+            current_body = cdr(current_body)
+        
+        return result
+    
+    return lambda_function
+
+
+def eval_declare(form, env):
+    """Evaluate DECLARE special form.
+    
+    DECLARE is used inside function/macro/block bodies to provide declarations.
+    This function stores declarations on the containing symbol's property list.
+    
+    Format: (DECLARE (declare-spec1) (declare-spec2) ...)
+    Common declare-specs: (OPTIMIZE ...) (SPECIAL var ...) (TYPE type var ...) (IGNORE var ...)
+    """
+    args = cdr(form)
+    
+    # Collect all declare-specs
+    result = None
+    while _consp_internal(args):
+        spec = car(args)
+        # Each spec is a list like (OPTIMIZE ...) or (SPECIAL x y z)
+        if _consp_internal(spec):
+            spec_type = car(spec)
+            if isinstance(spec_type, lisptype.LispSymbol):
+                spec_name = spec_type.name.upper()
+                
+                # Store declaration in a reserved property list key
+                if not hasattr(env, '_declarations'):
+                    env._declarations = {}
+                if spec_name not in env._declarations:
+                    env._declarations[spec_name] = []
+                env._declarations[spec_name].append(spec)
+        
+        args = cdr(args)
+    
+    # DECLARE returns NIL
+    return lisptype.NIL
+
+
+def eval_declaim(form, env):
+    """Evaluate DECLAIM special form (global declarations).
+    
+    DECLAIM provides global declarations that affect the entire program.
+    Stores declarations globally in the environment.
+    
+    Format: (DECLAIM (declare-spec1) (declare-spec2) ...)
+    """
+    args = cdr(form)
+    
+    # Get the global environment (root environment)
+    global_env = env
+    while global_env.parent is not None:
+        global_env = global_env.parent
+    
+    # Collect all declare-specs globally
+    result = None
+    while _consp_internal(args):
+        spec = car(args)
+        # Each spec is a list like (OPTIMIZE ...) or (SPECIAL x y z)
+        if _consp_internal(spec):
+            spec_type = car(spec)
+            if isinstance(spec_type, lisptype.LispSymbol):
+                spec_name = spec_type.name.upper()
+                
+                # Handle different declaration types
+                if spec_name == 'OPTIMIZE':
+                    # Store optimization settings globally
+                    _store_optimization_declaration(global_env, spec)
+                elif spec_name == 'SPECIAL':
+                    # Store special variable declarations globally
+                    _store_special_declaration(global_env, spec)
+                else:
+                    # Store other declarations
+                    if not hasattr(global_env, '_global_declarations'):
+                        global_env._global_declarations = {}
+                    if spec_name not in global_env._global_declarations:
+                        global_env._global_declarations[spec_name] = []
+                    global_env._global_declarations[spec_name].append(spec)
+        
+        args = cdr(args)
+    
+    # DECLAIM returns NIL
+    return lisptype.NIL
+
+
+def _store_optimization_declaration(env, spec):
+    """Helper to store OPTIMIZE declaration on environment."""
+    # OPTIMIZE spec format: (OPTIMIZE (quality level) ...)
+    # Qualities: SPEED, SAFETY, DEBUG, COMPILATION-SPEED, SPACE
+    # Levels: 0 (minimum) to 3 (maximum)
+    
+    if not hasattr(env, '_optimization_policy'):
+        env._optimization_policy = {
+            'speed': 1,
+            'safety': 1,
+            'debug': 1,
+            'compilation-speed': 1,
+            'space': 1
+        }
+    
+    # Parse (OPTIMIZE (quality level) ...)
+    specs = cdr(spec)  # Skip 'OPTIMIZE' keyword
+    while _consp_internal(specs):
+        item = car(specs)
+        if _consp_internal(item):
+            quality = car(item)
+            level = car(cdr(item))
+            
+            if isinstance(quality, lisptype.LispSymbol) and isinstance(level, int):
+                q_name = quality.name.lower().replace('-', '_')
+                env._optimization_policy[q_name] = max(0, min(3, level))
+        
+        specs = cdr(specs)
+
+
+def _store_special_declaration(env, spec):
+    """Helper to store SPECIAL declaration on environment."""
+    # SPECIAL spec format: (SPECIAL var1 var2 ...)
+    vars_to_declare = cdr(spec)  # Skip 'SPECIAL' keyword
+    
+    if not hasattr(env, '_special_variables'):
+        env._special_variables = {}
+    
+    while _consp_internal(vars_to_declare):
+        var = car(vars_to_declare)
+        if isinstance(var, lisptype.LispSymbol):
+            env._special_variables[var.name] = True
+        vars_to_declare = cdr(vars_to_declare)
+
+
+def eval_defvar(form, env):
+    """Evaluate DEFVAR special form.
+    
+    (DEFVAR name)           - declares special variable, binds to NIL if unbound
+    (DEFVAR name value)     - declares and initializes if unbound
+    (DEFVAR name value doc) - with documentation string
+    
+    DEFVAR only sets the initial value if the variable is not already bound.
+    This is in contrast to DEFPARAMETER which always sets the value.
+    
+    DEFVAR defines variables in the GLOBAL environment, not the local one.
+    This is standard Common Lisp behavior.
+    
+    Returns the symbol name.
+    """
+    from .evaluation_core import eval as lisp_eval
+    
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("DEFVAR requires at least a variable name")
+    
+    name = car(args)
+    if not isinstance(name, lisptype.LispSymbol):
+        raise lisptype.LispNotImplementedError("DEFVAR: first argument must be a symbol")
+    
+    # Find the global/root environment for defining the variable
+    global_env = env
+    while global_env.parent is not None:
+        global_env = global_env.parent
+    
+    # Check if variable is already bound (in any environment)
+    current_value = env.find_variable(name)
+    is_already_bound = current_value is not None
+    
+    # Get the value form if present
+    rest_args = cdr(args)
+    has_value_form = _consp_internal(rest_args)
+    
+    if has_value_form and not is_already_bound:
+        # Has initial value and not already bound - evaluate and bind globally
+        value_form = car(rest_args)
+        value = lisp_eval(value_form, env)
+        global_env.add_variable(name, value)
+    elif not is_already_bound:
+        # No value form and not bound - bind to NIL globally
+        global_env.add_variable(name, lisptype.NIL)
+    # If already bound, do nothing to the value
+    
+    # Handle documentation string if present (third argument)
+    if has_value_form:
+        doc_args = cdr(rest_args)
+        if _consp_internal(doc_args):
+            docstring = car(doc_args)
+            if isinstance(docstring, str):
+                # Store documentation on symbol's property list
+                if not hasattr(name, 'plist'):
+                    name.plist = {}
+                name.plist['DOCUMENTATION'] = docstring
+                name.plist['VARIABLE-DOCUMENTATION'] = docstring
+    
+    # Mark as special variable in global environment
+    if not hasattr(global_env, '_special_variables'):
+        global_env._special_variables = {}
+    global_env._special_variables[name.name] = True
+    
+    return name
+
+
+def eval_defparameter(form, env):
+    """Evaluate DEFPARAMETER special form.
+    
+    (DEFPARAMETER name value)     - declares and always sets value
+    (DEFPARAMETER name value doc) - with documentation string
+    
+    Unlike DEFVAR, DEFPARAMETER always sets the value, even if already bound.
+    
+    DEFPARAMETER defines variables in the GLOBAL environment, not the local one.
+    This is standard Common Lisp behavior.
+    
+    Returns the symbol name.
+    """
+    from .evaluation_core import eval as lisp_eval
+    
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("DEFPARAMETER requires a variable name")
+    
+    name = car(args)
+    if not isinstance(name, lisptype.LispSymbol):
+        raise lisptype.LispNotImplementedError("DEFPARAMETER: first argument must be a symbol")
+    
+    # Find the global/root environment for defining the variable
+    global_env = env
+    while global_env.parent is not None:
+        global_env = global_env.parent
+    
+    # Get the value form (required for DEFPARAMETER)
+    rest_args = cdr(args)
+    if not _consp_internal(rest_args):
+        raise lisptype.LispNotImplementedError("DEFPARAMETER requires an initial value")
+    
+    value_form = car(rest_args)
+    value = lisp_eval(value_form, env)
+    global_env.add_variable(name, value)
+    
+    # Handle documentation string if present (third argument)
+    doc_args = cdr(rest_args)
+    if _consp_internal(doc_args):
+        docstring = car(doc_args)
+        if isinstance(docstring, str):
+            # Store documentation on symbol's property list
+            if not hasattr(name, 'plist'):
+                name.plist = {}
+            name.plist['DOCUMENTATION'] = docstring
+            name.plist['VARIABLE-DOCUMENTATION'] = docstring
+    
+    # Mark as special variable in global environment
+    if not hasattr(global_env, '_special_variables'):
+        global_env._special_variables = {}
+    global_env._special_variables[name.name] = True
+    
+    return name
+
+
+def eval_defstruct(form, env):
+    """Evaluate DEFSTRUCT special form.
+    
+    (DEFSTRUCT name slot...)
+    (DEFSTRUCT (name option...) slot...)
+    
+    DEFSTRUCT does not evaluate its arguments - they are literal specifications.
+    """
+    import fclpy.state as state
+    
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("DEFSTRUCT requires a name")
+    
+    name_and_options = car(args)
+    slot_specs = cdr(args)
+    
+    # Parse name and options
+    if isinstance(name_and_options, lisptype.LispSymbol):
+        struct_name = name_and_options
+        conc_name = struct_name.name + '-'
+        constructor_name = 'MAKE-' + struct_name.name
+        copier_name = 'COPY-' + struct_name.name
+        predicate_name = struct_name.name + '-P'
+        include_parent = None
+    elif _consp_internal(name_and_options):
+        struct_name = car(name_and_options)
+        conc_name = struct_name.name + '-'  # Default prefix
+        constructor_name = 'MAKE-' + struct_name.name
+        copier_name = 'COPY-' + struct_name.name
+        predicate_name = struct_name.name + '-P'
+        include_parent = None
+        
+        # Parse options
+        options = cdr(name_and_options)
+        while _consp_internal(options):
+            opt = car(options)
+            if _consp_internal(opt):
+                opt_name = car(opt)
+                opt_value = car(cdr(opt)) if _consp_internal(cdr(opt)) else None
+                
+                if isinstance(opt_name, lisptype.LispSymbol):
+                    opt_name_str = opt_name.name.upper()
+                elif isinstance(opt_name, lisptype.lispKeyword):
+                    opt_name_str = opt_name.name.upper()
+                else:
+                    opt_name_str = str(opt_name).upper()
+                
+                if opt_name_str == 'CONC-NAME' or opt_name_str == ':CONC-NAME':
+                    if opt_value is None or opt_value == lisptype.NIL:
+                        conc_name = ''  # No prefix
+                    elif isinstance(opt_value, lisptype.LispSymbol):
+                        conc_name = opt_value.name
+                    else:
+                        conc_name = str(opt_value)
+                elif opt_name_str == 'CONSTRUCTOR' or opt_name_str == ':CONSTRUCTOR':
+                    if opt_value is None or opt_value == lisptype.NIL:
+                        constructor_name = None
+                    elif isinstance(opt_value, lisptype.LispSymbol):
+                        constructor_name = opt_value.name
+                elif opt_name_str == 'COPIER' or opt_name_str == ':COPIER':
+                    if opt_value is None or opt_value == lisptype.NIL:
+                        copier_name = None
+                    elif isinstance(opt_value, lisptype.LispSymbol):
+                        copier_name = opt_value.name
+                elif opt_name_str == 'PREDICATE' or opt_name_str == ':PREDICATE':
+                    if opt_value is None or opt_value == lisptype.NIL:
+                        predicate_name = None
+                    elif isinstance(opt_value, lisptype.LispSymbol):
+                        predicate_name = opt_value.name
+                elif opt_name_str == 'INCLUDE' or opt_name_str == ':INCLUDE':
+                    if isinstance(opt_value, lisptype.LispSymbol):
+                        include_parent = opt_value.name
+            options = cdr(options)
+    else:
+        struct_name = name_and_options
+        conc_name = str(struct_name) + '-'
+        constructor_name = 'MAKE-' + str(struct_name)
+        copier_name = 'COPY-' + str(struct_name)
+        predicate_name = str(struct_name) + '-P'
+        include_parent = None
+    
+    struct_class_name = struct_name.name if isinstance(struct_name, lisptype.LispSymbol) else str(struct_name)
+    
+    # Parse slot definitions
+    slot_defs = []  # List of (slot_name, default_value)
+    while _consp_internal(slot_specs):
+        slot = car(slot_specs)
+        if isinstance(slot, lisptype.LispSymbol):
+            slot_defs.append((slot.name, lisptype.NIL))
+        elif _consp_internal(slot):
+            slot_name = car(slot)
+            if isinstance(slot_name, lisptype.LispSymbol):
+                slot_name_str = slot_name.name
+            else:
+                slot_name_str = str(slot_name)
+            default_value = car(cdr(slot)) if _consp_internal(cdr(slot)) else lisptype.NIL
+            slot_defs.append((slot_name_str, default_value))
+        else:
+            slot_defs.append((str(slot), lisptype.NIL))
+        slot_specs = cdr(slot_specs)
+    
+    # Create the structure class
+    class StructureInstance:
+        def __init__(self, struct_type=struct_class_name, slot_defaults=None, **kwargs):
+            self._struct_type = struct_type
+            self._slots = {}
+            # Initialize with defaults
+            if slot_defaults is None:
+                slot_defaults = slot_defs
+            for slot_name, default_val in slot_defaults:
+                self._slots[slot_name] = default_val
+            # Override with provided values
+            for key, value in kwargs.items():
+                key_upper = key.upper()
+                for slot_name, _ in slot_defaults:
+                    if slot_name.upper() == key_upper:
+                        self._slots[slot_name] = value
+                        break
+        
+        def __repr__(self):
+            slot_values = ' '.join(f':{k} {v}' for k, v in self._slots.items())
+            return f'#S({self._struct_type} {slot_values})'
+        
+        def get_slot(self, name):
+            return self._slots.get(name, lisptype.NIL)
+        
+        def set_slot(self, name, value):
+            self._slots[name] = value
+    
+    # Store the structure class in a registry
+    if not hasattr(state, '_structure_classes'):
+        state._structure_classes = {}
+    state._structure_classes[struct_class_name] = {
+        'class': StructureInstance,
+        'slots': slot_defs,
+        'conc_name': conc_name
+    }
+    
+    # Create constructor function
+    if constructor_name:
+        def constructor_wrapper(*args, **kwargs):
+            # Convert keyword symbol arguments to kwargs
+            result_kwargs = dict(kwargs)
+            i = 0
+            while i < len(args):
+                if i + 1 < len(args):
+                    key = args[i]
+                    value = args[i + 1]
+                    if isinstance(key, lisptype.lispKeyword):
+                        result_kwargs[key.name.upper()] = value
+                        i += 2
+                    else:
+                        i += 1
+                else:
+                    i += 1
+            return StructureInstance(struct_class_name, slot_defs, **result_kwargs)
+        
+        constructor_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol(constructor_name)
+        env.add_function(constructor_sym, constructor_wrapper)
+    
+    # Create copier function
+    if copier_name:
+        def copy_structure(struct):
+            if not isinstance(struct, StructureInstance):
+                raise TypeError(f"Not a {struct_class_name}: {struct}")
+            new_struct = StructureInstance(struct_class_name, slot_defs)
+            new_struct._slots = dict(struct._slots)
+            return new_struct
+        
+        copier_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol(copier_name)
+        env.add_function(copier_sym, copy_structure)
+    
+    # Create predicate function
+    if predicate_name:
+        def is_structure(obj):
+            if hasattr(obj, '_struct_type') and obj._struct_type == struct_class_name:
+                return lisptype.T
+            return lisptype.NIL
+        
+        predicate_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol(predicate_name)
+        env.add_function(predicate_sym, is_structure)
+    
+    # Create accessor functions for each slot
+    for slot_name, _ in slot_defs:
+        accessor_name = conc_name + slot_name
+        
+        # Create getter
+        def make_getter(sn):
+            def getter(struct):
+                if hasattr(struct, 'get_slot'):
+                    return struct.get_slot(sn)
+                raise TypeError(f"Not a {struct_class_name}: {struct}")
+            return getter
+        
+        accessor_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol(accessor_name)
+        env.add_function(accessor_sym, make_getter(slot_name))
+        
+        # Create setter (for SETF)
+        def make_setter(sn):
+            def setter(struct, value):
+                if hasattr(struct, 'set_slot'):
+                    struct.set_slot(sn, value)
+                    return value
+                raise TypeError(f"Not a {struct_class_name}: {struct}")
+            return setter
+        
+        setter_name = 'SET-' + accessor_name
+        setter_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol(setter_name)
+        env.add_function(setter_sym, make_setter(slot_name))
+    
+    return struct_name
+
+
+def eval_pop(form, env):
+    """Evaluate POP special form (macro).
+    
+    (POP place) - Remove and return the first element from the list stored in place.
+    
+    POP is a macro that:
+    1. Gets the value of place (which must be a list)
+    2. Returns CAR of that list  
+    3. Sets place to CDR of that list
+    
+    For simple variable places, this is:
+        (let ((result (car place)))
+          (setq place (cdr place))
+          result)
+    """
+    from .evaluation_core import eval
+    from .core import car, cdr
+    
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("POP requires a place argument")
+    
+    place = car(args)
+    
+    # For simple variable places
+    if isinstance(place, lisptype.LispSymbol):
+        # Get the current value
+        current_value = env.find_variable(place)
+        if current_value is None:
+            return lisptype.NIL
+        
+        # Get CAR (first element)
+        if _consp_internal(current_value):
+            result = car(current_value)
+            # Set the variable to CDR
+            rest = cdr(current_value)
+            env.set_variable(place, rest)
+            return result
+        else:
+            # Not a cons, nothing to pop
+            return lisptype.NIL
+    
+    # For other place forms (like (car x), (gethash key table)), 
+    # we would need more complex handling
+    raise lisptype.LispNotImplementedError(f"POP not implemented for place: {place}")
+
+
+__all__ = [
+    'eval_if',
+    'eval_setq',
+    'eval_defun',
+    'eval_defmacro',
+    'eval_macroexpand_1',
+    'eval_macro_function',
+    'eval_lambda',
+    'eval_declare',
+    'eval_declaim',
+    'eval_defvar',
+    'eval_defparameter',
+    'eval_defstruct',
+    'eval_pop',
+    '_store_optimization_declaration',
+    '_store_special_declaration',
+]
