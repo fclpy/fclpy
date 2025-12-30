@@ -220,6 +220,32 @@ def eval(form, env=None):
                 return car(args)
             elif operator.name == 'IF':
                 return eval_if(form, env)
+            elif operator.name == 'FUNCTION':
+                # (FUNCTION name) - look up the function
+                args = cdr(form)
+                if args is None or args == lisptype.NIL:
+                    raise lisptype.LispError("FUNCTION requires exactly one argument")
+                name = car(args)
+                # Handle lambda expressions
+                if isinstance(name, lisptype.lispCons):
+                    op = car(name)
+                    if isinstance(op, lisptype.LispSymbol) and op.name == 'LAMBDA':
+                        return eval_lambda(name, env)
+                # Handle symbol names
+                if isinstance(name, lisptype.LispSymbol):
+                    # First look in environment
+                    func = env.find_func(name)
+                    if func is not None:
+                        return func
+                    # Then check the registry
+                    py_name = _registry.get_function_py_name(name.name)
+                    if py_name:
+                        import fclpy.lispfunc as lispfunc_module
+                        func = getattr(lispfunc_module, py_name, None)
+                        if func is not None:
+                            return func
+                    raise lisptype.LispNotImplementedError(f"Undefined function: {name.name}")
+                return name
             elif operator.name == 'SETQ':
                 return eval_setq(form, env)
             elif operator.name == 'PROGN':

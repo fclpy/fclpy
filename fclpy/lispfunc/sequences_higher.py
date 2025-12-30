@@ -180,18 +180,53 @@ def mapl(function, *lists):
 
 
 @_registry.cl_function('REDUCE')
-def reduce_fn(function, sequence, **kwargs):
-    """Reduce sequence using function."""
+def reduce_fn(function, sequence, key=None, from_end=None, start=None, end=None, initial_value=None, **kwargs):
+    """Reduce sequence using function.
+    
+    Args:
+        function: The function to apply
+        sequence: The sequence to reduce
+        key: Optional key function (applied to elements before combining)
+        from_end: If true, reduce from right to left
+        start: Starting index (default 0)
+        end: Ending index (default length)
+        initial_value: Initial value for accumulator
+    """
+    # Handle keyword args that might be passed as :initial-value etc.
+    if 'initial-value' in kwargs:
+        initial_value = kwargs['initial-value']
+    
     # Convert sequence to Python list to handle lispCons
     py_seq = _cons_to_list(sequence)
     
+    # Handle start/end
+    if start is not None:
+        start = int(start)
+    else:
+        start = 0
+    
+    if end is not None:
+        end = int(end)
+    else:
+        end = len(py_seq)
+    
+    py_seq = py_seq[start:end]
+    
+    # Apply key function if provided
+    if key is not None:
+        py_seq = [key(item) for item in py_seq]
+    
+    # Handle from-end
+    if from_end:
+        py_seq = list(reversed(py_seq))
+    
     if not py_seq:
-        if 'initial_value' in kwargs:
-            return kwargs['initial_value']
+        if initial_value is not None:
+            return initial_value
         return function()
     
-    result = py_seq[0] if 'initial_value' not in kwargs else kwargs['initial_value']
-    start_idx = 1 if 'initial_value' not in kwargs else 0
+    result = py_seq[0] if initial_value is None else initial_value
+    start_idx = 1 if initial_value is None else 0
     
     for item in py_seq[start_idx:]:
         result = function(result, item)

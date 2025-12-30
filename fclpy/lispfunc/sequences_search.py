@@ -6,6 +6,62 @@ from . import registry as _registry
 import fclpy.lisptype as lisptype
 
 
+# ===== HELPER FUNCTIONS =====
+
+def _seq_length(sequence):
+    """Get the length of any sequence-like object, including lispCons.
+    
+    Args:
+        sequence: List, string, tuple, lispCons, or other sequence type
+        
+    Returns:
+        The length of the sequence as an integer.
+    """
+    if hasattr(sequence, '__len__'):
+        return len(sequence)
+    # Handle lispCons by counting elements
+    if hasattr(sequence, 'car') and hasattr(sequence, 'cdr'):
+        length = 0
+        current = sequence
+        while current is not None and current != lisptype.NIL:
+            if not hasattr(current, 'cdr'):
+                # Dotted pair - add 1 for the car
+                length += 1
+                break
+            length += 1
+            current = current.cdr
+        return length
+    return 0
+
+
+def _seq_to_list(sequence):
+    """Convert any sequence to a Python list for easier processing.
+    
+    Args:
+        sequence: List, string, tuple, lispCons, or other sequence type
+        
+    Returns:
+        A Python list containing the elements.
+    """
+    if isinstance(sequence, (list, tuple)):
+        return list(sequence)
+    if isinstance(sequence, str):
+        return list(sequence)
+    # Handle lispCons
+    if hasattr(sequence, 'car') and hasattr(sequence, 'cdr'):
+        result = []
+        current = sequence
+        while current is not None and current != lisptype.NIL:
+            if not hasattr(current, 'cdr'):
+                # Dotted pair
+                result.append(current)
+                break
+            result.append(current.car)
+            current = current.cdr
+        return result
+    return []
+
+
 # ===== SEQUENCE PROTOCOL =====
 # Unified interface for sequences: lists, vectors, strings, and extensible for custom types
 
@@ -23,9 +79,13 @@ class SequenceIterator:
             key: Optional function to extract/transform values for testing
             test: Optional comparison function (default is equal)
         """
-        self.sequence = sequence
+        # Convert lispCons to list for easier iteration
+        if hasattr(sequence, 'car') and hasattr(sequence, 'cdr'):
+            self.sequence = _seq_to_list(sequence)
+        else:
+            self.sequence = sequence
         self.start = start
-        self.end = end if end is not None else len(sequence)
+        self.end = end if end is not None else _seq_length(self.sequence)
         self.key = key
         self.test = test or (lambda x, y: x == y)
         self.index = start
@@ -36,7 +96,7 @@ class SequenceIterator:
     
     def __next__(self):
         """Get next element."""
-        if self.index >= self.end or self.index >= len(self.sequence):
+        if self.index >= self.end or self.index >= _seq_length(self.sequence):
             raise StopIteration
         value = self.sequence[self.index]
         self.index += 1
@@ -110,7 +170,7 @@ def find(item, sequence, **kwargs):
       :end - end index
     """
     start = kwargs.get('start', 0)
-    end = kwargs.get('end', len(sequence))
+    end = kwargs.get('end', _seq_length(sequence))
     key = kwargs.get('key', None)
     test = kwargs.get('test', lambda x, y: x == y)
     
@@ -131,7 +191,7 @@ def find_if(predicate, sequence, **kwargs):
       :end - end index
     """
     start = kwargs.get('start', 0)
-    end = kwargs.get('end', len(sequence))
+    end = kwargs.get('end', _seq_length(sequence))
     key = kwargs.get('key', None)
     
     iterator = iterate(sequence, start=start, end=end, key=key)
@@ -152,7 +212,7 @@ def find_if_not(predicate, sequence, **kwargs):
       :end - end index
     """
     start = kwargs.get('start', 0)
-    end = kwargs.get('end', len(sequence))
+    end = kwargs.get('end', _seq_length(sequence))
     key = kwargs.get('key', None)
     
     iterator = iterate(sequence, start=start, end=end, key=key)
@@ -173,12 +233,16 @@ def position(item, sequence, **kwargs):
       :start - start index
       :end - end index
     """
+    # Convert lispCons to list for indexing
+    if hasattr(sequence, 'car') and hasattr(sequence, 'cdr'):
+        sequence = _seq_to_list(sequence)
+    
     start = kwargs.get('start', 0)
-    end = kwargs.get('end', len(sequence))
+    end = kwargs.get('end', _seq_length(sequence))
     key = kwargs.get('key', None)
     test = kwargs.get('test', lambda x, y: x == y)
     
-    for i in range(start, min(end, len(sequence))):
+    for i in range(start, min(end, _seq_length(sequence))):
         element = sequence[i]
         test_val = key(element) if key else element
         if test(test_val, item):
@@ -195,11 +259,15 @@ def position_if(predicate, sequence, **kwargs):
       :start - start index
       :end - end index
     """
+    # Convert lispCons to list for indexing
+    if hasattr(sequence, 'car') and hasattr(sequence, 'cdr'):
+        sequence = _seq_to_list(sequence)
+    
     start = kwargs.get('start', 0)
-    end = kwargs.get('end', len(sequence))
+    end = kwargs.get('end', _seq_length(sequence))
     key = kwargs.get('key', None)
     
-    for i in range(start, min(end, len(sequence))):
+    for i in range(start, min(end, _seq_length(sequence))):
         element = sequence[i]
         test_val = key(element) if key else element
         if predicate(test_val):
@@ -216,11 +284,15 @@ def position_if_not(predicate, sequence, **kwargs):
       :start - start index
       :end - end index
     """
+    # Convert lispCons to list for indexing
+    if hasattr(sequence, 'car') and hasattr(sequence, 'cdr'):
+        sequence = _seq_to_list(sequence)
+    
     start = kwargs.get('start', 0)
-    end = kwargs.get('end', len(sequence))
+    end = kwargs.get('end', _seq_length(sequence))
     key = kwargs.get('key', None)
     
-    for i in range(start, min(end, len(sequence))):
+    for i in range(start, min(end, _seq_length(sequence))):
         element = sequence[i]
         test_val = key(element) if key else element
         if not predicate(test_val):
@@ -239,7 +311,7 @@ def count(item, sequence, **kwargs):
       :end - end index
     """
     start = kwargs.get('start', 0)
-    end = kwargs.get('end', len(sequence))
+    end = kwargs.get('end', _seq_length(sequence))
     key = kwargs.get('key', None)
     test = kwargs.get('test', lambda x, y: x == y)
     
@@ -261,7 +333,7 @@ def count_if(predicate, sequence, **kwargs):
       :end - end index
     """
     start = kwargs.get('start', 0)
-    end = kwargs.get('end', len(sequence))
+    end = kwargs.get('end', _seq_length(sequence))
     key = kwargs.get('key', None)
     
     iterator = iterate(sequence, start=start, end=end, key=key)
@@ -276,14 +348,25 @@ def count_if(predicate, sequence, **kwargs):
 @_registry.cl_function('COUNT-IF-NOT')
 def count_if_not(predicate, sequence, **kwargs):
     """Count items not satisfying predicate."""
+    # Convert lispCons to list
+    if hasattr(sequence, 'car') and hasattr(sequence, 'cdr'):
+        sequence = _seq_to_list(sequence)
     return sum(1 for x in sequence if not predicate(x))
 
 
 @_registry.cl_function('SEARCH')
 def search(sequence1, sequence2, **kwargs):
     """Search for sequence1 in sequence2."""
-    for i in range(len(sequence2) - len(sequence1) + 1):
-        if sequence2[i:i+len(sequence1)] == sequence1:
+    # Convert lispCons to lists
+    if hasattr(sequence1, 'car') and hasattr(sequence1, 'cdr'):
+        sequence1 = _seq_to_list(sequence1)
+    if hasattr(sequence2, 'car') and hasattr(sequence2, 'cdr'):
+        sequence2 = _seq_to_list(sequence2)
+    
+    len1 = _seq_length(sequence1)
+    len2 = _seq_length(sequence2)
+    for i in range(len2 - len1 + 1):
+        if sequence2[i:i+len1] == sequence1:
             return i
     return None
 
@@ -291,17 +374,29 @@ def search(sequence1, sequence2, **kwargs):
 @_registry.cl_function('MISMATCH')
 def mismatch(sequence1, sequence2, **kwargs):
     """Find first mismatch between sequences."""
+    # Convert lispCons to lists
+    if hasattr(sequence1, 'car') and hasattr(sequence1, 'cdr'):
+        sequence1 = _seq_to_list(sequence1)
+    if hasattr(sequence2, 'car') and hasattr(sequence2, 'cdr'):
+        sequence2 = _seq_to_list(sequence2)
+    
     for i, (x, y) in enumerate(zip(sequence1, sequence2)):
         if x != y:
             return i
-    if len(sequence1) != len(sequence2):
-        return min(len(sequence1), len(sequence2))
+    len1 = _seq_length(sequence1)
+    len2 = _seq_length(sequence2)
+    if len1 != len2:
+        return min(len1, len2)
     return None
 
 
 @_registry.cl_function('MEMBER')
 def member(item, list_seq, test=None, test_not=None, key=None):
     """Find member in list."""
+    # Convert lispCons to list
+    if hasattr(list_seq, 'car') and hasattr(list_seq, 'cdr'):
+        list_seq = _seq_to_list(list_seq)
+    
     for x in list_seq:
         if (key(x) if key else x) == item:
             return list_seq[list_seq.index(x):]
@@ -311,6 +406,10 @@ def member(item, list_seq, test=None, test_not=None, key=None):
 @_registry.cl_function('MEMBER-IF')
 def member_if(predicate, list_seq, key=None):
     """Find member satisfying predicate."""
+    # Convert lispCons to list
+    if hasattr(list_seq, 'car') and hasattr(list_seq, 'cdr'):
+        list_seq = _seq_to_list(list_seq)
+    
     for x in list_seq:
         if predicate(key(x) if key else x):
             return list_seq[list_seq.index(x):]
@@ -320,6 +419,10 @@ def member_if(predicate, list_seq, key=None):
 @_registry.cl_function('MEMBER-IF-NOT')
 def member_if_not(predicate, list_seq, key=None):
     """Find member not satisfying predicate."""
+    # Convert lispCons to list
+    if hasattr(list_seq, 'car') and hasattr(list_seq, 'cdr'):
+        list_seq = _seq_to_list(list_seq)
+    
     for x in list_seq:
         if not predicate(key(x) if key else x):
             return list_seq[list_seq.index(x):]
