@@ -398,6 +398,16 @@ def eval(form, env=None):
                 return eval_dolist(form, env)
             elif operator.name == 'DOTIMES':
                 return eval_dotimes(form, env)
+            elif operator.name == 'IN-PACKAGE':
+                # IN-PACKAGE is a macro in Common Lisp - it doesn't evaluate its argument
+                # (in-package #:cl-test) -> call in_package with symbol CL-TEST
+                args = cdr(form)
+                if args is None or args == lisptype.NIL:
+                    raise lisptype.LispError("IN-PACKAGE requires a package designator")
+                name_arg = car(args)
+                # Don't evaluate - pass the symbol/keyword directly
+                from .utilities_symbols import in_package
+                return in_package(name_arg)
         
         # Macro handling: if operator names a macro function, expand first
         if isinstance(operator, lisptype.LispSymbol):

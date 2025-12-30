@@ -12,19 +12,31 @@ fclpy is a Python implementation of Common Lisp. The goal is to achieve ANSI Com
 
 ### Completed
 - ✅ **FLET/LABELS** - Local function binding special forms implemented
-- ✅ **IN-PACKAGE fix** - Now properly updates `*PACKAGE*` environment variable
+- ✅ **IN-PACKAGE special form** - Now handles uninterned symbols (`#:cl-test` syntax)
 - ✅ **Convenience API** - Added `eval_string`, `get_environment`, `setup_environment` to lispfunc
-- ✅ **gclload1.lsp loads** - RT (regression test) package infrastructure works
+- ✅ **gclload1.lsp loads** - RT (regression test) package infrastructure works (takes ~70s)
 
 ### ANSI Test Suite Status
 - `gclload1.lsp` - ✅ Loads cleanly (RT package, auxiliary functions, test infrastructure)
-- `gclload2.lsp` - ⚠️ Partially working (test definitions load but some issues)
+- `gclload2.lsp` - ⚠️ Partially working - IN-PACKAGE and first LOAD work, then "Not a function: NAME" errors
 - `init.lsp` - ❌ Blocked by missing pathname operations and `string-equal` with `:test` keyword
 
+### Current Issue (Dec 31, 2025 - Session)
+**Problem**: When loading test files, get "Not a function: NAME" errors.
+
+**Root Cause Investigation**:
+- DEFSTRUCT accessor functions (NAME, PEND, etc.) ARE defined in the environment
+- Functions are found when looking up CL-USER or RT package symbols
+- Issue: Symbol lookup during evaluation may be using wrong package symbols
+
+**Fix Applied**:
+- Made `IN-PACKAGE` a special form in `evaluation_core.py` that doesn't evaluate its argument
+- This allows `(in-package #:cl-test)` with uninterned symbols to work correctly
+
 ### Next Steps
-1. Fix `string-equal` to accept keyword arguments
-2. Implement missing pathname operations for init.lsp
-3. Get gclload2.lsp loading more test files
+1. Debug symbol resolution for DEFSTRUCT accessors across packages
+2. Ensure CL-TEST inherits RT functions properly (DEFTEST macro, entry accessors)
+3. Get gclload2.lsp loading all test definition files
 4. Run actual ANSI tests with `(rt:do-tests)`
 
 ---
