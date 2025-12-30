@@ -24,6 +24,11 @@
 - ✅ Added defensive to_int() conversions in AdjustableVector.__init__
 - ✅ Added to_int() helpers in sequences_higher.py for MAKE-ARRAY and ADJUST-ARRAY
 - ✅ Eliminated all "can't multiply sequence by non-int of type 'list'" errors
+- ✅ Added _seq_length() and _seq_to_list() helpers for lispCons handling
+- ✅ Fixed REMOVE-IF, REMOVE, REMOVE-IF-NOT, DELETE-* to handle lispCons
+- ✅ Fixed FIND, POSITION, COUNT, SEARCH, MISMATCH to handle lispCons
+- ✅ Fixed REDUCE to accept full Common Lisp parameter list
+- ✅ Added proper FUNCTION special form evaluation to look up functions
 - ✅ All 1152 tests still passing
 
 ### Previous Progress (Dec 30, 2025 - Session 3)
