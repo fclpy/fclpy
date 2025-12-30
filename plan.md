@@ -4,7 +4,28 @@
 
 fclpy is a Python implementation of Common Lisp. The goal is to achieve ANSI Common Lisp compliance.
 
-**Current Status**: 100% coverage of target ANSI symbols (347/347), 1152+ tests passing.
+**Current Status**: 100% coverage of target ANSI symbols (347/347), 1159 tests passing.
+
+---
+
+## Recent Progress (Dec 31, 2025)
+
+### Completed
+- ✅ **FLET/LABELS** - Local function binding special forms implemented
+- ✅ **IN-PACKAGE fix** - Now properly updates `*PACKAGE*` environment variable
+- ✅ **Convenience API** - Added `eval_string`, `get_environment`, `setup_environment` to lispfunc
+- ✅ **gclload1.lsp loads** - RT (regression test) package infrastructure works
+
+### ANSI Test Suite Status
+- `gclload1.lsp` - ✅ Loads cleanly (RT package, auxiliary functions, test infrastructure)
+- `gclload2.lsp` - ⚠️ Partially working (test definitions load but some issues)
+- `init.lsp` - ❌ Blocked by missing pathname operations and `string-equal` with `:test` keyword
+
+### Next Steps
+1. Fix `string-equal` to accept keyword arguments
+2. Implement missing pathname operations for init.lsp
+3. Get gclload2.lsp loading more test files
+4. Run actual ANSI tests with `(rt:do-tests)`
 
 ---
 
