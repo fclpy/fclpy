@@ -15,8 +15,23 @@ class AdjustableVector:
             initial_element: Element to fill with (default None)
             fill_pointer: How many elements are actually in use (default capacity)
         """
+        # Convert capacity to int (might come from lispCons or other types)
+        if hasattr(capacity, '__iter__') and not isinstance(capacity, (str, bytes)):
+            # If it's a list/tuple, assume single-dimension
+            capacity = int(capacity[0]) if capacity else 0
+        else:
+            capacity = int(capacity) if capacity else 0
+        
         self.data = [initial_element] * capacity
         self.capacity = capacity
+        
+        # Convert fill_pointer similarly
+        if fill_pointer is not None:
+            if hasattr(fill_pointer, '__iter__') and not isinstance(fill_pointer, (str, bytes)):
+                fill_pointer = int(fill_pointer[0]) if fill_pointer else 0
+            else:
+                fill_pointer = int(fill_pointer)
+        
         self.fill_pointer = fill_pointer if fill_pointer is not None else capacity
         self.initial_element = initial_element
     
@@ -93,7 +108,17 @@ class Array:
         if isinstance(dimensions, int):
             dimensions = (dimensions,)
         
-        self.dimensions = tuple(dimensions) if isinstance(dimensions, (list, tuple)) else (dimensions,)
+        # Ensure all dimensions are integers
+        def to_int(val):
+            if isinstance(val, int):
+                return val
+            if isinstance(val, float):
+                return int(val)
+            if isinstance(val, lisptype.lispCons):
+                return to_int(val.car)
+            return int(val)
+        
+        self.dimensions = tuple(to_int(d) for d in dimensions) if isinstance(dimensions, (list, tuple)) else (to_int(dimensions),)
         self.rank = len(self.dimensions)
         
         # Calculate total size
@@ -176,12 +201,23 @@ def make_array(dimensions, initial_element=None, adjustable=False, fill_pointer=
     Returns:
         Vector (list), AdjustableVector, or Array
     """
+    def to_int(val):
+        """Convert a value to int, handling various Lisp types."""
+        if isinstance(val, int):
+            return val
+        if isinstance(val, float):
+            return int(val)
+        if isinstance(val, lisptype.lispCons):
+            # If it's a single-element list, extract the value
+            return to_int(val.car)
+        return int(val)
+    
     # Convert Lisp list to Python list if needed
     if isinstance(dimensions, lisptype.lispCons):
         dim_list = []
         current = dimensions
         while isinstance(current, lisptype.lispCons):
-            dim_list.append(current.car)
+            dim_list.append(to_int(current.car))
             current = current.cdr
         dimensions = dim_list
     
@@ -197,6 +233,8 @@ def make_array(dimensions, initial_element=None, adjustable=False, fill_pointer=
     
     # Handle multi-dimensional arrays
     if isinstance(dimensions, (list, tuple)):
+        # Ensure all dimensions are integers
+        dimensions = [to_int(d) for d in dimensions]
         # Single element list is treated as 1D array
         if len(dimensions) == 1:
             dim = dimensions[0]
@@ -207,6 +245,9 @@ def make_array(dimensions, initial_element=None, adjustable=False, fill_pointer=
             else:
                 return [initial_element] * dim
         return Array(dimensions, initial_element=initial_element)
+    
+    # Fallback
+    return [initial_element]
     
     # Fallback
     return [initial_element]

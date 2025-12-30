@@ -362,12 +362,20 @@ def elt(sequence, index):
 @_registry.cl_function('MAKE-LIST')
 def make_list(size, initial_element=None):
     """Make list of given size."""
+    # Ensure size is an integer
+    if isinstance(size, lisptype.lispCons):
+        size = size.car
+    size = int(size)
     return [initial_element] * size
 
 
 @_registry.cl_function('MAKE-SEQUENCE')
 def make_sequence(sequence_type, size, **kwargs):
     """Create a sequence of the specified type and size."""
+    # Ensure size is an integer
+    if isinstance(size, lisptype.lispCons):
+        size = size.car
+    size = int(size)
     initial_element = kwargs.get('initial_element', None)
     if sequence_type == 'list' or sequence_type == list:
         return [initial_element] * size

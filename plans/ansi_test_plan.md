@@ -18,7 +18,15 @@
 13. **Type specifier symbols**: NUMBER, STREAM, etc. available as self-evaluating symbols
 14. **Array creation**: MAKE-ARRAY handles lispCons dimension lists
 
-### Recent Progress (Dec 30, 2025 - Session 3)
+### Recent Progress (Dec 30, 2025 - Session 4)
+- ✅ Fixed #. read-time evaluation to actually evaluate at read time
+- ✅ Fixed AdjustableVector creation in _read_vector (was passing list as capacity)
+- ✅ Added defensive to_int() conversions in AdjustableVector.__init__
+- ✅ Added to_int() helpers in sequences_higher.py for MAKE-ARRAY and ADJUST-ARRAY
+- ✅ Eliminated all "can't multiply sequence by non-int of type 'list'" errors
+- ✅ All 1152 tests still passing
+
+### Previous Progress (Dec 30, 2025 - Session 3)
 - ✅ Fixed keyword argument handling in evaluator (don't convert kwargs for *args functions)
 - ✅ Moved function symbol registration from CL-USER to COMMON-LISP package
 - ✅ Added export_symbol calls for all registered functions
@@ -194,8 +202,9 @@ After all fixes:
 #### Task 5.2: 🔲 Implement #* reader macro (bit-vectors)  
 - `#*101` → bit vector (partial support exists)
 
-#### Task 5.3: 🔲 Implement #. reader macro (read-time eval)
+#### Task 5.3: ✅ Implement #. reader macro (read-time eval)
 - `#.(+ 1 2)` → `3` at read time
+- Now actually evaluates expressions using eval() at read time
 
 #### Task 5.4: ✅ Implement D exponent marker for floats
 - `1.5D0` → double-float 1.5

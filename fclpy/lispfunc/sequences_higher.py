@@ -306,13 +306,19 @@ def pushnew(item, place, **kwargs):
 @_registry.cl_function('MAKE-ARRAY')
 def make_array(dimensions, **kwargs):
     """Create array."""
+    # Helper to convert dimensions to int
+    def to_int(val):
+        if hasattr(val, '__iter__') and not isinstance(val, (str, bytes)):
+            return int(val[0]) if val else 0
+        return int(val) if val else 0
+    
     if isinstance(dimensions, int):
         return [None] * dimensions
     # Multi-dimensional array - for now, nested lists
     def make_nested(dims):
         if len(dims) == 1:
-            return [None] * dims[0]
-        return [make_nested(dims[1:]) for _ in range(dims[0])]
+            return [None] * to_int(dims[0])
+        return [make_nested(dims[1:]) for _ in range(to_int(dims[0]))]
     return make_nested(dimensions)
 
 
@@ -370,10 +376,20 @@ def array_dimension(array, axis_number):
 @_registry.cl_function('ADJUST-ARRAY')
 def adjust_array(array, new_dimensions, **kwargs):
     """Adjust array to new dimensions."""
+    # Helper to convert dimensions to int
+    def to_int(val):
+        if hasattr(val, '__iter__') and not isinstance(val, (str, bytes)):
+            return int(val[0]) if val else 0
+        return int(val) if val else 0
+    
     # Simple implementation - create new array with new dimensions
     # This is a simplified version
     if isinstance(new_dimensions, int):
         return [None] * new_dimensions
+    elif hasattr(new_dimensions, '__iter__') and not isinstance(new_dimensions, (str, bytes)):
+        # It's a list - extract first dimension
+        dim = to_int(new_dimensions[0] if len(new_dimensions) > 0 else 0)
+        return [None] * dim
     # For multi-dimensional arrays, delegate to make_array
     return make_array(new_dimensions, **kwargs)
 

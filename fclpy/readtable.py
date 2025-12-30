@@ -436,9 +436,15 @@ class Readtable:
         elif sub_char == '.':
             # Read-time evaluation: #.(form)
             expr = self._read_item(stream)
-            # In a full implementation, this would evaluate at read time
-            # For now, just return the form as-is
-            return expr
+            # Actually evaluate at read time
+            import fclpy.state as state
+            from fclpy.lispfunc.evaluation_core import eval
+            env = state.current_environment
+            if env is not None:
+                return eval(expr, env)
+            else:
+                # Fall back to returning the form if no environment
+                return expr
         elif sub_char.upper() == 'P':
             # Pathname literal: #P"path" or #p"path"
             return self._read_pathname_literal(stream)
@@ -573,7 +579,11 @@ class Readtable:
                 if item is not None:
                     result.append(item)
         
-        return AdjustableVector(result)
+        # Create an AdjustableVector with the right capacity and fill it
+        vec = AdjustableVector(capacity=len(result), fill_pointer=len(result))
+        for i, elem in enumerate(result):
+            vec.data[i] = elem
+        return vec
     
     def _check_feature(self, feature):
         """Check if a feature expression is satisfied.
