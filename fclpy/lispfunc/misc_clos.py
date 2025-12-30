@@ -141,8 +141,69 @@ def slot_missing(class_obj, instance, slot_name, operation, *args):
 # --- Method operations ---
 @_registry.cl_function('FIND-METHOD')
 def find_method(generic_function, qualifiers, specializers, errorp=True):
-    """Find method in generic function."""
-    raise lisptype.LispNotImplementedError("FIND-METHOD")
+    """Find method in generic function.
+    
+    Args:
+        generic_function: The generic function to search in
+        qualifiers: Method qualifiers (currently ignored in our simplified implementation)
+        specializers: List of class specializers to match
+        errorp: If true, signal error if not found (default true)
+    
+    Returns:
+        The method object, or NIL if not found and errorp is false
+    """
+    from fclpy.lispfunc.core import _consp_internal, car, cdr
+    import fclpy.classes as classes
+    
+    # Convert specializers to a list
+    spec_list = []
+    current = specializers
+    while _consp_internal(current):
+        spec_list.append(car(current))
+        current = cdr(current)
+    
+    # Check if generic_function has our GenericFunction type
+    # (from evaluation_special_forms.eval_defgeneric)
+    if hasattr(generic_function, 'methods') and hasattr(generic_function, 'find_applicable_method'):
+        # Search through methods
+        for method_specializers, method_fn in generic_function.methods:
+            # Check if specializers match
+            if len(method_specializers) == len(spec_list):
+                match = True
+                for i, (spec, target) in enumerate(zip(method_specializers, spec_list)):
+                    if spec is None:
+                        # None matches any type - check if target is T or equivalent
+                        if isinstance(target, lisptype.LispSymbol) and target.name == 'T':
+                            continue
+                        elif isinstance(target, classes.LispClass) and target.name.name == 'T':
+                            continue
+                    # Check if specs match
+                    elif isinstance(spec, lisptype.LispSymbol) and isinstance(target, classes.LispClass):
+                        if spec.name != target.name.name:
+                            match = False
+                            break
+                    elif isinstance(spec, lisptype.LispSymbol) and isinstance(target, lisptype.LispSymbol):
+                        if spec.name != target.name:
+                            match = False
+                            break
+                    elif spec != target:
+                        match = False
+                        break
+                
+                if match:
+                    # Return a method-like object
+                    class MethodWrapper:
+                        def __init__(self, fn, specs):
+                            self.function = fn
+                            self.specializers = specs
+                        def __repr__(self):
+                            return f"#<METHOD {generic_function.name if hasattr(generic_function, 'name') else '?'}>"
+                    return MethodWrapper(method_fn, method_specializers)
+    
+    # Not found
+    if errorp is True or errorp is lisptype.T:
+        raise lisptype.LispError(f"No method found for specializers: {specializers}")
+    return lisptype.NIL
 
 
 @_registry.cl_function('ADD-METHOD')

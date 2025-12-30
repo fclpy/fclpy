@@ -58,31 +58,45 @@ def get_current_package():
 
 @_registry.cl_function('IN-PACKAGE')
 def in_package(name):
-    """Set current package and return it."""
-    if isinstance(name, lisptype.Package):
-        state.current_package = name
-        return name
-    # Handle keywords  
-    if isinstance(name, lisptype.lispKeyword):
-        pkg_name = name.name
-    elif isinstance(name, lisptype.LispSymbol):
-        pkg_name = name.name
-        if pkg_name.startswith(':'):
-            pkg_name = pkg_name[1:]
-    else:
-        pkg_name = str(name)
-        if pkg_name.startswith(':'):
-            pkg_name = pkg_name[1:]
+    """Set current package and return it.
     
-    pkg = lisptype.find_package(pkg_name)
-    if pkg is None:
-        # Create package - by default new packages USE COMMON-LISP
-        pkg = lisptype.make_package(pkg_name)
-        # Add COMMON-LISP to use list by default
-        cl_pkg = lisptype.COMMON_LISP_PACKAGE
-        if cl_pkg and cl_pkg not in pkg.use_packages:
-            pkg.use_packages.append(cl_pkg)
+    This updates both state.current_package and the *PACKAGE* variable
+    in the current environment for proper dynamic binding behavior.
+    """
+    if isinstance(name, lisptype.Package):
+        pkg = name
+    else:
+        # Handle keywords  
+        if isinstance(name, lisptype.lispKeyword):
+            pkg_name = name.name
+        elif isinstance(name, lisptype.LispSymbol):
+            pkg_name = name.name
+            if pkg_name.startswith(':'):
+                pkg_name = pkg_name[1:]
+        else:
+            pkg_name = str(name)
+            if pkg_name.startswith(':'):
+                pkg_name = pkg_name[1:]
+        
+        pkg = lisptype.find_package(pkg_name)
+        if pkg is None:
+            # Create package - by default new packages USE COMMON-LISP
+            pkg = lisptype.make_package(pkg_name)
+            # Add COMMON-LISP to use list by default
+            cl_pkg = lisptype.COMMON_LISP_PACKAGE
+            if cl_pkg and cl_pkg not in pkg.use_packages:
+                pkg.use_packages.append(cl_pkg)
+    
+    # Update state.current_package
     state.current_package = pkg
+    
+    # Also update *PACKAGE* variable in the current environment if it exists
+    env = getattr(state, 'current_environment', None)
+    if env is not None:
+        package_sym = lisptype.COMMON_LISP_PACKAGE.intern_symbol('*PACKAGE*')
+        # Set the variable directly
+        env.set_variable(package_sym, pkg)
+    
     return pkg
 
 

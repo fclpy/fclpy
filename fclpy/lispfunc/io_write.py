@@ -1343,25 +1343,49 @@ def file_write_date(pathspec):
 def compile_file(input_file, output_file=None, **kwargs):
     """Compile file.
     
-    In FCLpy, we don't actually compile - we just return success.
-    The file will be interpreted when loaded.
+    In FCLpy, we don't actually compile to bytecode - we copy the source file
+    to a .fasl file which will be interpreted when loaded. This allows FCLpy
+    to work with Common Lisp build systems that expect compile-and-load workflows.
     
     Returns: MultipleValues(output-truename, warnings-p, failure-p)
-      - output-truename: The file that would be loaded (same as input in FCLpy)
+      - output-truename: The pathname of the output file
       - warnings-p: NIL (no warnings)
       - failure-p: NIL (no failure)
     """
+    import os
+    import shutil
     from fclpy.lispfunc.pathnames import Pathname
     
-    # Convert to pathname if needed
+    # Get the input path
     if isinstance(input_file, Pathname):
-        output_path = input_file
+        input_path = input_file.original
     else:
-        output_path = Pathname(str(input_file))
+        input_path = str(input_file)
     
-    # Return multiple values: output-truename, warnings-p, failure-p
-    # In FCLpy, we "compile" by returning the source file path with no failures
-    return lisptype.MultipleValues(output_path, lisptype.NIL, lisptype.NIL)
+    # Determine output path
+    if output_file is not None:
+        if isinstance(output_file, Pathname):
+            out_path = output_file.original
+        else:
+            out_path = str(output_file)
+    else:
+        # Default: replace extension with .fasl
+        base = os.path.splitext(input_path)[0]
+        out_path = base + ".fasl"
+    
+    # "Compile" by copying the source file to the output path
+    # This allows LOAD to find and interpret the .fasl file
+    try:
+        if os.path.exists(input_path):
+            shutil.copy2(input_path, out_path)
+            output_pathname = Pathname(out_path)
+            return lisptype.MultipleValues(output_pathname, lisptype.NIL, lisptype.NIL)
+        else:
+            # File doesn't exist - return failure
+            return lisptype.MultipleValues(lisptype.NIL, lisptype.NIL, lisptype.T)
+    except Exception as e:
+        # Compilation failed
+        return lisptype.MultipleValues(lisptype.NIL, lisptype.NIL, lisptype.T)
 
 
 @_registry.cl_function('COMPILE-FILE-PATHNAME')

@@ -169,10 +169,40 @@ def use_value(value):
 
 
 # --- Method combination and condition errors ---
+# NOTE: DEFINE-METHOD-COMBINATION is implemented as a special form in evaluation_core.py
+# This function stub is kept for backward compatibility if called directly
 @_registry.cl_function('DEFINE-METHOD-COMBINATION')
 def define_method_combination(name, *args):
-    """Define method combination."""
-    return name
+    """Define method combination.
+    
+    In FCLpy, we create a simple method combination object that can be
+    used as a value. Full method combination semantics are not implemented.
+    
+    NOTE: This should typically be called as a special form that doesn't evaluate
+    its name argument. This function exists for direct invocation.
+    """
+    import fclpy.state as state
+    import fclpy.lisptype as lt
+    
+    # Create a simple method combination object
+    class MethodCombination:
+        def __init__(self, name):
+            self.name = name
+        def __repr__(self):
+            return f"#<METHOD-COMBINATION {self.name}>"
+    
+    mc = MethodCombination(name if isinstance(name, str) else name.name if hasattr(name, 'name') else str(name))
+    
+    # Bind to global environment if available
+    if hasattr(state, 'current_environment') and state.current_environment is not None:
+        env = state.current_environment
+        # Walk to global environment
+        while env.parent is not None:
+            env = env.parent
+        if isinstance(name, lt.LispSymbol):
+            env.add_variable(name, mc)
+    
+    return mc
 
 
 @_registry.cl_function('METHOD-COMBINATION-ERROR')

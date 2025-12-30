@@ -566,3 +566,258 @@ def call_next_method(*args) -> Any:
         return method.function(*args) if args else method.function()
     finally:
         call_generic_function._next_methods = old_next_methods
+
+
+# ==============================================================================
+# Built-in Type Classes
+# ==============================================================================
+# Register the standard Common Lisp built-in type classes.
+# These are used for CLOS dispatch and FIND-CLASS.
+
+def _make_builtin_class(name: str) -> LispClass:
+    """Create and register a built-in type class."""
+    sym = LispSymbol(name)
+    cls = LispClass(name=sym)
+    return register_class(cls)
+
+
+def _init_builtin_classes():
+    """Initialize all built-in type classes.
+    
+    This is called lazily on first use to avoid circular import issues.
+    """
+    global _builtin_classes_initialized
+    if _builtin_classes_initialized:
+        return
+    
+    # Root class
+    _make_builtin_class('T')
+    
+    # Numeric types
+    _make_builtin_class('NUMBER')
+    _make_builtin_class('REAL')
+    _make_builtin_class('RATIONAL')
+    _make_builtin_class('INTEGER')
+    _make_builtin_class('FIXNUM')
+    _make_builtin_class('BIGNUM')
+    _make_builtin_class('RATIO')
+    _make_builtin_class('FLOAT')
+    _make_builtin_class('SHORT-FLOAT')
+    _make_builtin_class('SINGLE-FLOAT')
+    _make_builtin_class('DOUBLE-FLOAT')
+    _make_builtin_class('LONG-FLOAT')
+    _make_builtin_class('COMPLEX')
+    
+    # Sequence types
+    _make_builtin_class('SEQUENCE')
+    _make_builtin_class('LIST')
+    _make_builtin_class('CONS')
+    _make_builtin_class('NULL')
+    _make_builtin_class('VECTOR')
+    _make_builtin_class('STRING')
+    _make_builtin_class('SIMPLE-STRING')
+    _make_builtin_class('BASE-STRING')
+    _make_builtin_class('SIMPLE-BASE-STRING')
+    _make_builtin_class('BIT-VECTOR')
+    _make_builtin_class('SIMPLE-BIT-VECTOR')
+    _make_builtin_class('SIMPLE-VECTOR')
+    _make_builtin_class('ARRAY')
+    _make_builtin_class('SIMPLE-ARRAY')
+    
+    # Character type
+    _make_builtin_class('CHARACTER')
+    _make_builtin_class('BASE-CHAR')
+    _make_builtin_class('STANDARD-CHAR')
+    _make_builtin_class('EXTENDED-CHAR')
+    
+    # Symbol types
+    _make_builtin_class('SYMBOL')
+    _make_builtin_class('KEYWORD')
+    
+    # Function types
+    _make_builtin_class('FUNCTION')
+    _make_builtin_class('COMPILED-FUNCTION')
+    _make_builtin_class('GENERIC-FUNCTION')
+    _make_builtin_class('STANDARD-GENERIC-FUNCTION')
+    _make_builtin_class('METHOD')
+    _make_builtin_class('STANDARD-METHOD')
+    
+    # Class types
+    _make_builtin_class('CLASS')
+    _make_builtin_class('STANDARD-CLASS')
+    _make_builtin_class('BUILT-IN-CLASS')
+    _make_builtin_class('STRUCTURE-CLASS')
+    _make_builtin_class('STANDARD-OBJECT')
+    _make_builtin_class('STRUCTURE-OBJECT')
+    
+    # Stream types
+    _make_builtin_class('STREAM')
+    _make_builtin_class('BROADCAST-STREAM')
+    _make_builtin_class('CONCATENATED-STREAM')
+    _make_builtin_class('ECHO-STREAM')
+    _make_builtin_class('FILE-STREAM')
+    _make_builtin_class('STRING-STREAM')
+    _make_builtin_class('SYNONYM-STREAM')
+    _make_builtin_class('TWO-WAY-STREAM')
+    
+    # Hash table
+    _make_builtin_class('HASH-TABLE')
+    
+    # Pathname types
+    _make_builtin_class('PATHNAME')
+    _make_builtin_class('LOGICAL-PATHNAME')
+    
+    # Package
+    _make_builtin_class('PACKAGE')
+    
+    # Readtable
+    _make_builtin_class('READTABLE')
+    
+    # Random state
+    _make_builtin_class('RANDOM-STATE')
+    
+    # Condition types
+    _make_builtin_class('CONDITION')
+    _make_builtin_class('SERIOUS-CONDITION')
+    _make_builtin_class('ERROR')
+    _make_builtin_class('SIMPLE-ERROR')
+    _make_builtin_class('SIMPLE-CONDITION')
+    _make_builtin_class('WARNING')
+    _make_builtin_class('STYLE-WARNING')
+    _make_builtin_class('SIMPLE-WARNING')
+    _make_builtin_class('TYPE-ERROR')
+    _make_builtin_class('SIMPLE-TYPE-ERROR')
+    _make_builtin_class('CELL-ERROR')
+    _make_builtin_class('UNBOUND-VARIABLE')
+    _make_builtin_class('UNDEFINED-FUNCTION')
+    _make_builtin_class('UNBOUND-SLOT')
+    _make_builtin_class('CONTROL-ERROR')
+    _make_builtin_class('PROGRAM-ERROR')
+    _make_builtin_class('PACKAGE-ERROR')
+    _make_builtin_class('STREAM-ERROR')
+    _make_builtin_class('READER-ERROR')
+    _make_builtin_class('END-OF-FILE')
+    _make_builtin_class('FILE-ERROR')
+    _make_builtin_class('PARSE-ERROR')
+    _make_builtin_class('PRINT-NOT-READABLE')
+    _make_builtin_class('STORAGE-CONDITION')
+    _make_builtin_class('ARITHMETIC-ERROR')
+    _make_builtin_class('DIVISION-BY-ZERO')
+    _make_builtin_class('FLOATING-POINT-OVERFLOW')
+    _make_builtin_class('FLOATING-POINT-UNDERFLOW')
+    _make_builtin_class('FLOATING-POINT-INEXACT')
+    _make_builtin_class('FLOATING-POINT-INVALID-OPERATION')
+    
+    # Restart
+    _make_builtin_class('RESTART')
+    
+    # Other
+    _make_builtin_class('ATOM')
+    _make_builtin_class('NIL')
+    
+    _builtin_classes_initialized = True
+
+
+_builtin_classes_initialized = False
+
+# Wrap find_class to ensure built-in classes are initialized
+_original_find_class = find_class
+
+def find_class(name: str) -> Optional[LispClass]:
+    """Find a class by name, initializing built-in classes if needed."""
+    _init_builtin_classes()
+    return _original_find_class(name)
+
+
+# =============================================================================
+# Built-in type classes
+# =============================================================================
+# Register built-in Common Lisp type classes
+# These are needed for CLOS method dispatch and FIND-CLASS
+
+def _init_builtin_classes():
+    """Initialize built-in type classes."""
+    from fclpy.lisptype import COMMON_LISP_PACKAGE
+    
+    # Create a list of built-in type names
+    # These correspond to CL type specifiers that can be used as specializers
+    builtin_types = [
+        'T',  # The supertype of all types
+        'NIL',
+        'NULL',
+        'ATOM',
+        'SYMBOL',
+        'KEYWORD',
+        'CONS',
+        'LIST',
+        'SEQUENCE',
+        'ARRAY',
+        'VECTOR',
+        'STRING',
+        'BIT-VECTOR',
+        'SIMPLE-ARRAY',
+        'SIMPLE-VECTOR',
+        'SIMPLE-STRING',
+        'SIMPLE-BIT-VECTOR',
+        'NUMBER',
+        'REAL',
+        'RATIONAL',
+        'INTEGER',
+        'RATIO',
+        'FLOAT',
+        'SHORT-FLOAT',
+        'SINGLE-FLOAT',
+        'DOUBLE-FLOAT',
+        'LONG-FLOAT',
+        'COMPLEX',
+        'CHARACTER',
+        'BASE-CHAR',
+        'STANDARD-CHAR',
+        'EXTENDED-CHAR',
+        'FUNCTION',
+        'COMPILED-FUNCTION',
+        'GENERIC-FUNCTION',
+        'STANDARD-GENERIC-FUNCTION',
+        'METHOD',
+        'STANDARD-METHOD',
+        'CLASS',
+        'STANDARD-CLASS',
+        'BUILT-IN-CLASS',
+        'STRUCTURE-CLASS',
+        'STRUCTURE-OBJECT',
+        'STANDARD-OBJECT',
+        'HASH-TABLE',
+        'PACKAGE',
+        'PATHNAME',
+        'LOGICAL-PATHNAME',
+        'STREAM',
+        'BROADCAST-STREAM',
+        'CONCATENATED-STREAM',
+        'ECHO-STREAM',
+        'FILE-STREAM',
+        'STRING-STREAM',
+        'SYNONYM-STREAM',
+        'TWO-WAY-STREAM',
+        'READTABLE',
+        'RANDOM-STATE',
+        'CONDITION',
+        'RESTART',
+        'METHOD-COMBINATION',
+    ]
+    
+    # First create T as the root class
+    t_sym = COMMON_LISP_PACKAGE.intern_symbol('T')
+    t_class = LispClass(name=t_sym, direct_superclasses=[], direct_slots=[])
+    register_class(t_class)
+    
+    # Create all other built-in type classes with T as superclass
+    for type_name in builtin_types:
+        if type_name == 'T':
+            continue  # Already created
+        sym = COMMON_LISP_PACKAGE.intern_symbol(type_name)
+        cls = LispClass(name=sym, direct_superclasses=[t_class], direct_slots=[])
+        register_class(cls)
+
+
+# Initialize built-in classes when module is loaded
+_init_builtin_classes()

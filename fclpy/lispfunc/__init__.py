@@ -154,5 +154,73 @@ __all__ = [
     'get_universal_time', 'functionp', 'compiled_function_p', 'fboundp',
     
     # Reader macros
-    'get_macro_character', 'set_dispatch_macro_character', 'set_macro_character'
+    'get_macro_character', 'set_dispatch_macro_character', 'set_macro_character',
+    
+    # Convenience API
+    'eval_string', 'get_environment', 'setup_environment',
 ]
+
+
+# ============================================================================
+# Convenience API - what users expect to be able to import from lispfunc
+# ============================================================================
+
+def setup_environment():
+    """Initialize and return the standard Lisp environment.
+    
+    Returns:
+        Environment: The initialized standard environment
+    """
+    import fclpy.lispenv as lispenv
+    lispenv.setup_standard_environment()
+    return lispenv.current_environment
+
+
+def get_environment():
+    """Get the current Lisp environment, initializing if needed.
+    
+    Returns:
+        Environment: The current environment
+    """
+    import fclpy.lispenv as lispenv
+    # Always call setup_standard_environment to ensure the environment
+    # is properly populated. It's idempotent and returns quickly if 
+    # already set up (checks functions_loaded flag).
+    lispenv.setup_standard_environment()
+    return lispenv.current_environment
+
+
+def eval_string(code, env=None):
+    """Parse and evaluate a string of Lisp code.
+    
+    Args:
+        code: A string containing Lisp code
+        env: Optional environment (uses current if None)
+        
+    Returns:
+        The result of evaluating the last expression
+    """
+    import io
+    import fclpy.lispreader as lispreader
+    from fclpy.readtable import get_current_readtable
+    from fclpy.lispfunc.evaluation import eval as lisp_eval
+    
+    if env is None:
+        env = get_environment()
+    
+    string_io = io.StringIO(code)
+    stream = lispreader.LispStream(string_io)
+    readtable = get_current_readtable()
+    reader = lispreader.LispReader(readtable.get_macro_character, stream)
+    
+    result = None
+    while True:
+        try:
+            expr = reader.read_1()
+            if expr is None:  # EOF
+                break
+            result = lisp_eval(expr, env)
+        except EOFError:
+            break
+    
+    return result

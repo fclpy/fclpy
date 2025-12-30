@@ -186,6 +186,15 @@ def setup_standard_environment():
             current_pkg = getattr(state, 'current_package', None) or fclpy.lisptype.COMMON_LISP_USER_PACKAGE
             state.current_environment.add_variable(package_sym, current_pkg)
         
+        # *PRINT-PPRINT-DISPATCH* - the current pretty print dispatch table
+        pprint_dispatch_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*PRINT-PPRINT-DISPATCH*')
+        if state.current_environment.find_variable(pprint_dispatch_sym) is None:
+            # Create a simple pprint dispatch table object
+            class PprintDispatchTable:
+                def __repr__(self):
+                    return "#<PPRINT-DISPATCH-TABLE>"
+            state.current_environment.add_variable(pprint_dispatch_sym, PprintDispatchTable())
+        
         # === Numeric Constants (ANSI CL required) ===
         import math
         

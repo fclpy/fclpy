@@ -190,8 +190,8 @@ def eval(form, env=None):
     from .evaluation_special_forms import (
         eval_if, eval_setq, eval_defun, eval_defmacro, eval_macroexpand_1,
         eval_macro_function, eval_lambda, eval_declare, eval_declaim,
-        eval_defvar, eval_defparameter, eval_defstruct, eval_pop,
-        eval_incf, eval_decf
+        eval_defvar, eval_defparameter, eval_defconstant, eval_defstruct, eval_pop,
+        eval_incf, eval_decf, eval_defgeneric, eval_defmethod, eval_define_method_combination
     )
     from .evaluation_control_flow import (
         eval_block, eval_return_from, eval_catch, eval_throw,
@@ -200,7 +200,8 @@ def eval(form, env=None):
     from .evaluation_loops_conditionals import (
         eval_when, eval_unless, eval_cond, eval_and, eval_or,
         eval_progn, eval_locally, eval_prog1, eval_prog2, eval_let, eval_letstar, eval_quasiquote,
-        eval_loop, eval_eval_when, eval_do, eval_do_star, eval_dolist, eval_dotimes
+        eval_loop, eval_eval_when, eval_do, eval_do_star, eval_dolist, eval_dotimes,
+        eval_flet, eval_labels
     )
     from .evaluation_conditions import (
         eval_signal, eval_error, eval_cerror, eval_warn,
@@ -291,6 +292,10 @@ def eval(form, env=None):
                 return eval_let(form, env)
             elif operator.name == 'LET*':
                 return eval_letstar(form, env)
+            elif operator.name == 'FLET':
+                return eval_flet(form, env)
+            elif operator.name == 'LABELS':
+                return eval_labels(form, env)
             elif operator.name == 'WHEN':
                 return eval_when(form, env)
             elif operator.name == 'UNLESS':
@@ -311,8 +316,16 @@ def eval(form, env=None):
                 return eval_defvar(form, env)
             elif operator.name == 'DEFPARAMETER':
                 return eval_defparameter(form, env)
+            elif operator.name == 'DEFCONSTANT':
+                return eval_defconstant(form, env)
             elif operator.name == 'DEFSTRUCT':
                 return eval_defstruct(form, env)
+            elif operator.name == 'DEFGENERIC':
+                return eval_defgeneric(form, env)
+            elif operator.name == 'DEFMETHOD':
+                return eval_defmethod(form, env)
+            elif operator.name == 'DEFINE-METHOD-COMBINATION':
+                return eval_define_method_combination(form, env)
             elif operator.name == 'LOOP':
                 return eval_loop(form, env)
             elif operator.name == 'POP':

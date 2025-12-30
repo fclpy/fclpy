@@ -346,6 +346,233 @@ def eval_letstar(form, env):
             state.current_package = old_package
 
 
+def eval_flet(form, env):
+    """Evaluate FLET special form - local function bindings.
+    
+    (FLET ((name1 (args1...) body1...) (name2 (args2...) body2...)) body...)
+    
+    FLET establishes local function bindings. The function definitions
+    DO NOT see each other (use LABELS for mutually recursive functions).
+    The body is evaluated in an environment with the local function bindings.
+    """
+    from .evaluation_core import eval
+    
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("FLET requires at least a binding list")
+    
+    bindings_form = car(args)
+    body = cdr(args)
+    
+    # Create new environment for FLET scope
+    flet_env = lisptype.Environment(env)
+    
+    # Process function definitions - create closures in OUTER environment
+    current = bindings_form
+    while _consp_internal(current):
+        binding = car(current)
+        if _consp_internal(binding):
+            func_name = car(binding)
+            func_lambda_list = car(cdr(binding))
+            func_body = cdr(cdr(binding))
+            
+            # Create a lambda-like closure
+            if isinstance(func_name, lisptype.LispSymbol):
+                # Build the function closure
+                closure = make_lambda_closure(func_lambda_list, func_body, env)
+                # Bind the function in the new environment
+                flet_env.add_function(func_name, closure)
+        current = cdr(current)
+    
+    # Evaluate body in environment with local function bindings
+    result = lisptype.NIL
+    current = body
+    while _consp_internal(current):
+        result = eval(car(current), flet_env)
+        current = cdr(current)
+    
+    return result
+
+
+def eval_labels(form, env):
+    """Evaluate LABELS special form - mutually recursive local function bindings.
+    
+    (LABELS ((name1 (args1...) body1...) (name2 (args2...) body2...)) body...)
+    
+    LABELS establishes local function bindings where the functions CAN see
+    each other (for mutual recursion). The body is evaluated in an environment
+    with the local function bindings.
+    """
+    from .evaluation_core import eval
+    
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("LABELS requires at least a binding list")
+    
+    bindings_form = car(args)
+    body = cdr(args)
+    
+    # Create new environment for LABELS scope
+    labels_env = lisptype.Environment(env)
+    
+    # Process function definitions - create closures in the NEW environment
+    # so they can see each other
+    current = bindings_form
+    while _consp_internal(current):
+        binding = car(current)
+        if _consp_internal(binding):
+            func_name = car(binding)
+            func_lambda_list = car(cdr(binding))
+            func_body = cdr(cdr(binding))
+            
+            # Create a lambda-like closure in the labels environment
+            if isinstance(func_name, lisptype.LispSymbol):
+                # Build the function closure - uses labels_env so functions can call each other
+                closure = make_lambda_closure(func_lambda_list, func_body, labels_env)
+                # Bind the function in the new environment
+                labels_env.add_function(func_name, closure)
+        current = cdr(current)
+    
+    # Evaluate body in environment with local function bindings
+    result = lisptype.NIL
+    current = body
+    while _consp_internal(current):
+        result = eval(car(current), labels_env)
+        current = cdr(current)
+    
+    return result
+
+
+def make_lambda_closure(lambda_list, body, env):
+    """Create a closure function from a lambda list and body.
+    
+    This handles parsing the lambda list with &optional, &rest, &key, etc.
+    """
+    from .evaluation_core import eval
+    
+    # Parse the lambda list
+    required_params = []
+    optional_params = []  # (name, default_value)
+    rest_param = None
+    key_params = []  # (keyword, name, default_value)
+    
+    current = lambda_list
+    mode = 'required'
+    
+    while _consp_internal(current):
+        param = car(current)
+        if isinstance(param, lisptype.LispSymbol):
+            param_name = param.name.upper()
+            if param_name == '&OPTIONAL':
+                mode = 'optional'
+            elif param_name == '&REST':
+                mode = 'rest'
+            elif param_name == '&KEY':
+                mode = 'key'
+            elif param_name == '&ALLOW-OTHER-KEYS':
+                pass  # Ignore for now
+            elif param_name == '&BODY':
+                mode = 'rest'  # &body is similar to &rest
+            elif param_name == '&AUX':
+                mode = 'aux'
+            else:
+                if mode == 'required':
+                    required_params.append(param)
+                elif mode == 'optional':
+                    optional_params.append((param, lisptype.NIL))
+                elif mode == 'rest':
+                    rest_param = param
+                    mode = 'after_rest'  # Only one &rest param
+                elif mode == 'key':
+                    key_params.append((lisptype.lispKeyword(param.name), param, lisptype.NIL))
+                elif mode == 'aux':
+                    pass  # &aux params are local bindings, handle later
+        elif _consp_internal(param):
+            # Complex parameter form: (name default) or (name default supplied-p)
+            pname = car(param)
+            pdefault = car(cdr(param)) if _consp_internal(cdr(param)) else lisptype.NIL
+            if mode == 'optional':
+                optional_params.append((pname, pdefault))
+            elif mode == 'key':
+                # Key params can be (name default) or ((:keyword name) default)
+                if _consp_internal(pname):
+                    keyword = car(pname)
+                    actual_name = car(cdr(pname))
+                    key_params.append((keyword, actual_name, pdefault))
+                else:
+                    key_params.append((lisptype.lispKeyword(pname.name), pname, pdefault))
+        current = cdr(current)
+    
+    def closure_function(*args):
+        # Create local environment for this call
+        call_env = lisptype.Environment(env)
+        
+        args_list = list(args)
+        arg_idx = 0
+        
+        # Bind required parameters
+        for param in required_params:
+            if arg_idx < len(args_list):
+                call_env.add_variable(param, args_list[arg_idx])
+                arg_idx += 1
+            else:
+                call_env.add_variable(param, lisptype.NIL)
+        
+        # Bind optional parameters
+        for param, default in optional_params:
+            if arg_idx < len(args_list):
+                call_env.add_variable(param, args_list[arg_idx])
+                arg_idx += 1
+            else:
+                # Evaluate default in closure environment
+                default_val = eval(default, env) if default != lisptype.NIL else lisptype.NIL
+                call_env.add_variable(param, default_val)
+        
+        # Handle keyword arguments
+        remaining_args = args_list[arg_idx:]
+        keyword_values = {}
+        i = 0
+        while i < len(remaining_args):
+            if isinstance(remaining_args[i], lisptype.lispKeyword):
+                if i + 1 < len(remaining_args):
+                    keyword_values[remaining_args[i].name.upper()] = remaining_args[i + 1]
+                    i += 2
+                else:
+                    i += 1
+            else:
+                i += 1
+        
+        for keyword, param, default in key_params:
+            key_name = keyword.name.upper()
+            if key_name in keyword_values:
+                call_env.add_variable(param, keyword_values[key_name])
+            else:
+                # Evaluate default
+                default_val = eval(default, env) if default != lisptype.NIL else lisptype.NIL
+                call_env.add_variable(param, default_val)
+        
+        # Bind rest parameter if present
+        if rest_param:
+            # Collect remaining non-keyword args
+            rest_args = args_list[arg_idx:]
+            # Build a list from rest args
+            rest_list = lisptype.NIL
+            for arg in reversed(rest_args):
+                rest_list = cons(arg, rest_list)
+            call_env.add_variable(rest_param, rest_list)
+        
+        # Evaluate body
+        result = lisptype.NIL
+        current_form = body
+        while _consp_internal(current_form):
+            result = eval(car(current_form), call_env)
+            current_form = cdr(current_form)
+        
+        return result
+    
+    return closure_function
+
+
 def eval_quasiquote(form, env):
     """Evaluate a QUASIQUOTE form by processing UNQUOTE and UNQUOTE-SPLICING.
 
