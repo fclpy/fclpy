@@ -117,6 +117,7 @@ def load_and_evaluate_file(filename, environment=None, verbose=False):
         if verbose:
             import traceback
             traceback.print_exc()
+        return lisptype.NIL
     finally:
         # Restore old values
         if old_truename is not None:
@@ -128,7 +129,7 @@ def load_and_evaluate_file(filename, environment=None, verbose=False):
             environment.set_variable(load_pathname_sym, old_pathname)
         else:
             environment.set_variable(load_pathname_sym, lisptype.NIL)
-        return lisptype.NIL
+        # Don't return here - let the try block's return value propagate
 
 class FclpyREPL:
     """Interactive Read-Eval-Print Loop for FCLPY."""
