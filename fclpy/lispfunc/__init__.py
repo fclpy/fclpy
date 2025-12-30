@@ -81,7 +81,8 @@ def allocate_instance(class_obj, **kwargs):
 
 def aref(array, *subscripts):
     """Access array element."""
-    raise NotImplementedError("AREF")
+    from .vectors import aref as real_aref
+    return real_aref(array, *subscripts)
 
 def svref(simple_vector, index):
     """Access simple vector element."""
