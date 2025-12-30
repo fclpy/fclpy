@@ -69,12 +69,14 @@ def setup_standard_environment():
     try:
         import os
         # *LOAD-TRUENAME* - absolute truename of file being loaded (NIL if not loading)
-        load_truename_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*LOAD-TRUENAME*')
+        load_truename_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*LOAD-TRUENAME*')
+        fclpy.lisptype.COMMON_LISP_PACKAGE.export_symbol(load_truename_sym)
         if state.current_environment.find_variable(load_truename_sym) is None:
             state.current_environment.add_variable(load_truename_sym, fclpy.lisptype.NIL)
         
         # *LOAD-PATHNAME* - pathname of file being loaded (NIL if not loading)
-        load_pathname_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*LOAD-PATHNAME*')
+        load_pathname_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*LOAD-PATHNAME*')
+        fclpy.lisptype.COMMON_LISP_PACKAGE.export_symbol(load_pathname_sym)
         if state.current_environment.find_variable(load_pathname_sym) is None:
             state.current_environment.add_variable(load_pathname_sym, fclpy.lisptype.NIL)
         

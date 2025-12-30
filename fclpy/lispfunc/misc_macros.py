@@ -135,26 +135,51 @@ def load(filespec, verbose=None, print_p=None, if_does_not_exist=None,
     else:
         path_str = str(filespec)
     
-    # If path is relative, resolve it against *DEFAULT-PATHNAME-DEFAULTS*
+    # If path is relative, resolve it against the directory of the currently loading file
+    # (via *LOAD-TRUENAME*), then fall back to *DEFAULT-PATHNAME-DEFAULTS*
     if not os.path.isabs(path_str):
-        # Get *DEFAULT-PATHNAME-DEFAULTS*
-        default_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*DEFAULT-PATHNAME-DEFAULTS*')
-        default_pathname = env.find_variable(default_sym)
+        resolved = False
         
-        if default_pathname and default_pathname is not lisptype.NIL:
-            # Merge with default pathname
-            if isinstance(default_pathname, Pathname):
-                # Check if the default pathname is a directory
-                default_path = default_pathname.original
-                if os.path.isdir(default_path):
-                    # It's a directory - use it directly
-                    default_dir = default_path
-                else:
-                    # It's a file - use its parent directory
-                    default_dir = os.path.dirname(default_path)
-                if default_dir:
-                    path_str = os.path.join(default_dir, path_str)
-                    path_str = os.path.normpath(path_str)
+        # First, try to resolve against *LOAD-TRUENAME* (directory of currently loading file)
+        load_truename_sym = lisptype.COMMON_LISP_PACKAGE.intern_symbol('*LOAD-TRUENAME*')
+        load_truename = env.find_variable(load_truename_sym)
+        
+        if load_truename and load_truename is not lisptype.NIL:
+            if isinstance(load_truename, Pathname):
+                # Get the directory containing the currently loading file
+                current_file_path = load_truename.original
+                current_dir = os.path.dirname(current_file_path)
+                if current_dir:
+                    candidate = os.path.join(current_dir, path_str)
+                    candidate = os.path.normpath(candidate)
+                    # Only use this path if it exists or if we haven't found anything yet
+                    if os.path.exists(candidate):
+                        path_str = candidate
+                        resolved = True
+                    elif not resolved:
+                        # Remember this as a fallback
+                        path_str = candidate
+                        resolved = True
+        
+        # If not resolved, try *DEFAULT-PATHNAME-DEFAULTS*
+        if not resolved:
+            default_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*DEFAULT-PATHNAME-DEFAULTS*')
+            default_pathname = env.find_variable(default_sym)
+            
+            if default_pathname and default_pathname is not lisptype.NIL:
+                # Merge with default pathname
+                if isinstance(default_pathname, Pathname):
+                    # Check if the default pathname is a directory
+                    default_path = default_pathname.original
+                    if os.path.isdir(default_path):
+                        # It's a directory - use it directly
+                        default_dir = default_path
+                    else:
+                        # It's a file - use its parent directory
+                        default_dir = os.path.dirname(default_path)
+                    if default_dir:
+                        path_str = os.path.join(default_dir, path_str)
+                        path_str = os.path.normpath(path_str)
     
     # Handle if-does-not-exist: try .lsp if .fasl not found (for FCLpy)
     if not os.path.exists(path_str):
@@ -180,8 +205,8 @@ def load(filespec, verbose=None, print_p=None, if_does_not_exist=None,
         truename_obj = pathname_obj  # Fall back to pathname if truename fails
     
     # Save old values of load variables
-    load_truename_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*LOAD-TRUENAME*')
-    load_pathname_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*LOAD-PATHNAME*')
+    load_truename_sym = lisptype.COMMON_LISP_PACKAGE.intern_symbol('*LOAD-TRUENAME*')
+    load_pathname_sym = lisptype.COMMON_LISP_PACKAGE.intern_symbol('*LOAD-PATHNAME*')
     
     old_truename = env.find_variable(load_truename_sym)
     old_pathname = env.find_variable(load_pathname_sym)

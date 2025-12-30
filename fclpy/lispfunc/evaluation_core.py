@@ -10,10 +10,45 @@ import fclpy.lispreader as lispreader
 from .core import car, cdr, cons, _consp_internal, _atom_internal
 import fclpy.lispenv as lispenv  # environment setup utilities
 from fclpy.lisptype import resolve_environment, LispEnvironmentError
+import inspect
+from functools import lru_cache
 
 # Register special operator handlers into the builtin registry
 from . import registry as _registry
 import fclpy.lispfunc as lispfunc
+
+
+# Cache for function signature information to avoid repeated inspect.signature calls
+@lru_cache(maxsize=1024)
+def _get_func_signature_info(func_id: int, func):
+    """Get cached signature information for a function.
+    
+    Returns a tuple of (use_kwargs, kwarg_param_names_frozenset).
+    """
+    try:
+        sig = inspect.signature(func)
+        params = list(sig.parameters.values())
+        
+        # Check if function accepts varargs (*args)
+        has_var_positional = any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in params)
+        
+        # Collect the actual keyword parameter names for this function
+        kwarg_param_names = set()
+        for p in params:
+            if (p.kind in (inspect.Parameter.KEYWORD_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+                and p.default is not inspect.Parameter.empty):
+                kwarg_param_names.add(p.name.lower())
+        
+        use_kwargs = bool(kwarg_param_names) and not has_var_positional
+        return (use_kwargs, frozenset(kwarg_param_names))
+    except (ValueError, TypeError):
+        return (False, frozenset())
+
+
+def get_func_signature_info(func):
+    """Get signature info for a function, using cache."""
+    # Use id() to create a hashable key for the function
+    return _get_func_signature_info(id(func), func)
 
 
 # Exception classes for non-local exits
@@ -370,25 +405,8 @@ def eval(form, env=None):
         if not callable(func):
             raise lisptype.LispNotImplementedError(f"Not a function: {operator}")
         
-        # Check if function has only *args (no named parameters after first)
-        # If so, just pass all arguments positionally
-        import inspect
-        try:
-            sig = inspect.signature(func)
-            params = list(sig.parameters.values())
-            
-            # Check if function accepts varargs (*args) and has no named keyword params
-            has_var_positional = any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in params)
-            has_named_keyword_params = any(
-                p.kind in (inspect.Parameter.KEYWORD_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
-                and p.default is not inspect.Parameter.empty
-                for p in params
-            )
-            
-            use_kwargs = has_named_keyword_params and not has_var_positional
-        except (ValueError, TypeError):
-            # Can't inspect, default to positional only
-            use_kwargs = False
+        # Get cached signature info for keyword argument handling
+        use_kwargs, kwarg_param_names = get_func_signature_info(func)
         
         # Evaluate arguments
         eval_args = []
@@ -398,17 +416,25 @@ def eval(form, env=None):
         while _consp_internal(current):
             arg_val = eval(car(current), env)
             
-            # Only try to detect keyword arguments if function accepts them as **kwargs
+            # Only treat a keyword as a Python kwarg if:
+            # 1. The function accepts kwargs
+            # 2. The keyword name matches an actual parameter name
             if use_kwargs and isinstance(arg_val, lisptype.lispKeyword):
-                # Get the next argument as the value
-                current = cdr(current)
-                if _consp_internal(current):
-                    key_val = eval(car(current), env)
-                    # Convert keyword name to Python kwarg name
-                    py_key = arg_val.name.lower().replace('-', '_')
-                    kwargs[py_key] = key_val
+                # Convert keyword name to Python kwarg name format
+                py_key = arg_val.name.lower().replace('-', '_')
+                
+                # Only treat as kwarg if this matches a function parameter
+                if py_key in kwarg_param_names:
+                    # Get the next argument as the value
+                    current = cdr(current)
+                    if _consp_internal(current):
+                        key_val = eval(car(current), env)
+                        kwargs[py_key] = key_val
+                    else:
+                        # Keyword at end with no value - pass as positional
+                        eval_args.append(arg_val)
                 else:
-                    # Keyword at end with no value - pass as positional
+                    # Keyword doesn't match a param, pass as positional value
                     eval_args.append(arg_val)
             else:
                 eval_args.append(arg_val)

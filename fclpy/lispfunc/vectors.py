@@ -189,14 +189,20 @@ class Array:
 
 
 @_registry.cl_function('MAKE-ARRAY')
-def make_array(dimensions, initial_element=None, adjustable=False, fill_pointer=None, **kwargs):
+def make_array(dimensions, element_type=None, initial_element=None, initial_contents=None,
+               adjustable=False, fill_pointer=None, displaced_to=None, displaced_index_offset=None,
+               **kwargs):
     """Make an array (vector for 1D, Array for multi-dimensional).
     
     Args:
         dimensions: Integer for 1D, list/tuple/lispCons for multi-dimensional
+        element_type: Element type specifier (ignored in FCLpy, arrays are generic)
         initial_element: Initial value for elements
+        initial_contents: Sequence of initial values (mutually exclusive with initial_element)
         adjustable: If True, create adjustable vector (1D only)
         fill_pointer: For adjustable vectors, set fill-pointer
+        displaced_to: Another array to share storage with (not fully implemented)
+        displaced_index_offset: Offset into displaced array (not fully implemented)
     
     Returns:
         Vector (list), AdjustableVector, or Array
@@ -212,6 +218,23 @@ def make_array(dimensions, initial_element=None, adjustable=False, fill_pointer=
             return to_int(val.car)
         return int(val)
     
+    def lisp_list_to_python_list(obj):
+        """Convert a Lisp list or sequence to Python list."""
+        if obj is None or obj is lisptype.NIL:
+            return []
+        if isinstance(obj, list):
+            return obj
+        if isinstance(obj, str):
+            return list(obj)
+        if isinstance(obj, lisptype.lispCons):
+            result = []
+            current = obj
+            while isinstance(current, lisptype.lispCons):
+                result.append(current.car)
+                current = current.cdr
+            return result
+        return list(obj)
+    
     # Convert Lisp list to Python list if needed
     if isinstance(dimensions, lisptype.lispCons):
         dim_list = []
@@ -223,7 +246,16 @@ def make_array(dimensions, initial_element=None, adjustable=False, fill_pointer=
     
     # Handle 1D arrays (vectors)
     if isinstance(dimensions, int):
-        if adjustable:
+        if initial_contents is not None:
+            contents = lisp_list_to_python_list(initial_contents)
+            if adjustable:
+                adj_vec = AdjustableVector(capacity=dimensions, fill_pointer=fill_pointer)
+                for i, val in enumerate(contents[:dimensions]):
+                    adj_vec[i] = val
+                return adj_vec
+            else:
+                return contents[:dimensions] if len(contents) >= dimensions else contents + [initial_element] * (dimensions - len(contents))
+        elif adjustable:
             adj_vec = AdjustableVector(capacity=dimensions, 
                                       initial_element=initial_element,
                                       fill_pointer=fill_pointer)
@@ -238,16 +270,22 @@ def make_array(dimensions, initial_element=None, adjustable=False, fill_pointer=
         # Single element list is treated as 1D array
         if len(dimensions) == 1:
             dim = dimensions[0]
-            if adjustable:
+            if initial_contents is not None:
+                contents = lisp_list_to_python_list(initial_contents)
+                if adjustable:
+                    adj_vec = AdjustableVector(capacity=dim, fill_pointer=fill_pointer)
+                    for i, val in enumerate(contents[:dim]):
+                        adj_vec[i] = val
+                    return adj_vec
+                else:
+                    return contents[:dim] if len(contents) >= dim else contents + [initial_element] * (dim - len(contents))
+            elif adjustable:
                 return AdjustableVector(capacity=dim, 
                                        initial_element=initial_element,
                                        fill_pointer=fill_pointer)
             else:
                 return [initial_element] * dim
         return Array(dimensions, initial_element=initial_element)
-    
-    # Fallback
-    return [initial_element]
     
     # Fallback
     return [initial_element]

@@ -26,10 +26,20 @@ def setup_reader_macros():
     # This function is kept for backward compatibility but is no longer needed
     pass
 
-def load_and_evaluate_file(filename, environment=None, verbose=False):
-    """Load and evaluate a Lisp file."""
+def load_and_evaluate_file(filename, environment=None, verbose=False, timing=False):
+    """Load and evaluate a Lisp file.
+    
+    Args:
+        filename: Path to the Lisp file
+        environment: Environment to use (default: current environment)
+        verbose: Print detailed progress info
+        timing: Print timing information for performance debugging
+    """
     import os
+    import time
     from fclpy.lispfunc.pathnames import Pathname
+    
+    start_time = time.time()
     
     if environment is None:
         # Ensure standard environment is set up
@@ -40,8 +50,8 @@ def load_and_evaluate_file(filename, environment=None, verbose=False):
     abs_path = os.path.abspath(filename)
     pathname_obj = Pathname(abs_path)
     
-    load_truename_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*LOAD-TRUENAME*')
-    load_pathname_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*LOAD-PATHNAME*')
+    load_truename_sym = lisptype.COMMON_LISP_PACKAGE.intern_symbol('*LOAD-TRUENAME*')
+    load_pathname_sym = lisptype.COMMON_LISP_PACKAGE.intern_symbol('*LOAD-PATHNAME*')
     
     old_truename = environment.find_variable(load_truename_sym)
     old_pathname = environment.find_variable(load_pathname_sym)
@@ -51,14 +61,14 @@ def load_and_evaluate_file(filename, environment=None, verbose=False):
         environment.set_variable(load_truename_sym, pathname_obj)
         environment.set_variable(load_pathname_sym, pathname_obj)
         
-        if verbose:
-            print(f"Loading file: {filename}")
+        if verbose or timing:
+            print(f"[{time.time() - start_time:.3f}s] Loading file: {filename}")
         
         with open(filename, 'r', encoding='utf-8') as f:
             content = f.read()
         
-        if verbose:
-            print(f"Read {len(content)} characters")
+        if verbose or timing:
+            print(f"[{time.time() - start_time:.3f}s] Read {len(content)} characters")
         
         # Create a stream from the file content
         string_io = io.StringIO(content)
@@ -73,21 +83,36 @@ def load_and_evaluate_file(filename, environment=None, verbose=False):
         
         results = []
         expr_count = 0
+        last_timing_report = start_time
         
         # Read and evaluate expressions one by one
         while True:
             try:
+                expr_start = time.time()
                 expr = reader.read_1()
                 if expr is None:  # EOF
                     break
                 
                 expr_count += 1
+                read_time = time.time() - expr_start
+                
                 if verbose:
                     print(f"  Reading expression {expr_count}: {expr}")
                 
                 # Evaluate the expression
+                eval_start = time.time()
                 result = lispfunc.eval(expr, environment)
+                eval_time = time.time() - eval_start
                 results.append(result)
+                
+                # Report timing periodically or for slow expressions
+                if timing:
+                    now = time.time()
+                    total_time = read_time + eval_time
+                    # Report if expression took > 0.5s or every 5 seconds
+                    if total_time > 0.5 or (now - last_timing_report) > 5.0:
+                        print(f"[{now - start_time:.3f}s] Expr {expr_count}: read={read_time:.3f}s eval={eval_time:.3f}s")
+                        last_timing_report = now
                 
                 # In standard Lisp, file loading is usually silent
                 # Only show results in verbose mode
@@ -104,9 +129,10 @@ def load_and_evaluate_file(filename, environment=None, verbose=False):
                     import traceback
                     traceback.print_exc()
         
-        # Don't announce the number of expressions loaded (not standard Lisp behavior)
-        if verbose:
-            print(f"Loaded {expr_count} expressions from {filename}")
+        # Final timing report
+        if verbose or timing:
+            elapsed = time.time() - start_time
+            print(f"[{elapsed:.3f}s] Loaded {expr_count} expressions from {filename}")
         return lisptype.T
         
     except FileNotFoundError:

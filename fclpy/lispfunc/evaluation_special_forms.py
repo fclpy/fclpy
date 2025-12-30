@@ -412,7 +412,19 @@ def eval_defmacro(form, env):
 
     # Mark as macro and register in environment
     setattr(macro_callable, '__is_macro__', True)
-    env.add_function(macro_name, macro_callable)
+    
+    # Find the global/root environment for defining the macro
+    # DEFMACRO always creates global macro bindings (like DEFUN)
+    global_env = env
+    while global_env.parent is not None:
+        global_env = global_env.parent
+    
+    # Add macro to the GLOBAL environment (not local)
+    global_env.add_function(macro_name, macro_callable)
+    
+    # Also add to the current environment for immediate visibility
+    if env is not global_env:
+        env.add_function(macro_name, macro_callable)
     
     # Store docstring on the macro symbol's property list
     if docstring:
