@@ -228,6 +228,9 @@ class Package(lispT):
         Returns an existing symbol with the given name, or creates a new one.
         Symbol names are uppercased per Common Lisp standard.
         
+        If the symbol is inherited from a used package, returns the inherited
+        symbol (Common Lisp semantics).
+        
         Args:
             name: Symbol name (string)
             external: Whether to export the symbol
@@ -238,11 +241,29 @@ class Package(lispT):
         # Uppercase the name per Common Lisp standard
         name = name.upper()
         
-        if name not in self.symbols:
-            symbol = LispSymbol(name, package=self)
-            self.symbols[name] = symbol
-        else:
+        # First check if symbol already exists in this package
+        if name in self.symbols:
             symbol = self.symbols[name]
+            if external:
+                self.external_symbols.add(name)
+            return symbol
+        
+        # Check if symbol is inherited from a used package
+        for used_pkg in getattr(self, 'use_packages', []):
+            # Handle both Package objects and package names
+            if isinstance(used_pkg, str):
+                used_pkg = find_package(used_pkg)
+            if used_pkg is not None and hasattr(used_pkg, 'external_symbols'):
+                # Only look at external symbols of used packages
+                if name in used_pkg.external_symbols:
+                    sym = used_pkg.symbols.get(name)
+                    if sym is not None:
+                        # Return the inherited symbol (don't create a new one)
+                        return sym
+        
+        # Symbol not found anywhere - create new one in this package
+        symbol = LispSymbol(name, package=self)
+        self.symbols[name] = symbol
         
         if external:
             self.external_symbols.add(name)

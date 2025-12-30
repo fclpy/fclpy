@@ -41,6 +41,7 @@ class TokenType(Enum):
     HASH_LPAREN = "HASH_LPAREN"
     HASH_PLUS = "HASH_PLUS"      # #+feature
     HASH_MINUS = "HASH_MINUS"    # #-feature
+    UNINTERNED_SYMBOL = "UNINTERNED_SYMBOL"  # #:name
     
     # Comments and whitespace
     COMMENT = "COMMENT"
@@ -462,6 +463,18 @@ class Tokenizer:
         elif next_char == '-':
             self._advance()
             return Token(TokenType.HASH_MINUS, "#-", start_line, start_col)
+        
+        # Uninterned symbol: #:name
+        elif next_char == ':':
+            self._advance()  # consume ':'
+            # Read the symbol name (without the #: prefix)
+            name = ""
+            while self._peek() and self._peek() not in ' \t\n\r()[]':
+                name += self._advance()
+            if not name:
+                raise ValueError("Empty symbol name after #:")
+            # Return as UNINTERNED_SYMBOL token (name only, no #: prefix)
+            return Token(TokenType.UNINTERNED_SYMBOL, name.upper(), start_line, start_col)
         
         # Other dispatch macros would go here
         else:

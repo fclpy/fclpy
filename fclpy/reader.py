@@ -11,6 +11,15 @@ from fclpy.tokenizer import Tokenizer, TokenType
 from fclpy.character import parse_character_token
 
 
+# Sentinel object used to mark feature conditionals that should be skipped
+class _FeatureSkipMarker:
+    """Marker object returned when a feature conditional skips a form."""
+    def __repr__(self):
+        return "#<FEATURE-SKIP-MARKER>"
+
+_FEATURE_SKIP_MARKER = _FeatureSkipMarker()
+
+
 class ReaderError(Exception):
     """Base exception for reader errors."""
     pass
@@ -112,7 +121,10 @@ class Reader:
             token = self.tokens[self.position]
             if token.type == TokenType.EOF:
                 break
-            objects.append(self._read_object())
+            obj = self._read_object()
+            # Skip feature markers at top level
+            if not isinstance(obj, _FeatureSkipMarker):
+                objects.append(obj)
         
         return objects
     
@@ -178,6 +190,11 @@ class Reader:
             self._consume_token()
             # Intern symbol into current package
             return self.package.intern_symbol(token.value)
+        elif token.type == TokenType.UNINTERNED_SYMBOL:
+            # #:name - uninterned symbol (not in any package)
+            self._consume_token()
+            # Create a fresh symbol with no package
+            return lisptype.LispSymbol(token.value, package=None)
         elif token.type == TokenType.KEYWORD:
             self._consume_token()
             # Keywords intern into KEYWORD package
@@ -253,6 +270,9 @@ class Reader:
                 if not elements:
                     raise ReaderError("Unexpected '.' at start of list")
                 tail = self._read_object()
+                # Skip feature markers in tail
+                if isinstance(tail, _FeatureSkipMarker):
+                    tail = lisptype.NIL
                 
                 token = self._peek_token()
                 if token is None or token.type != TokenType.RPAREN:
@@ -272,7 +292,10 @@ class Reader:
                     current.cdr = tail
                 return result
             
-            elements.append(self._read_object())
+            obj = self._read_object()
+            # Skip feature markers (forms that were feature-conditional and skipped)
+            if not isinstance(obj, _FeatureSkipMarker):
+                elements.append(obj)
         
         # Assemble proper list
         result = lisptype.NIL
@@ -296,7 +319,10 @@ class Reader:
                 self._consume_token()
                 break
             
-            elements.append(self._read_object())
+            obj = self._read_object()
+            # Skip feature markers
+            if not isinstance(obj, _FeatureSkipMarker):
+                elements.append(obj)
         
         # Return a vector as a Python list wrapped in a cons structure
         # This represents #(...) as (VECTOR element1 element2 ...)
@@ -313,7 +339,7 @@ class Reader:
             positive: True for #+, False for #-
             
         Returns:
-            The form if feature test passes, otherwise continues reading.
+            The form if feature test passes, otherwise a special marker.
         """
         self._consume_token()  # consume #+ or #-
         
@@ -327,9 +353,9 @@ class Reader:
         if self._check_feature(feature, positive):
             return form
         else:
-            # Feature test failed, skip this form and read the next object
-            # Continue reading from the stream to get the next form
-            return self._read_object()
+            # Feature test failed, return a special marker to indicate "nothing"
+            # This marker will be filtered out by the caller
+            return _FEATURE_SKIP_MARKER
     
     def _check_feature(self, feature, positive):
         """Check if a feature expression is satisfied.
