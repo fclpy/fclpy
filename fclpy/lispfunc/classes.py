@@ -258,8 +258,13 @@ def class_superclasses(lisp_class):
 
 
 @_registry.cl_function('FIND-CLASS')
-def find_class_fn(name):
-    """FIND-CLASS: Find a class by name."""
+def find_class_fn(name, errorp=True, environment=None):
+    """FIND-CLASS: Find a class by name.
+    
+    (FIND-CLASS symbol &optional errorp environment)
+    Returns the class named by symbol. If errorp is true (default) and no
+    class is found, signals an error. Otherwise returns NIL.
+    """
     if isinstance(name, lisptype.LispSymbol):
         name = name.name
     elif not isinstance(name, str):
@@ -267,7 +272,9 @@ def find_class_fn(name):
     
     cls = classes.find_class(name)
     if cls is None:
-        raise NameError(f"Class not found: {name}")
+        if lisptype.is_truthy(errorp):
+            raise NameError(f"Class not found: {name}")
+        return lisptype.NIL
     return cls
 
 

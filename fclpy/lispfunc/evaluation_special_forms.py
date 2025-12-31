@@ -1132,6 +1132,7 @@ def eval_pop(form, env):
     if isinstance(place, lisptype.LispSymbol):
         # Get the current value
         current_value = env.find_variable(place)
+        
         if current_value is None:
             return lisptype.NIL
         

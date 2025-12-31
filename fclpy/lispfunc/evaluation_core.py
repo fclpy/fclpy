@@ -424,7 +424,25 @@ def eval(form, env=None):
                 return eval(expanded, env)
 
         # Regular function call
-        func = eval(operator, env)
+        # In Common Lisp, function position uses the FUNCTION namespace, not variable namespace
+        if isinstance(operator, lisptype.LispSymbol):
+            # Look up in function namespace directly
+            func = env.find_func(operator)
+            if func is None:
+                # Try registry fallback
+                try:
+                    py_name = _registry.get_function_py_name(operator.name)
+                    if py_name:
+                        fn = getattr(lispfunc, py_name, None)
+                        if fn:
+                            env.add_function(operator, fn)
+                            func = fn
+                except Exception:
+                    pass
+        else:
+            # For non-symbol operators (e.g., lambda forms), evaluate to get function
+            func = eval(operator, env)
+            
         if not callable(func):
             raise lisptype.LispNotImplementedError(f"Not a function: {operator}")
         

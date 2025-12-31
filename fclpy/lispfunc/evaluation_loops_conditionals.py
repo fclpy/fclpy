@@ -3,6 +3,11 @@
 import fclpy.lisptype as lisptype
 from .core import car, cdr, _consp_internal, cons
 from . import registry as _registry
+import time
+import sys
+
+# Timeout for loop warning (in seconds) - set to 0 to disable
+LOOP_TIMEOUT_WARNING = 120  # 2 minutes
 
 
 def eval_when(form, env):
@@ -730,6 +735,7 @@ def eval_loop(form, env):
     conditionals = []  # list of ('when'/'unless', test_form)
     body_forms = []
     accumulation = None  # ('collect'/'append'/'sum'/'count', form)
+    accumulation_conditionals = []  # conditionals that apply to accumulation
     finally_forms = []
     
     # Parse clauses
@@ -801,6 +807,7 @@ def eval_loop(form, env):
             
         elif name in ('DO', 'DOING'):
             # Collect body forms until next clause keyword
+            # DO clause consumes the current conditionals - they don't apply to subsequent clauses
             i += 1
             while i < len(forms):
                 f = forms[i]
@@ -814,22 +821,33 @@ def eval_loop(form, env):
                 i += 1
                 
         elif name in ('COLLECT', 'COLLECTING'):
+            # If there are pending conditionals (no DO consumed them), they apply to this
+            if not body_forms:  # No DO clause consumed the conditionals
+                accumulation_conditionals = list(conditionals)
             accumulation = ('collect', forms[i+1])
             i += 2
             
         elif name in ('APPEND', 'APPENDING'):
+            if not body_forms:
+                accumulation_conditionals = list(conditionals)
             accumulation = ('append', forms[i+1])
             i += 2
             
         elif name in ('NCONC', 'NCONCING'):
+            if not body_forms:
+                accumulation_conditionals = list(conditionals)
             accumulation = ('nconc', forms[i+1])
             i += 2
             
         elif name in ('SUM', 'SUMMING'):
+            if not body_forms:
+                accumulation_conditionals = list(conditionals)
             accumulation = ('sum', forms[i+1])
             i += 2
             
         elif name in ('COUNT', 'COUNTING'):
+            if not body_forms:
+                accumulation_conditionals = list(conditionals)
             accumulation = ('count', forms[i+1])
             i += 2
             
@@ -858,8 +876,18 @@ def eval_loop(form, env):
     count_result = 0
     
     def should_execute_body(loop_env):
-        """Check conditionals."""
+        """Check conditionals for body forms."""
         for cond_type, cond_form in conditionals:
+            cond_result = eval(cond_form, loop_env)
+            if cond_type == 'when' and not lisptype.is_truthy(cond_result):
+                return False
+            if cond_type == 'unless' and lisptype.is_truthy(cond_result):
+                return False
+        return True
+    
+    def should_execute_accumulation(loop_env):
+        """Check conditionals for accumulation (may be different from body)."""
+        for cond_type, cond_form in accumulation_conditionals:
             cond_result = eval(cond_form, loop_env)
             if cond_type == 'when' and not lisptype.is_truthy(cond_result):
                 return False
@@ -871,15 +899,13 @@ def eval_loop(form, env):
         """Execute one iteration of the loop body."""
         nonlocal result, accumulated, sum_result, count_result
         
-        if not should_execute_body(loop_env):
-            return
+        # Execute body forms (controlled by main conditionals like WHEN/UNLESS)
+        if should_execute_body(loop_env):
+            for f in body_forms:
+                result = eval(f, loop_env)
         
-        # Execute body forms
-        for f in body_forms:
-            result = eval(f, loop_env)
-        
-        # Handle accumulation
-        if accumulation:
+        # Handle accumulation - uses its own conditionals (may be empty)
+        if accumulation and should_execute_accumulation(loop_env):
             acc_type, acc_form = accumulation
             acc_value = eval(acc_form, loop_env)
             if acc_type == 'collect':
@@ -906,13 +932,34 @@ def eval_loop(form, env):
                 if lisptype.is_truthy(acc_value):
                     count_result += 1
     
-    # Main loop execution
+    # Main loop execution with timeout warning
+    loop_start_time = time.time()
+    loop_iterations = 0
+    warning_printed = False
+    
+    def check_loop_timeout():
+        """Check if loop has been running too long and print warning."""
+        nonlocal warning_printed, loop_iterations
+        loop_iterations += 1
+        if LOOP_TIMEOUT_WARNING > 0 and not warning_printed:
+            elapsed = time.time() - loop_start_time
+            if elapsed > LOOP_TIMEOUT_WARNING:
+                warning_printed = True
+                print(f"\n*** LOOP WARNING: Loop has been running for {elapsed:.1f}s ({loop_iterations} iterations) ***", file=sys.stderr)
+                print(f"*** LOOP body_forms: {body_forms} ***", file=sys.stderr)
+                print(f"*** LOOP iteration_type: {iteration_type}, iteration_test: {iteration_test} ***", file=sys.stderr)
+                if iteration_var:
+                    print(f"*** LOOP var: {iteration_var} ***", file=sys.stderr)
+                sys.stderr.flush()
+    
     if iteration_type == 'while':
         while lisptype.is_truthy(eval(iteration_test, env)):
+            check_loop_timeout()
             execute_iteration_body(env)
             
     elif iteration_type == 'until':
         while True:
+            check_loop_timeout()
             execute_iteration_body(env)
             if lisptype.is_truthy(eval(iteration_test, env)):
                 break
@@ -920,6 +967,7 @@ def eval_loop(form, env):
     elif iteration_type == 'repeat':
         count = eval(repeat_count, env)
         for _ in range(count):
+            check_loop_timeout()
             execute_iteration_body(env)
             
     elif iteration_type == 'for-range':
@@ -933,6 +981,7 @@ def eval_loop(form, env):
         cur = start
         compare = (lambda a, b: a <= b) if step > 0 else (lambda a, b: a >= b)
         while compare(cur, end):
+            check_loop_timeout()
             loop_env.set_variable(iteration_var, cur)
             execute_iteration_body(loop_env)
             cur = cur + step
@@ -948,6 +997,7 @@ def eval_loop(form, env):
         cur = start
         compare = (lambda a, b: a < b) if step > 0 else (lambda a, b: a > b)
         while compare(cur, end):
+            check_loop_timeout()
             loop_env.set_variable(iteration_var, cur)
             execute_iteration_body(loop_env)
             cur = cur + step
@@ -957,6 +1007,7 @@ def eval_loop(form, env):
         loop_env = lisptype.Environment(env)
         cur = lst
         while _consp_internal(cur):
+            check_loop_timeout()
             loop_env.set_variable(iteration_var, car(cur))
             execute_iteration_body(loop_env)
             cur = cdr(cur)
@@ -966,6 +1017,7 @@ def eval_loop(form, env):
         loop_env = lisptype.Environment(env)
         cur = lst
         while _consp_internal(cur):
+            check_loop_timeout()
             loop_env.set_variable(iteration_var, cur)
             execute_iteration_body(loop_env)
             cur = cdr(cur)
@@ -1056,8 +1108,23 @@ def eval_do(form, env):
     for (var, _, _), value in zip(var_specs, init_values):
         loop_env.set_variable(var, value)
     
-    # Main loop
+    # Main loop with timeout warning
+    loop_start_time = time.time()
+    loop_iterations = 0
+    warning_printed = False
+    
     while True:
+        # Check timeout
+        loop_iterations += 1
+        if LOOP_TIMEOUT_WARNING > 0 and not warning_printed:
+            elapsed = time.time() - loop_start_time
+            if elapsed > LOOP_TIMEOUT_WARNING:
+                warning_printed = True
+                print(f"\n*** DO LOOP WARNING: Loop has been running for {elapsed:.1f}s ({loop_iterations} iterations) ***", file=sys.stderr)
+                print(f"*** DO end_test: {end_test} ***", file=sys.stderr)
+                print(f"*** DO var_specs: {var_specs} ***", file=sys.stderr)
+                sys.stderr.flush()
+        
         # Check end-test
         if lisptype.is_truthy(eval(end_test, loop_env)):
             # Evaluate result forms and return last value
@@ -1138,8 +1205,23 @@ def eval_do_star(form, env):
             var_specs.append((var, step_form))
         current = cdr(current)
     
-    # Main loop
+    # Main loop with timeout warning
+    loop_start_time = time.time()
+    loop_iterations = 0
+    warning_printed = False
+    
     while True:
+        # Check timeout
+        loop_iterations += 1
+        if LOOP_TIMEOUT_WARNING > 0 and not warning_printed:
+            elapsed = time.time() - loop_start_time
+            if elapsed > LOOP_TIMEOUT_WARNING:
+                warning_printed = True
+                print(f"\n*** DO* LOOP WARNING: Loop has been running for {elapsed:.1f}s ({loop_iterations} iterations) ***", file=sys.stderr)
+                print(f"*** DO* end_test: {end_test} ***", file=sys.stderr)
+                print(f"*** DO* var_specs: {var_specs} ***", file=sys.stderr)
+                sys.stderr.flush()
+        
         # Check end-test
         if lisptype.is_truthy(eval(end_test, loop_env)):
             # Evaluate result forms and return last value

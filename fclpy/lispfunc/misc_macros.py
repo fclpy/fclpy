@@ -135,33 +135,41 @@ def load(filespec, verbose=None, print_p=None, if_does_not_exist=None,
     else:
         path_str = str(filespec)
     
-    # If path is relative, resolve it against the directory of the currently loading file
-    # (via *LOAD-TRUENAME*), then fall back to *DEFAULT-PATHNAME-DEFAULTS*
+    # If path is relative, resolve it against various directories in priority order:
+    # 1. LISP_CWD env var (allows Python CWD and Lisp CWD to differ)
+    # 2. *LOAD-TRUENAME* directory (for nested loads relative to current file)
+    # 3. *DEFAULT-PATHNAME-DEFAULTS*
+    # 4. Python's CWD as last resort
     if not os.path.isabs(path_str):
         resolved = False
         
-        # First, try to resolve against *LOAD-TRUENAME* (directory of currently loading file)
-        load_truename_sym = lisptype.COMMON_LISP_PACKAGE.intern_symbol('*LOAD-TRUENAME*')
-        load_truename = env.find_variable(load_truename_sym)
+        # First, try LISP_CWD environment variable
+        lisp_cwd = os.environ.get('LISP_CWD')
+        if lisp_cwd:
+            candidate = os.path.join(lisp_cwd, path_str)
+            candidate = os.path.normpath(candidate)
+            if os.path.exists(candidate):
+                path_str = candidate
+                resolved = True
         
-        if load_truename and load_truename is not lisptype.NIL:
-            if isinstance(load_truename, Pathname):
-                # Get the directory containing the currently loading file
-                current_file_path = load_truename.original
-                current_dir = os.path.dirname(current_file_path)
-                if current_dir:
-                    candidate = os.path.join(current_dir, path_str)
-                    candidate = os.path.normpath(candidate)
-                    # Only use this path if it exists or if we haven't found anything yet
-                    if os.path.exists(candidate):
-                        path_str = candidate
-                        resolved = True
-                    elif not resolved:
-                        # Remember this as a fallback
-                        path_str = candidate
-                        resolved = True
+        # Second, try to resolve against *LOAD-TRUENAME* (directory of currently loading file)
+        if not resolved:
+            load_truename_sym = lisptype.COMMON_LISP_PACKAGE.intern_symbol('*LOAD-TRUENAME*')
+            load_truename = env.find_variable(load_truename_sym)
+            
+            if load_truename and load_truename is not lisptype.NIL:
+                if isinstance(load_truename, Pathname):
+                    # Get the directory containing the currently loading file
+                    current_file_path = load_truename.original
+                    current_dir = os.path.dirname(current_file_path)
+                    if current_dir:
+                        candidate = os.path.join(current_dir, path_str)
+                        candidate = os.path.normpath(candidate)
+                        if os.path.exists(candidate):
+                            path_str = candidate
+                            resolved = True
         
-        # If not resolved, try *DEFAULT-PATHNAME-DEFAULTS*
+        # Third, try *DEFAULT-PATHNAME-DEFAULTS*
         if not resolved:
             default_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*DEFAULT-PATHNAME-DEFAULTS*')
             default_pathname = env.find_variable(default_sym)
