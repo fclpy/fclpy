@@ -10,34 +10,36 @@ fclpy is a Python implementation of Common Lisp. The goal is to achieve ANSI Com
 
 ## Recent Progress (Dec 31, 2025)
 
-### Completed
-- ✅ **FLET/LABELS** - Local function binding special forms implemented
-- ✅ **IN-PACKAGE special form** - Now handles uninterned symbols (`#:cl-test` syntax)
-- ✅ **Convenience API** - Added `eval_string`, `get_environment`, `setup_environment` to lispfunc
-- ✅ **gclload1.lsp loads** - RT (regression test) package infrastructure works (takes ~70s)
+### Milestone: ANSI Test Infrastructure Ready
+
+**Commits**:
+- Fixed LOOP conditional scoping, function namespace lookup, and LISP_CWD support
+
+**Key Fixes**:
+- ✅ **Function namespace lookup** - Fixed eval to use `find_func` directly for symbols in function position, preventing variable namespace shadowing (fixed "Not a function: NAME" errors)
+- ✅ **LOOP conditional scoping** - WHEN/UNLESS now only apply to DO body when followed by DO clause; accumulation (APPEND/COLLECT) runs independently (fixed infinite loop in DEFTEST)
+- ✅ **LISP_CWD support** - Added environment variable for separating Python CWD from Lisp working directory (enables embedded Lisp scenarios like running ANSI tests)
+- ✅ **FIND-CLASS** - Now accepts optional errorp and environment arguments per ANSI spec
+- ✅ **Loop timeout warnings** - All loop types (LOOP, DO, DO*, DOTIMES, DOLIST) warn after 2 minutes
 
 ### ANSI Test Suite Status
-- `gclload1.lsp` - ✅ Loads cleanly (RT package, auxiliary functions, test infrastructure)
-- `gclload2.lsp` - ⚠️ Partially working - IN-PACKAGE and first LOAD work, then "Not a function: NAME" errors
-- `init.lsp` - ❌ Blocked by missing pathname operations and `string-equal` with `:test` keyword
+- `gclload1.lsp` - ✅ Loads cleanly (~90s for large array initialization)
+- `gclload2.lsp` - ⚠️ Loads with errors (files found correctly with LISP_CWD)
+- Many test files have loading errors due to missing features (CLOS, FORMAT directives, etc.)
 
-### Current Issue (Dec 31, 2025 - Session)
-**Problem**: When loading test files, get "Not a function: NAME" errors.
+### Next Steps: Clean Load Strategy
+1. **Write loading errors to file** - Capture all errors during gclload2.lsp
+2. **Fix errors incrementally** - Address each issue before re-running
+3. **Track progress** - Document which test categories load cleanly
+4. **Then run DO-TESTS** - Only after clean load
 
-**Root Cause Investigation**:
-- DEFSTRUCT accessor functions (NAME, PEND, etc.) ARE defined in the environment
-- Functions are found when looking up CL-USER or RT package symbols
-- Issue: Symbol lookup during evaluation may be using wrong package symbols
+### Running ANSI Tests
 
-**Fix Applied**:
-- Made `IN-PACKAGE` a special form in `evaluation_core.py` that doesn't evaluate its argument
-- This allows `(in-package #:cl-test)` with uninterned symbols to work correctly
-
-### Next Steps
-1. Debug symbol resolution for DEFSTRUCT accessors across packages
-2. Ensure CL-TEST inherits RT functions properly (DEFTEST macro, entry accessors)
-3. Get gclload2.lsp loading all test definition files
-4. Run actual ANSI tests with `(rt:do-tests)`
+```powershell
+cd C:\Users\ACER\git\fclpy\fclpy
+$env:LISP_CWD = "C:\Users\ACER\git\fclpy\ansi-test"
+pipenv run python run.py ../ansi-test/gclload1.lsp ../ansi-test/gclload2.lsp
+```
 
 ---
 
