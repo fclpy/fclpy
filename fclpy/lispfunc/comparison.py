@@ -110,10 +110,211 @@ def typep(object, type_specifier):
     # Import classes here to avoid circular dependencies
     from fclpy import classes
     from fractions import Fraction
+    from .core import _consp_internal
     
     # Constants for fixnum boundary (2^29 is common choice for 32-bit-like semantics)
     FIXNUM_MAX = 2**29 - 1
     FIXNUM_MIN = -2**29
+    
+    # Helper to convert list to Python list for iteration
+    def list_to_pylist(lst):
+        """Convert a Lisp list to a Python list."""
+        result = []
+        current = lst
+        while _consp_internal(current):
+            result.append(car(current))
+            current = cdr(current)
+        return result
+    
+    # Handle compound type specifiers (lists like (or ...), (and ...), (not ...), etc.)
+    if _consp_internal(type_specifier):
+        first = car(type_specifier)
+        if hasattr(first, 'name'):
+            compound_type = first.name.upper()
+        elif isinstance(first, str):
+            compound_type = first.upper()
+        else:
+            compound_type = str(first).upper()
+        
+        rest = list_to_pylist(cdr(type_specifier))
+        
+        if compound_type == 'OR':
+            # (OR type1 type2 ...) - true if object matches any type
+            for sub_type in rest:
+                if typep(object, sub_type) == lisptype.T:
+                    return lisptype.T
+            return lisptype.NIL
+        
+        elif compound_type == 'AND':
+            # (AND type1 type2 ...) - true if object matches all types
+            for sub_type in rest:
+                if typep(object, sub_type) == lisptype.NIL:
+                    return lisptype.NIL
+            return lisptype.T
+        
+        elif compound_type == 'NOT':
+            # (NOT type) - true if object doesn't match type
+            if len(rest) >= 1:
+                if typep(object, rest[0]) == lisptype.T:
+                    return lisptype.NIL
+                return lisptype.T
+            return lisptype.NIL
+        
+        elif compound_type == 'MEMBER':
+            # (MEMBER item1 item2 ...) - true if object is EQL to any item
+            for item in rest:
+                if eql(object, item) == lisptype.T:
+                    return lisptype.T
+            return lisptype.NIL
+        
+        elif compound_type == 'EQL':
+            # (EQL item) - true if object is EQL to item
+            if len(rest) >= 1:
+                return eql(object, rest[0])
+            return lisptype.NIL
+        
+        elif compound_type == 'SATISFIES':
+            # (SATISFIES predicate) - true if (predicate object) is true
+            # This requires evaluation - for now return NIL as we can't easily call arbitrary functions
+            return lisptype.NIL
+        
+        elif compound_type == 'INTEGER':
+            # (INTEGER [low [high]]) - integer in range
+            if not isinstance(object, int):
+                return lisptype.NIL
+            low = rest[0] if len(rest) > 0 else None
+            high = rest[1] if len(rest) > 1 else None
+            # Handle * meaning unbounded
+            if low is not None and not (hasattr(low, 'name') and low.name == '*'):
+                # Handle (low) meaning exclusive
+                if _consp_internal(low):
+                    if object <= car(low):
+                        return lisptype.NIL
+                elif object < low:
+                    return lisptype.NIL
+            if high is not None and not (hasattr(high, 'name') and high.name == '*'):
+                # Handle (high) meaning exclusive
+                if _consp_internal(high):
+                    if object >= car(high):
+                        return lisptype.NIL
+                elif object > high:
+                    return lisptype.NIL
+            return lisptype.T
+        
+        elif compound_type in ('FLOAT', 'SINGLE-FLOAT', 'DOUBLE-FLOAT', 'SHORT-FLOAT', 'LONG-FLOAT'):
+            # (FLOAT [low [high]]) - float in range
+            if not isinstance(object, float):
+                return lisptype.NIL
+            low = rest[0] if len(rest) > 0 else None
+            high = rest[1] if len(rest) > 1 else None
+            if low is not None and not (hasattr(low, 'name') and low.name == '*'):
+                if _consp_internal(low):
+                    if object <= car(low):
+                        return lisptype.NIL
+                elif object < low:
+                    return lisptype.NIL
+            if high is not None and not (hasattr(high, 'name') and high.name == '*'):
+                if _consp_internal(high):
+                    if object >= car(high):
+                        return lisptype.NIL
+                elif object > high:
+                    return lisptype.NIL
+            return lisptype.T
+        
+        elif compound_type == 'REAL':
+            # (REAL [low [high]]) - real number in range
+            if not isinstance(object, (int, float, Fraction)):
+                return lisptype.NIL
+            low = rest[0] if len(rest) > 0 else None
+            high = rest[1] if len(rest) > 1 else None
+            if low is not None and not (hasattr(low, 'name') and low.name == '*'):
+                if _consp_internal(low):
+                    if object <= car(low):
+                        return lisptype.NIL
+                elif object < low:
+                    return lisptype.NIL
+            if high is not None and not (hasattr(high, 'name') and high.name == '*'):
+                if _consp_internal(high):
+                    if object >= car(high):
+                        return lisptype.NIL
+                elif object > high:
+                    return lisptype.NIL
+            return lisptype.T
+        
+        elif compound_type == 'RATIONAL':
+            # (RATIONAL [low [high]]) - rational in range
+            if not isinstance(object, (int, Fraction)):
+                return lisptype.NIL
+            low = rest[0] if len(rest) > 0 else None
+            high = rest[1] if len(rest) > 1 else None
+            if low is not None and not (hasattr(low, 'name') and low.name == '*'):
+                if _consp_internal(low):
+                    if object <= car(low):
+                        return lisptype.NIL
+                elif object < low:
+                    return lisptype.NIL
+            if high is not None and not (hasattr(high, 'name') and high.name == '*'):
+                if _consp_internal(high):
+                    if object >= car(high):
+                        return lisptype.NIL
+                elif object > high:
+                    return lisptype.NIL
+            return lisptype.T
+        
+        elif compound_type in ('MOD', 'UNSIGNED-BYTE', 'SIGNED-BYTE'):
+            # (MOD n) = (INTEGER 0 (n)), (UNSIGNED-BYTE n) = integers 0 to 2^n-1
+            if not isinstance(object, int):
+                return lisptype.NIL
+            if compound_type == 'MOD':
+                n = rest[0] if len(rest) > 0 else 1
+                return lisptype.lisp_bool(0 <= object < n)
+            elif compound_type == 'UNSIGNED-BYTE':
+                n = rest[0] if len(rest) > 0 else 8
+                return lisptype.lisp_bool(0 <= object < (2 ** n))
+            elif compound_type == 'SIGNED-BYTE':
+                n = rest[0] if len(rest) > 0 else 8
+                limit = 2 ** (n - 1)
+                return lisptype.lisp_bool(-limit <= object < limit)
+        
+        elif compound_type == 'SIMPLE-BIT-VECTOR':
+            # (SIMPLE-BIT-VECTOR [size]) - for now, treat as vector check
+            return lisptype.lisp_bool(isinstance(object, (list, tuple)))
+        
+        elif compound_type in ('VECTOR', 'SIMPLE-VECTOR', 'ARRAY', 'SIMPLE-ARRAY'):
+            # (VECTOR element-type [size]) etc. - simplified check
+            return lisptype.lisp_bool(isinstance(object, (list, tuple)))
+        
+        elif compound_type == 'STRING' or compound_type == 'SIMPLE-STRING' or compound_type == 'BASE-STRING' or compound_type == 'SIMPLE-BASE-STRING':
+            # (STRING [size]) - string with optional size
+            if not isinstance(object, str):
+                return lisptype.NIL
+            if len(rest) > 0:
+                size = rest[0]
+                if isinstance(size, int) and len(object) != size:
+                    return lisptype.NIL
+            return lisptype.T
+        
+        elif compound_type == 'CONS':
+            # (CONS [car-type [cdr-type]]) - cons with specific types
+            if not _consp_internal(object):
+                return lisptype.NIL
+            # With no subtypes, just check it's a cons
+            if len(rest) == 0:
+                return lisptype.T
+            car_type = rest[0] if len(rest) > 0 else None
+            cdr_type = rest[1] if len(rest) > 1 else None
+            if car_type is not None and not (hasattr(car_type, 'name') and car_type.name == '*'):
+                if typep(car(object), car_type) == lisptype.NIL:
+                    return lisptype.NIL
+            if cdr_type is not None and not (hasattr(cdr_type, 'name') and cdr_type.name == '*'):
+                if typep(cdr(object), cdr_type) == lisptype.NIL:
+                    return lisptype.NIL
+            return lisptype.T
+        
+        else:
+            # Unknown compound type - check if it might be a simple type name followed by parameters
+            # Just try the simple type name
+            return typep(object, first)
     
     # Handle LispClass type specifiers (user-defined classes)
     if isinstance(type_specifier, classes.LispClass):

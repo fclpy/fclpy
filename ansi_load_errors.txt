@@ -1,25 +1,27 @@
 ANSI Test Loading Errors
-Generated: 2025-12-31T10:26:44.841050
+Generated: 2025-12-31T10:35:44.566890
 ============================================================
 
 Summary: 666 total errors
 
 Error Categories:
   Unbound variable: 346
-  Assertion failed: 268
-  Other: 23
+  Assertion failed: 202
+  Other: 89
   Not implemented: 12
   Not a function: 8
   argument: 8
   EOF: 1
 
 ============================================================
-UNIQUE ERROR TYPES (224):
+UNIQUE ERROR TYPES (226):
 ============================================================
 
 [1x] 
+[65x] 'LispSymbol' object is not iterable
 [1x] 'lispCons' object cannot be interpreted as an integer
 [1x] 'lispCons' object is not subscriptable
+[1x] 'lispKeyword' object is not iterable
 [1x] 'lispNull' object is not iterable
 [1x] *CLASS-28-RESET-FN*: Not implemented
 [1x] *PATTERN-SUBLISTS*: Not implemented
@@ -31,7 +33,7 @@ UNIQUE ERROR TYPES (224):
 [1x] ALLOCATE-INSTANCE-CLASS-01: Not implemented
 [1x] ALLOCATE-INSTANCE-CLASS-02: Not implemented
 [8x] Argument is not a REAL: NIL
-[268x] Assertion failed
+[202x] Assertion failed
 [2x] C: Not implemented
 [1x] CHANGE-CLASS-CLASS-01A: Not implemented
 [1x] CHANGE-CLASS-CLASS-01B: Not implemented
@@ -550,73 +552,73 @@ ALL ERRORS (FULL):
 302. Error evaluating expression 7: Unbound variable: UPGRADED-TYPE: Not implemented
 303. Error evaluating expression 2: 'lispCons' object is not subscriptable
 304. Error evaluating expression 4: Unbound variable: *PATTERN-SUBLISTS*: Not implemented
-305. Error evaluating expression 13: Assertion failed
-306. Error evaluating expression 14: Assertion failed
-307. Error evaluating expression 15: Assertion failed
-308. Error evaluating expression 16: Assertion failed
-309. Error evaluating expression 17: Assertion failed
-310. Error evaluating expression 18: Assertion failed
-311. Error evaluating expression 19: Assertion failed
-312. Error evaluating expression 20: Assertion failed
-313. Error evaluating expression 21: Assertion failed
-314. Error evaluating expression 22: Assertion failed
-315. Error evaluating expression 23: Assertion failed
-316. Error evaluating expression 24: Assertion failed
-317. Error evaluating expression 25: Assertion failed
-318. Error evaluating expression 26: Assertion failed
-319. Error evaluating expression 27: Assertion failed
-320. Error evaluating expression 28: Assertion failed
-321. Error evaluating expression 29: Assertion failed
-322. Error evaluating expression 30: Assertion failed
-323. Error evaluating expression 31: Assertion failed
-324. Error evaluating expression 32: Assertion failed
-325. Error evaluating expression 33: Assertion failed
-326. Error evaluating expression 34: Assertion failed
-327. Error evaluating expression 35: Assertion failed
-328. Error evaluating expression 36: Assertion failed
-329. Error evaluating expression 37: Assertion failed
-330. Error evaluating expression 38: Assertion failed
-331. Error evaluating expression 39: Assertion failed
-332. Error evaluating expression 40: Assertion failed
-333. Error evaluating expression 41: Assertion failed
+305. Error evaluating expression 13: 'LispSymbol' object is not iterable
+306. Error evaluating expression 14: 'LispSymbol' object is not iterable
+307. Error evaluating expression 15: 'LispSymbol' object is not iterable
+308. Error evaluating expression 16: 'LispSymbol' object is not iterable
+309. Error evaluating expression 17: 'LispSymbol' object is not iterable
+310. Error evaluating expression 18: 'LispSymbol' object is not iterable
+311. Error evaluating expression 19: 'LispSymbol' object is not iterable
+312. Error evaluating expression 20: 'LispSymbol' object is not iterable
+313. Error evaluating expression 21: 'LispSymbol' object is not iterable
+314. Error evaluating expression 22: 'LispSymbol' object is not iterable
+315. Error evaluating expression 23: 'LispSymbol' object is not iterable
+316. Error evaluating expression 24: 'LispSymbol' object is not iterable
+317. Error evaluating expression 25: 'LispSymbol' object is not iterable
+318. Error evaluating expression 26: 'LispSymbol' object is not iterable
+319. Error evaluating expression 27: 'LispSymbol' object is not iterable
+320. Error evaluating expression 28: 'LispSymbol' object is not iterable
+321. Error evaluating expression 29: 'LispSymbol' object is not iterable
+322. Error evaluating expression 30: 'LispSymbol' object is not iterable
+323. Error evaluating expression 31: 'LispSymbol' object is not iterable
+324. Error evaluating expression 32: 'LispSymbol' object is not iterable
+325. Error evaluating expression 33: 'LispSymbol' object is not iterable
+326. Error evaluating expression 34: 'LispSymbol' object is not iterable
+327. Error evaluating expression 35: 'LispSymbol' object is not iterable
+328. Error evaluating expression 36: 'LispSymbol' object is not iterable
+329. Error evaluating expression 37: 'LispSymbol' object is not iterable
+330. Error evaluating expression 38: 'LispSymbol' object is not iterable
+331. Error evaluating expression 39: 'LispSymbol' object is not iterable
+332. Error evaluating expression 40: 'LispSymbol' object is not iterable
+333. Error evaluating expression 41: 'LispSymbol' object is not iterable
 334. Error evaluating expression 42: Unbound variable: STRUCT-TEST-PACKAGE: Not implemented
-335. Error evaluating expression 43: Assertion failed
-336. Error evaluating expression 44: Assertion failed
-337. Error evaluating expression 45: Assertion failed
-338. Error evaluating expression 46: Assertion failed
-339. Error evaluating expression 47: Assertion failed
-340. Error evaluating expression 48: Assertion failed
-341. Error evaluating expression 50: Assertion failed
-342. Error evaluating expression 52: Assertion failed
-343. Error evaluating expression 54: Assertion failed
-344. Error evaluating expression 55: Assertion failed
-345. Error evaluating expression 56: Assertion failed
-346. Error evaluating expression 57: Assertion failed
-347. Error evaluating expression 58: Assertion failed
-348. Error evaluating expression 60: Assertion failed
-349. Error evaluating expression 62: Assertion failed
-350. Error evaluating expression 64: Assertion failed
-351. Error evaluating expression 66: Assertion failed
-352. Error evaluating expression 68: Assertion failed
-353. Error evaluating expression 69: Assertion failed
-354. Error evaluating expression 70: Assertion failed
-355. Error evaluating expression 71: Assertion failed
-356. Error evaluating expression 72: Assertion failed
-357. Error evaluating expression 74: Assertion failed
-358. Error evaluating expression 76: Assertion failed
-359. Error evaluating expression 78: Assertion failed
-360. Error evaluating expression 80: Assertion failed
-361. Error evaluating expression 81: Assertion failed
-362. Error evaluating expression 82: Assertion failed
-363. Error evaluating expression 84: Assertion failed
-364. Error evaluating expression 91: Assertion failed
-365. Error evaluating expression 92: Assertion failed
-366. Error evaluating expression 93: Assertion failed
-367. Error evaluating expression 94: Assertion failed
-368. Error evaluating expression 95: Assertion failed
-369. Error evaluating expression 96: Assertion failed
-370. Error evaluating expression 97: Assertion failed
-371. Error evaluating expression 98: Assertion failed
+335. Error evaluating expression 43: 'LispSymbol' object is not iterable
+336. Error evaluating expression 44: 'LispSymbol' object is not iterable
+337. Error evaluating expression 45: 'LispSymbol' object is not iterable
+338. Error evaluating expression 46: 'LispSymbol' object is not iterable
+339. Error evaluating expression 47: 'LispSymbol' object is not iterable
+340. Error evaluating expression 48: 'LispSymbol' object is not iterable
+341. Error evaluating expression 50: 'LispSymbol' object is not iterable
+342. Error evaluating expression 52: 'LispSymbol' object is not iterable
+343. Error evaluating expression 54: 'LispSymbol' object is not iterable
+344. Error evaluating expression 55: 'LispSymbol' object is not iterable
+345. Error evaluating expression 56: 'LispSymbol' object is not iterable
+346. Error evaluating expression 57: 'LispSymbol' object is not iterable
+347. Error evaluating expression 58: 'LispSymbol' object is not iterable
+348. Error evaluating expression 60: 'LispSymbol' object is not iterable
+349. Error evaluating expression 62: 'LispSymbol' object is not iterable
+350. Error evaluating expression 64: 'LispSymbol' object is not iterable
+351. Error evaluating expression 66: 'LispSymbol' object is not iterable
+352. Error evaluating expression 68: 'LispSymbol' object is not iterable
+353. Error evaluating expression 69: 'LispSymbol' object is not iterable
+354. Error evaluating expression 70: 'LispSymbol' object is not iterable
+355. Error evaluating expression 71: 'LispSymbol' object is not iterable
+356. Error evaluating expression 72: 'LispSymbol' object is not iterable
+357. Error evaluating expression 74: 'LispSymbol' object is not iterable
+358. Error evaluating expression 76: 'LispSymbol' object is not iterable
+359. Error evaluating expression 78: 'LispSymbol' object is not iterable
+360. Error evaluating expression 80: 'LispSymbol' object is not iterable
+361. Error evaluating expression 81: 'LispSymbol' object is not iterable
+362. Error evaluating expression 82: 'LispSymbol' object is not iterable
+363. Error evaluating expression 84: 'LispSymbol' object is not iterable
+364. Error evaluating expression 91: 'lispKeyword' object is not iterable
+365. Error evaluating expression 92: 'LispSymbol' object is not iterable
+366. Error evaluating expression 93: 'LispSymbol' object is not iterable
+367. Error evaluating expression 94: 'LispSymbol' object is not iterable
+368. Error evaluating expression 95: 'LispSymbol' object is not iterable
+369. Error evaluating expression 96: 'LispSymbol' object is not iterable
+370. Error evaluating expression 97: 'LispSymbol' object is not iterable
+371. Error evaluating expression 98: 'LispSymbol' object is not iterable
 372. Error evaluating expression 14: Unbound variable: EVEN-ARRAY: Not implemented
 373. Error evaluating expression 3: Unbound variable: TAC-1-CLASS: Not implemented
 374. Error evaluating expression 4: Unbound variable: TAC-1A-CLASS: Not implemented
