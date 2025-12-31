@@ -3,6 +3,7 @@
 import functools
 from .core import cons, car, cdr, atom
 from . import registry as _registry
+from .vectors import AdjustableVector
 import fclpy.lisptype as lisptype
 
 
@@ -25,8 +26,11 @@ def length(sequence):
             count += 1
             current = current.cdr
         return count
-    else:
+    elif isinstance(sequence, (str, list, tuple, AdjustableVector)):
         return len(sequence)
+    else:
+        raise lisptype.LispTypeError(f"LENGTH: {type(sequence).__name__} is not a sequence",
+                                    expected_type="SEQUENCE", actual_value=sequence)
 
 
 @_registry.cl_function('REVERSE')

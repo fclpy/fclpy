@@ -494,6 +494,32 @@ def eval_handler_case(form, env):
     expression = car(args)
     clauses = cdr(args)
     
+    # Condition type hierarchy for matching
+    # In CL, arithmetic-error is a subtype of error
+    # type-error is a subtype of error
+    # All errors are subtypes of condition
+    condition_hierarchy = {
+        'ARITHMETIC-ERROR': ['ARITHMETIC-ERROR', 'ERROR', 'SERIOUS-CONDITION', 'CONDITION', 'T'],
+        'TYPE-ERROR': ['TYPE-ERROR', 'ERROR', 'SERIOUS-CONDITION', 'CONDITION', 'T'],
+        'ERROR': ['ERROR', 'SERIOUS-CONDITION', 'CONDITION', 'T'],
+        'SERIOUS-CONDITION': ['SERIOUS-CONDITION', 'CONDITION', 'T'],
+        'CONDITION': ['CONDITION', 'T'],
+    }
+    
+    def matches_condition_type(handler_type, error):
+        """Check if error matches the handler condition type."""
+        handler_type_name = handler_type.upper() if isinstance(handler_type, str) else handler_type.name.upper()
+        
+        # TYPE-ERROR matches LispTypeError
+        if handler_type_name in ('TYPE-ERROR', 'ARITHMETIC-ERROR', 'ERROR', 'SERIOUS-CONDITION', 'CONDITION', 'T'):
+            if isinstance(error, lisptype.LispTypeError):
+                # LispTypeError is both a type-error and can be arithmetic-error for numeric operations
+                return handler_type_name in condition_hierarchy.get('TYPE-ERROR', ['TYPE-ERROR', 'ERROR', 'CONDITION', 'T'])
+            elif isinstance(error, lisptype.LispError):
+                # Generic error
+                return handler_type_name in condition_hierarchy.get('ERROR', ['ERROR', 'CONDITION', 'T'])
+        return False
+    
     try:
         # Try to evaluate the expression
         return eval(expression, env)
@@ -504,10 +530,10 @@ def eval_handler_case(form, env):
             clause = car(current)
             if _consp_internal(clause):
                 condition_type = car(clause)
-                # Check if this is the ERROR type
+                # Check if this clause matches the error
                 if isinstance(condition_type, lisptype.LispSymbol):
-                    if condition_type.name.upper() == 'ERROR':
-                        # This clause handles errors
+                    if matches_condition_type(condition_type.name, e):
+                        # This clause handles the error
                         var_list = car(cdr(clause))
                         clause_body = cdr(cdr(clause))
                         

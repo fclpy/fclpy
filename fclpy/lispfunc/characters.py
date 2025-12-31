@@ -210,7 +210,7 @@ def character(designator):
             name_up = designator.upper()
             if name_up == "SPACE":
                 return " "
-            elif name_up == "NEWLINE":
+            elif name_up == "NEWLINE" or name_up == "LINEFEED":
                 return "\n"
             elif name_up == "TAB":
                 return "\t"
@@ -220,8 +220,18 @@ def character(designator):
                 return "\f"
             elif name_up == "BACKSPACE":
                 return "\b"
+            elif name_up == "RUBOUT":
+                return chr(127)  # DEL character
+            elif name_up == "NULL" or name_up == "NUL":
+                return chr(0)
+            elif name_up == "BELL" or name_up == "BEL":
+                return chr(7)
+            elif name_up == "ESCAPE" or name_up == "ESC":
+                return chr(27)
     elif isinstance(designator, int):
         return chr(designator)
+    elif isinstance(designator, lisptype.Character):
+        return designator.char
     
     raise lisptype.LispTypeError(f"CHARACTER: cannot convert {designator} to character",
                                 expected_type="CHARACTER-DESIGNATOR",

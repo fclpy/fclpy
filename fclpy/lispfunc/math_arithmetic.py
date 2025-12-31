@@ -6,6 +6,37 @@ import fclpy.lisptype as lisptype
 from . import registry as _registry
 
 
+def _ensure_number(x, func_name):
+    """Ensure argument is a number, raise error if not."""
+    if isinstance(x, (int, float, complex)):
+        return x
+    if x is lisptype.NIL or isinstance(x, lisptype.lispNull):
+        raise lisptype.LispTypeError(f"{func_name}: Argument is not a NUMBER: NIL",
+                                    expected_type="NUMBER", actual_value=x)
+    if isinstance(x, lisptype.Symbol):
+        raise lisptype.LispTypeError(f"{func_name}: Argument is not a NUMBER: {x.name}",
+                                    expected_type="NUMBER", actual_value=x)
+    raise lisptype.LispTypeError(f"{func_name}: Argument is not a NUMBER: {x}",
+                                expected_type="NUMBER", actual_value=x)
+
+
+def _ensure_real(x, func_name):
+    """Ensure argument is a real number, raise error if not."""
+    if isinstance(x, (int, float)):
+        return x
+    if isinstance(x, complex):
+        raise lisptype.LispTypeError(f"{func_name}: Argument is not a REAL: {x}",
+                                    expected_type="REAL", actual_value=x)
+    if x is lisptype.NIL or isinstance(x, lisptype.lispNull):
+        raise lisptype.LispTypeError(f"{func_name}: Argument is not a REAL: NIL",
+                                    expected_type="REAL", actual_value=x)
+    if isinstance(x, lisptype.Symbol):
+        raise lisptype.LispTypeError(f"{func_name}: Argument is not a REAL: {x.name}",
+                                    expected_type="REAL", actual_value=x)
+    raise lisptype.LispTypeError(f"{func_name}: Argument is not a REAL: {x}",
+                                expected_type="REAL", actual_value=x)
+
+
 @_registry.cl_function('ABS')
 def abs_fn(x):
     """Absolute value."""
@@ -516,6 +547,9 @@ def _s_eq_(*args):
     """Numeric equality operator (=)."""
     if len(args) < 2:
         return lisptype.T
+    # Validate all args are numbers
+    for arg in args:
+        _ensure_number(arg, '=')
     first = args[0]
     return lisptype.lisp_bool(all(x == first for x in args[1:]))
 
@@ -525,6 +559,9 @@ def _s_lt_(*args):
     """Less than operator (<)."""
     if len(args) < 2:
         return lisptype.T
+    # Validate all args are real numbers
+    for arg in args:
+        _ensure_real(arg, '<')
     for i in range(len(args) - 1):
         if not (args[i] < args[i + 1]):
             return lisptype.NIL
@@ -536,6 +573,9 @@ def _s_gt_(*args):
     """Greater than operator (>)."""
     if len(args) < 2:
         return lisptype.T
+    # Validate all args are real numbers
+    for arg in args:
+        _ensure_real(arg, '>')
     for i in range(len(args) - 1):
         if not (args[i] > args[i + 1]):
             return lisptype.NIL
@@ -547,6 +587,9 @@ def _s_lt__s_eq_(*args):
     """Less than or equal operator (<=)."""
     if len(args) < 2:
         return lisptype.T
+    # Validate all args are real numbers
+    for arg in args:
+        _ensure_real(arg, '<=')
     for i in range(len(args) - 1):
         if not (args[i] <= args[i + 1]):
             return lisptype.NIL
@@ -558,6 +601,9 @@ def _s_gt__s_eq_(*args):
     """Greater than or equal operator (>=)."""
     if len(args) < 2:
         return lisptype.T
+    # Validate all args are real numbers
+    for arg in args:
+        _ensure_real(arg, '>=')
     for i in range(len(args) - 1):
         if not (args[i] >= args[i + 1]):
             return lisptype.NIL

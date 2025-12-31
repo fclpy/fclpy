@@ -5,7 +5,13 @@ Provides fundamental Lisp types, symbols, characters, and basic utilities.
 """
 
 
-class LispNotImplementedError(Exception):
+class LispError(Exception):
+    """Base class for Common Lisp runtime errors."""
+    def __init__(self, message):
+        super().__init__(message)
+
+
+class LispNotImplementedError(LispError):
     """Custom exception for ANSI Common Lisp functions that are not yet implemented."""
     def __init__(self, function_name=None, message="Not implemented"):
         if function_name:
@@ -15,18 +21,12 @@ class LispNotImplementedError(Exception):
         self.function_name = function_name
 
 
-class LispTypeError(Exception):
+class LispTypeError(LispError):
     """Exception for Common Lisp type errors."""
     def __init__(self, message, expected_type=None, actual_value=None):
         super().__init__(message)
         self.expected_type = expected_type
         self.actual_value = actual_value
-
-
-class LispError(Exception):
-    """Base class for Common Lisp runtime errors."""
-    def __init__(self, message):
-        super().__init__(message)
 
 
 class LispEndOfFileError(LispError):
