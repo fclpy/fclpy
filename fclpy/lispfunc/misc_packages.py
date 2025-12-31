@@ -248,7 +248,10 @@ def unintern(symbol, package=None):
 @_registry.cl_function('UNEXPORT')
 def unexport(symbols, package=None):
     """Unexport symbols from package."""
-    if not isinstance(symbols, (list, tuple)):
+    # Handle lispCons (Lisp list)
+    if isinstance(symbols, lisptype.lispCons):
+        symbols = list(symbols)
+    elif not isinstance(symbols, (list, tuple)):
         symbols = [symbols]
     pkg = package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)) if package else getattr(state, 'current_package', None)
     if pkg is None:

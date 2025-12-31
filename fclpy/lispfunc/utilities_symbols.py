@@ -105,7 +105,16 @@ def import_symbol(symbols, package=None):
     """Import symbols into a package."""
     import fclpy.state as state  # Re-import to ensure we have the same state module
     
-    if not isinstance(symbols, (list, tuple)):
+    # Convert symbols to a list for iteration
+    if isinstance(symbols, lisptype.lispCons):
+        # Convert lispCons to Python list
+        sym_list = []
+        cur = symbols
+        while isinstance(cur, lisptype.lispCons):
+            sym_list.append(cur.car)
+            cur = cur.cdr
+        symbols = sym_list
+    elif not isinstance(symbols, (list, tuple)):
         symbols = [symbols]
     
     # Determine the target package
