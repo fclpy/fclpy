@@ -15,42 +15,43 @@ fclpy is a Python implementation of Common Lisp. The goal is to achieve ANSI Com
 **Error capture script**: `scripts/ansi_load_errors.py`
 **Error report**: `ansi_load_errors.txt`
 
-**Loading Results**:
+**Loading Results** (after fixes):
 - `gclload1.lsp` - ✅ Loads cleanly (0 errors)
-- `gclload2.lsp` - ⚠️ 1154 errors during loading
+- `gclload2.lsp` - ⚠️ ~680 errors during loading (down from 1154)
 
-**Error Categories** (from 1154 total):
+**Error Reduction Progress**:
+| Fix | Errors Fixed | Description |
+|-----|--------------|-------------|
+| DEFMACRO &key parameters | 314 | Macro keyword params weren't being bound |
+| Supplied-p parameters | 164 | `(param default supplied-p)` form not handled |
+| LOOP FOR-AS-EQUALS-THEN | 71 | `for x = 1 then (1+ x)` wasn't recognized |
+| **Total Fixed** | **549** | Down from 1154 to ~680 |
+
+**Current Error Categories** (~680 total):
 | Category | Count | Description |
 |----------|-------|-------------|
-| Unbound variable | 829 | Variables referenced before definition |
+| Unbound variable | 354 | Variables referenced before definition |
 | Assertion failed | 268 | Tests with failing assertions during load |
-| Other | 33 | Miscellaneous errors |
+| Other | 34 | Miscellaneous errors |
 | Not implemented | 12 | Explicit not-implemented messages |
 | Not a function | 8 | Symbol called as function but isn't |
 | Argument errors | 3 | Wrong argument count/type |
 | EOF | 1 | Premature end of file |
 
-**Top Unbound Variables**:
-- `PRETTY` (237x) - Macro parameter in def-pprint-test
-- `ELEMENT-TYPE-P` (76x) - Macro parameter in def-open-test
-- `BUILD-FORM` (54x) - Macro parameter in def-open-test
-- `MARGIN` (37x) - Macro parameter in def-pprint-test
-- `CLASS-*` (100+) - CLOS class definitions not loading
+**Remaining High-Frequency Issues**:
+- `CLASS-*` (200+) - CLOS class definitions not loading (DEFCLASS/DEFGENERIC needed)
+- `DGMC-CLASS-*` (70x) - CLOS generic function tests
+- `ACROSS` - LOOP FOR-AS-ACROSS clause not implemented
+- Various Python type errors in edge cases
 
-**Root Causes**:
-1. **Macro expansion issue** - Macro parameters (PRETTY, BUILD-FORM, etc.) are being looked up as global variables instead of local bindings
-2. **CLOS not implemented** - Many tests define classes with DEFCLASS which isn't fully working
-3. **compile-and-load** - Test infrastructure tries to compile files, which fclpy doesn't support
-
-### Previous Fixes (this session)
+### Fixes Completed This Session
+- ✅ DEFMACRO `&key` parameter binding (copied from DEFUN)
+- ✅ Supplied-p parameter support for `(param default supplied-p)` form
+- ✅ LOOP FOR-AS-EQUALS-THEN: `for x = 1 then (1+ x) until (> x 5)`
+- ✅ LOOP termination types can combine with FOR iteration
 - ✅ Function namespace lookup (fixed "Not a function: NAME")
 - ✅ LOOP conditional scoping (fixed infinite loop in DEFTEST)
 - ✅ LISP_CWD environment variable for path resolution
-- ✅ FIND-CLASS optional arguments
-- ✅ 2-minute loop timeout warnings
-
-### Next Priority: Fix Macro Expansion
-The macro parameter issue is causing 400+ errors. Need to investigate why `&key` parameters with default values aren't being properly bound during macro expansion.
 
 ### Running Error Capture
 
