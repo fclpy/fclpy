@@ -1,1 +1,1 @@
-(print (equal (loop for x = 1 then (1+ x) until (> x 5) collect x) '(1 2 3 4 5)))
+(print (loop for x across #(1 2 3 4 5) collect x))

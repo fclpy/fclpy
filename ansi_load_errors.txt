@@ -1,13 +1,13 @@
 ANSI Test Loading Errors
-Generated: 2025-12-31T09:39:51.076286
+Generated: 2025-12-31T09:48:21.126940
 ============================================================
 
 Summary: 680 total errors
 
 Error Categories:
-  Unbound variable: 354
+  Unbound variable: 353
   Assertion failed: 268
-  Other: 34
+  Other: 35
   Not implemented: 12
   Not a function: 8
   argument: 3
@@ -31,7 +31,6 @@ UNIQUE ERROR TYPES (234):
 [1x] : Not implemented
 [3x] :USE: Not implemented
 [1x] ACCESSOR-5-1-2-6: Not implemented
-[1x] ACROSS: Not implemented
 [1x] ALLOCATE-INSTANCE-CLASS-01: Not implemented
 [1x] ALLOCATE-INSTANCE-CLASS-02: Not implemented
 [268x] Assertion failed
@@ -246,6 +245,7 @@ UNIQUE ERROR TYPES (234):
 [1x] WITH-ACCESSORS-CLASS-01: Not implemented
 [1x] WITH-SLOTS-CLASS-01: Not implemented
 [2x] Y: Not implemented
+[1x] cannot convert #\\ to character
 [2x] cannot convert Linefeed to character
 [1x] function name must be a symbol: Not implemented
 [5x] object of type 'int' has no len()
@@ -926,7 +926,7 @@ ALL ERRORS (FULL):
 668. Error evaluating expression 222: Assertion failed
 669. Error evaluating expression 231: EOF during list read
 670. Error evaluating expression 9: Not a function: LOOKUP-TABLE: Not implemented
-671. Error evaluating expression 5: Unbound variable: ACROSS: Not implemented
+671. Error evaluating expression 5: CHARACTER: cannot convert #\\ to character
 672. Error evaluating expression 7: t_symbol_function() takes 0 positional arguments but 1 was given
 673. Error evaluating expression 42: object of type 'int' has no len()
 674. Error evaluating expression 43: object of type 'int' has no len()

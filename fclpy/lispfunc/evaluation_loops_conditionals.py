@@ -775,6 +775,11 @@ def eval_loop(form, env):
                     iteration_list = forms[j+1]
                     iteration_type = 'for-on'
                     j += 2
+                elif fname == 'ACROSS':
+                    # FOR x ACROSS vector/string
+                    iteration_list = forms[j+1]
+                    iteration_type = 'for-across'
+                    j += 2
                 elif fname == '=':
                     # FOR x = init-form [THEN step-form]
                     iteration_start = forms[j+1]
@@ -1043,6 +1048,27 @@ def eval_loop(form, env):
             loop_env.set_variable(iteration_var, cur)
             execute_iteration_body(loop_env)
             cur = cdr(cur)
+            
+    elif iteration_type == 'for-across':
+        # FOR x ACROSS vector/string - iterate over array elements
+        seq = eval(iteration_list, env)
+        loop_env = lisptype.Environment(env)
+        
+        # Handle different sequence types
+        if isinstance(seq, str):
+            # String - iterate over characters
+            for char in seq:
+                check_loop_timeout()
+                loop_env.set_variable(iteration_var, lisptype.Character(char))
+                execute_iteration_body(loop_env)
+        elif hasattr(seq, '__iter__') and hasattr(seq, '__len__') and not _consp_internal(seq):
+            # Array/vector with __iter__ (AdjustableVector, list, tuple, etc.)
+            for elem in seq:
+                check_loop_timeout()
+                loop_env.set_variable(iteration_var, elem)
+                execute_iteration_body(loop_env)
+        else:
+            raise lisptype.LispNotImplementedError(f'LOOP FOR ACROSS requires a vector or string, got {type(seq).__name__}')
             
     elif iteration_type == 'for-equals':
         # FOR var = init-form [THEN step-form]
