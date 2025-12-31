@@ -115,13 +115,39 @@ def append(*args):
 
 @_registry.cl_function('NCONC')
 def nconc(*lists):
-    """Destructive concatenation of lists."""
+    """Destructively concatenate lists.
+
+    For now, implement a safe, non-destructive version that correctly
+    handles Lisp cons lists (and NIL) without assuming Python list semantics.
+    """
     if not lists:
-        return []
-    result = lists[0]
-    for lst in lists[1:]:
-        if lst:
-            result.extend(lst)
+        return lisptype.NIL
+
+    elems = []
+    tail = lisptype.NIL
+
+    for idx, lst in enumerate(lists):
+        if lst is None or lst == lisptype.NIL:
+            continue
+
+        if isinstance(lst, lisptype.lispCons):
+            cur = lst
+            while cur is not None and cur != lisptype.NIL and isinstance(cur, lisptype.lispCons):
+                elems.append(cur.car)
+                cur = cur.cdr
+            # If a dotted tail is provided, preserve it (best-effort)
+            if cur is not None and cur != lisptype.NIL:
+                tail = cur
+        elif isinstance(lst, (list, tuple)):
+            elems.extend(lst)
+        else:
+            # Treat non-lists as elements
+            elems.append(lst)
+
+    # Build a proper Lisp list from collected elements
+    result = tail
+    for elem in reversed(elems):
+        result = lisptype.lispCons(elem, result)
     return result
 
 

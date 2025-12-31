@@ -86,22 +86,24 @@ def load_and_evaluate_file(filename, environment=None, verbose=False, timing=Fal
         last_timing_report = start_time
         
         # Read and evaluate expressions one by one
+        current_expr = None
+
         while True:
             try:
                 expr_start = time.time()
-                expr = reader.read_1()
-                if expr is None:  # EOF
+                current_expr = reader.read_1()
+                if current_expr is None:  # EOF
                     break
                 
                 expr_count += 1
                 read_time = time.time() - expr_start
                 
                 if verbose:
-                    print(f"  Reading expression {expr_count}: {expr}")
+                    print(f"  Reading expression {expr_count}: {current_expr}")
                 
                 # Evaluate the expression
                 eval_start = time.time()
-                result = lispfunc.eval(expr, environment)
+                result = lispfunc.eval(current_expr, environment)
                 eval_time = time.time() - eval_start
                 results.append(result)
                 
@@ -124,9 +126,18 @@ def load_and_evaluate_file(filename, environment=None, verbose=False, timing=Fal
             except Exception as e:
                 if "reader-error" in str(e) or not content.strip():
                     break  # End of file or empty content
-                print(f"  Error evaluating expression {expr_count}: {e}")
-                if verbose:
-                    import traceback
+                # Include filename to make large multi-file loads debuggable.
+                expr_preview = ""
+                try:
+                    if current_expr is not None:
+                        expr_preview = f" | expr={current_expr!r}"
+                except Exception:
+                    expr_preview = ""
+
+                print(f"  Error evaluating expression {expr_count} in {filename}: {e}{expr_preview}")
+
+                # Print a traceback when explicitly requested (or in verbose mode).
+                if verbose or os.environ.get('FCLPY_LOAD_TRACEBACK') == '1':
                     traceback.print_exc()
         
         # Final timing report
@@ -141,7 +152,6 @@ def load_and_evaluate_file(filename, environment=None, verbose=False, timing=Fal
     except Exception as e:
         print(f"Error loading file '{filename}': {e}")
         if verbose:
-            import traceback
             traceback.print_exc()
         return lisptype.NIL
     finally:

@@ -719,6 +719,43 @@ def eval_loop(form, env):
         """Get uppercase symbol name or None."""
         return x.name.upper() if isinstance(x, lisptype.LispSymbol) else None
 
+    def _bind_varspec(loop_env, varspec, value):
+        """Bind a LOOP var spec (symbol or simple destructuring pattern)."""
+        # Common case: single symbol
+        if isinstance(varspec, lisptype.LispSymbol):
+            loop_env.set_variable(varspec, value)
+            return
+
+        # Destructuring patterns used by ANSI tests (e.g., (KEY . VAL))
+        if _consp_internal(varspec):
+            # Dotted pair pattern: (A . B)
+            left = car(varspec)
+            right = cdr(varspec)
+            if isinstance(left, lisptype.LispSymbol) and isinstance(right, lisptype.LispSymbol) and not _consp_internal(right):
+                if _consp_internal(value):
+                    loop_env.set_variable(left, car(value))
+                    loop_env.set_variable(right, cdr(value))
+                else:
+                    loop_env.set_variable(left, lisptype.NIL)
+                    loop_env.set_variable(right, lisptype.NIL)
+                return
+
+            # Proper list pattern: (A B C)
+            pat = varspec
+            cur_val = value
+            while _consp_internal(pat):
+                pitem = car(pat)
+                if isinstance(pitem, lisptype.LispSymbol):
+                    if _consp_internal(cur_val):
+                        loop_env.set_variable(pitem, car(cur_val))
+                        cur_val = cdr(cur_val)
+                    else:
+                        loop_env.set_variable(pitem, lisptype.NIL)
+                pat = cdr(pat)
+            return
+
+        raise lisptype.LispNotImplementedError('LOOP FOR requires a symbol')
+
     # Parse loop clauses into structured form
     i = 0
     
@@ -732,6 +769,15 @@ def eval_loop(form, env):
     iteration_step = 1
     iteration_list = None  # for FOR ... IN/ON
     repeat_count = None
+
+    # Primary + additional iteration drivers (for parallel FOR clauses).
+    # Each driver is a dict with keys: var, kind, and kind-specific data.
+    iteration_drivers = []
+
+    # Additional FOR bindings that don't drive the primary iteration.
+    # Minimal support for ANSI patterns like:
+    #   (LOOP FOR I FROM 0 BELOW 256 FOR C = (CODE-CHAR I) WHEN C COLLECT C)
+    aux_for_bindings = []  # list of (var, init_form, then_form_or_None)
     
     conditionals = []  # list of ('when'/'unless', test_form)
     body_forms = []
@@ -745,63 +791,127 @@ def eval_loop(form, env):
         name = sym_name(token)
         
         if name == 'FOR':
-            iteration_var = forms[i+1]
-            if not isinstance(iteration_var, lisptype.LispSymbol):
+            candidate_var = forms[i+1]
+            if not (isinstance(candidate_var, lisptype.LispSymbol) or _consp_internal(candidate_var)):
                 raise lisptype.LispNotImplementedError('LOOP FOR requires a symbol')
+
+            clause_stop = ('FOR', 'WHILE', 'UNTIL', 'REPEAT', 'DO', 'DOING',
+                           'COLLECT', 'COLLECTING', 'APPEND', 'APPENDING',
+                           'NCONC', 'NCONCING', 'SUM', 'SUMMING', 'COUNT', 'COUNTING',
+                           'WHEN', 'UNLESS', 'IF', 'RETURN', 'FINALLY')
+
+            # Parse the FOR clause into either a driver (IN/ON/ACROSS/FROM...) or an aux binding (=
+            # without FROM/IN/etc) when a driver already exists.
             j = i + 2
-            # Look for FROM/TO/BY/IN/ON/ACROSS/= (THEN)
+            saw_driver_keyword = False
+            driver_kind = None
+            driver_start = None
+            driver_end = None
+            driver_step = None
+            driver_list = None
+            aux_init = None
+            aux_then = None
+
             while j < len(forms):
-                f = forms[j]
-                fname = sym_name(f)
+                fname = sym_name(forms[j])
                 if fname == 'FROM':
-                    iteration_start = forms[j+1]
+                    saw_driver_keyword = True
+                    driver_start = forms[j+1]
                     j += 2
                 elif fname == 'TO':
-                    iteration_end = forms[j+1]
-                    iteration_type = 'for-range'
+                    saw_driver_keyword = True
+                    driver_end = forms[j+1]
+                    driver_kind = 'for-range'
                     j += 2
                 elif fname == 'BELOW':
-                    iteration_end = forms[j+1]
-                    iteration_type = 'for-below'
+                    saw_driver_keyword = True
+                    driver_end = forms[j+1]
+                    driver_kind = 'for-below'
                     j += 2
                 elif fname == 'BY':
-                    iteration_step = forms[j+1]
+                    saw_driver_keyword = True
+                    driver_step = forms[j+1]
                     j += 2
                 elif fname == 'IN':
-                    iteration_list = forms[j+1]
-                    iteration_type = 'for-in'
+                    saw_driver_keyword = True
+                    driver_list = forms[j+1]
+                    driver_kind = 'for-in'
                     j += 2
                 elif fname == 'ON':
-                    iteration_list = forms[j+1]
-                    iteration_type = 'for-on'
+                    saw_driver_keyword = True
+                    driver_list = forms[j+1]
+                    driver_kind = 'for-on'
                     j += 2
                 elif fname == 'ACROSS':
-                    # FOR x ACROSS vector/string
-                    iteration_list = forms[j+1]
-                    iteration_type = 'for-across'
+                    saw_driver_keyword = True
+                    driver_list = forms[j+1]
+                    driver_kind = 'for-across'
                     j += 2
                 elif fname == '=':
                     # FOR x = init-form [THEN step-form]
-                    iteration_start = forms[j+1]
-                    iteration_type = 'for-equals'
+                    aux_init = forms[j+1]
                     j += 2
-                    # Check for THEN
                     if j < len(forms) and sym_name(forms[j]) == 'THEN':
-                        iteration_step = forms[j+1]  # step form
+                        aux_then = forms[j+1]
                         j += 2
-                    else:
-                        iteration_step = None  # No step, just re-eval init each time
+                    # '=' can be either a driver (if this is the first/only iteration clause)
+                    # or an auxiliary binding when a driver already exists.
+                    if not saw_driver_keyword and driver_kind is None:
+                        driver_kind = 'for-equals'
+                        driver_start = aux_init
+                        driver_step = aux_then
                 elif fname == 'THEN':
-                    # THEN after = was already handled above, but in case it wasn't
-                    iteration_step = forms[j+1]
+                    # THEN after = was already handled above
                     j += 2
-                elif fname in ('DO', 'DOING', 'COLLECT', 'COLLECTING', 'APPEND', 'APPENDING',
-                               'NCONC', 'NCONCING', 'SUM', 'SUMMING', 'COUNT', 'COUNTING',
-                               'WHEN', 'UNLESS', 'IF', 'RETURN', 'FINALLY', 'UNTIL', 'WHILE'):
+                elif fname in clause_stop:
                     break
                 else:
                     break
+
+            # If we saw FROM but no end specifier, treat as an unbounded arithmetic progression.
+            # This is valid in ANSI LOOP, and is often paired with another driver that
+            # terminates the overall loop.
+            if driver_kind is None and saw_driver_keyword and driver_start is not None:
+                driver_kind = 'for-from'
+
+            # Decide whether this clause is a driver or an aux binding.
+            if iteration_drivers and (not saw_driver_keyword) and (driver_kind == 'for-equals'):
+                # Second/subsequent "FOR var = ..." is treated as aux binding.
+                aux_for_bindings.append((candidate_var, aux_init, aux_then))
+                i = j
+                continue
+
+            if driver_kind is None:
+                # e.g., "FOR X" without IN/FROM/=
+                raise lisptype.LispNotImplementedError('LOOP FOR clause missing iteration spec')
+
+            driver = {
+                'var': candidate_var,
+                'kind': driver_kind,
+                'start': driver_start,
+                'end': driver_end,
+                'step': driver_step,
+                'list': driver_list,
+            }
+            iteration_drivers.append(driver)
+
+            # Preserve previous single-driver state for existing execution paths.
+            if iteration_var is None:
+                iteration_var = candidate_var
+                iteration_type = driver_kind
+                if driver_kind in ('for-range', 'for-below'):
+                    iteration_start = driver_start if driver_start is not None else 0
+                    iteration_end = driver_end
+                    if driver_step is not None:
+                        iteration_step = driver_step
+                elif driver_kind in ('for-in', 'for-on', 'for-across'):
+                    iteration_list = driver_list
+                elif driver_kind == 'for-equals':
+                    iteration_start = driver_start
+                    iteration_step = driver_step
+
             i = j
+            continue
             
         elif name == 'WHILE':
             # If we already have an iteration type (e.g. FOR clause), this is just a termination test
@@ -901,6 +1011,18 @@ def eval_loop(form, env):
     accumulated = []
     sum_result = 0
     count_result = 0
+
+    aux_first_iter = True
+
+    def bind_aux(loop_env):
+        """Bind auxiliary FOR variables for this iteration."""
+        nonlocal aux_first_iter
+        if not aux_for_bindings:
+            return
+        for var, init_form, then_form in aux_for_bindings:
+            form = init_form if (aux_first_iter or then_form is None) else then_form
+            loop_env.set_variable(var, eval(form, loop_env))
+        aux_first_iter = False
     
     def should_execute_body(loop_env):
         """Check conditionals for body forms."""
@@ -978,15 +1100,172 @@ def eval_loop(form, env):
                 if iteration_var:
                     print(f"*** LOOP var: {iteration_var} ***", file=sys.stderr)
                 sys.stderr.flush()
+
+    def _termination_break(loop_env):
+        """Check termination_type/iteration_test if present."""
+        if iteration_test is None or termination_type is None:
+            return False
+        test_result = eval(iteration_test, loop_env)
+        if termination_type == 'until' and lisptype.is_truthy(test_result):
+            return True
+        if termination_type == 'while' and not lisptype.is_truthy(test_result):
+            return True
+        return False
+
+    def _init_driver(loop_env, driver):
+        kind = driver['kind']
+        if kind in ('for-in', 'for-on'):
+            driver['_cur'] = eval(driver['list'], loop_env)
+            return True
+        if kind == 'for-across':
+            driver['_seq'] = eval(driver['list'], loop_env)
+            driver['_idx'] = 0
+            return True
+        if kind in ('for-range', 'for-below'):
+            start_form = driver.get('start', 0)
+            end_form = driver.get('end')
+            step_form = driver.get('step')
+            if step_form is None:
+                step_form = 1
+            start = eval(start_form, loop_env) if not isinstance(start_form, int) else start_form
+            end = eval(end_form, loop_env)
+            step = eval(step_form, loop_env) if not isinstance(step_form, int) else step_form
+            if step == 0:
+                raise lisptype.LispNotImplementedError('LOOP BY step cannot be 0')
+            driver['_cur'] = start
+            driver['_end'] = end
+            driver['_step'] = step
+            return True
+        if kind == 'for-from':
+            start_form = driver.get('start', 0)
+            step_form = driver.get('step')
+            if step_form is None:
+                step_form = 1
+            start = eval(start_form, loop_env) if not isinstance(start_form, int) else start_form
+            step = eval(step_form, loop_env) if not isinstance(step_form, int) else step_form
+            if step == 0:
+                raise lisptype.LispNotImplementedError('LOOP BY step cannot be 0')
+            driver['_cur'] = start
+            driver['_step'] = step
+            return True
+        if kind == 'for-equals':
+            start_form = driver.get('start')
+            step_form = driver.get('step')
+            driver['_cur'] = eval(start_form, loop_env)
+            driver['_step_form'] = step_form
+            return True
+        raise lisptype.LispNotImplementedError(f'LOOP driver kind not implemented: {kind}')
+
+    def _driver_has_value(driver):
+        kind = driver['kind']
+        if kind in ('for-in', 'for-on'):
+            return _consp_internal(driver.get('_cur'))
+        if kind == 'for-across':
+            seq = driver.get('_seq')
+            idx = driver.get('_idx', 0)
+            if isinstance(seq, str):
+                return idx < len(seq)
+            if hasattr(seq, '__len__'):
+                return idx < len(seq)
+            return False
+        if kind == 'for-range':
+            cur = driver.get('_cur')
+            end = driver.get('_end')
+            step = driver.get('_step')
+            if step is None:
+                return False
+            return (cur <= end) if step > 0 else (cur >= end)
+        if kind == 'for-below':
+            cur = driver.get('_cur')
+            end = driver.get('_end')
+            step = driver.get('_step')
+            if step is None:
+                return False
+            return (cur < end) if step > 0 else (cur > end)
+        if kind == 'for-from':
+            return True
+        if kind == 'for-equals':
+            return True
+        return False
+
+    def _bind_driver(loop_env, driver):
+        kind = driver['kind']
+        var = driver['var']
+        if kind == 'for-in':
+            _bind_varspec(loop_env, var, car(driver['_cur']))
+            return
+        if kind == 'for-on':
+            _bind_varspec(loop_env, var, driver['_cur'])
+            return
+        if kind == 'for-across':
+            seq = driver['_seq']
+            idx = driver['_idx']
+            if isinstance(seq, str):
+                _bind_varspec(loop_env, var, lisptype.Character(seq[idx]))
+            else:
+                _bind_varspec(loop_env, var, seq[idx])
+            return
+        if kind in ('for-range', 'for-below'):
+            _bind_varspec(loop_env, var, driver['_cur'])
+            return
+        if kind == 'for-from':
+            _bind_varspec(loop_env, var, driver['_cur'])
+            return
+        if kind == 'for-equals':
+            _bind_varspec(loop_env, var, driver['_cur'])
+            return
+
+    def _step_driver(loop_env, driver):
+        kind = driver['kind']
+        if kind in ('for-in', 'for-on'):
+            driver['_cur'] = cdr(driver['_cur'])
+            return
+        if kind == 'for-across':
+            driver['_idx'] = driver.get('_idx', 0) + 1
+            return
+        if kind in ('for-range', 'for-below'):
+            driver['_cur'] = driver['_cur'] + driver['_step']
+            return
+        if kind == 'for-from':
+            driver['_cur'] = driver['_cur'] + driver['_step']
+            return
+        if kind == 'for-equals':
+            step_form = driver.get('_step_form')
+            if step_form is not None:
+                driver['_cur'] = eval(step_form, loop_env)
+            else:
+                driver['_cur'] = eval(driver.get('start'), loop_env)
+            return
     
-    if iteration_type == 'while':
+    # Parallel drivers: iterate while all drivers can produce values.
+    if len(iteration_drivers) > 1:
+        loop_env = lisptype.Environment(env)
+        for d in iteration_drivers:
+            _init_driver(loop_env, d)
+
+        while all(_driver_has_value(d) for d in iteration_drivers):
+            check_loop_timeout()
+            if _termination_break(loop_env):
+                break
+
+            for d in iteration_drivers:
+                _bind_driver(loop_env, d)
+            bind_aux(loop_env)
+            execute_iteration_body(loop_env)
+
+            for d in iteration_drivers:
+                _step_driver(loop_env, d)
+
+    elif iteration_type == 'while':
         while lisptype.is_truthy(eval(iteration_test, env)):
             check_loop_timeout()
+            bind_aux(env)
             execute_iteration_body(env)
             
     elif iteration_type == 'until':
         while True:
             check_loop_timeout()
+            bind_aux(env)
             execute_iteration_body(env)
             if lisptype.is_truthy(eval(iteration_test, env)):
                 break
@@ -995,6 +1274,7 @@ def eval_loop(form, env):
         count = eval(repeat_count, env)
         for _ in range(count):
             check_loop_timeout()
+            bind_aux(env)
             execute_iteration_body(env)
             
     elif iteration_type == 'for-range':
@@ -1009,7 +1289,10 @@ def eval_loop(form, env):
         compare = (lambda a, b: a <= b) if step > 0 else (lambda a, b: a >= b)
         while compare(cur, end):
             check_loop_timeout()
-            loop_env.set_variable(iteration_var, cur)
+            if _termination_break(loop_env):
+                break
+            _bind_varspec(loop_env, iteration_var, cur)
+            bind_aux(loop_env)
             execute_iteration_body(loop_env)
             cur = cur + step
             
@@ -1025,7 +1308,10 @@ def eval_loop(form, env):
         compare = (lambda a, b: a < b) if step > 0 else (lambda a, b: a > b)
         while compare(cur, end):
             check_loop_timeout()
-            loop_env.set_variable(iteration_var, cur)
+            if _termination_break(loop_env):
+                break
+            _bind_varspec(loop_env, iteration_var, cur)
+            bind_aux(loop_env)
             execute_iteration_body(loop_env)
             cur = cur + step
             
@@ -1035,7 +1321,10 @@ def eval_loop(form, env):
         cur = lst
         while _consp_internal(cur):
             check_loop_timeout()
-            loop_env.set_variable(iteration_var, car(cur))
+            if _termination_break(loop_env):
+                break
+            _bind_varspec(loop_env, iteration_var, car(cur))
+            bind_aux(loop_env)
             execute_iteration_body(loop_env)
             cur = cdr(cur)
             
@@ -1045,7 +1334,10 @@ def eval_loop(form, env):
         cur = lst
         while _consp_internal(cur):
             check_loop_timeout()
-            loop_env.set_variable(iteration_var, cur)
+            if _termination_break(loop_env):
+                break
+            _bind_varspec(loop_env, iteration_var, cur)
+            bind_aux(loop_env)
             execute_iteration_body(loop_env)
             cur = cdr(cur)
             
@@ -1059,13 +1351,15 @@ def eval_loop(form, env):
             # String - iterate over characters
             for char in seq:
                 check_loop_timeout()
-                loop_env.set_variable(iteration_var, lisptype.Character(char))
+                _bind_varspec(loop_env, iteration_var, lisptype.Character(char))
+                bind_aux(loop_env)
                 execute_iteration_body(loop_env)
         elif hasattr(seq, '__iter__') and hasattr(seq, '__len__') and not _consp_internal(seq):
             # Array/vector with __iter__ (AdjustableVector, list, tuple, etc.)
             for elem in seq:
                 check_loop_timeout()
-                loop_env.set_variable(iteration_var, elem)
+                _bind_varspec(loop_env, iteration_var, elem)
+                bind_aux(loop_env)
                 execute_iteration_body(loop_env)
         else:
             raise lisptype.LispNotImplementedError(f'LOOP FOR ACROSS requires a vector or string, got {type(seq).__name__}')
@@ -1076,11 +1370,12 @@ def eval_loop(form, env):
         loop_env = lisptype.Environment(env)
         # Initial value
         cur_value = eval(iteration_start, loop_env)
-        loop_env.set_variable(iteration_var, cur_value)
+        _bind_varspec(loop_env, iteration_var, cur_value)
         
         first_iteration = True
         while True:
             check_loop_timeout()
+            bind_aux(loop_env)
             
             # Check termination condition
             if iteration_test is not None:
@@ -1096,11 +1391,11 @@ def eval_loop(form, env):
             # Step to next value
             if iteration_step is not None:
                 cur_value = eval(iteration_step, loop_env)
-                loop_env.set_variable(iteration_var, cur_value)
+                _bind_varspec(loop_env, iteration_var, cur_value)
             else:
                 # Without THEN, just re-evaluate init-form
                 cur_value = eval(iteration_start, loop_env)
-                loop_env.set_variable(iteration_var, cur_value)
+                _bind_varspec(loop_env, iteration_var, cur_value)
                 
     elif iteration_type is None:
         # No iteration - simple loop body, execute once

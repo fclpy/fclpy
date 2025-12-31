@@ -417,6 +417,93 @@ def eval(form, env=None):
                 # Don't evaluate - pass the symbol/keyword directly
                 from .utilities_symbols import in_package
                 return in_package(name_arg)
+            elif operator.name == 'DEFPACKAGE':
+                # DEFPACKAGE is a macro in Common Lisp - option clauses must not be evaluated.
+                # Example: (DEFPACKAGE 'FOO (:USE 'CL) (:INTERN 'A 'B) (:EXPORT 'A))
+                args = cdr(form)
+                if args is None or args == lisptype.NIL:
+                    raise lisptype.LispError("DEFPACKAGE requires a package name")
+
+                name_arg = car(args)
+                opt_forms = cdr(args)
+
+                def _unquote(x):
+                    if isinstance(x, lisptype.lispCons):
+                        op = car(x)
+                        if isinstance(op, lisptype.LispSymbol) and op.name == 'QUOTE':
+                            qargs = cdr(x)
+                            if qargs is not None and qargs != lisptype.NIL:
+                                return car(qargs)
+                    return x
+
+                def _designator_to_name(x):
+                    x = _unquote(x)
+                    if isinstance(x, lisptype.lispKeyword):
+                        return x.name
+                    if isinstance(x, lisptype.LispSymbol):
+                        return x.name
+                    if isinstance(x, str):
+                        return x
+                    return str(x)
+
+                pkg_name = _designator_to_name(name_arg)
+                pkg = lisptype.make_package(pkg_name)
+
+                cur = opt_forms
+                while _consp_internal(cur):
+                    clause = car(cur)
+                    if _consp_internal(clause):
+                        key = car(clause)
+                        rest = cdr(clause)
+
+                        if isinstance(key, lisptype.lispKeyword):
+                            key_name = key.name.upper()
+                        elif isinstance(key, lisptype.LispSymbol):
+                            key_name = key.name.upper()
+                            if key_name.startswith(':'):
+                                key_name = key_name[1:]
+                        else:
+                            key_name = str(key).upper()
+
+                        if key_name == 'USE':
+                            use_list = []
+                            r = rest
+                            while _consp_internal(r):
+                                use_list.append(_designator_to_name(car(r)))
+                                r = cdr(r)
+                            pkg.use_packages = []
+                            for use_pkg_name in use_list:
+                                use_pkg = lisptype.find_package(use_pkg_name)
+                                if use_pkg is None:
+                                    use_pkg = lisptype.make_package(use_pkg_name)
+                                if use_pkg not in pkg.use_packages:
+                                    pkg.use_packages.append(use_pkg)
+
+                        elif key_name == 'NICKNAMES':
+                            nicknames = []
+                            r = rest
+                            while _consp_internal(r):
+                                nicknames.append(_designator_to_name(car(r)))
+                                r = cdr(r)
+                            pkg.nick_names = nicknames
+
+                        elif key_name == 'INTERN':
+                            r = rest
+                            while _consp_internal(r):
+                                sym_name = _designator_to_name(car(r))
+                                pkg.intern(sym_name, external=False)
+                                r = cdr(r)
+
+                        elif key_name == 'EXPORT':
+                            r = rest
+                            while _consp_internal(r):
+                                sym_name = _designator_to_name(car(r))
+                                pkg.intern(sym_name, external=True)
+                                r = cdr(r)
+
+                    cur = cdr(cur)
+
+                return pkg
         
         # Macro handling: if operator names a macro function, expand first
         if isinstance(operator, lisptype.LispSymbol):

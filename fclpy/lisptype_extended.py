@@ -30,6 +30,11 @@ class Environment(lispT):
         self.parent = parent
         self.bindings = None  # Singly-linked list of Binding objects
         self.function_bindings = None  # Singly-linked list of FunctionBinding objects
+
+        # Fast name-based caches to speed up legacy APIs (find_func/find_variable).
+        # These legacy lookups compare by symbol.name, not by symbol identity.
+        self._function_map = {}
+        self._variable_map = {}
         # Legacy attributes for old API compatibility
         if parent is None:
             self.variable_bindings = None
@@ -56,6 +61,11 @@ class Environment(lispT):
         
         # Create new binding that shadows previous bindings
         self.bindings = Binding(symbol, value, self.bindings, env=self)
+        # Keep legacy name-based variable lookup fast.
+        try:
+            self._variable_map[symbol.name] = value
+        except Exception:
+            pass
         return value
     
     def lookup(self, symbol):
@@ -97,6 +107,11 @@ class Environment(lispT):
             raise TypeError(f"bind_function: {symbol} is not a symbol")
         
         self.function_bindings = FunctionBinding(symbol, func, self.function_bindings)
+        # Keep legacy name-based function lookup fast.
+        try:
+            self._function_map[symbol.name] = func
+        except Exception:
+            pass
         return func
     
     def lookup_function(self, symbol):
@@ -132,9 +147,18 @@ class Environment(lispT):
     
     def find_func(self, sym):
         """Legacy: find a function by symbol name."""
+        try:
+            if sym.name in self._function_map:
+                return self._function_map[sym.name]
+        except Exception:
+            pass
         b = self.function_bindings
         while b is not None:
             if b.symbol.name == sym.name:
+                try:
+                    self._function_map[sym.name] = b.value
+                except Exception:
+                    pass
                 return b.value
             b = b.next
         # Check parent
@@ -145,6 +169,10 @@ class Environment(lispT):
     def add_variable(self, symbol, value):
         """Legacy: add a variable binding (use bind)."""
         self.variable_bindings = Binding(symbol, value, self.variable_bindings, self)
+        try:
+            self._variable_map[symbol.name] = value
+        except Exception:
+            pass
     
     def has_variable(self, sym):
         """Check if a variable binding exists (distinguishes unbound from bound-to-None)."""
@@ -160,9 +188,18 @@ class Environment(lispT):
     
     def find_variable(self, sym):
         """Legacy: find a variable by symbol name."""
+        try:
+            if sym.name in self._variable_map:
+                return self._variable_map[sym.name]
+        except Exception:
+            pass
         b = self.variable_bindings
         while b is not None:
             if b.symbol.name == sym.name:
+                try:
+                    self._variable_map[sym.name] = b.value
+                except Exception:
+                    pass
                 return b.value
             b = b.next
         # Check parent
@@ -176,6 +213,10 @@ class Environment(lispT):
         while b is not None:
             if b.symbol.name == sym.name:
                 b.value = value
+                try:
+                    self._variable_map[sym.name] = value
+                except Exception:
+                    pass
                 return value
             b = b.next
         # Check parent

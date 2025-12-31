@@ -17,41 +17,42 @@ fclpy is a Python implementation of Common Lisp. The goal is to achieve ANSI Com
 
 **Loading Results** (after fixes):
 - `gclload1.lsp` - ✅ Loads cleanly (0 errors)
-- `gclload2.lsp` - ⚠️ ~680 errors during loading (down from 1154)
+- `gclload2.lsp` - ⚠️ 575 errors during loading
 
-**Error Reduction Progress**:
-| Fix | Errors Fixed | Description |
-|-----|--------------|-------------|
-| DEFMACRO &key parameters | 314 | Macro keyword params weren't being bound |
-| Supplied-p parameters | 164 | `(param default supplied-p)` form not handled |
-| LOOP FOR-AS-EQUALS-THEN | 71 | `for x = 1 then (1+ x)` wasn't recognized |
-| **Total Fixed** | **549** | Down from 1154 to ~680 |
+**Progress This Session**:
+| Change | Outcome | Notes |
+|--------|---------|------|
+| Environment lookup caching | ✅ Unblocked gclload2 completion | Removed prior hang/slowdown from O(n) `find_func` scans |
+| Treat `DEFPACKAGE` as special-form/macro | ✅ Reduced loader failures | Avoids evaluating option clauses like `(:USE ...)` |
+| LOOP destructuring varspec | ✅ Fixed `FOR (KEY . VAL) IN ...` | Supports dotted-pair and simple list patterns |
+| Fix `NCONC` for Lisp cons lists | ✅ Removed `'lispCons' object has no attribute 'extend'` | Implements safe cons-aware concatenation |
+| Net effect | ✅ 592 → 575 | gclload2 baseline after these fixes |
 
-**Current Error Categories** (~680 total):
+**Current Error Categories** (575 total):
 | Category | Count | Description |
 |----------|-------|-------------|
-| Unbound variable | 354 | Variables referenced before definition |
-| Assertion failed | 268 | Tests with failing assertions during load |
-| Other | 34 | Miscellaneous errors |
-| Not implemented | 12 | Explicit not-implemented messages |
-| Not a function | 8 | Symbol called as function but isn't |
-| Argument errors | 3 | Wrong argument count/type |
+| Unbound variable | 268 | Variables referenced before definition (mostly CLOS/test harness) |
+| Assertion failed | 202 | Tests with failing assertions during load |
+| Other | 85 | Python type errors and misc runtime failures |
+| Not implemented | 2 | Explicit not-implemented messages |
+| Not a function | 6 | Symbol called as function but isn't |
+| Argument errors | 9 | Wrong argument count/type |
 | EOF | 1 | Premature end of file |
 
 **Remaining High-Frequency Issues**:
 - `CLASS-*` (200+) - CLOS class definitions not loading (DEFCLASS/DEFGENERIC needed)
 - `DGMC-CLASS-*` (70x) - CLOS generic function tests
-- `ACROSS` - LOOP FOR-AS-ACROSS clause not implemented
-- Various Python type errors in edge cases
+- `DEFSETF`/compiler-macro-related harness macros - several still effectively unimplemented
+- `DEFSTRUCT-WITH-TESTS` failures: `'LispSymbol' object is not iterable` (struct tests)
+- Some remaining LOOP edge-cases (now down to 2 LOOP-category loader errors)
+- Various Python type errors in edge cases (e.g., cons/list sequence APIs)
 
 ### Fixes Completed This Session
-- ✅ DEFMACRO `&key` parameter binding (copied from DEFUN)
-- ✅ Supplied-p parameter support for `(param default supplied-p)` form
-- ✅ LOOP FOR-AS-EQUALS-THEN: `for x = 1 then (1+ x) until (> x 5)`
-- ✅ LOOP termination types can combine with FOR iteration
-- ✅ Function namespace lookup (fixed "Not a function: NAME")
-- ✅ LOOP conditional scoping (fixed infinite loop in DEFTEST)
-- ✅ LISP_CWD environment variable for path resolution
+- ✅ Loader diagnostics + gclload1 regression kept clean (0 errors)
+- ✅ Environment lookup caching (gclload2 performance)
+- ✅ `DEFPACKAGE` handled as macro/special-form in evaluator
+- ✅ LOOP destructuring varspec support `(KEY . VAL)` and `(A B ...)`
+- ✅ `NCONC` made cons-aware (removed `.extend` crashes)
 
 ### Running Error Capture
 

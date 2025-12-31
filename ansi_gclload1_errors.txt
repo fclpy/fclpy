@@ -1,0 +1,9 @@
+ANSI gclload1.lsp Loading Errors
+Generated: 2025-12-31T11:22:50.538870
+============================================================
+
+ANSI Test Directory: C:\Users\ACER\git\fclpy\ansi-test
+gclload1: C:\Users\ACER\git\fclpy\ansi-test\gclload1.lsp
+
+Summary: 0 total errors
+

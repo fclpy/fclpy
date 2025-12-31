@@ -16,6 +16,9 @@ def main():
         os.path.dirname(__file__), '..', '..', 'ansi-test'
     ))
     os.environ['LISP_CWD'] = ansi_test_dir
+    # Keep default runs lightweight; opt into tracebacks when needed.
+    # The parser below only collects structured "Error evaluating expression" lines.
+    os.environ.setdefault('FCLPY_LOAD_TRACEBACK', '0')
     
     output_file = os.path.join(os.path.dirname(__file__), '..', 'ansi_load_errors.txt')
     
@@ -69,7 +72,16 @@ def main():
     
     # Parse all errors
     all_output = gclload1_output + "\n" + gclload2_output
-    errors = [line.strip() for line in all_output.split('\n') if 'Error' in line or 'error' in line]
+
+    def _is_structured_error_line(line: str) -> bool:
+        s = line.lstrip()
+        return (
+            s.startswith('Error evaluating expression')
+            or s.startswith('Error loading file')
+            or s.startswith('Error: File')
+        )
+
+    errors = [line.strip() for line in all_output.split('\n') if _is_structured_error_line(line)]
     
     # Categorize errors
     error_types = {
