@@ -231,14 +231,19 @@ def eval_defun(form, env):
                 func_env.add_variable(rest_param, lisptype.NIL)
         
         # Bind keyword parameters
-        # First, initialize all keyword params to their defaults or NIL
+        # First, initialize all keyword params to their defaults and supplied-p to NIL
         for param_spec in keyword_params:
             if _consp_internal(param_spec):
                 param = car(param_spec)
-                default_form = car(cdr(param_spec))
+                rest = cdr(param_spec)
+                default_form = car(rest) if _consp_internal(rest) else None
+                # Check for supplied-p parameter (third element)
+                rest2 = cdr(rest) if _consp_internal(rest) else None
+                supplied_p = car(rest2) if _consp_internal(rest2) else None
             else:
                 param = param_spec
                 default_form = None
+                supplied_p = None
             
             # Default value
             if default_form is not None:
@@ -246,6 +251,10 @@ def eval_defun(form, env):
                 func_env.add_variable(param, default_value)
             else:
                 func_env.add_variable(param, lisptype.NIL)
+            
+            # Initialize supplied-p to NIL (not supplied yet)
+            if supplied_p is not None:
+                func_env.add_variable(supplied_p, lisptype.NIL)
         
         # Now process actual keyword arguments from the call
         i = keyword_start
@@ -259,11 +268,18 @@ def eval_defun(form, env):
                 for param_spec in keyword_params:
                     if _consp_internal(param_spec):
                         param = car(param_spec)
+                        rest = cdr(param_spec)
+                        rest2 = cdr(rest) if _consp_internal(rest) else None
+                        supplied_p = car(rest2) if _consp_internal(rest2) else None
                     else:
                         param = param_spec
+                        supplied_p = None
                     
                     if isinstance(param, lisptype.LispSymbol) and param.name.upper() == key_name:
                         func_env.add_variable(param, value)
+                        # Set supplied-p to T when keyword is provided
+                        if supplied_p is not None:
+                            func_env.add_variable(supplied_p, lisptype.T)
                         break
                 i += 2
             else:
@@ -395,7 +411,61 @@ def eval_defmacro(form, env):
             else:
                 macro_env.add_variable(rest_param, lisptype.NIL)
         
-        # TODO: Handle &key parameters properly
+        # Bind keyword parameters
+        # First, initialize all keyword params to their defaults and supplied-p to NIL
+        for param_spec in keyword_params:
+            if _consp_internal(param_spec):
+                param = car(param_spec)
+                rest = cdr(param_spec)
+                default_form = car(rest) if _consp_internal(rest) else None
+                # Check for supplied-p parameter (third element)
+                rest2 = cdr(rest) if _consp_internal(rest) else None
+                supplied_p = car(rest2) if _consp_internal(rest2) else None
+            else:
+                param = param_spec
+                default_form = None
+                supplied_p = None
+            
+            # Default value
+            if default_form is not None:
+                default_value = eval(default_form, macro_env)
+                macro_env.add_variable(param, default_value)
+            else:
+                macro_env.add_variable(param, lisptype.NIL)
+            
+            # Initialize supplied-p to NIL (not supplied yet)
+            if supplied_p is not None:
+                macro_env.add_variable(supplied_p, lisptype.NIL)
+        
+        # Now process actual keyword arguments from the call
+        keyword_start = arg_idx
+        i = keyword_start
+        while i < len(call_args) - 1:
+            key = call_args[i]
+            value = call_args[i + 1]
+            
+            if isinstance(key, lisptype.lispKeyword):
+                key_name = key.name.upper()
+                # Find matching parameter
+                for param_spec in keyword_params:
+                    if _consp_internal(param_spec):
+                        param = car(param_spec)
+                        rest = cdr(param_spec)
+                        rest2 = cdr(rest) if _consp_internal(rest) else None
+                        supplied_p = car(rest2) if _consp_internal(rest2) else None
+                    else:
+                        param = param_spec
+                        supplied_p = None
+                    
+                    if isinstance(param, lisptype.LispSymbol) and param.name.upper() == key_name:
+                        macro_env.add_variable(param, value)
+                        # Set supplied-p to T when keyword is provided
+                        if supplied_p is not None:
+                            macro_env.add_variable(supplied_p, lisptype.T)
+                        break
+                i += 2
+            else:
+                i += 1
 
         # If no body, return NIL
         if not _consp_internal(actual_body):

@@ -723,9 +723,10 @@ def eval_loop(form, env):
     i = 0
     
     # Loop state
-    iteration_type = None  # 'for-range', 'for-in', 'for-on', 'while', 'until', 'repeat', None
+    iteration_type = None  # 'for-range', 'for-in', 'for-on', 'for-equals', 'while', 'until', 'repeat', None
     iteration_var = None
-    iteration_test = None  # for WHILE/UNTIL
+    iteration_test = None  # for WHILE/UNTIL termination
+    termination_type = None  # 'while' or 'until' - can be used with FOR clauses
     iteration_start = 0
     iteration_end = None
     iteration_step = 1
@@ -748,7 +749,7 @@ def eval_loop(form, env):
             if not isinstance(iteration_var, lisptype.LispSymbol):
                 raise lisptype.LispNotImplementedError('LOOP FOR requires a symbol')
             j = i + 2
-            # Look for FROM/TO/BY/IN/ON/ACROSS
+            # Look for FROM/TO/BY/IN/ON/ACROSS/= (THEN)
             while j < len(forms):
                 f = forms[j]
                 fname = sym_name(f)
@@ -774,21 +775,42 @@ def eval_loop(form, env):
                     iteration_list = forms[j+1]
                     iteration_type = 'for-on'
                     j += 2
+                elif fname == '=':
+                    # FOR x = init-form [THEN step-form]
+                    iteration_start = forms[j+1]
+                    iteration_type = 'for-equals'
+                    j += 2
+                    # Check for THEN
+                    if j < len(forms) and sym_name(forms[j]) == 'THEN':
+                        iteration_step = forms[j+1]  # step form
+                        j += 2
+                    else:
+                        iteration_step = None  # No step, just re-eval init each time
+                elif fname == 'THEN':
+                    # THEN after = was already handled above, but in case it wasn't
+                    iteration_step = forms[j+1]
+                    j += 2
                 elif fname in ('DO', 'DOING', 'COLLECT', 'COLLECTING', 'APPEND', 'APPENDING',
                                'NCONC', 'NCONCING', 'SUM', 'SUMMING', 'COUNT', 'COUNTING',
-                               'WHEN', 'UNLESS', 'IF', 'RETURN', 'FINALLY'):
+                               'WHEN', 'UNLESS', 'IF', 'RETURN', 'FINALLY', 'UNTIL', 'WHILE'):
                     break
                 else:
                     break
             i = j
             
         elif name == 'WHILE':
-            iteration_type = 'while'
+            # If we already have an iteration type (e.g. FOR clause), this is just a termination test
+            if iteration_type is None:
+                iteration_type = 'while'
+            termination_type = 'while'
             iteration_test = forms[i+1]
             i += 2
             
         elif name == 'UNTIL':
-            iteration_type = 'until'
+            # If we already have an iteration type (e.g. FOR clause), this is just a termination test
+            if iteration_type is None:
+                iteration_type = 'until'
+            termination_type = 'until'
             iteration_test = forms[i+1]
             i += 2
             
@@ -1022,6 +1044,38 @@ def eval_loop(form, env):
             execute_iteration_body(loop_env)
             cur = cdr(cur)
             
+    elif iteration_type == 'for-equals':
+        # FOR var = init-form [THEN step-form]
+        # iteration_start = init-form, iteration_step = step-form or None
+        loop_env = lisptype.Environment(env)
+        # Initial value
+        cur_value = eval(iteration_start, loop_env)
+        loop_env.set_variable(iteration_var, cur_value)
+        
+        first_iteration = True
+        while True:
+            check_loop_timeout()
+            
+            # Check termination condition
+            if iteration_test is not None:
+                test_result = eval(iteration_test, loop_env)
+                if termination_type == 'until' and lisptype.is_truthy(test_result):
+                    break
+                if termination_type == 'while' and not lisptype.is_truthy(test_result):
+                    break
+            
+            execute_iteration_body(loop_env)
+            first_iteration = False
+            
+            # Step to next value
+            if iteration_step is not None:
+                cur_value = eval(iteration_step, loop_env)
+                loop_env.set_variable(iteration_var, cur_value)
+            else:
+                # Without THEN, just re-evaluate init-form
+                cur_value = eval(iteration_start, loop_env)
+                loop_env.set_variable(iteration_var, cur_value)
+                
     elif iteration_type is None:
         # No iteration - simple loop body, execute once
         # Or infinite loop if there are body forms

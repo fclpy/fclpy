@@ -1,24 +1,25 @@
 ANSI Test Loading Errors
-Generated: 2025-12-31T09:14:22.194818
+Generated: 2025-12-31T09:39:51.076286
 ============================================================
 
-Summary: 1154 total errors
+Summary: 680 total errors
 
 Error Categories:
-  Unbound variable: 829
+  Unbound variable: 354
   Assertion failed: 268
-  Other: 33
+  Other: 34
   Not implemented: 12
   Not a function: 8
   argument: 3
   EOF: 1
 
 ============================================================
-UNIQUE ERROR TYPES (239):
+UNIQUE ERROR TYPES (234):
 ============================================================
 
 [1x] 
 [8x] '<' not supported between instances of 'lispNull' and 'int'
+[1x] 'lispCons' object cannot be interpreted as an integer
 [1x] 'lispCons' object is not subscriptable
 [1x] 'lispNull' object is not iterable
 [1x] *CAM-GF-03-METHOD1*: Not implemented
@@ -26,6 +27,7 @@ UNIQUE ERROR TYPES (239):
 [1x] *CLASS-28-RESET-FN*: Not implemented
 [1x] *PATTERN-SUBLISTS*: Not implemented
 [1x] *SHARED-INIT-VAR-02-INIT*: Not implemented
+[1x] +CODE-CHARS+: Not implemented
 [1x] : Not implemented
 [3x] :USE: Not implemented
 [1x] ACCESSOR-5-1-2-6: Not implemented
@@ -33,9 +35,7 @@ UNIQUE ERROR TYPES (239):
 [1x] ALLOCATE-INSTANCE-CLASS-01: Not implemented
 [1x] ALLOCATE-INSTANCE-CLASS-02: Not implemented
 [268x] Assertion failed
-[34x] BUILD-FORM-P: Not implemented
-[54x] BUILD-FORM: Not implemented
-[1x] C: Not implemented
+[2x] C: Not implemented
 [1x] CHANGE-CLASS-CLASS-01A: Not implemented
 [1x] CHANGE-CLASS-CLASS-01B: Not implemented
 [1x] CHANGE-CLASS-CLASS-02A: Not implemented
@@ -48,7 +48,6 @@ UNIQUE ERROR TYPES (239):
 [1x] CHANGE-CLASS-CLASS-06: Not implemented
 [1x] CHANGE-CLASS-CLASS-07: Not implemented
 [1x] CHANGE-CLASS-CLASS-07B: Not implemented
-[4x] CHARS: Not implemented
 [1x] CLASS-01: Not implemented
 [1x] CLASS-0201: Not implemented
 [1x] CLASS-0202: Not implemented
@@ -172,13 +171,14 @@ UNIQUE ERROR TYPES (239):
 [1x] DMC-GF-04: Not implemented
 [1x] DMC-GF-07: Not implemented
 [1x] DMC-LONG-GF-11B: Not implemented
-[76x] ELEMENT-TYPE-P: Not implemented
+[71x] E: Not implemented
 [1x] EOF during list read
 [1x] EQUALP-CLASS-36: Not implemented
 [2x] ERROR
 [4x] EVEN-ARRAY: Not implemented
 [1x] Expected a class, got T
 [1x] FLET.74: Not implemented
+[1x] FORMS2: Not implemented
 [1x] GOOD): Not implemented
 [2x] I2: Not implemented
 [1x] LABELS.52: Not implemented
@@ -192,7 +192,6 @@ UNIQUE ERROR TYPES (239):
 [1x] MAKE-LOAD-FORM-CLASS-01: Not implemented
 [1x] MAKE-LOAD-FORM-CLASS-04: Not implemented
 [1x] MAKE-LOAD-FORM-CONDITION-03: Not implemented
-[37x] MARGIN: Not implemented
 [1x] MLFSS-02: Not implemented
 [1x] MQ-CLASS-01: Not implemented
 [1x] MQ-CLASS-02: Not implemented
@@ -200,8 +199,6 @@ UNIQUE ERROR TYPES (239):
 [1x] N: Not implemented
 [1x] NIL
 [10x] Not implemented
-[8x] PREFIX: Not implemented
-[237x] PRETTY: Not implemented
 [1x] PRINT-LEVEL-CONDITION: Not implemented
 [1x] PRINT-LEVEL-TEST-CLASS: Not implemented
 [1x] REINIT-CLASS-01: Not implemented
@@ -238,7 +235,6 @@ UNIQUE ERROR TYPES (239):
 [1x] TAC-3-B: Not implemented
 [1x] TAC-3-BC: Not implemented
 [1x] TAC-3-C: Not implemented
-[71x] THEN: Not implemented
 [1x] TYPE-OF.EXAMPLE-CLASS: Not implemented
 [1x] UBS-CLASS-01: Not implemented
 [1x] UBS-CLASS-02: Not implemented
@@ -246,7 +242,6 @@ UNIQUE ERROR TYPES (239):
 [1x] UIFDC-CLASS-01B: Not implemented
 [1x] UIFDC-CLASS-02: Not implemented
 [6x] UPGRADED-TYPE: Not implemented
-[28x] USER: Not implemented
 [11x] Unmatched closing parenthesis
 [1x] WITH-ACCESSORS-CLASS-01: Not implemented
 [1x] WITH-SLOTS-CLASS-01: Not implemented
@@ -261,1157 +256,683 @@ UNIQUE ERROR TYPES (239):
 ALL ERRORS (FULL):
 ============================================================
 
-1. Error evaluating expression 14: Unbound variable: EVEN-ARRAY: Not implemented
-2. Error evaluating expression 19: Unbound variable: ACCESSOR-5-1-2-6: Not implemented
-3. Error evaluating expression 17: Not a function: N: Not implemented
-4. Error evaluating expression 22: Not a function: Y: Not implemented
-5. Error evaluating expression 25: Not a function: Y: Not implemented
-6. Error evaluating expression 27: Unbound variable: : Not implemented
-7. Error evaluating expression 42: Unbound variable: EQUALP-CLASS-36: Not implemented
-8. Error evaluating expression 73: Unbound variable: FLET.74: Not implemented
-9. Error evaluating expression 58: Unbound variable: LABELS.52: Not implemented
-10. Error evaluating expression 55: Unbound variable: MACROLET.52: Not implemented
-11. Error evaluating expression 4: LOOP FOR requires a symbol: Not implemented
-12. Error evaluating expression 5: LOOP FOR requires a symbol: Not implemented
-13. Error evaluating expression 6: LOOP FOR requires a symbol: Not implemented
-14. Error evaluating expression 7: LOOP FOR requires a symbol: Not implemented
-15. Error evaluating expression 8: LOOP FOR requires a symbol: Not implemented
-16. Error evaluating expression 9: LOOP FOR requires a symbol: Not implemented
-17. Error evaluating expression 11: LOOP FOR requires a symbol: Not implemented
-18. Error evaluating expression 12: LOOP FOR requires a symbol: Not implemented
-19. Error evaluating expression 1: Not a function: :USE: Not implemented
-20. Error evaluating expression 2: Not a function: :USE: Not implemented
-21. Error evaluating expression 1: Assertion failed
-22. Error evaluating expression 2: Assertion failed
-23. Error evaluating expression 3: Assertion failed
-24. Error evaluating expression 4: Assertion failed
-25. Error evaluating expression 5: 'lispNull' object is not iterable
-26. Error evaluating expression 1: Unbound variable: CLASS-01: Not implemented
-27. Error evaluating expression 5: Unbound variable: CLASS-02: Not implemented
-28. Error evaluating expression 9: Unbound variable: CLASS-03: Not implemented
-29. Error evaluating expression 13: Unbound variable: CLASS-04: Not implemented
-30. Error evaluating expression 28: Unbound variable: CLASS-05: Not implemented
-31. Error evaluating expression 30: Unbound variable: CLASS-06: Not implemented
-32. Error evaluating expression 31: Unbound variable: CLASS-06A: Not implemented
-33. Error evaluating expression 34: Unbound variable: CLASS-07: Not implemented
-34. Error evaluating expression 48: Unbound variable: CLASS-08: Not implemented
-35. Error evaluating expression 51: Unbound variable: CLASS-09: Not implemented
-36. Error evaluating expression 57: Unbound variable: CLASS-10: Not implemented
-37. Error evaluating expression 60: Unbound variable: CLASS-11: Not implemented
-38. Error evaluating expression 63: Unbound variable: CLASS-12: Not implemented
-39. Error evaluating expression 66: Unbound variable: CLASS-13: Not implemented
-40. Error evaluating expression 68: Unbound variable: CLASS-14: Not implemented
-41. Error evaluating expression 70: Unbound variable: CLASS-15: Not implemented
-42. Error evaluating expression 77: Unbound variable: CLASS-16: Not implemented
-43. Error evaluating expression 81: Unbound variable: CLASS-17: Not implemented
-44. Error evaluating expression 85: Unbound variable: CLASS-18: Not implemented
-45. Error evaluating expression 92: Unbound variable: CLASS-19: Not implemented
-46. Error evaluating expression 97: Unbound variable: CLASS-20: Not implemented
-47. Error evaluating expression 102: Unbound variable: CLASS-21: Not implemented
-48. Error evaluating expression 108: Unbound variable: CLASS-22: Not implemented
-49. Error evaluating expression 110: Unbound variable: CLASS-23: Not implemented
-50. Error evaluating expression 115: Unbound variable: CLASS-24: Not implemented
-51. Error evaluating expression 120: Unbound variable: CLASS-25: Not implemented
-52. Error evaluating expression 127: Unbound variable: CLASS-26: Not implemented
-53. Error evaluating expression 129: Unbound variable: CLASS-27: Not implemented
-54. Error evaluating expression 135: Unbound variable: *CLASS-28-RESET-FN*: Not implemented
-55. Error evaluating expression 1: Unbound variable: CLASS-0201: Not implemented
-56. Error evaluating expression 2: Unbound variable: CLASS-0202: Not implemented
-57. Error evaluating expression 5: Unbound variable: CLASS-0203: Not implemented
-58. Error evaluating expression 6: Unbound variable: CLASS-0204: Not implemented
-59. Error evaluating expression 9: Unbound variable: CLASS-0205A: Not implemented
-60. Error evaluating expression 10: Unbound variable: CLASS-0205B: Not implemented
-61. Error evaluating expression 13: Unbound variable: CLASS-0206A: Not implemented
-62. Error evaluating expression 14: Unbound variable: CLASS-0206B: Not implemented
-63. Error evaluating expression 16: Unbound variable: CLASS-0207A: Not implemented
-64. Error evaluating expression 17: Unbound variable: CLASS-0207B: Not implemented
-65. Error evaluating expression 18: Unbound variable: CLASS-0207C: Not implemented
-66. Error evaluating expression 20: Unbound variable: CLASS-0208A: Not implemented
-67. Error evaluating expression 21: Unbound variable: CLASS-0208B: Not implemented
-68. Error evaluating expression 26: Unbound variable: CLASS-0211A: Not implemented
-69. Error evaluating expression 27: Unbound variable: CLASS-0211B: Not implemented
-70. Error evaluating expression 29: Unbound variable: CLASS-0212A: Not implemented
-71. Error evaluating expression 30: Unbound variable: CLASS-0212B: Not implemented
-72. Error evaluating expression 36: Unbound variable: CLASS-0213A: Not implemented
-73. Error evaluating expression 37: Unbound variable: CLASS-0213B: Not implemented
-74. Error evaluating expression 40: Unbound variable: CLASS-0214A: Not implemented
-75. Error evaluating expression 41: Unbound variable: CLASS-0214B: Not implemented
-76. Error evaluating expression 44: Unbound variable: CLASS-0215A: Not implemented
-77. Error evaluating expression 45: Unbound variable: CLASS-0215B: Not implemented
-78. Error evaluating expression 48: Unbound variable: CLASS-0216A: Not implemented
-79. Error evaluating expression 49: Unbound variable: CLASS-0216B: Not implemented
-80. Error evaluating expression 52: Unbound variable: CLASS-0217A: Not implemented
-81. Error evaluating expression 53: Unbound variable: CLASS-0217B: Not implemented
-82. Error evaluating expression 58: Unbound variable: CLASS-0218A: Not implemented
-83. Error evaluating expression 59: Unbound variable: CLASS-0218B: Not implemented
-84. Error evaluating expression 63: Unbound variable: CLASS-0219A: Not implemented
-85. Error evaluating expression 64: Unbound variable: CLASS-0219B: Not implemented
-86. Error evaluating expression 67: Unbound variable: CLASS-0220A: Not implemented
-87. Error evaluating expression 68: Unbound variable: CLASS-0220B: Not implemented
-88. Error evaluating expression 73: Unbound variable: CLASS-0221A: Not implemented
-89. Error evaluating expression 74: Unbound variable: CLASS-0221B: Not implemented
-90. Error evaluating expression 75: Unbound variable: CLASS-0221C: Not implemented
-91. Error evaluating expression 79: Unbound variable: CLASS-0222A: Not implemented
-92. Error evaluating expression 80: Unbound variable: CLASS-0222B: Not implemented
-93. Error evaluating expression 83: Unbound variable: CLASS-0223A: Not implemented
-94. Error evaluating expression 84: Unbound variable: CLASS-0223B: Not implemented
-95. Error evaluating expression 1: Unbound variable: CLASS-0301A: Not implemented
-96. Error evaluating expression 2: Unbound variable: CLASS-0301B: Not implemented
-97. Error evaluating expression 3: Unbound variable: CLASS-0301C: Not implemented
-98. Error evaluating expression 5: Unbound variable: CLASS-0302A: Not implemented
-99. Error evaluating expression 6: Unbound variable: CLASS-0302B: Not implemented
-100. Error evaluating expression 7: Unbound variable: CLASS-0302C: Not implemented
-101. Error evaluating expression 9: Unbound variable: CLASS-0303A: Not implemented
-102. Error evaluating expression 10: Unbound variable: CLASS-0303B: Not implemented
-103. Error evaluating expression 11: Unbound variable: CLASS-0303C: Not implemented
-104. Error evaluating expression 13: Unbound variable: CLASS-0304A: Not implemented
-105. Error evaluating expression 14: Unbound variable: CLASS-0304B: Not implemented
-106. Error evaluating expression 15: Unbound variable: CLASS-0304C: Not implemented
-107. Error evaluating expression 16: Unbound variable: CLASS-0304D: Not implemented
-108. Error evaluating expression 18: Unbound variable: CLASS-0305A: Not implemented
-109. Error evaluating expression 19: Unbound variable: CLASS-0305B: Not implemented
-110. Error evaluating expression 20: Unbound variable: CLASS-0305C: Not implemented
-111. Error evaluating expression 21: Unbound variable: CLASS-0305D: Not implemented
-112. Error evaluating expression 23: Unbound variable: CLASS-0306A: Not implemented
-113. Error evaluating expression 24: Unbound variable: CLASS-0306B: Not implemented
-114. Error evaluating expression 25: Unbound variable: CLASS-0306C: Not implemented
-115. Error evaluating expression 26: Unbound variable: CLASS-0306D: Not implemented
-116. Error evaluating expression 27: Unbound variable: CLASS-0306E: Not implemented
-117. Error evaluating expression 28: Unbound variable: CLASS-0306F: Not implemented
-118. Error evaluating expression 29: Unbound variable: CLASS-0306G: Not implemented
-119. Error evaluating expression 30: Unbound variable: CLASS-0306H: Not implemented
-120. Error evaluating expression 1: Unbound variable: ALLOCATE-INSTANCE-CLASS-01: Not implemented
-121. Error evaluating expression 5: Unbound variable: ALLOCATE-INSTANCE-CLASS-02: Not implemented
-122. Error evaluating expression 8: Unbound variable: REINIT-CLASS-01: Not implemented
-123. Error evaluating expression 1: Unbound variable: SHARED-INIT-CLASS-01: Not implemented
-124. Error evaluating expression 14: Unbound variable: *SHARED-INIT-VAR-02-INIT*: Not implemented
-125. Error evaluating expression 24: Unbound variable: SHARED-INIT-CLASS-04A: Not implemented
-126. Error evaluating expression 25: Unbound variable: SHARED-INIT-CLASS-04B: Not implemented
-127. Error evaluating expression 33: Unbound variable: SHARED-INIT-CLASS-05: Not implemented
-128. Error evaluating expression 38: Unbound variable: SHARED-INIT-CLASS-06: Not implemented
-129. Error evaluating expression 48: Unbound variable: SHARED-INIT-CLASS-07: Not implemented
-130. Error evaluating expression 52: Unbound variable: SHARED-INIT-CLASS-08: Not implemented
-131. Error evaluating expression 57: Unbound variable: SHARED-INIT-CLASS-09: Not implemented
-132. Error evaluating expression 1: Unbound variable: CHANGE-CLASS-CLASS-01A: Not implemented
-133. Error evaluating expression 2: Unbound variable: CHANGE-CLASS-CLASS-01B: Not implemented
-134. Error evaluating expression 15: Unbound variable: CHANGE-CLASS-CLASS-02A: Not implemented
-135. Error evaluating expression 16: Unbound variable: CHANGE-CLASS-CLASS-02B: Not implemented
-136. Error evaluating expression 20: Unbound variable: CHANGE-CLASS-CLASS-03A: Not implemented
-137. Error evaluating expression 21: Unbound variable: CHANGE-CLASS-CLASS-03B: Not implemented
-138. Error evaluating expression 24: Unbound variable: CHANGE-CLASS-CLASS-04A: Not implemented
-139. Error evaluating expression 25: Unbound variable: CHANGE-CLASS-CLASS-04B: Not implemented
-140. Error evaluating expression 32: Unbound variable: CHANGE-CLASS-CLASS-05: Not implemented
-141. Error evaluating expression 35: Unbound variable: CHANGE-CLASS-CLASS-06: Not implemented
-142. Error evaluating expression 39: Unbound variable: CHANGE-CLASS-CLASS-07: Not implemented
-143. Error evaluating expression 40: Unbound variable: CHANGE-CLASS-CLASS-07B: Not implemented
-144. Error evaluating expression 1: Unbound variable: UIFDC-CLASS-01A: Not implemented
-145. Error evaluating expression 2: Unbound variable: UIFDC-CLASS-01B: Not implemented
-146. Error evaluating expression 9: Unbound variable: UIFDC-CLASS-02: Not implemented
-147. Error evaluating expression 1: Unbound variable: SLOT-BOUNDP-CLASS-01: Not implemented
-148. Error evaluating expression 1: Unbound variable: SLOT-EXISTS-P-CLASS-01: Not implemented
-149. Error evaluating expression 10: Unbound variable: SLOT-EXISTS-P-CLASS-02: Not implemented
-150. Error evaluating expression 12: Unbound variable: SLOT-EXISTS-P-CLASS-03A: Not implemented
-151. Error evaluating expression 13: Unbound variable: SLOT-EXISTS-P-CLASS-03B: Not implemented
-152. Error evaluating expression 14: Unbound variable: SLOT-EXISTS-P-CLASS-03C: Not implemented
-153. Error evaluating expression 22: Unbound variable: SLOT-EXISTS-P-CONDITION-01: Not implemented
-154. Error evaluating expression 24: Unbound variable: SLOT-EXISTS-P-CONDITION-02: Not implemented
-155. Error evaluating expression 1: Unbound variable: SLOT-MAKUNBOUND-CLASS-01: Not implemented
-156. Error evaluating expression 2: Unbound variable: SLOT-MISSING-CLASS-01: Not implemented
-157. Error evaluating expression 1: Unbound variable: SLOT-UNBOUND-CLASS-01: Not implemented
-158. Error evaluating expression 1: Unbound variable: SLOT-VALUE-CLASS-01: Not implemented
-159. Error evaluating expression 5: Unbound variable: SLOT-VALUE-CLASS-02: Not implemented
-160. Error evaluating expression 4: Unbound variable: MQ-CLASS-01: Not implemented
-161. Error evaluating expression 7: Unbound variable: MQ-CLASS-02: Not implemented
-162. Error evaluating expression 10: Unbound variable: MQ-CLASS-03: Not implemented
-163. Error evaluating expression 2: Unbound variable: MAKE-INSTANCE-CLASS-01: Not implemented
-164. Error evaluating expression 1: Unbound variable: MAKE-INSTANCES-OBSOLETE-CLASS-01: Not implemented
-165. Error evaluating expression 1: Unbound variable: MAKE-LOAD-FORM-CLASS-01: Not implemented
-166. Error evaluating expression 5: Unbound variable: MAKE-LOAD-FORM-CONDITION-03: Not implemented
-167. Error evaluating expression 16: Unbound variable: MAKE-LOAD-FORM-CLASS-04: Not implemented
-168. Error evaluating expression 2: Unbound variable: LOAD-FORM-TEST-OBJECT: Not implemented
-169. Error evaluating expression 4: Unbound variable: MLFSS-02: Not implemented
-170. Error evaluating expression 12: Not a function: :USE: Not implemented
-171. Error evaluating expression 6: Unbound variable: WITH-ACCESSORS-CLASS-01: Not implemented
-172. Error evaluating expression 7: Unbound variable: WITH-SLOTS-CLASS-01: Not implemented
-173. Error evaluating expression 52: Unbound variable: DEFGENERIC.29.CLASS.1: Not implemented
-174. Error evaluating expression 53: Unbound variable: DEFGENERIC.29.CLASS.2: Not implemented
-175. Error evaluating expression 54: Unbound variable: DEFGENERIC.29.CLASS.3: Not implemented
-176. Error evaluating expression 55: Expected a class, got T
-177. Error evaluating expression 55: Unmatched closing parenthesis
-178. Error evaluating expression 55: Unmatched closing parenthesis
-179. Error evaluating expression 56: Unmatched closing parenthesis
-180. Error evaluating expression 1: Unbound variable: DGMC-CLASS-01: Not implemented
-181. Error evaluating expression 2: Unbound variable: DGMC-CLASS-02: Not implemented
-182. Error evaluating expression 3: Unbound variable: DGMC-CLASS-03: Not implemented
-183. Error evaluating expression 4: Unbound variable: DGMC-CLASS-04: Not implemented
-184. Error evaluating expression 5: Unbound variable: DGMC-CLASS-05: Not implemented
-185. Error evaluating expression 6: Unbound variable: DGMC-CLASS-06: Not implemented
-186. Error evaluating expression 7: Unbound variable: DGMC-CLASS-07: Not implemented
-187. Error evaluating expression 1: Unbound variable: DGMC-CLASS-01: Not implemented
-188. Error evaluating expression 2: Unbound variable: DGMC-CLASS-02: Not implemented
-189. Error evaluating expression 3: Unbound variable: DGMC-CLASS-03: Not implemented
-190. Error evaluating expression 4: Unbound variable: DGMC-CLASS-04: Not implemented
-191. Error evaluating expression 5: Unbound variable: DGMC-CLASS-05: Not implemented
-192. Error evaluating expression 6: Unbound variable: DGMC-CLASS-06: Not implemented
-193. Error evaluating expression 7: Unbound variable: DGMC-CLASS-07: Not implemented
-194. Error evaluating expression 1: Unbound variable: DGMC-CLASS-01: Not implemented
-195. Error evaluating expression 2: Unbound variable: DGMC-CLASS-02: Not implemented
-196. Error evaluating expression 3: Unbound variable: DGMC-CLASS-03: Not implemented
-197. Error evaluating expression 4: Unbound variable: DGMC-CLASS-04: Not implemented
-198. Error evaluating expression 5: Unbound variable: DGMC-CLASS-05: Not implemented
-199. Error evaluating expression 6: Unbound variable: DGMC-CLASS-06: Not implemented
-200. Error evaluating expression 7: Unbound variable: DGMC-CLASS-07: Not implemented
-201. Error evaluating expression 1: Unbound variable: DGMC-CLASS-01: Not implemented
-202. Error evaluating expression 2: Unbound variable: DGMC-CLASS-02: Not implemented
-203. Error evaluating expression 3: Unbound variable: DGMC-CLASS-03: Not implemented
-204. Error evaluating expression 4: Unbound variable: DGMC-CLASS-04: Not implemented
-205. Error evaluating expression 5: Unbound variable: DGMC-CLASS-05: Not implemented
-206. Error evaluating expression 6: Unbound variable: DGMC-CLASS-06: Not implemented
-207. Error evaluating expression 7: Unbound variable: DGMC-CLASS-07: Not implemented
-208. Error evaluating expression 1: Unbound variable: DGMC-CLASS-01: Not implemented
-209. Error evaluating expression 2: Unbound variable: DGMC-CLASS-02: Not implemented
-210. Error evaluating expression 3: Unbound variable: DGMC-CLASS-03: Not implemented
-211. Error evaluating expression 4: Unbound variable: DGMC-CLASS-04: Not implemented
-212. Error evaluating expression 5: Unbound variable: DGMC-CLASS-05: Not implemented
-213. Error evaluating expression 6: Unbound variable: DGMC-CLASS-06: Not implemented
-214. Error evaluating expression 7: Unbound variable: DGMC-CLASS-07: Not implemented
-215. Error evaluating expression 1: Unbound variable: DGMC-CLASS-01: Not implemented
-216. Error evaluating expression 2: Unbound variable: DGMC-CLASS-02: Not implemented
-217. Error evaluating expression 3: Unbound variable: DGMC-CLASS-03: Not implemented
-218. Error evaluating expression 4: Unbound variable: DGMC-CLASS-04: Not implemented
-219. Error evaluating expression 5: Unbound variable: DGMC-CLASS-05: Not implemented
-220. Error evaluating expression 6: Unbound variable: DGMC-CLASS-06: Not implemented
-221. Error evaluating expression 7: Unbound variable: DGMC-CLASS-07: Not implemented
-222. Error evaluating expression 1: Unbound variable: DGMC-CLASS-01: Not implemented
-223. Error evaluating expression 2: Unbound variable: DGMC-CLASS-02: Not implemented
-224. Error evaluating expression 3: Unbound variable: DGMC-CLASS-03: Not implemented
-225. Error evaluating expression 4: Unbound variable: DGMC-CLASS-04: Not implemented
-226. Error evaluating expression 5: Unbound variable: DGMC-CLASS-05: Not implemented
-227. Error evaluating expression 6: Unbound variable: DGMC-CLASS-06: Not implemented
-228. Error evaluating expression 7: Unbound variable: DGMC-CLASS-07: Not implemented
-229. Error evaluating expression 1: Unbound variable: DGMC-CLASS-01: Not implemented
-230. Error evaluating expression 2: Unbound variable: DGMC-CLASS-02: Not implemented
-231. Error evaluating expression 3: Unbound variable: DGMC-CLASS-03: Not implemented
-232. Error evaluating expression 4: Unbound variable: DGMC-CLASS-04: Not implemented
-233. Error evaluating expression 5: Unbound variable: DGMC-CLASS-05: Not implemented
-234. Error evaluating expression 6: Unbound variable: DGMC-CLASS-06: Not implemented
-235. Error evaluating expression 7: Unbound variable: DGMC-CLASS-07: Not implemented
-236. Error evaluating expression 1: Unbound variable: DGMC-CLASS-01: Not implemented
-237. Error evaluating expression 2: Unbound variable: DGMC-CLASS-02: Not implemented
-238. Error evaluating expression 3: Unbound variable: DGMC-CLASS-03: Not implemented
-239. Error evaluating expression 4: Unbound variable: DGMC-CLASS-04: Not implemented
-240. Error evaluating expression 5: Unbound variable: DGMC-CLASS-05: Not implemented
-241. Error evaluating expression 6: Unbound variable: DGMC-CLASS-06: Not implemented
-242. Error evaluating expression 7: Unbound variable: DGMC-CLASS-07: Not implemented
-243. Error evaluating expression 1: Unbound variable: DGMC-CLASS-01: Not implemented
-244. Error evaluating expression 2: Unbound variable: DGMC-CLASS-02: Not implemented
-245. Error evaluating expression 3: Unbound variable: DGMC-CLASS-03: Not implemented
-246. Error evaluating expression 4: Unbound variable: DGMC-CLASS-04: Not implemented
-247. Error evaluating expression 5: Unbound variable: DGMC-CLASS-05: Not implemented
-248. Error evaluating expression 6: Unbound variable: DGMC-CLASS-06: Not implemented
-249. Error evaluating expression 7: Unbound variable: DGMC-CLASS-07: Not implemented
-250. Error evaluating expression 12: Unbound variable: CNM-CLASS-01A: Not implemented
-251. Error evaluating expression 13: Unbound variable: CNM-CLASS-01B: Not implemented
-252. Error evaluating expression 14: Unbound variable: CNM-CLASS-01C: Not implemented
-253. Error evaluating expression 15: Unbound variable: CNM-CLASS-01D: Not implemented
-254. Error evaluating expression 12: Unbound variable: *CAM-GF-03-METHOD1*: Not implemented
-255. Error evaluating expression 14: Unbound variable: *CAM-GF-04-METHOD1*: Not implemented
-256. Error evaluating expression 1: Unbound variable: DMC-CLASS-01A: Not implemented
-257. Error evaluating expression 2: Unbound variable: DMC-CLASS-01B: Not implemented
-258. Error evaluating expression 3: Unbound variable: DMC-CLASS-01C: Not implemented
-259. Error evaluating expression 4: Unbound variable: DMC-CLASS-01D: Not implemented
-260. Error evaluating expression 5: Unbound variable: DMC-CLASS-01E: Not implemented
-261. Error evaluating expression 6: Unbound variable: DMC-CLASS-01F: Not implemented
-262. Error evaluating expression 7: Unbound variable: DMC-CLASS-01G: Not implemented
-263. Error evaluating expression 8: Unbound variable: DMC-CLASS-01H: Not implemented
-264. Error evaluating expression 9: Unbound variable: DMC-GF-01: Not implemented
-265. Error evaluating expression 14: Unbound variable: DMC-GF-02: Not implemented
-266. Error evaluating expression 20: Unbound variable: DMC-GF-04: Not implemented
-267. Error evaluating expression 26: Unbound variable: DMC-GF-07: Not implemented
-268. Error evaluating expression 39: Unbound variable: DMC-LONG-GF-11B: Not implemented
-269. Error evaluating expression 2: Unbound variable: CLASS-NAME-CLASS-01: Not implemented
-270. Error evaluating expression 1: Unbound variable: UBS-CLASS-01: Not implemented
-271. Error evaluating expression 3: Unbound variable: UBS-CLASS-02: Not implemented
-272. Error evaluating expression 14: Unbound variable: EVEN-ARRAY: Not implemented
-273. Error evaluating expression 17: Class not found: ERROR
-274. Error evaluating expression 18: Unmatched closing parenthesis
-275. Error evaluating expression 18: Unmatched closing parenthesis
-276. Error evaluating expression 19:
-277. Error evaluating expression 19: Unmatched closing parenthesis
-278. Error evaluating expression 19: Unmatched closing parenthesis
-279. Error evaluating expression 20: Unbound variable: GOOD): Not implemented
-280. Error evaluating expression 4: Class not found: ERROR
-281. Error evaluating expression 5: Not a function: C: Not implemented
-282. Error evaluating expression 6: Unmatched closing parenthesis
-283. Error evaluating expression 7: NIL
-284. Error evaluating expression 7: Unmatched closing parenthesis
-285. Error evaluating expression 8: Unbound variable: T): Not implemented
-286. Error evaluating expression 139: LOOP FOR requires a symbol: Not implemented
-287. Error evaluating expression 6: LOOP FOR requires a symbol: Not implemented
-288. Error evaluating expression 12: Unbound variable: USER: Not implemented
-289. Error evaluating expression 13: Unbound variable: USER: Not implemented
-290. Error evaluating expression 14: Unbound variable: USER: Not implemented
-291. Error evaluating expression 15: Unbound variable: USER: Not implemented
-292. Error evaluating expression 16: Unbound variable: USER: Not implemented
-293. Error evaluating expression 17: Unbound variable: USER: Not implemented
-294. Error evaluating expression 18: Unbound variable: USER: Not implemented
-295. Error evaluating expression 19: Unbound variable: USER: Not implemented
-296. Error evaluating expression 20: Unbound variable: USER: Not implemented
-297. Error evaluating expression 21: Unbound variable: USER: Not implemented
-298. Error evaluating expression 22: Unbound variable: USER: Not implemented
-299. Error evaluating expression 23: Unbound variable: USER: Not implemented
-300. Error evaluating expression 24: Unbound variable: USER: Not implemented
-301. Error evaluating expression 25: Unbound variable: USER: Not implemented
-302. Error evaluating expression 10: Unbound variable: USER: Not implemented
-303. Error evaluating expression 11: Unbound variable: USER: Not implemented
-304. Error evaluating expression 12: Unbound variable: USER: Not implemented
-305. Error evaluating expression 13: Unbound variable: USER: Not implemented
-306. Error evaluating expression 14: Unbound variable: USER: Not implemented
-307. Error evaluating expression 15: Unbound variable: USER: Not implemented
-308. Error evaluating expression 16: Unbound variable: USER: Not implemented
-309. Error evaluating expression 17: Unbound variable: USER: Not implemented
-310. Error evaluating expression 18: Unbound variable: USER: Not implemented
-311. Error evaluating expression 19: Unbound variable: USER: Not implemented
-312. Error evaluating expression 20: Unbound variable: USER: Not implemented
-313. Error evaluating expression 21: Unbound variable: USER: Not implemented
-314. Error evaluating expression 22: Unbound variable: USER: Not implemented
-315. Error evaluating expression 23: Unbound variable: USER: Not implemented
-316. Error evaluating expression 6: '<' not supported between instances of 'lispNull' and 'int'
-317. Error evaluating expression 7: '<' not supported between instances of 'lispNull' and 'int'
-318. Error evaluating expression 8: '<' not supported between instances of 'lispNull' and 'int'
-319. Error evaluating expression 9: '<' not supported between instances of 'lispNull' and 'int'
-320. Error evaluating expression 10: '<' not supported between instances of 'lispNull' and 'int'
-321. Error evaluating expression 11: '<' not supported between instances of 'lispNull' and 'int'
-322. Error evaluating expression 12: '<' not supported between instances of 'lispNull' and 'int'
-323. Error evaluating expression 13: '<' not supported between instances of 'lispNull' and 'int'
-324. Error evaluating expression 14: Unbound variable: EVEN-ARRAY: Not implemented
-325. Error evaluating expression 54: Unbound variable: I2: Not implemented
-326. Error evaluating expression 72: Unbound variable: I2: Not implemented
-327. Error evaluating expression 3: Undefined function: LOGANDC1: Not implemented
-328. Error evaluating expression 2: Unbound variable: UPGRADED-TYPE: Not implemented
-329. Error evaluating expression 3: Unbound variable: UPGRADED-TYPE: Not implemented
-330. Error evaluating expression 4: Unbound variable: UPGRADED-TYPE: Not implemented
-331. Error evaluating expression 5: Unbound variable: UPGRADED-TYPE: Not implemented
-332. Error evaluating expression 6: Unbound variable: UPGRADED-TYPE: Not implemented
-333. Error evaluating expression 7: Unbound variable: UPGRADED-TYPE: Not implemented
-334. Error evaluating expression 2: 'lispCons' object is not subscriptable
-335. Error evaluating expression 4: Unbound variable: *PATTERN-SUBLISTS*: Not implemented
-336. Error evaluating expression 6: remove_duplicates() takes 1 positional argument but 3 were given
-337. Error evaluating expression 8: remove_duplicates() takes 1 positional argument but 3 were given
-338. Error evaluating expression 13: Assertion failed
-339. Error evaluating expression 14: Assertion failed
-340. Error evaluating expression 15: Assertion failed
-341. Error evaluating expression 16: Assertion failed
-342. Error evaluating expression 17: Assertion failed
-343. Error evaluating expression 18: Assertion failed
-344. Error evaluating expression 19: Assertion failed
-345. Error evaluating expression 20: Assertion failed
-346. Error evaluating expression 21: Assertion failed
-347. Error evaluating expression 22: Assertion failed
-348. Error evaluating expression 23: Assertion failed
-349. Error evaluating expression 24: Assertion failed
-350. Error evaluating expression 25: Assertion failed
-351. Error evaluating expression 26: Assertion failed
-352. Error evaluating expression 27: Assertion failed
-353. Error evaluating expression 28: Assertion failed
-354. Error evaluating expression 29: Assertion failed
-355. Error evaluating expression 30: Assertion failed
-356. Error evaluating expression 31: Assertion failed
-357. Error evaluating expression 32: Assertion failed
-358. Error evaluating expression 33: Assertion failed
-359. Error evaluating expression 34: Assertion failed
-360. Error evaluating expression 35: Assertion failed
-361. Error evaluating expression 36: Assertion failed
-362. Error evaluating expression 37: Assertion failed
-363. Error evaluating expression 38: Assertion failed
-364. Error evaluating expression 39: Assertion failed
-365. Error evaluating expression 40: Assertion failed
-366. Error evaluating expression 41: Assertion failed
-367. Error evaluating expression 42: Unbound variable: STRUCT-TEST-PACKAGE: Not implemented
-368. Error evaluating expression 43: Assertion failed
-369. Error evaluating expression 44: Assertion failed
-370. Error evaluating expression 45: Assertion failed
-371. Error evaluating expression 46: Assertion failed
-372. Error evaluating expression 47: Assertion failed
-373. Error evaluating expression 48: Assertion failed
-374. Error evaluating expression 50: Assertion failed
-375. Error evaluating expression 52: Assertion failed
-376. Error evaluating expression 54: Assertion failed
-377. Error evaluating expression 55: Assertion failed
-378. Error evaluating expression 56: Assertion failed
-379. Error evaluating expression 57: Assertion failed
-380. Error evaluating expression 58: Assertion failed
-381. Error evaluating expression 60: Assertion failed
-382. Error evaluating expression 62: Assertion failed
-383. Error evaluating expression 64: Assertion failed
-384. Error evaluating expression 66: Assertion failed
-385. Error evaluating expression 68: Assertion failed
-386. Error evaluating expression 69: Assertion failed
-387. Error evaluating expression 70: Assertion failed
-388. Error evaluating expression 71: Assertion failed
-389. Error evaluating expression 72: Assertion failed
-390. Error evaluating expression 74: Assertion failed
-391. Error evaluating expression 76: Assertion failed
-392. Error evaluating expression 78: Assertion failed
-393. Error evaluating expression 80: Assertion failed
-394. Error evaluating expression 81: Assertion failed
-395. Error evaluating expression 82: Assertion failed
-396. Error evaluating expression 84: Assertion failed
-397. Error evaluating expression 91: Assertion failed
-398. Error evaluating expression 92: Assertion failed
-399. Error evaluating expression 93: Assertion failed
-400. Error evaluating expression 94: Assertion failed
-401. Error evaluating expression 95: Assertion failed
-402. Error evaluating expression 96: Assertion failed
-403. Error evaluating expression 97: Assertion failed
-404. Error evaluating expression 98: Assertion failed
-405. Error evaluating expression 14: Unbound variable: EVEN-ARRAY: Not implemented
-406. Error evaluating expression 3: Unbound variable: TAC-1-CLASS: Not implemented
-407. Error evaluating expression 4: Unbound variable: TAC-1A-CLASS: Not implemented
-408. Error evaluating expression 5: Unbound variable: TAC-1B-CLASS: Not implemented
-409. Error evaluating expression 13: Unbound variable: TAC-3-A: Not implemented
-410. Error evaluating expression 14: Unbound variable: TAC-3-B: Not implemented
-411. Error evaluating expression 15: Unbound variable: TAC-3-C: Not implemented
-412. Error evaluating expression 16: Unbound variable: TAC-3-AB: Not implemented
-413. Error evaluating expression 17: Unbound variable: TAC-3-AC: Not implemented
-414. Error evaluating expression 18: Unbound variable: TAC-3-BC: Not implemented
-415. Error evaluating expression 19: Unbound variable: TAC-3-ABC: Not implemented
-416. Error evaluating expression 10: Unbound variable: TYPE-OF.EXAMPLE-CLASS: Not implemented
-417. Error evaluating expression 5: Unbound variable: THEN: Not implemented
-418. Error evaluating expression 6: Unbound variable: THEN: Not implemented
-419. Error evaluating expression 7: Unbound variable: THEN: Not implemented
-420. Error evaluating expression 8: Unbound variable: THEN: Not implemented
-421. Error evaluating expression 9: Unbound variable: THEN: Not implemented
-422. Error evaluating expression 10: Unbound variable: THEN: Not implemented
-423. Error evaluating expression 11: Unbound variable: THEN: Not implemented
-424. Error evaluating expression 12: Unbound variable: THEN: Not implemented
-425. Error evaluating expression 13: Unbound variable: THEN: Not implemented
-426. Error evaluating expression 14: Unbound variable: THEN: Not implemented
-427. Error evaluating expression 15: Unbound variable: THEN: Not implemented
-428. Error evaluating expression 16: Unbound variable: THEN: Not implemented
-429. Error evaluating expression 17: Unbound variable: THEN: Not implemented
-430. Error evaluating expression 18: Unbound variable: THEN: Not implemented
-431. Error evaluating expression 19: Unbound variable: THEN: Not implemented
-432. Error evaluating expression 20: Unbound variable: THEN: Not implemented
-433. Error evaluating expression 21: Unbound variable: THEN: Not implemented
-434. Error evaluating expression 22: Unbound variable: THEN: Not implemented
-435. Error evaluating expression 23: Unbound variable: THEN: Not implemented
-436. Error evaluating expression 24: Unbound variable: THEN: Not implemented
-437. Error evaluating expression 25: Unbound variable: THEN: Not implemented
-438. Error evaluating expression 26: Unbound variable: THEN: Not implemented
-439. Error evaluating expression 27: Unbound variable: THEN: Not implemented
-440. Error evaluating expression 28: Unbound variable: THEN: Not implemented
-441. Error evaluating expression 29: Unbound variable: THEN: Not implemented
-442. Error evaluating expression 30: Unbound variable: THEN: Not implemented
-443. Error evaluating expression 31: Unbound variable: THEN: Not implemented
-444. Error evaluating expression 32: Unbound variable: THEN: Not implemented
-445. Error evaluating expression 33: Unbound variable: THEN: Not implemented
-446. Error evaluating expression 34: Unbound variable: THEN: Not implemented
-447. Error evaluating expression 35: Unbound variable: THEN: Not implemented
-448. Error evaluating expression 36: Unbound variable: THEN: Not implemented
-449. Error evaluating expression 37: Unbound variable: THEN: Not implemented
-450. Error evaluating expression 38: Unbound variable: THEN: Not implemented
-451. Error evaluating expression 39: Unbound variable: THEN: Not implemented
-452. Error evaluating expression 40: Unbound variable: THEN: Not implemented
-453. Error evaluating expression 41: Unbound variable: THEN: Not implemented
-454. Error evaluating expression 42: Unbound variable: THEN: Not implemented
-455. Error evaluating expression 43: Unbound variable: THEN: Not implemented
-456. Error evaluating expression 44: Unbound variable: THEN: Not implemented
-457. Error evaluating expression 45: Unbound variable: THEN: Not implemented
-458. Error evaluating expression 46: Unbound variable: THEN: Not implemented
-459. Error evaluating expression 47: Unbound variable: THEN: Not implemented
-460. Error evaluating expression 48: Unbound variable: THEN: Not implemented
-461. Error evaluating expression 49: Unbound variable: THEN: Not implemented
-462. Error evaluating expression 50: Unbound variable: THEN: Not implemented
-463. Error evaluating expression 51: Unbound variable: THEN: Not implemented
-464. Error evaluating expression 52: Unbound variable: THEN: Not implemented
-465. Error evaluating expression 53: Unbound variable: THEN: Not implemented
-466. Error evaluating expression 54: Unbound variable: THEN: Not implemented
-467. Error evaluating expression 55: Unbound variable: THEN: Not implemented
-468. Error evaluating expression 56: Unbound variable: THEN: Not implemented
-469. Error evaluating expression 57: Unbound variable: THEN: Not implemented
-470. Error evaluating expression 58: Unbound variable: THEN: Not implemented
-471. Error evaluating expression 59: Unbound variable: THEN: Not implemented
-472. Error evaluating expression 60: Unbound variable: THEN: Not implemented
-473. Error evaluating expression 61: Unbound variable: THEN: Not implemented
-474. Error evaluating expression 62: Unbound variable: THEN: Not implemented
-475. Error evaluating expression 63: Unbound variable: THEN: Not implemented
-476. Error evaluating expression 64: Unbound variable: THEN: Not implemented
-477. Error evaluating expression 65: Unbound variable: THEN: Not implemented
-478. Error evaluating expression 66: Unbound variable: CPL-EXAMPLE-CLASS: Not implemented
-479. Error evaluating expression 67: Unbound variable: THEN: Not implemented
-480. Error evaluating expression 69: Unbound variable: THEN: Not implemented
-481. Error evaluating expression 70: Unbound variable: THEN: Not implemented
-482. Error evaluating expression 71: Unbound variable: THEN: Not implemented
-483. Error evaluating expression 72: Unbound variable: THEN: Not implemented
-484. Error evaluating expression 73: Unbound variable: THEN: Not implemented
-485. Error evaluating expression 75: Unbound variable: THEN: Not implemented
-486. Error evaluating expression 77: Unbound variable: THEN: Not implemented
-487. Error evaluating expression 79: Unbound variable: THEN: Not implemented
-488. Error evaluating expression 80: Unbound variable: THEN: Not implemented
-489. Error evaluating expression 4: CHARACTER: cannot convert Linefeed to character
-490. Error evaluating expression 4: CHARACTER: cannot convert Linefeed to character
-491. Error evaluating expression 6: Unmatched closing parenthesis
-492. Error evaluating expression 6: Unmatched closing parenthesis
-493. Error evaluating expression 5: Unbound variable: ELEMENT-TYPE-P: Not implemented
-494. Error evaluating expression 6: Unbound variable: ELEMENT-TYPE-P: Not implemented
-495. Error evaluating expression 7: Unbound variable: ELEMENT-TYPE-P: Not implemented
-496. Error evaluating expression 8: Unbound variable: ELEMENT-TYPE-P: Not implemented
-497. Error evaluating expression 9: Unbound variable: ELEMENT-TYPE-P: Not implemented
-498. Error evaluating expression 10: Unbound variable: ELEMENT-TYPE-P: Not implemented
-499. Error evaluating expression 11: Unbound variable: ELEMENT-TYPE-P: Not implemented
-500. Error evaluating expression 12: Unbound variable: ELEMENT-TYPE-P: Not implemented
-501. Error evaluating expression 13: Unbound variable: ELEMENT-TYPE-P: Not implemented
-502. Error evaluating expression 14: Unbound variable: ELEMENT-TYPE-P: Not implemented
-503. Error evaluating expression 15: Unbound variable: ELEMENT-TYPE-P: Not implemented
-504. Error evaluating expression 16: Unbound variable: ELEMENT-TYPE-P: Not implemented
-505. Error evaluating expression 17: Unbound variable: ELEMENT-TYPE-P: Not implemented
-506. Error evaluating expression 18: Unbound variable: ELEMENT-TYPE-P: Not implemented
-507. Error evaluating expression 19: Unbound variable: ELEMENT-TYPE-P: Not implemented
-508. Error evaluating expression 20: Unbound variable: ELEMENT-TYPE-P: Not implemented
-509. Error evaluating expression 21: Unbound variable: ELEMENT-TYPE-P: Not implemented
-510. Error evaluating expression 22: Unbound variable: ELEMENT-TYPE-P: Not implemented
-511. Error evaluating expression 23: Unbound variable: ELEMENT-TYPE-P: Not implemented
-512. Error evaluating expression 24: Unbound variable: ELEMENT-TYPE-P: Not implemented
-513. Error evaluating expression 25: Unbound variable: ELEMENT-TYPE-P: Not implemented
-514. Error evaluating expression 26: Unbound variable: ELEMENT-TYPE-P: Not implemented
-515. Error evaluating expression 27: Unbound variable: ELEMENT-TYPE-P: Not implemented
-516. Error evaluating expression 28: Unbound variable: ELEMENT-TYPE-P: Not implemented
-517. Error evaluating expression 29: Unbound variable: ELEMENT-TYPE-P: Not implemented
-518. Error evaluating expression 30: Unbound variable: ELEMENT-TYPE-P: Not implemented
-519. Error evaluating expression 31: Unbound variable: ELEMENT-TYPE-P: Not implemented
-520. Error evaluating expression 32: Unbound variable: ELEMENT-TYPE-P: Not implemented
-521. Error evaluating expression 33: Unbound variable: ELEMENT-TYPE-P: Not implemented
-522. Error evaluating expression 34: Unbound variable: ELEMENT-TYPE-P: Not implemented
-523. Error evaluating expression 35: Unbound variable: ELEMENT-TYPE-P: Not implemented
-524. Error evaluating expression 36: Unbound variable: ELEMENT-TYPE-P: Not implemented
-525. Error evaluating expression 37: Unbound variable: ELEMENT-TYPE-P: Not implemented
-526. Error evaluating expression 38: Unbound variable: ELEMENT-TYPE-P: Not implemented
-527. Error evaluating expression 39: Unbound variable: ELEMENT-TYPE-P: Not implemented
-528. Error evaluating expression 40: Unbound variable: ELEMENT-TYPE-P: Not implemented
-529. Error evaluating expression 41: Unbound variable: ELEMENT-TYPE-P: Not implemented
-530. Error evaluating expression 42: Unbound variable: ELEMENT-TYPE-P: Not implemented
-531. Error evaluating expression 43: Unbound variable: ELEMENT-TYPE-P: Not implemented
-532. Error evaluating expression 44: Unbound variable: ELEMENT-TYPE-P: Not implemented
-533. Error evaluating expression 45: Unbound variable: ELEMENT-TYPE-P: Not implemented
-534. Error evaluating expression 46: Unbound variable: ELEMENT-TYPE-P: Not implemented
-535. Error evaluating expression 47: Unbound variable: ELEMENT-TYPE-P: Not implemented
-536. Error evaluating expression 48: Unbound variable: ELEMENT-TYPE-P: Not implemented
-537. Error evaluating expression 49: Unbound variable: ELEMENT-TYPE-P: Not implemented
-538. Error evaluating expression 50: Unbound variable: ELEMENT-TYPE-P: Not implemented
-539. Error evaluating expression 51: Unbound variable: ELEMENT-TYPE-P: Not implemented
-540. Error evaluating expression 52: Unbound variable: ELEMENT-TYPE-P: Not implemented
-541. Error evaluating expression 53: Unbound variable: ELEMENT-TYPE-P: Not implemented
-542. Error evaluating expression 54: Unbound variable: ELEMENT-TYPE-P: Not implemented
-543. Error evaluating expression 55: Unbound variable: ELEMENT-TYPE-P: Not implemented
-544. Error evaluating expression 56: Unbound variable: ELEMENT-TYPE-P: Not implemented
-545. Error evaluating expression 57: Unbound variable: ELEMENT-TYPE-P: Not implemented
-546. Error evaluating expression 58: Unbound variable: ELEMENT-TYPE-P: Not implemented
-547. Error evaluating expression 59: Unbound variable: ELEMENT-TYPE-P: Not implemented
-548. Error evaluating expression 60: Unbound variable: ELEMENT-TYPE-P: Not implemented
-549. Error evaluating expression 61: Unbound variable: ELEMENT-TYPE-P: Not implemented
-550. Error evaluating expression 62: Unbound variable: ELEMENT-TYPE-P: Not implemented
-551. Error evaluating expression 63: Unbound variable: ELEMENT-TYPE-P: Not implemented
-552. Error evaluating expression 64: Unbound variable: ELEMENT-TYPE-P: Not implemented
-553. Error evaluating expression 65: Unbound variable: ELEMENT-TYPE-P: Not implemented
-554. Error evaluating expression 66: Unbound variable: ELEMENT-TYPE-P: Not implemented
-555. Error evaluating expression 67: Unbound variable: ELEMENT-TYPE-P: Not implemented
-556. Error evaluating expression 68: Unbound variable: ELEMENT-TYPE-P: Not implemented
-557. Error evaluating expression 73: Unbound variable: BUILD-FORM: Not implemented
-558. Error evaluating expression 74: Unbound variable: BUILD-FORM: Not implemented
-559. Error evaluating expression 75: Unbound variable: BUILD-FORM: Not implemented
-560. Error evaluating expression 76: Unbound variable: BUILD-FORM: Not implemented
-561. Error evaluating expression 77: Unbound variable: BUILD-FORM: Not implemented
-562. Error evaluating expression 78: Unbound variable: BUILD-FORM: Not implemented
-563. Error evaluating expression 79: Unbound variable: BUILD-FORM: Not implemented
-564. Error evaluating expression 80: Unbound variable: BUILD-FORM: Not implemented
-565. Error evaluating expression 81: Unbound variable: BUILD-FORM: Not implemented
-566. Error evaluating expression 82: Unbound variable: BUILD-FORM: Not implemented
-567. Error evaluating expression 83: Unbound variable: BUILD-FORM: Not implemented
-568. Error evaluating expression 84: Unbound variable: BUILD-FORM: Not implemented
-569. Error evaluating expression 85: Unbound variable: BUILD-FORM: Not implemented
-570. Error evaluating expression 86: Unbound variable: BUILD-FORM: Not implemented
-571. Error evaluating expression 87: Unbound variable: BUILD-FORM: Not implemented
-572. Error evaluating expression 88: Unbound variable: BUILD-FORM: Not implemented
-573. Error evaluating expression 89: Unbound variable: BUILD-FORM: Not implemented
-574. Error evaluating expression 90: Unbound variable: BUILD-FORM: Not implemented
-575. Error evaluating expression 91: Unbound variable: BUILD-FORM: Not implemented
-576. Error evaluating expression 93: Unbound variable: ELEMENT-TYPE-P: Not implemented
-577. Error evaluating expression 94: Unbound variable: ELEMENT-TYPE-P: Not implemented
-578. Error evaluating expression 95: Unbound variable: ELEMENT-TYPE-P: Not implemented
-579. Error evaluating expression 96: Unbound variable: ELEMENT-TYPE-P: Not implemented
-580. Error evaluating expression 97: Unbound variable: ELEMENT-TYPE-P: Not implemented
-581. Error evaluating expression 98: Unbound variable: ELEMENT-TYPE-P: Not implemented
-582. Error evaluating expression 99: Unbound variable: BUILD-FORM: Not implemented
-583. Error evaluating expression 101: Unbound variable: BUILD-FORM: Not implemented
-584. Error evaluating expression 102: Unbound variable: BUILD-FORM: Not implemented
-585. Error evaluating expression 104: Unbound variable: BUILD-FORM: Not implemented
-586. Error evaluating expression 105: Unbound variable: BUILD-FORM: Not implemented
-587. Error evaluating expression 106: Unbound variable: BUILD-FORM: Not implemented
-588. Error evaluating expression 107: Unbound variable: BUILD-FORM: Not implemented
-589. Error evaluating expression 108: Unbound variable: BUILD-FORM: Not implemented
-590. Error evaluating expression 110: Unbound variable: BUILD-FORM: Not implemented
-591. Error evaluating expression 111: Unbound variable: BUILD-FORM: Not implemented
-592. Error evaluating expression 112: Unbound variable: BUILD-FORM: Not implemented
-593. Error evaluating expression 113: Unbound variable: BUILD-FORM: Not implemented
-594. Error evaluating expression 114: Unbound variable: BUILD-FORM: Not implemented
-595. Error evaluating expression 115: Unbound variable: BUILD-FORM: Not implemented
-596. Error evaluating expression 116: Unbound variable: BUILD-FORM: Not implemented
-597. Error evaluating expression 117: Unbound variable: BUILD-FORM: Not implemented
-598. Error evaluating expression 118: Unbound variable: BUILD-FORM: Not implemented
-599. Error evaluating expression 119: Unbound variable: BUILD-FORM: Not implemented
-600. Error evaluating expression 120: Unbound variable: BUILD-FORM: Not implemented
-601. Error evaluating expression 121: Unbound variable: BUILD-FORM: Not implemented
-602. Error evaluating expression 122: Unbound variable: BUILD-FORM: Not implemented
-603. Error evaluating expression 123: Unbound variable: BUILD-FORM: Not implemented
-604. Error evaluating expression 124: Unbound variable: BUILD-FORM: Not implemented
-605. Error evaluating expression 125: Unbound variable: BUILD-FORM: Not implemented
-606. Error evaluating expression 126: Unbound variable: BUILD-FORM: Not implemented
-607. Error evaluating expression 127: Unbound variable: BUILD-FORM: Not implemented
-608. Error evaluating expression 128: Unbound variable: BUILD-FORM: Not implemented
-609. Error evaluating expression 130: Unbound variable: ELEMENT-TYPE-P: Not implemented
-610. Error evaluating expression 131: Unbound variable: ELEMENT-TYPE-P: Not implemented
-611. Error evaluating expression 132: Unbound variable: ELEMENT-TYPE-P: Not implemented
-612. Error evaluating expression 133: Unbound variable: ELEMENT-TYPE-P: Not implemented
-613. Error evaluating expression 134: Unbound variable: ELEMENT-TYPE-P: Not implemented
-614. Error evaluating expression 135: Unbound variable: ELEMENT-TYPE-P: Not implemented
-615. Error evaluating expression 136: Unbound variable: BUILD-FORM: Not implemented
-616. Error evaluating expression 138: Unbound variable: BUILD-FORM: Not implemented
-617. Error evaluating expression 139: Unbound variable: BUILD-FORM: Not implemented
-618. Error evaluating expression 141: Unbound variable: BUILD-FORM: Not implemented
-619. Error evaluating expression 142: Unbound variable: BUILD-FORM: Not implemented
-620. Error evaluating expression 143: Unbound variable: BUILD-FORM: Not implemented
-621. Error evaluating expression 144: Unbound variable: BUILD-FORM: Not implemented
-622. Error evaluating expression 145: Unbound variable: BUILD-FORM: Not implemented
-623. Error evaluating expression 147: Unbound variable: BUILD-FORM-P: Not implemented
-624. Error evaluating expression 148: Unbound variable: BUILD-FORM-P: Not implemented
-625. Error evaluating expression 149: Unbound variable: BUILD-FORM-P: Not implemented
-626. Error evaluating expression 150: Unbound variable: BUILD-FORM-P: Not implemented
-627. Error evaluating expression 151: Unbound variable: BUILD-FORM-P: Not implemented
-628. Error evaluating expression 152: Unbound variable: BUILD-FORM-P: Not implemented
-629. Error evaluating expression 153: Unbound variable: BUILD-FORM-P: Not implemented
-630. Error evaluating expression 154: Unbound variable: BUILD-FORM-P: Not implemented
-631. Error evaluating expression 155: Unbound variable: BUILD-FORM-P: Not implemented
-632. Error evaluating expression 156: Unbound variable: BUILD-FORM-P: Not implemented
-633. Error evaluating expression 157: Unbound variable: BUILD-FORM-P: Not implemented
-634. Error evaluating expression 158: Unbound variable: BUILD-FORM-P: Not implemented
-635. Error evaluating expression 159: Unbound variable: BUILD-FORM-P: Not implemented
-636. Error evaluating expression 160: Unbound variable: BUILD-FORM-P: Not implemented
-637. Error evaluating expression 161: Unbound variable: BUILD-FORM-P: Not implemented
-638. Error evaluating expression 162: Unbound variable: BUILD-FORM-P: Not implemented
-639. Error evaluating expression 163: Unbound variable: BUILD-FORM-P: Not implemented
-640. Error evaluating expression 164: Unbound variable: BUILD-FORM-P: Not implemented
-641. Error evaluating expression 165: Unbound variable: BUILD-FORM-P: Not implemented
-642. Error evaluating expression 166: Unbound variable: BUILD-FORM-P: Not implemented
-643. Error evaluating expression 169: Unbound variable: BUILD-FORM-P: Not implemented
-644. Error evaluating expression 170: Unbound variable: BUILD-FORM-P: Not implemented
-645. Error evaluating expression 171: Unbound variable: BUILD-FORM-P: Not implemented
-646. Error evaluating expression 172: Unbound variable: BUILD-FORM-P: Not implemented
-647. Error evaluating expression 173: Unbound variable: BUILD-FORM-P: Not implemented
-648. Error evaluating expression 174: Unbound variable: BUILD-FORM-P: Not implemented
-649. Error evaluating expression 175: Unbound variable: BUILD-FORM-P: Not implemented
-650. Error evaluating expression 176: Unbound variable: BUILD-FORM-P: Not implemented
-651. Error evaluating expression 177: Unbound variable: BUILD-FORM-P: Not implemented
-652. Error evaluating expression 178: Unbound variable: BUILD-FORM-P: Not implemented
-653. Error evaluating expression 179: Unbound variable: BUILD-FORM-P: Not implemented
-654. Error evaluating expression 180: Unbound variable: BUILD-FORM-P: Not implemented
-655. Error evaluating expression 181: Unbound variable: BUILD-FORM-P: Not implemented
-656. Error evaluating expression 182: Unbound variable: BUILD-FORM-P: Not implemented
-657. Error evaluating expression 19: Unbound variable: PREFIX: Not implemented
-658. Error evaluating expression 20: Unbound variable: PREFIX: Not implemented
-659. Error evaluating expression 21: Unbound variable: PREFIX: Not implemented
-660. Error evaluating expression 22: Unbound variable: PREFIX: Not implemented
-661. Error evaluating expression 23: Unbound variable: PREFIX: Not implemented
-662. Error evaluating expression 25: Unbound variable: PREFIX: Not implemented
-663. Error evaluating expression 26: Unbound variable: PREFIX: Not implemented
-664. Error evaluating expression 27: Unbound variable: PREFIX: Not implemented
-665. Error evaluating expression 5: Unbound variable: MARGIN: Not implemented
-666. Error evaluating expression 6: Unbound variable: MARGIN: Not implemented
-667. Error evaluating expression 7: Unbound variable: MARGIN: Not implemented
-668. Error evaluating expression 8: Unbound variable: MARGIN: Not implemented
-669. Error evaluating expression 9: Unbound variable: MARGIN: Not implemented
-670. Error evaluating expression 10: Unbound variable: MARGIN: Not implemented
-671. Error evaluating expression 11: Unbound variable: MARGIN: Not implemented
-672. Error evaluating expression 16: Unbound variable: MARGIN: Not implemented
-673. Error evaluating expression 17: Unbound variable: MARGIN: Not implemented
-674. Error evaluating expression 5: Unbound variable: MARGIN: Not implemented
-675. Error evaluating expression 6: Unbound variable: MARGIN: Not implemented
-676. Error evaluating expression 7: Unbound variable: MARGIN: Not implemented
-677. Error evaluating expression 8: Unbound variable: MARGIN: Not implemented
-678. Error evaluating expression 9: Unbound variable: MARGIN: Not implemented
-679. Error evaluating expression 10: Unbound variable: MARGIN: Not implemented
-680. Error evaluating expression 11: Unbound variable: MARGIN: Not implemented
-681. Error evaluating expression 16: Unbound variable: MARGIN: Not implemented
-682. Error evaluating expression 5: Unbound variable: MARGIN: Not implemented
-683. Error evaluating expression 6: Unbound variable: MARGIN: Not implemented
-684. Error evaluating expression 7: Unbound variable: MARGIN: Not implemented
-685. Error evaluating expression 8: Unbound variable: MARGIN: Not implemented
-686. Error evaluating expression 9: Unbound variable: MARGIN: Not implemented
-687. Error evaluating expression 10: Unbound variable: MARGIN: Not implemented
-688. Error evaluating expression 11: Unbound variable: MARGIN: Not implemented
-689. Error evaluating expression 12: Unbound variable: MARGIN: Not implemented
-690. Error evaluating expression 13: Unbound variable: MARGIN: Not implemented
-691. Error evaluating expression 14: Unbound variable: MARGIN: Not implemented
-692. Error evaluating expression 15: Unbound variable: MARGIN: Not implemented
-693. Error evaluating expression 16: Unbound variable: MARGIN: Not implemented
-694. Error evaluating expression 17: Unbound variable: MARGIN: Not implemented
-695. Error evaluating expression 18: Unbound variable: MARGIN: Not implemented
-696. Error evaluating expression 19: Unbound variable: MARGIN: Not implemented
-697. Error evaluating expression 20: Unbound variable: MARGIN: Not implemented
-698. Error evaluating expression 21: Unbound variable: MARGIN: Not implemented
-699. Error evaluating expression 22: Unbound variable: MARGIN: Not implemented
-700. Error evaluating expression 23: Unbound variable: MARGIN: Not implemented
-701. Error evaluating expression 24: Unbound variable: MARGIN: Not implemented
-702. Error evaluating expression 3: Unbound variable: PRETTY: Not implemented
-703. Error evaluating expression 4: Unbound variable: PRETTY: Not implemented
-704. Error evaluating expression 5: Unbound variable: PRETTY: Not implemented
-705. Error evaluating expression 6: Unbound variable: PRETTY: Not implemented
-706. Error evaluating expression 7: Unbound variable: PRETTY: Not implemented
-707. Error evaluating expression 8: Unbound variable: PRETTY: Not implemented
-708. Error evaluating expression 9: Unbound variable: PRETTY: Not implemented
-709. Error evaluating expression 10: Unbound variable: PRETTY: Not implemented
-710. Error evaluating expression 11: Unbound variable: PRETTY: Not implemented
-711. Error evaluating expression 12: Unbound variable: PRETTY: Not implemented
-712. Error evaluating expression 13: Unbound variable: PRETTY: Not implemented
-713. Error evaluating expression 14: Unbound variable: PRETTY: Not implemented
-714. Error evaluating expression 16: Unbound variable: PRETTY: Not implemented
-715. Error evaluating expression 17: Unbound variable: PRETTY: Not implemented
-716. Error evaluating expression 18: Unbound variable: PRETTY: Not implemented
-717. Error evaluating expression 19: Unbound variable: PRETTY: Not implemented
-718. Error evaluating expression 20: Unbound variable: PRETTY: Not implemented
-719. Error evaluating expression 21: Unbound variable: PRETTY: Not implemented
-720. Error evaluating expression 22: Unbound variable: PRETTY: Not implemented
-721. Error evaluating expression 23: Unbound variable: PRETTY: Not implemented
-722. Error evaluating expression 24: Unbound variable: PRETTY: Not implemented
-723. Error evaluating expression 25: Unbound variable: PRETTY: Not implemented
-724. Error evaluating expression 26: Unbound variable: PRETTY: Not implemented
-725. Error evaluating expression 27: Unbound variable: PRETTY: Not implemented
-726. Error evaluating expression 29: Unbound variable: PRETTY: Not implemented
-727. Error evaluating expression 30: Unbound variable: PRETTY: Not implemented
-728. Error evaluating expression 31: Unbound variable: PRETTY: Not implemented
-729. Error evaluating expression 32: Unbound variable: PRETTY: Not implemented
-730. Error evaluating expression 33: Unbound variable: PRETTY: Not implemented
-731. Error evaluating expression 34: Unbound variable: PRETTY: Not implemented
-732. Error evaluating expression 35: Unbound variable: PRETTY: Not implemented
-733. Error evaluating expression 36: Unbound variable: PRETTY: Not implemented
-734. Error evaluating expression 39: Unbound variable: PRETTY: Not implemented
-735. Error evaluating expression 40: Unbound variable: PRETTY: Not implemented
-736. Error evaluating expression 41: Unbound variable: PRETTY: Not implemented
-737. Error evaluating expression 42: Unbound variable: PRETTY: Not implemented
-738. Error evaluating expression 43: Unbound variable: PRETTY: Not implemented
-739. Error evaluating expression 2: Unbound variable: PRETTY: Not implemented
-740. Error evaluating expression 3: Unbound variable: PRETTY: Not implemented
-741. Error evaluating expression 4: Unbound variable: PRETTY: Not implemented
-742. Error evaluating expression 5: Unbound variable: PRETTY: Not implemented
-743. Error evaluating expression 6: Unbound variable: PRETTY: Not implemented
-744. Error evaluating expression 7: Unbound variable: PRETTY: Not implemented
-745. Error evaluating expression 8: Unbound variable: PRETTY: Not implemented
-746. Error evaluating expression 9: Unbound variable: PRETTY: Not implemented
-747. Error evaluating expression 10: Unbound variable: PRETTY: Not implemented
-748. Error evaluating expression 11: Unbound variable: PRETTY: Not implemented
-749. Error evaluating expression 12: Unbound variable: PRETTY: Not implemented
-750. Error evaluating expression 13: Unbound variable: PRETTY: Not implemented
-751. Error evaluating expression 14: Unbound variable: PRETTY: Not implemented
-752. Error evaluating expression 15: Unbound variable: PRETTY: Not implemented
-753. Error evaluating expression 2: Unbound variable: PRETTY: Not implemented
-754. Error evaluating expression 3: Unbound variable: PRETTY: Not implemented
-755. Error evaluating expression 4: Unbound variable: PRETTY: Not implemented
-756. Error evaluating expression 5: Unbound variable: PRETTY: Not implemented
-757. Error evaluating expression 2: Unbound variable: PRINT-LEVEL-TEST-CLASS: Not implemented
-758. Error evaluating expression 6: Unbound variable: PRINT-LEVEL-CONDITION: Not implemented
-759. Error evaluating expression 1: Unbound variable: PRETTY: Not implemented
-760. Error evaluating expression 2: Unbound variable: PRETTY: Not implemented
-761. Error evaluating expression 3: Unbound variable: PRETTY: Not implemented
-762. Error evaluating expression 4: Unbound variable: PRETTY: Not implemented
-763. Error evaluating expression 5: Unbound variable: PRETTY: Not implemented
-764. Error evaluating expression 6: Unbound variable: PRETTY: Not implemented
-765. Error evaluating expression 7: Unbound variable: PRETTY: Not implemented
-766. Error evaluating expression 8: Unbound variable: PRETTY: Not implemented
-767. Error evaluating expression 11: Unbound variable: PRETTY: Not implemented
-768. Error evaluating expression 12: Unbound variable: PRETTY: Not implemented
-769. Error evaluating expression 13: Unbound variable: PRETTY: Not implemented
-770. Error evaluating expression 14: Unbound variable: PRETTY: Not implemented
-771. Error evaluating expression 15: Unbound variable: PRETTY: Not implemented
-772. Error evaluating expression 16: Unbound variable: PRETTY: Not implemented
-773. Error evaluating expression 17: Unbound variable: PRETTY: Not implemented
-774. Error evaluating expression 18: Unbound variable: PRETTY: Not implemented
-775. Error evaluating expression 19: Unbound variable: PRETTY: Not implemented
-776. Error evaluating expression 22: Unbound variable: PRETTY: Not implemented
-777. Error evaluating expression 23: Unbound variable: PRETTY: Not implemented
-778. Error evaluating expression 24: Unbound variable: PRETTY: Not implemented
-779. Error evaluating expression 25: Unbound variable: PRETTY: Not implemented
-780. Error evaluating expression 26: Unbound variable: PRETTY: Not implemented
-781. Error evaluating expression 27: Unbound variable: PRETTY: Not implemented
-782. Error evaluating expression 30: Unbound variable: PRETTY: Not implemented
-783. Error evaluating expression 31: Unbound variable: PRETTY: Not implemented
-784. Error evaluating expression 32: Unbound variable: PRETTY: Not implemented
-785. Error evaluating expression 33: Unbound variable: PRETTY: Not implemented
-786. Error evaluating expression 26: Unbound variable: PRETTY: Not implemented
-787. Error evaluating expression 27: Unbound variable: PRETTY: Not implemented
-788. Error evaluating expression 28: Unbound variable: PRETTY: Not implemented
-789. Error evaluating expression 29: Unbound variable: PRETTY: Not implemented
-790. Error evaluating expression 30: Unbound variable: PRETTY: Not implemented
-791. Error evaluating expression 31: Unbound variable: PRETTY: Not implemented
-792. Error evaluating expression 32: Unbound variable: PRETTY: Not implemented
-793. Error evaluating expression 33: Unbound variable: PRETTY: Not implemented
-794. Error evaluating expression 34: Unbound variable: PRETTY: Not implemented
-795. Error evaluating expression 35: Unbound variable: PRETTY: Not implemented
-796. Error evaluating expression 36: Unbound variable: PRETTY: Not implemented
-797. Error evaluating expression 37: Unbound variable: PRETTY: Not implemented
-798. Error evaluating expression 38: Unbound variable: PRETTY: Not implemented
-799. Error evaluating expression 39: Unbound variable: PRETTY: Not implemented
-800. Error evaluating expression 40: Unbound variable: PRETTY: Not implemented
-801. Error evaluating expression 41: Unbound variable: PRETTY: Not implemented
-802. Error evaluating expression 42: Unbound variable: PRETTY: Not implemented
-803. Error evaluating expression 43: Unbound variable: PRETTY: Not implemented
-804. Error evaluating expression 44: Unbound variable: PRETTY: Not implemented
-805. Error evaluating expression 45: Unbound variable: PRETTY: Not implemented
-806. Error evaluating expression 46: Unbound variable: PRETTY: Not implemented
-807. Error evaluating expression 47: Unbound variable: PRETTY: Not implemented
-808. Error evaluating expression 48: Unbound variable: PRETTY: Not implemented
-809. Error evaluating expression 49: Unbound variable: PRETTY: Not implemented
-810. Error evaluating expression 50: Unbound variable: PRETTY: Not implemented
-811. Error evaluating expression 51: Unbound variable: PRETTY: Not implemented
-812. Error evaluating expression 52: Unbound variable: PRETTY: Not implemented
-813. Error evaluating expression 53: Unbound variable: PRETTY: Not implemented
-814. Error evaluating expression 54: Unbound variable: PRETTY: Not implemented
-815. Error evaluating expression 55: Unbound variable: PRETTY: Not implemented
-816. Error evaluating expression 56: Unbound variable: PRETTY: Not implemented
-817. Error evaluating expression 57: Unbound variable: PRETTY: Not implemented
-818. Error evaluating expression 58: Unbound variable: PRETTY: Not implemented
-819. Error evaluating expression 59: Unbound variable: PRETTY: Not implemented
-820. Error evaluating expression 60: Unbound variable: PRETTY: Not implemented
-821. Error evaluating expression 61: Unbound variable: PRETTY: Not implemented
-822. Error evaluating expression 1: Unbound variable: PRETTY: Not implemented
-823. Error evaluating expression 2: Unbound variable: PRETTY: Not implemented
-824. Error evaluating expression 3: Unbound variable: PRETTY: Not implemented
-825. Error evaluating expression 4: Unbound variable: PRETTY: Not implemented
-826. Error evaluating expression 5: Unbound variable: PRETTY: Not implemented
-827. Error evaluating expression 6: Unbound variable: PRETTY: Not implemented
-828. Error evaluating expression 7: Unbound variable: PRETTY: Not implemented
-829. Error evaluating expression 8: Unbound variable: PRETTY: Not implemented
-830. Error evaluating expression 9: Unbound variable: PRETTY: Not implemented
-831. Error evaluating expression 10: Unbound variable: PRETTY: Not implemented
-832. Error evaluating expression 11: Unbound variable: PRETTY: Not implemented
-833. Error evaluating expression 12: Unbound variable: PRETTY: Not implemented
-834. Error evaluating expression 13: Unbound variable: PRETTY: Not implemented
-835. Error evaluating expression 14: Unbound variable: PRETTY: Not implemented
-836. Error evaluating expression 15: Unbound variable: PRETTY: Not implemented
-837. Error evaluating expression 16: Unbound variable: PRETTY: Not implemented
-838. Error evaluating expression 1: Unbound variable: PRETTY: Not implemented
-839. Error evaluating expression 2: Unbound variable: PRETTY: Not implemented
-840. Error evaluating expression 3: Unbound variable: PRETTY: Not implemented
-841. Error evaluating expression 4: Unbound variable: PRETTY: Not implemented
-842. Error evaluating expression 5: Unbound variable: PRETTY: Not implemented
-843. Error evaluating expression 6: Unbound variable: PRETTY: Not implemented
-844. Error evaluating expression 7: Unbound variable: PRETTY: Not implemented
-845. Error evaluating expression 8: Unbound variable: PRETTY: Not implemented
-846. Error evaluating expression 9: Unbound variable: PRETTY: Not implemented
-847. Error evaluating expression 10: Unbound variable: PRETTY: Not implemented
-848. Error evaluating expression 11: Unbound variable: PRETTY: Not implemented
-849. Error evaluating expression 12: Unbound variable: PRETTY: Not implemented
-850. Error evaluating expression 13: Unbound variable: PRETTY: Not implemented
-851. Error evaluating expression 14: Unbound variable: PRETTY: Not implemented
-852. Error evaluating expression 15: Unbound variable: PRETTY: Not implemented
-853. Error evaluating expression 16: Unbound variable: PRETTY: Not implemented
-854. Error evaluating expression 17: Unbound variable: PRETTY: Not implemented
-855. Error evaluating expression 18: Unbound variable: PRETTY: Not implemented
-856. Error evaluating expression 20: Unbound variable: PRETTY: Not implemented
-857. Error evaluating expression 1: Unbound variable: PRETTY: Not implemented
-858. Error evaluating expression 2: Unbound variable: PRETTY: Not implemented
-859. Error evaluating expression 3: Unbound variable: PRETTY: Not implemented
-860. Error evaluating expression 4: Unbound variable: PRETTY: Not implemented
-861. Error evaluating expression 5: Unbound variable: PRETTY: Not implemented
-862. Error evaluating expression 6: Unbound variable: PRETTY: Not implemented
-863. Error evaluating expression 7: Unbound variable: PRETTY: Not implemented
-864. Error evaluating expression 8: Unbound variable: PRETTY: Not implemented
-865. Error evaluating expression 9: Unbound variable: PRETTY: Not implemented
-866. Error evaluating expression 10: Unbound variable: PRETTY: Not implemented
-867. Error evaluating expression 11: Unbound variable: PRETTY: Not implemented
-868. Error evaluating expression 12: Unbound variable: PRETTY: Not implemented
-869. Error evaluating expression 13: Unbound variable: PRETTY: Not implemented
-870. Error evaluating expression 14: Unbound variable: PRETTY: Not implemented
-871. Error evaluating expression 15: Unbound variable: PRETTY: Not implemented
-872. Error evaluating expression 16: Unbound variable: PRETTY: Not implemented
-873. Error evaluating expression 17: Unbound variable: PRETTY: Not implemented
-874. Error evaluating expression 18: Unbound variable: PRETTY: Not implemented
-875. Error evaluating expression 19: Unbound variable: PRETTY: Not implemented
-876. Error evaluating expression 20: Unbound variable: PRETTY: Not implemented
-877. Error evaluating expression 21: Unbound variable: PRETTY: Not implemented
-878. Error evaluating expression 22: Unbound variable: PRETTY: Not implemented
-879. Error evaluating expression 23: Unbound variable: PRETTY: Not implemented
-880. Error evaluating expression 24: Unbound variable: PRETTY: Not implemented
-881. Error evaluating expression 25: Unbound variable: PRETTY: Not implemented
-882. Error evaluating expression 26: Unbound variable: PRETTY: Not implemented
-883. Error evaluating expression 27: Unbound variable: PRETTY: Not implemented
-884. Error evaluating expression 28: Unbound variable: PRETTY: Not implemented
-885. Error evaluating expression 29: Unbound variable: PRETTY: Not implemented
-886. Error evaluating expression 30: Unbound variable: PRETTY: Not implemented
-887. Error evaluating expression 31: Unbound variable: PRETTY: Not implemented
-888. Error evaluating expression 32: Unbound variable: PRETTY: Not implemented
-889. Error evaluating expression 33: Unbound variable: PRETTY: Not implemented
-890. Error evaluating expression 34: Unbound variable: PRETTY: Not implemented
-891. Error evaluating expression 35: Unbound variable: PRETTY: Not implemented
-892. Error evaluating expression 36: Unbound variable: PRETTY: Not implemented
-893. Error evaluating expression 37: Unbound variable: PRETTY: Not implemented
-894. Error evaluating expression 38: Unbound variable: PRETTY: Not implemented
-895. Error evaluating expression 39: Unbound variable: PRETTY: Not implemented
-896. Error evaluating expression 1: Unbound variable: PRETTY: Not implemented
-897. Error evaluating expression 2: Unbound variable: PRETTY: Not implemented
-898. Error evaluating expression 3: Unbound variable: PRETTY: Not implemented
-899. Error evaluating expression 4: Unbound variable: PRETTY: Not implemented
-900. Error evaluating expression 5: Unbound variable: PRETTY: Not implemented
-901. Error evaluating expression 6: Unbound variable: PRETTY: Not implemented
-902. Error evaluating expression 7: Unbound variable: PRETTY: Not implemented
-903. Error evaluating expression 8: Unbound variable: PRETTY: Not implemented
-904. Error evaluating expression 9: Unbound variable: PRETTY: Not implemented
-905. Error evaluating expression 10: Unbound variable: PRETTY: Not implemented
-906. Error evaluating expression 11: Unbound variable: PRETTY: Not implemented
-907. Error evaluating expression 12: Unbound variable: PRETTY: Not implemented
-908. Error evaluating expression 13: Unbound variable: PRETTY: Not implemented
-909. Error evaluating expression 14: Unbound variable: PRETTY: Not implemented
-910. Error evaluating expression 15: Unbound variable: PRETTY: Not implemented
-911. Error evaluating expression 16: Unbound variable: PRETTY: Not implemented
-912. Error evaluating expression 17: Unbound variable: PRETTY: Not implemented
-913. Error evaluating expression 18: Unbound variable: PRETTY: Not implemented
-914. Error evaluating expression 19: Unbound variable: PRETTY: Not implemented
-915. Error evaluating expression 20: Unbound variable: PRETTY: Not implemented
-916. Error evaluating expression 21: Unbound variable: PRETTY: Not implemented
-917. Error evaluating expression 22: Unbound variable: PRETTY: Not implemented
-918. Error evaluating expression 23: Unbound variable: PRETTY: Not implemented
-919. Error evaluating expression 24: Unbound variable: PRETTY: Not implemented
-920. Error evaluating expression 25: Unbound variable: PRETTY: Not implemented
-921. Error evaluating expression 26: Unbound variable: PRETTY: Not implemented
-922. Error evaluating expression 27: Unbound variable: PRETTY: Not implemented
-923. Error evaluating expression 28: Unbound variable: PRETTY: Not implemented
-924. Error evaluating expression 29: Unbound variable: PRETTY: Not implemented
-925. Error evaluating expression 30: Unbound variable: PRETTY: Not implemented
-926. Error evaluating expression 31: Unbound variable: PRETTY: Not implemented
-927. Error evaluating expression 32: Unbound variable: PRETTY: Not implemented
-928. Error evaluating expression 33: Unbound variable: PRETTY: Not implemented
-929. Error evaluating expression 34: Unbound variable: PRETTY: Not implemented
-930. Error evaluating expression 35: Unbound variable: PRETTY: Not implemented
-931. Error evaluating expression 36: Unbound variable: PRETTY: Not implemented
-932. Error evaluating expression 37: Unbound variable: PRETTY: Not implemented
-933. Error evaluating expression 38: Unbound variable: PRETTY: Not implemented
-934. Error evaluating expression 39: Unbound variable: PRETTY: Not implemented
-935. Error evaluating expression 40: Unbound variable: PRETTY: Not implemented
-936. Error evaluating expression 41: Unbound variable: PRETTY: Not implemented
-937. Error evaluating expression 42: Unbound variable: PRETTY: Not implemented
-938. Error evaluating expression 43: Unbound variable: PRETTY: Not implemented
-939. Error evaluating expression 44: Unbound variable: PRETTY: Not implemented
-940. Error evaluating expression 45: Unbound variable: PRETTY: Not implemented
-941. Error evaluating expression 10: Assertion failed
-942. Error evaluating expression 11: Assertion failed
-943. Error evaluating expression 12: Assertion failed
-944. Error evaluating expression 13: Assertion failed
-945. Error evaluating expression 14: Assertion failed
-946. Error evaluating expression 15: Assertion failed
-947. Error evaluating expression 16: Assertion failed
-948. Error evaluating expression 17: Assertion failed
-949. Error evaluating expression 18: Assertion failed
-950. Error evaluating expression 19: Assertion failed
-951. Error evaluating expression 20: Assertion failed
-952. Error evaluating expression 21: Assertion failed
-953. Error evaluating expression 22: Assertion failed
-954. Error evaluating expression 22: Assertion failed
-955. Error evaluating expression 23: Assertion failed
-956. Error evaluating expression 24: Assertion failed
-957. Error evaluating expression 31: Assertion failed
-958. Error evaluating expression 32: Assertion failed
-959. Error evaluating expression 33: Assertion failed
-960. Error evaluating expression 32: Assertion failed
-961. Error evaluating expression 33: Assertion failed
-962. Error evaluating expression 34: Assertion failed
-963. Error evaluating expression 35: Assertion failed
-964. Error evaluating expression 36: Assertion failed
-965. Error evaluating expression 38: Assertion failed
-966. Error evaluating expression 39: Assertion failed
-967. Error evaluating expression 40: Assertion failed
-968. Error evaluating expression 41: Assertion failed
-969. Error evaluating expression 44: Assertion failed
-970. Error evaluating expression 45: Assertion failed
-971. Error evaluating expression 46: Assertion failed
-972. Error evaluating expression 49: Assertion failed
-973. Error evaluating expression 50: Assertion failed
-974. Error evaluating expression 66: Assertion failed
-975. Error evaluating expression 67: Assertion failed
-976. Error evaluating expression 68: Assertion failed
-977. Error evaluating expression 69: Assertion failed
-978. Error evaluating expression 70: Assertion failed
-979. Error evaluating expression 71: Assertion failed
-980. Error evaluating expression 72: Assertion failed
-981. Error evaluating expression 73: Assertion failed
-982. Error evaluating expression 74: Assertion failed
-983. Error evaluating expression 34: Assertion failed
-984. Error evaluating expression 35: Assertion failed
-985. Error evaluating expression 36: Assertion failed
-986. Error evaluating expression 37: Assertion failed
-987. Error evaluating expression 38: Assertion failed
-988. Error evaluating expression 39: Assertion failed
-989. Error evaluating expression 40: Assertion failed
-990. Error evaluating expression 41: Assertion failed
-991. Error evaluating expression 42: Assertion failed
-992. Error evaluating expression 43: Assertion failed
-993. Error evaluating expression 44: Assertion failed
-994. Error evaluating expression 45: Assertion failed
-995. Error evaluating expression 46: Assertion failed
-996. Error evaluating expression 47: Assertion failed
-997. Error evaluating expression 48: Assertion failed
-998. Error evaluating expression 49: Assertion failed
-999. Error evaluating expression 50: Assertion failed
-1000. Error evaluating expression 51: Assertion failed
-1001. Error evaluating expression 52: Assertion failed
-1002. Error evaluating expression 53: Assertion failed
-1003. Error evaluating expression 54: Assertion failed
-1004. Error evaluating expression 55: Assertion failed
-1005. Error evaluating expression 56: Assertion failed
-1006. Error evaluating expression 57: Assertion failed
-1007. Error evaluating expression 58: Assertion failed
-1008. Error evaluating expression 59: Assertion failed
-1009. Error evaluating expression 60: Assertion failed
-1010. Error evaluating expression 61: Assertion failed
-1011. Error evaluating expression 62: Assertion failed
-1012. Error evaluating expression 63: Assertion failed
-1013. Error evaluating expression 64: Assertion failed
-1014. Error evaluating expression 65: Assertion failed
-1015. Error evaluating expression 66: Assertion failed
-1016. Error evaluating expression 67: Assertion failed
-1017. Error evaluating expression 68: Assertion failed
-1018. Error evaluating expression 69: Assertion failed
-1019. Error evaluating expression 70: Assertion failed
-1020. Error evaluating expression 71: Assertion failed
-1021. Error evaluating expression 72: Assertion failed
-1022. Error evaluating expression 106: Assertion failed
-1023. Error evaluating expression 107: Assertion failed
-1024. Error evaluating expression 108: Assertion failed
-1025. Error evaluating expression 109: Assertion failed
-1026. Error evaluating expression 110: Assertion failed
-1027. Error evaluating expression 111: Assertion failed
-1028. Error evaluating expression 112: Assertion failed
-1029. Error evaluating expression 113: Assertion failed
-1030. Error evaluating expression 114: Assertion failed
-1031. Error evaluating expression 115: Assertion failed
-1032. Error evaluating expression 116: Assertion failed
-1033. Error evaluating expression 117: Assertion failed
-1034. Error evaluating expression 118: Assertion failed
-1035. Error evaluating expression 119: Assertion failed
-1036. Error evaluating expression 120: Assertion failed
-1037. Error evaluating expression 121: Assertion failed
-1038. Error evaluating expression 122: Assertion failed
-1039. Error evaluating expression 123: Assertion failed
-1040. Error evaluating expression 124: Assertion failed
-1041. Error evaluating expression 125: Assertion failed
-1042. Error evaluating expression 126: Assertion failed
-1043. Error evaluating expression 127: Assertion failed
-1044. Error evaluating expression 128: Assertion failed
-1045. Error evaluating expression 129: Assertion failed
-1046. Error evaluating expression 130: Assertion failed
-1047. Error evaluating expression 131: Assertion failed
-1048. Error evaluating expression 132: Assertion failed
-1049. Error evaluating expression 133: Assertion failed
-1050. Error evaluating expression 134: Assertion failed
-1051. Error evaluating expression 135: Assertion failed
-1052. Error evaluating expression 136: Assertion failed
-1053. Error evaluating expression 137: Assertion failed
-1054. Error evaluating expression 138: Assertion failed
-1055. Error evaluating expression 139: Assertion failed
-1056. Error evaluating expression 140: Assertion failed
-1057. Error evaluating expression 141: Assertion failed
-1058. Error evaluating expression 142: Assertion failed
-1059. Error evaluating expression 143: Assertion failed
-1060. Error evaluating expression 144: Assertion failed
-1061. Error evaluating expression 145: Assertion failed
-1062. Error evaluating expression 146: Assertion failed
-1063. Error evaluating expression 147: Assertion failed
-1064. Error evaluating expression 148: Assertion failed
-1065. Error evaluating expression 149: Assertion failed
-1066. Error evaluating expression 150: Assertion failed
-1067. Error evaluating expression 151: Assertion failed
-1068. Error evaluating expression 152: Assertion failed
-1069. Error evaluating expression 153: Assertion failed
-1070. Error evaluating expression 154: Assertion failed
-1071. Error evaluating expression 155: Assertion failed
-1072. Error evaluating expression 156: Assertion failed
-1073. Error evaluating expression 157: Assertion failed
-1074. Error evaluating expression 158: Assertion failed
-1075. Error evaluating expression 159: Assertion failed
-1076. Error evaluating expression 160: Assertion failed
-1077. Error evaluating expression 161: Assertion failed
-1078. Error evaluating expression 162: Assertion failed
-1079. Error evaluating expression 163: Assertion failed
-1080. Error evaluating expression 164: Assertion failed
-1081. Error evaluating expression 165: Assertion failed
-1082. Error evaluating expression 166: Assertion failed
-1083. Error evaluating expression 167: Assertion failed
-1084. Error evaluating expression 168: Assertion failed
-1085. Error evaluating expression 169: Assertion failed
-1086. Error evaluating expression 170: Assertion failed
-1087. Error evaluating expression 171: Assertion failed
-1088. Error evaluating expression 172: Assertion failed
-1089. Error evaluating expression 173: Assertion failed
-1090. Error evaluating expression 174: Assertion failed
-1091. Error evaluating expression 175: Assertion failed
-1092. Error evaluating expression 176: Assertion failed
-1093. Error evaluating expression 177: Assertion failed
-1094. Error evaluating expression 178: Assertion failed
-1095. Error evaluating expression 179: Assertion failed
-1096. Error evaluating expression 180: Assertion failed
-1097. Error evaluating expression 181: Assertion failed
-1098. Error evaluating expression 182: Assertion failed
-1099. Error evaluating expression 183: Assertion failed
-1100. Error evaluating expression 184: Assertion failed
-1101. Error evaluating expression 185: Assertion failed
-1102. Error evaluating expression 186: Assertion failed
-1103. Error evaluating expression 187: Assertion failed
-1104. Error evaluating expression 188: Assertion failed
-1105. Error evaluating expression 189: Assertion failed
-1106. Error evaluating expression 190: Assertion failed
-1107. Error evaluating expression 191: Assertion failed
-1108. Error evaluating expression 192: Assertion failed
-1109. Error evaluating expression 193: Assertion failed
-1110. Error evaluating expression 194: Assertion failed
-1111. Error evaluating expression 195: Assertion failed
-1112. Error evaluating expression 196: Assertion failed
-1113. Error evaluating expression 197: Assertion failed
-1114. Error evaluating expression 198: Assertion failed
-1115. Error evaluating expression 199: Assertion failed
-1116. Error evaluating expression 200: Assertion failed
-1117. Error evaluating expression 201: Assertion failed
-1118. Error evaluating expression 202: Assertion failed
-1119. Error evaluating expression 203: Assertion failed
-1120. Error evaluating expression 204: Assertion failed
-1121. Error evaluating expression 205: Assertion failed
-1122. Error evaluating expression 206: Assertion failed
-1123. Error evaluating expression 207: Assertion failed
-1124. Error evaluating expression 208: Assertion failed
-1125. Error evaluating expression 209: Assertion failed
-1126. Error evaluating expression 210: Assertion failed
-1127. Error evaluating expression 211: Assertion failed
-1128. Error evaluating expression 212: Assertion failed
-1129. Error evaluating expression 213: Assertion failed
-1130. Error evaluating expression 214: Assertion failed
-1131. Error evaluating expression 215: Assertion failed
-1132. Error evaluating expression 216: Assertion failed
-1133. Error evaluating expression 217: Assertion failed
-1134. Error evaluating expression 218: Assertion failed
-1135. Error evaluating expression 219: Assertion failed
-1136. Error evaluating expression 220: Assertion failed
-1137. Error evaluating expression 221: Assertion failed
-1138. Error evaluating expression 222: Assertion failed
-1139. Error evaluating expression 231: EOF during list read
-1140. Error evaluating expression 9: Not a function: LOOKUP-TABLE: Not implemented
-1141. Error evaluating expression 17: Unbound variable: CHARS: Not implemented
-1142. Error evaluating expression 18: Unbound variable: CHARS: Not implemented
-1143. Error evaluating expression 19: Unbound variable: CHARS: Not implemented
-1144. Error evaluating expression 20: Unbound variable: CHARS: Not implemented
-1145. Error evaluating expression 5: Unbound variable: ACROSS: Not implemented
-1146. Error evaluating expression 7: t_symbol_function() takes 0 positional arguments but 1 was given
-1147. Error evaluating expression 42: object of type 'int' has no len()
-1148. Error evaluating expression 43: object of type 'int' has no len()
-1149. Error evaluating expression 44: object of type 'int' has no len()
-1150. Error evaluating expression 45: object of type 'int' has no len()
-1151. Error evaluating expression 46: object of type 'int' has no len()
-1152. Error evaluating expression 16: Unbound variable: LOAD-TEST-PACKAGE: Not implemented
-1153. Error evaluating expression 6: Unbound variable: DESCRIBE-OBJECT-TEST-CLASS-01: Not implemented
-1154. Error evaluating expression 3: DEFUN: function name must be a symbol: Not implemented
+1. Error evaluating expression 67: 'lispCons' object cannot be interpreted as an integer
+2. Error evaluating expression 69: Unbound variable: +CODE-CHARS+: Not implemented
+3. Error evaluating expression 14: Unbound variable: EVEN-ARRAY: Not implemented
+4. Error evaluating expression 19: Unbound variable: ACCESSOR-5-1-2-6: Not implemented
+5. Error evaluating expression 17: Not a function: N: Not implemented
+6. Error evaluating expression 22: Not a function: Y: Not implemented
+7. Error evaluating expression 25: Not a function: Y: Not implemented
+8. Error evaluating expression 27: Unbound variable: : Not implemented
+9. Error evaluating expression 42: Unbound variable: EQUALP-CLASS-36: Not implemented
+10. Error evaluating expression 73: Unbound variable: FLET.74: Not implemented
+11. Error evaluating expression 58: Unbound variable: LABELS.52: Not implemented
+12. Error evaluating expression 55: Unbound variable: MACROLET.52: Not implemented
+13. Error evaluating expression 4: LOOP FOR requires a symbol: Not implemented
+14. Error evaluating expression 5: LOOP FOR requires a symbol: Not implemented
+15. Error evaluating expression 6: LOOP FOR requires a symbol: Not implemented
+16. Error evaluating expression 7: LOOP FOR requires a symbol: Not implemented
+17. Error evaluating expression 8: LOOP FOR requires a symbol: Not implemented
+18. Error evaluating expression 9: LOOP FOR requires a symbol: Not implemented
+19. Error evaluating expression 11: LOOP FOR requires a symbol: Not implemented
+20. Error evaluating expression 12: LOOP FOR requires a symbol: Not implemented
+21. Error evaluating expression 1: Not a function: :USE: Not implemented
+22. Error evaluating expression 2: Not a function: :USE: Not implemented
+23. Error evaluating expression 1: Assertion failed
+24. Error evaluating expression 2: Assertion failed
+25. Error evaluating expression 3: Assertion failed
+26. Error evaluating expression 4: Assertion failed
+27. Error evaluating expression 5: 'lispNull' object is not iterable
+28. Error evaluating expression 1: Unbound variable: CLASS-01: Not implemented
+29. Error evaluating expression 5: Unbound variable: CLASS-02: Not implemented
+30. Error evaluating expression 9: Unbound variable: CLASS-03: Not implemented
+31. Error evaluating expression 13: Unbound variable: CLASS-04: Not implemented
+32. Error evaluating expression 28: Unbound variable: CLASS-05: Not implemented
+33. Error evaluating expression 30: Unbound variable: CLASS-06: Not implemented
+34. Error evaluating expression 31: Unbound variable: CLASS-06A: Not implemented
+35. Error evaluating expression 34: Unbound variable: CLASS-07: Not implemented
+36. Error evaluating expression 48: Unbound variable: CLASS-08: Not implemented
+37. Error evaluating expression 51: Unbound variable: CLASS-09: Not implemented
+38. Error evaluating expression 57: Unbound variable: CLASS-10: Not implemented
+39. Error evaluating expression 60: Unbound variable: CLASS-11: Not implemented
+40. Error evaluating expression 63: Unbound variable: CLASS-12: Not implemented
+41. Error evaluating expression 66: Unbound variable: CLASS-13: Not implemented
+42. Error evaluating expression 68: Unbound variable: CLASS-14: Not implemented
+43. Error evaluating expression 70: Unbound variable: CLASS-15: Not implemented
+44. Error evaluating expression 77: Unbound variable: CLASS-16: Not implemented
+45. Error evaluating expression 81: Unbound variable: CLASS-17: Not implemented
+46. Error evaluating expression 85: Unbound variable: CLASS-18: Not implemented
+47. Error evaluating expression 92: Unbound variable: CLASS-19: Not implemented
+48. Error evaluating expression 97: Unbound variable: CLASS-20: Not implemented
+49. Error evaluating expression 102: Unbound variable: CLASS-21: Not implemented
+50. Error evaluating expression 108: Unbound variable: CLASS-22: Not implemented
+51. Error evaluating expression 110: Unbound variable: CLASS-23: Not implemented
+52. Error evaluating expression 115: Unbound variable: CLASS-24: Not implemented
+53. Error evaluating expression 120: Unbound variable: CLASS-25: Not implemented
+54. Error evaluating expression 127: Unbound variable: CLASS-26: Not implemented
+55. Error evaluating expression 129: Unbound variable: CLASS-27: Not implemented
+56. Error evaluating expression 135: Unbound variable: *CLASS-28-RESET-FN*: Not implemented
+57. Error evaluating expression 1: Unbound variable: CLASS-0201: Not implemented
+58. Error evaluating expression 2: Unbound variable: CLASS-0202: Not implemented
+59. Error evaluating expression 5: Unbound variable: CLASS-0203: Not implemented
+60. Error evaluating expression 6: Unbound variable: CLASS-0204: Not implemented
+61. Error evaluating expression 9: Unbound variable: CLASS-0205A: Not implemented
+62. Error evaluating expression 10: Unbound variable: CLASS-0205B: Not implemented
+63. Error evaluating expression 13: Unbound variable: CLASS-0206A: Not implemented
+64. Error evaluating expression 14: Unbound variable: CLASS-0206B: Not implemented
+65. Error evaluating expression 16: Unbound variable: CLASS-0207A: Not implemented
+66. Error evaluating expression 17: Unbound variable: CLASS-0207B: Not implemented
+67. Error evaluating expression 18: Unbound variable: CLASS-0207C: Not implemented
+68. Error evaluating expression 20: Unbound variable: CLASS-0208A: Not implemented
+69. Error evaluating expression 21: Unbound variable: CLASS-0208B: Not implemented
+70. Error evaluating expression 26: Unbound variable: CLASS-0211A: Not implemented
+71. Error evaluating expression 27: Unbound variable: CLASS-0211B: Not implemented
+72. Error evaluating expression 29: Unbound variable: CLASS-0212A: Not implemented
+73. Error evaluating expression 30: Unbound variable: CLASS-0212B: Not implemented
+74. Error evaluating expression 36: Unbound variable: CLASS-0213A: Not implemented
+75. Error evaluating expression 37: Unbound variable: CLASS-0213B: Not implemented
+76. Error evaluating expression 40: Unbound variable: CLASS-0214A: Not implemented
+77. Error evaluating expression 41: Unbound variable: CLASS-0214B: Not implemented
+78. Error evaluating expression 44: Unbound variable: CLASS-0215A: Not implemented
+79. Error evaluating expression 45: Unbound variable: CLASS-0215B: Not implemented
+80. Error evaluating expression 48: Unbound variable: CLASS-0216A: Not implemented
+81. Error evaluating expression 49: Unbound variable: CLASS-0216B: Not implemented
+82. Error evaluating expression 52: Unbound variable: CLASS-0217A: Not implemented
+83. Error evaluating expression 53: Unbound variable: CLASS-0217B: Not implemented
+84. Error evaluating expression 58: Unbound variable: CLASS-0218A: Not implemented
+85. Error evaluating expression 59: Unbound variable: CLASS-0218B: Not implemented
+86. Error evaluating expression 63: Unbound variable: CLASS-0219A: Not implemented
+87. Error evaluating expression 64: Unbound variable: CLASS-0219B: Not implemented
+88. Error evaluating expression 67: Unbound variable: CLASS-0220A: Not implemented
+89. Error evaluating expression 68: Unbound variable: CLASS-0220B: Not implemented
+90. Error evaluating expression 73: Unbound variable: CLASS-0221A: Not implemented
+91. Error evaluating expression 74: Unbound variable: CLASS-0221B: Not implemented
+92. Error evaluating expression 75: Unbound variable: CLASS-0221C: Not implemented
+93. Error evaluating expression 79: Unbound variable: CLASS-0222A: Not implemented
+94. Error evaluating expression 80: Unbound variable: CLASS-0222B: Not implemented
+95. Error evaluating expression 83: Unbound variable: CLASS-0223A: Not implemented
+96. Error evaluating expression 84: Unbound variable: CLASS-0223B: Not implemented
+97. Error evaluating expression 1: Unbound variable: CLASS-0301A: Not implemented
+98. Error evaluating expression 2: Unbound variable: CLASS-0301B: Not implemented
+99. Error evaluating expression 3: Unbound variable: CLASS-0301C: Not implemented
+100. Error evaluating expression 5: Unbound variable: CLASS-0302A: Not implemented
+101. Error evaluating expression 6: Unbound variable: CLASS-0302B: Not implemented
+102. Error evaluating expression 7: Unbound variable: CLASS-0302C: Not implemented
+103. Error evaluating expression 9: Unbound variable: CLASS-0303A: Not implemented
+104. Error evaluating expression 10: Unbound variable: CLASS-0303B: Not implemented
+105. Error evaluating expression 11: Unbound variable: CLASS-0303C: Not implemented
+106. Error evaluating expression 13: Unbound variable: CLASS-0304A: Not implemented
+107. Error evaluating expression 14: Unbound variable: CLASS-0304B: Not implemented
+108. Error evaluating expression 15: Unbound variable: CLASS-0304C: Not implemented
+109. Error evaluating expression 16: Unbound variable: CLASS-0304D: Not implemented
+110. Error evaluating expression 18: Unbound variable: CLASS-0305A: Not implemented
+111. Error evaluating expression 19: Unbound variable: CLASS-0305B: Not implemented
+112. Error evaluating expression 20: Unbound variable: CLASS-0305C: Not implemented
+113. Error evaluating expression 21: Unbound variable: CLASS-0305D: Not implemented
+114. Error evaluating expression 23: Unbound variable: CLASS-0306A: Not implemented
+115. Error evaluating expression 24: Unbound variable: CLASS-0306B: Not implemented
+116. Error evaluating expression 25: Unbound variable: CLASS-0306C: Not implemented
+117. Error evaluating expression 26: Unbound variable: CLASS-0306D: Not implemented
+118. Error evaluating expression 27: Unbound variable: CLASS-0306E: Not implemented
+119. Error evaluating expression 28: Unbound variable: CLASS-0306F: Not implemented
+120. Error evaluating expression 29: Unbound variable: CLASS-0306G: Not implemented
+121. Error evaluating expression 30: Unbound variable: CLASS-0306H: Not implemented
+122. Error evaluating expression 1: Unbound variable: ALLOCATE-INSTANCE-CLASS-01: Not implemented
+123. Error evaluating expression 5: Unbound variable: ALLOCATE-INSTANCE-CLASS-02: Not implemented
+124. Error evaluating expression 8: Unbound variable: REINIT-CLASS-01: Not implemented
+125. Error evaluating expression 1: Unbound variable: SHARED-INIT-CLASS-01: Not implemented
+126. Error evaluating expression 14: Unbound variable: *SHARED-INIT-VAR-02-INIT*: Not implemented
+127. Error evaluating expression 24: Unbound variable: SHARED-INIT-CLASS-04A: Not implemented
+128. Error evaluating expression 25: Unbound variable: SHARED-INIT-CLASS-04B: Not implemented
+129. Error evaluating expression 33: Unbound variable: SHARED-INIT-CLASS-05: Not implemented
+130. Error evaluating expression 38: Unbound variable: SHARED-INIT-CLASS-06: Not implemented
+131. Error evaluating expression 48: Unbound variable: SHARED-INIT-CLASS-07: Not implemented
+132. Error evaluating expression 52: Unbound variable: SHARED-INIT-CLASS-08: Not implemented
+133. Error evaluating expression 57: Unbound variable: SHARED-INIT-CLASS-09: Not implemented
+134. Error evaluating expression 1: Unbound variable: CHANGE-CLASS-CLASS-01A: Not implemented
+135. Error evaluating expression 2: Unbound variable: CHANGE-CLASS-CLASS-01B: Not implemented
+136. Error evaluating expression 15: Unbound variable: CHANGE-CLASS-CLASS-02A: Not implemented
+137. Error evaluating expression 16: Unbound variable: CHANGE-CLASS-CLASS-02B: Not implemented
+138. Error evaluating expression 20: Unbound variable: CHANGE-CLASS-CLASS-03A: Not implemented
+139. Error evaluating expression 21: Unbound variable: CHANGE-CLASS-CLASS-03B: Not implemented
+140. Error evaluating expression 24: Unbound variable: CHANGE-CLASS-CLASS-04A: Not implemented
+141. Error evaluating expression 25: Unbound variable: CHANGE-CLASS-CLASS-04B: Not implemented
+142. Error evaluating expression 32: Unbound variable: CHANGE-CLASS-CLASS-05: Not implemented
+143. Error evaluating expression 35: Unbound variable: CHANGE-CLASS-CLASS-06: Not implemented
+144. Error evaluating expression 39: Unbound variable: CHANGE-CLASS-CLASS-07: Not implemented
+145. Error evaluating expression 40: Unbound variable: CHANGE-CLASS-CLASS-07B: Not implemented
+146. Error evaluating expression 1: Unbound variable: UIFDC-CLASS-01A: Not implemented
+147. Error evaluating expression 2: Unbound variable: UIFDC-CLASS-01B: Not implemented
+148. Error evaluating expression 9: Unbound variable: UIFDC-CLASS-02: Not implemented
+149. Error evaluating expression 1: Unbound variable: SLOT-BOUNDP-CLASS-01: Not implemented
+150. Error evaluating expression 1: Unbound variable: SLOT-EXISTS-P-CLASS-01: Not implemented
+151. Error evaluating expression 10: Unbound variable: SLOT-EXISTS-P-CLASS-02: Not implemented
+152. Error evaluating expression 12: Unbound variable: SLOT-EXISTS-P-CLASS-03A: Not implemented
+153. Error evaluating expression 13: Unbound variable: SLOT-EXISTS-P-CLASS-03B: Not implemented
+154. Error evaluating expression 14: Unbound variable: SLOT-EXISTS-P-CLASS-03C: Not implemented
+155. Error evaluating expression 22: Unbound variable: SLOT-EXISTS-P-CONDITION-01: Not implemented
+156. Error evaluating expression 24: Unbound variable: SLOT-EXISTS-P-CONDITION-02: Not implemented
+157. Error evaluating expression 1: Unbound variable: SLOT-MAKUNBOUND-CLASS-01: Not implemented
+158. Error evaluating expression 2: Unbound variable: SLOT-MISSING-CLASS-01: Not implemented
+159. Error evaluating expression 1: Unbound variable: SLOT-UNBOUND-CLASS-01: Not implemented
+160. Error evaluating expression 1: Unbound variable: SLOT-VALUE-CLASS-01: Not implemented
+161. Error evaluating expression 5: Unbound variable: SLOT-VALUE-CLASS-02: Not implemented
+162. Error evaluating expression 4: Unbound variable: MQ-CLASS-01: Not implemented
+163. Error evaluating expression 7: Unbound variable: MQ-CLASS-02: Not implemented
+164. Error evaluating expression 10: Unbound variable: MQ-CLASS-03: Not implemented
+165. Error evaluating expression 2: Unbound variable: MAKE-INSTANCE-CLASS-01: Not implemented
+166. Error evaluating expression 1: Unbound variable: MAKE-INSTANCES-OBSOLETE-CLASS-01: Not implemented
+167. Error evaluating expression 1: Unbound variable: MAKE-LOAD-FORM-CLASS-01: Not implemented
+168. Error evaluating expression 5: Unbound variable: MAKE-LOAD-FORM-CONDITION-03: Not implemented
+169. Error evaluating expression 16: Unbound variable: MAKE-LOAD-FORM-CLASS-04: Not implemented
+170. Error evaluating expression 2: Unbound variable: LOAD-FORM-TEST-OBJECT: Not implemented
+171. Error evaluating expression 4: Unbound variable: MLFSS-02: Not implemented
+172. Error evaluating expression 12: Not a function: :USE: Not implemented
+173. Error evaluating expression 6: Unbound variable: WITH-ACCESSORS-CLASS-01: Not implemented
+174. Error evaluating expression 7: Unbound variable: WITH-SLOTS-CLASS-01: Not implemented
+175. Error evaluating expression 52: Unbound variable: DEFGENERIC.29.CLASS.1: Not implemented
+176. Error evaluating expression 53: Unbound variable: DEFGENERIC.29.CLASS.2: Not implemented
+177. Error evaluating expression 54: Unbound variable: DEFGENERIC.29.CLASS.3: Not implemented
+178. Error evaluating expression 55: Expected a class, got T
+179. Error evaluating expression 55: Unmatched closing parenthesis
+180. Error evaluating expression 55: Unmatched closing parenthesis
+181. Error evaluating expression 56: Unmatched closing parenthesis
+182. Error evaluating expression 1: Unbound variable: DGMC-CLASS-01: Not implemented
+183. Error evaluating expression 2: Unbound variable: DGMC-CLASS-02: Not implemented
+184. Error evaluating expression 3: Unbound variable: DGMC-CLASS-03: Not implemented
+185. Error evaluating expression 4: Unbound variable: DGMC-CLASS-04: Not implemented
+186. Error evaluating expression 5: Unbound variable: DGMC-CLASS-05: Not implemented
+187. Error evaluating expression 6: Unbound variable: DGMC-CLASS-06: Not implemented
+188. Error evaluating expression 7: Unbound variable: DGMC-CLASS-07: Not implemented
+189. Error evaluating expression 1: Unbound variable: DGMC-CLASS-01: Not implemented
+190. Error evaluating expression 2: Unbound variable: DGMC-CLASS-02: Not implemented
+191. Error evaluating expression 3: Unbound variable: DGMC-CLASS-03: Not implemented
+192. Error evaluating expression 4: Unbound variable: DGMC-CLASS-04: Not implemented
+193. Error evaluating expression 5: Unbound variable: DGMC-CLASS-05: Not implemented
+194. Error evaluating expression 6: Unbound variable: DGMC-CLASS-06: Not implemented
+195. Error evaluating expression 7: Unbound variable: DGMC-CLASS-07: Not implemented
+196. Error evaluating expression 1: Unbound variable: DGMC-CLASS-01: Not implemented
+197. Error evaluating expression 2: Unbound variable: DGMC-CLASS-02: Not implemented
+198. Error evaluating expression 3: Unbound variable: DGMC-CLASS-03: Not implemented
+199. Error evaluating expression 4: Unbound variable: DGMC-CLASS-04: Not implemented
+200. Error evaluating expression 5: Unbound variable: DGMC-CLASS-05: Not implemented
+201. Error evaluating expression 6: Unbound variable: DGMC-CLASS-06: Not implemented
+202. Error evaluating expression 7: Unbound variable: DGMC-CLASS-07: Not implemented
+203. Error evaluating expression 1: Unbound variable: DGMC-CLASS-01: Not implemented
+204. Error evaluating expression 2: Unbound variable: DGMC-CLASS-02: Not implemented
+205. Error evaluating expression 3: Unbound variable: DGMC-CLASS-03: Not implemented
+206. Error evaluating expression 4: Unbound variable: DGMC-CLASS-04: Not implemented
+207. Error evaluating expression 5: Unbound variable: DGMC-CLASS-05: Not implemented
+208. Error evaluating expression 6: Unbound variable: DGMC-CLASS-06: Not implemented
+209. Error evaluating expression 7: Unbound variable: DGMC-CLASS-07: Not implemented
+210. Error evaluating expression 1: Unbound variable: DGMC-CLASS-01: Not implemented
+211. Error evaluating expression 2: Unbound variable: DGMC-CLASS-02: Not implemented
+212. Error evaluating expression 3: Unbound variable: DGMC-CLASS-03: Not implemented
+213. Error evaluating expression 4: Unbound variable: DGMC-CLASS-04: Not implemented
+214. Error evaluating expression 5: Unbound variable: DGMC-CLASS-05: Not implemented
+215. Error evaluating expression 6: Unbound variable: DGMC-CLASS-06: Not implemented
+216. Error evaluating expression 7: Unbound variable: DGMC-CLASS-07: Not implemented
+217. Error evaluating expression 1: Unbound variable: DGMC-CLASS-01: Not implemented
+218. Error evaluating expression 2: Unbound variable: DGMC-CLASS-02: Not implemented
+219. Error evaluating expression 3: Unbound variable: DGMC-CLASS-03: Not implemented
+220. Error evaluating expression 4: Unbound variable: DGMC-CLASS-04: Not implemented
+221. Error evaluating expression 5: Unbound variable: DGMC-CLASS-05: Not implemented
+222. Error evaluating expression 6: Unbound variable: DGMC-CLASS-06: Not implemented
+223. Error evaluating expression 7: Unbound variable: DGMC-CLASS-07: Not implemented
+224. Error evaluating expression 1: Unbound variable: DGMC-CLASS-01: Not implemented
+225. Error evaluating expression 2: Unbound variable: DGMC-CLASS-02: Not implemented
+226. Error evaluating expression 3: Unbound variable: DGMC-CLASS-03: Not implemented
+227. Error evaluating expression 4: Unbound variable: DGMC-CLASS-04: Not implemented
+228. Error evaluating expression 5: Unbound variable: DGMC-CLASS-05: Not implemented
+229. Error evaluating expression 6: Unbound variable: DGMC-CLASS-06: Not implemented
+230. Error evaluating expression 7: Unbound variable: DGMC-CLASS-07: Not implemented
+231. Error evaluating expression 1: Unbound variable: DGMC-CLASS-01: Not implemented
+232. Error evaluating expression 2: Unbound variable: DGMC-CLASS-02: Not implemented
+233. Error evaluating expression 3: Unbound variable: DGMC-CLASS-03: Not implemented
+234. Error evaluating expression 4: Unbound variable: DGMC-CLASS-04: Not implemented
+235. Error evaluating expression 5: Unbound variable: DGMC-CLASS-05: Not implemented
+236. Error evaluating expression 6: Unbound variable: DGMC-CLASS-06: Not implemented
+237. Error evaluating expression 7: Unbound variable: DGMC-CLASS-07: Not implemented
+238. Error evaluating expression 1: Unbound variable: DGMC-CLASS-01: Not implemented
+239. Error evaluating expression 2: Unbound variable: DGMC-CLASS-02: Not implemented
+240. Error evaluating expression 3: Unbound variable: DGMC-CLASS-03: Not implemented
+241. Error evaluating expression 4: Unbound variable: DGMC-CLASS-04: Not implemented
+242. Error evaluating expression 5: Unbound variable: DGMC-CLASS-05: Not implemented
+243. Error evaluating expression 6: Unbound variable: DGMC-CLASS-06: Not implemented
+244. Error evaluating expression 7: Unbound variable: DGMC-CLASS-07: Not implemented
+245. Error evaluating expression 1: Unbound variable: DGMC-CLASS-01: Not implemented
+246. Error evaluating expression 2: Unbound variable: DGMC-CLASS-02: Not implemented
+247. Error evaluating expression 3: Unbound variable: DGMC-CLASS-03: Not implemented
+248. Error evaluating expression 4: Unbound variable: DGMC-CLASS-04: Not implemented
+249. Error evaluating expression 5: Unbound variable: DGMC-CLASS-05: Not implemented
+250. Error evaluating expression 6: Unbound variable: DGMC-CLASS-06: Not implemented
+251. Error evaluating expression 7: Unbound variable: DGMC-CLASS-07: Not implemented
+252. Error evaluating expression 12: Unbound variable: CNM-CLASS-01A: Not implemented
+253. Error evaluating expression 13: Unbound variable: CNM-CLASS-01B: Not implemented
+254. Error evaluating expression 14: Unbound variable: CNM-CLASS-01C: Not implemented
+255. Error evaluating expression 15: Unbound variable: CNM-CLASS-01D: Not implemented
+256. Error evaluating expression 12: Unbound variable: *CAM-GF-03-METHOD1*: Not implemented
+257. Error evaluating expression 14: Unbound variable: *CAM-GF-04-METHOD1*: Not implemented
+258. Error evaluating expression 1: Unbound variable: DMC-CLASS-01A: Not implemented
+259. Error evaluating expression 2: Unbound variable: DMC-CLASS-01B: Not implemented
+260. Error evaluating expression 3: Unbound variable: DMC-CLASS-01C: Not implemented
+261. Error evaluating expression 4: Unbound variable: DMC-CLASS-01D: Not implemented
+262. Error evaluating expression 5: Unbound variable: DMC-CLASS-01E: Not implemented
+263. Error evaluating expression 6: Unbound variable: DMC-CLASS-01F: Not implemented
+264. Error evaluating expression 7: Unbound variable: DMC-CLASS-01G: Not implemented
+265. Error evaluating expression 8: Unbound variable: DMC-CLASS-01H: Not implemented
+266. Error evaluating expression 9: Unbound variable: DMC-GF-01: Not implemented
+267. Error evaluating expression 14: Unbound variable: DMC-GF-02: Not implemented
+268. Error evaluating expression 20: Unbound variable: DMC-GF-04: Not implemented
+269. Error evaluating expression 26: Unbound variable: DMC-GF-07: Not implemented
+270. Error evaluating expression 39: Unbound variable: DMC-LONG-GF-11B: Not implemented
+271. Error evaluating expression 2: Unbound variable: CLASS-NAME-CLASS-01: Not implemented
+272. Error evaluating expression 1: Unbound variable: UBS-CLASS-01: Not implemented
+273. Error evaluating expression 3: Unbound variable: UBS-CLASS-02: Not implemented
+274. Error evaluating expression 14: Unbound variable: EVEN-ARRAY: Not implemented
+275. Error evaluating expression 17: Class not found: ERROR
+276. Error evaluating expression 18: Unmatched closing parenthesis
+277. Error evaluating expression 18: Unmatched closing parenthesis
+278. Error evaluating expression 19:
+279. Error evaluating expression 19: Unmatched closing parenthesis
+280. Error evaluating expression 19: Unmatched closing parenthesis
+281. Error evaluating expression 20: Unbound variable: GOOD): Not implemented
+282. Error evaluating expression 4: Class not found: ERROR
+283. Error evaluating expression 5: Not a function: C: Not implemented
+284. Error evaluating expression 6: Unbound variable: C: Not implemented
+285. Error evaluating expression 6: Unmatched closing parenthesis
+286. Error evaluating expression 7: NIL
+287. Error evaluating expression 7: Unmatched closing parenthesis
+288. Error evaluating expression 8: Unbound variable: T): Not implemented
+289. Error evaluating expression 139: LOOP FOR requires a symbol: Not implemented
+290. Error evaluating expression 6: LOOP FOR requires a symbol: Not implemented
+291. Error evaluating expression 54: Unbound variable: FORMS2: Not implemented
+292. Error evaluating expression 6: '<' not supported between instances of 'lispNull' and 'int'
+293. Error evaluating expression 7: '<' not supported between instances of 'lispNull' and 'int'
+294. Error evaluating expression 8: '<' not supported between instances of 'lispNull' and 'int'
+295. Error evaluating expression 9: '<' not supported between instances of 'lispNull' and 'int'
+296. Error evaluating expression 10: '<' not supported between instances of 'lispNull' and 'int'
+297. Error evaluating expression 11: '<' not supported between instances of 'lispNull' and 'int'
+298. Error evaluating expression 12: '<' not supported between instances of 'lispNull' and 'int'
+299. Error evaluating expression 13: '<' not supported between instances of 'lispNull' and 'int'
+300. Error evaluating expression 14: Unbound variable: EVEN-ARRAY: Not implemented
+301. Error evaluating expression 54: Unbound variable: I2: Not implemented
+302. Error evaluating expression 72: Unbound variable: I2: Not implemented
+303. Error evaluating expression 3: Undefined function: LOGANDC1: Not implemented
+304. Error evaluating expression 2: Unbound variable: UPGRADED-TYPE: Not implemented
+305. Error evaluating expression 3: Unbound variable: UPGRADED-TYPE: Not implemented
+306. Error evaluating expression 4: Unbound variable: UPGRADED-TYPE: Not implemented
+307. Error evaluating expression 5: Unbound variable: UPGRADED-TYPE: Not implemented
+308. Error evaluating expression 6: Unbound variable: UPGRADED-TYPE: Not implemented
+309. Error evaluating expression 7: Unbound variable: UPGRADED-TYPE: Not implemented
+310. Error evaluating expression 2: 'lispCons' object is not subscriptable
+311. Error evaluating expression 4: Unbound variable: *PATTERN-SUBLISTS*: Not implemented
+312. Error evaluating expression 6: remove_duplicates() takes 1 positional argument but 3 were given
+313. Error evaluating expression 8: remove_duplicates() takes 1 positional argument but 3 were given
+314. Error evaluating expression 13: Assertion failed
+315. Error evaluating expression 14: Assertion failed
+316. Error evaluating expression 15: Assertion failed
+317. Error evaluating expression 16: Assertion failed
+318. Error evaluating expression 17: Assertion failed
+319. Error evaluating expression 18: Assertion failed
+320. Error evaluating expression 19: Assertion failed
+321. Error evaluating expression 20: Assertion failed
+322. Error evaluating expression 21: Assertion failed
+323. Error evaluating expression 22: Assertion failed
+324. Error evaluating expression 23: Assertion failed
+325. Error evaluating expression 24: Assertion failed
+326. Error evaluating expression 25: Assertion failed
+327. Error evaluating expression 26: Assertion failed
+328. Error evaluating expression 27: Assertion failed
+329. Error evaluating expression 28: Assertion failed
+330. Error evaluating expression 29: Assertion failed
+331. Error evaluating expression 30: Assertion failed
+332. Error evaluating expression 31: Assertion failed
+333. Error evaluating expression 32: Assertion failed
+334. Error evaluating expression 33: Assertion failed
+335. Error evaluating expression 34: Assertion failed
+336. Error evaluating expression 35: Assertion failed
+337. Error evaluating expression 36: Assertion failed
+338. Error evaluating expression 37: Assertion failed
+339. Error evaluating expression 38: Assertion failed
+340. Error evaluating expression 39: Assertion failed
+341. Error evaluating expression 40: Assertion failed
+342. Error evaluating expression 41: Assertion failed
+343. Error evaluating expression 42: Unbound variable: STRUCT-TEST-PACKAGE: Not implemented
+344. Error evaluating expression 43: Assertion failed
+345. Error evaluating expression 44: Assertion failed
+346. Error evaluating expression 45: Assertion failed
+347. Error evaluating expression 46: Assertion failed
+348. Error evaluating expression 47: Assertion failed
+349. Error evaluating expression 48: Assertion failed
+350. Error evaluating expression 50: Assertion failed
+351. Error evaluating expression 52: Assertion failed
+352. Error evaluating expression 54: Assertion failed
+353. Error evaluating expression 55: Assertion failed
+354. Error evaluating expression 56: Assertion failed
+355. Error evaluating expression 57: Assertion failed
+356. Error evaluating expression 58: Assertion failed
+357. Error evaluating expression 60: Assertion failed
+358. Error evaluating expression 62: Assertion failed
+359. Error evaluating expression 64: Assertion failed
+360. Error evaluating expression 66: Assertion failed
+361. Error evaluating expression 68: Assertion failed
+362. Error evaluating expression 69: Assertion failed
+363. Error evaluating expression 70: Assertion failed
+364. Error evaluating expression 71: Assertion failed
+365. Error evaluating expression 72: Assertion failed
+366. Error evaluating expression 74: Assertion failed
+367. Error evaluating expression 76: Assertion failed
+368. Error evaluating expression 78: Assertion failed
+369. Error evaluating expression 80: Assertion failed
+370. Error evaluating expression 81: Assertion failed
+371. Error evaluating expression 82: Assertion failed
+372. Error evaluating expression 84: Assertion failed
+373. Error evaluating expression 91: Assertion failed
+374. Error evaluating expression 92: Assertion failed
+375. Error evaluating expression 93: Assertion failed
+376. Error evaluating expression 94: Assertion failed
+377. Error evaluating expression 95: Assertion failed
+378. Error evaluating expression 96: Assertion failed
+379. Error evaluating expression 97: Assertion failed
+380. Error evaluating expression 98: Assertion failed
+381. Error evaluating expression 14: Unbound variable: EVEN-ARRAY: Not implemented
+382. Error evaluating expression 3: Unbound variable: TAC-1-CLASS: Not implemented
+383. Error evaluating expression 4: Unbound variable: TAC-1A-CLASS: Not implemented
+384. Error evaluating expression 5: Unbound variable: TAC-1B-CLASS: Not implemented
+385. Error evaluating expression 13: Unbound variable: TAC-3-A: Not implemented
+386. Error evaluating expression 14: Unbound variable: TAC-3-B: Not implemented
+387. Error evaluating expression 15: Unbound variable: TAC-3-C: Not implemented
+388. Error evaluating expression 16: Unbound variable: TAC-3-AB: Not implemented
+389. Error evaluating expression 17: Unbound variable: TAC-3-AC: Not implemented
+390. Error evaluating expression 18: Unbound variable: TAC-3-BC: Not implemented
+391. Error evaluating expression 19: Unbound variable: TAC-3-ABC: Not implemented
+392. Error evaluating expression 10: Unbound variable: TYPE-OF.EXAMPLE-CLASS: Not implemented
+393. Error evaluating expression 5: Unbound variable: E: Not implemented
+394. Error evaluating expression 6: Unbound variable: E: Not implemented
+395. Error evaluating expression 7: Unbound variable: E: Not implemented
+396. Error evaluating expression 8: Unbound variable: E: Not implemented
+397. Error evaluating expression 9: Unbound variable: E: Not implemented
+398. Error evaluating expression 10: Unbound variable: E: Not implemented
+399. Error evaluating expression 11: Unbound variable: E: Not implemented
+400. Error evaluating expression 12: Unbound variable: E: Not implemented
+401. Error evaluating expression 13: Unbound variable: E: Not implemented
+402. Error evaluating expression 14: Unbound variable: E: Not implemented
+403. Error evaluating expression 15: Unbound variable: E: Not implemented
+404. Error evaluating expression 16: Unbound variable: E: Not implemented
+405. Error evaluating expression 17: Unbound variable: E: Not implemented
+406. Error evaluating expression 18: Unbound variable: E: Not implemented
+407. Error evaluating expression 19: Unbound variable: E: Not implemented
+408. Error evaluating expression 20: Unbound variable: E: Not implemented
+409. Error evaluating expression 21: Unbound variable: E: Not implemented
+410. Error evaluating expression 22: Unbound variable: E: Not implemented
+411. Error evaluating expression 23: Unbound variable: E: Not implemented
+412. Error evaluating expression 24: Unbound variable: E: Not implemented
+413. Error evaluating expression 25: Unbound variable: E: Not implemented
+414. Error evaluating expression 26: Unbound variable: E: Not implemented
+415. Error evaluating expression 27: Unbound variable: E: Not implemented
+416. Error evaluating expression 28: Unbound variable: E: Not implemented
+417. Error evaluating expression 29: Unbound variable: E: Not implemented
+418. Error evaluating expression 30: Unbound variable: E: Not implemented
+419. Error evaluating expression 31: Unbound variable: E: Not implemented
+420. Error evaluating expression 32: Unbound variable: E: Not implemented
+421. Error evaluating expression 33: Unbound variable: E: Not implemented
+422. Error evaluating expression 34: Unbound variable: E: Not implemented
+423. Error evaluating expression 35: Unbound variable: E: Not implemented
+424. Error evaluating expression 36: Unbound variable: E: Not implemented
+425. Error evaluating expression 37: Unbound variable: E: Not implemented
+426. Error evaluating expression 38: Unbound variable: E: Not implemented
+427. Error evaluating expression 39: Unbound variable: E: Not implemented
+428. Error evaluating expression 40: Unbound variable: E: Not implemented
+429. Error evaluating expression 41: Unbound variable: E: Not implemented
+430. Error evaluating expression 42: Unbound variable: E: Not implemented
+431. Error evaluating expression 43: Unbound variable: E: Not implemented
+432. Error evaluating expression 44: Unbound variable: E: Not implemented
+433. Error evaluating expression 45: Unbound variable: E: Not implemented
+434. Error evaluating expression 46: Unbound variable: E: Not implemented
+435. Error evaluating expression 47: Unbound variable: E: Not implemented
+436. Error evaluating expression 48: Unbound variable: E: Not implemented
+437. Error evaluating expression 49: Unbound variable: E: Not implemented
+438. Error evaluating expression 50: Unbound variable: E: Not implemented
+439. Error evaluating expression 51: Unbound variable: E: Not implemented
+440. Error evaluating expression 52: Unbound variable: E: Not implemented
+441. Error evaluating expression 53: Unbound variable: E: Not implemented
+442. Error evaluating expression 54: Unbound variable: E: Not implemented
+443. Error evaluating expression 55: Unbound variable: E: Not implemented
+444. Error evaluating expression 56: Unbound variable: E: Not implemented
+445. Error evaluating expression 57: Unbound variable: E: Not implemented
+446. Error evaluating expression 58: Unbound variable: E: Not implemented
+447. Error evaluating expression 59: Unbound variable: E: Not implemented
+448. Error evaluating expression 60: Unbound variable: E: Not implemented
+449. Error evaluating expression 61: Unbound variable: E: Not implemented
+450. Error evaluating expression 62: Unbound variable: E: Not implemented
+451. Error evaluating expression 63: Unbound variable: E: Not implemented
+452. Error evaluating expression 64: Unbound variable: E: Not implemented
+453. Error evaluating expression 65: Unbound variable: E: Not implemented
+454. Error evaluating expression 66: Unbound variable: CPL-EXAMPLE-CLASS: Not implemented
+455. Error evaluating expression 67: Unbound variable: E: Not implemented
+456. Error evaluating expression 69: Unbound variable: E: Not implemented
+457. Error evaluating expression 70: Unbound variable: E: Not implemented
+458. Error evaluating expression 71: Unbound variable: E: Not implemented
+459. Error evaluating expression 72: Unbound variable: E: Not implemented
+460. Error evaluating expression 73: Unbound variable: E: Not implemented
+461. Error evaluating expression 75: Unbound variable: E: Not implemented
+462. Error evaluating expression 77: Unbound variable: E: Not implemented
+463. Error evaluating expression 79: Unbound variable: E: Not implemented
+464. Error evaluating expression 80: Unbound variable: E: Not implemented
+465. Error evaluating expression 4: CHARACTER: cannot convert Linefeed to character
+466. Error evaluating expression 4: CHARACTER: cannot convert Linefeed to character
+467. Error evaluating expression 6: Unmatched closing parenthesis
+468. Error evaluating expression 6: Unmatched closing parenthesis
+469. Error evaluating expression 2: Unbound variable: PRINT-LEVEL-TEST-CLASS: Not implemented
+470. Error evaluating expression 6: Unbound variable: PRINT-LEVEL-CONDITION: Not implemented
+471. Error evaluating expression 10: Assertion failed
+472. Error evaluating expression 11: Assertion failed
+473. Error evaluating expression 12: Assertion failed
+474. Error evaluating expression 13: Assertion failed
+475. Error evaluating expression 14: Assertion failed
+476. Error evaluating expression 15: Assertion failed
+477. Error evaluating expression 16: Assertion failed
+478. Error evaluating expression 17: Assertion failed
+479. Error evaluating expression 18: Assertion failed
+480. Error evaluating expression 19: Assertion failed
+481. Error evaluating expression 20: Assertion failed
+482. Error evaluating expression 21: Assertion failed
+483. Error evaluating expression 22: Assertion failed
+484. Error evaluating expression 22: Assertion failed
+485. Error evaluating expression 23: Assertion failed
+486. Error evaluating expression 24: Assertion failed
+487. Error evaluating expression 31: Assertion failed
+488. Error evaluating expression 32: Assertion failed
+489. Error evaluating expression 33: Assertion failed
+490. Error evaluating expression 32: Assertion failed
+491. Error evaluating expression 33: Assertion failed
+492. Error evaluating expression 34: Assertion failed
+493. Error evaluating expression 35: Assertion failed
+494. Error evaluating expression 36: Assertion failed
+495. Error evaluating expression 38: Assertion failed
+496. Error evaluating expression 39: Assertion failed
+497. Error evaluating expression 40: Assertion failed
+498. Error evaluating expression 41: Assertion failed
+499. Error evaluating expression 44: Assertion failed
+500. Error evaluating expression 45: Assertion failed
+501. Error evaluating expression 46: Assertion failed
+502. Error evaluating expression 49: Assertion failed
+503. Error evaluating expression 50: Assertion failed
+504. Error evaluating expression 66: Assertion failed
+505. Error evaluating expression 67: Assertion failed
+506. Error evaluating expression 68: Assertion failed
+507. Error evaluating expression 69: Assertion failed
+508. Error evaluating expression 70: Assertion failed
+509. Error evaluating expression 71: Assertion failed
+510. Error evaluating expression 72: Assertion failed
+511. Error evaluating expression 73: Assertion failed
+512. Error evaluating expression 74: Assertion failed
+513. Error evaluating expression 34: Assertion failed
+514. Error evaluating expression 35: Assertion failed
+515. Error evaluating expression 36: Assertion failed
+516. Error evaluating expression 37: Assertion failed
+517. Error evaluating expression 38: Assertion failed
+518. Error evaluating expression 39: Assertion failed
+519. Error evaluating expression 40: Assertion failed
+520. Error evaluating expression 41: Assertion failed
+521. Error evaluating expression 42: Assertion failed
+522. Error evaluating expression 43: Assertion failed
+523. Error evaluating expression 44: Assertion failed
+524. Error evaluating expression 45: Assertion failed
+525. Error evaluating expression 46: Assertion failed
+526. Error evaluating expression 47: Assertion failed
+527. Error evaluating expression 48: Assertion failed
+528. Error evaluating expression 49: Assertion failed
+529. Error evaluating expression 50: Assertion failed
+530. Error evaluating expression 51: Assertion failed
+531. Error evaluating expression 52: Assertion failed
+532. Error evaluating expression 53: Assertion failed
+533. Error evaluating expression 54: Assertion failed
+534. Error evaluating expression 55: Assertion failed
+535. Error evaluating expression 56: Assertion failed
+536. Error evaluating expression 57: Assertion failed
+537. Error evaluating expression 58: Assertion failed
+538. Error evaluating expression 59: Assertion failed
+539. Error evaluating expression 60: Assertion failed
+540. Error evaluating expression 61: Assertion failed
+541. Error evaluating expression 62: Assertion failed
+542. Error evaluating expression 63: Assertion failed
+543. Error evaluating expression 64: Assertion failed
+544. Error evaluating expression 65: Assertion failed
+545. Error evaluating expression 66: Assertion failed
+546. Error evaluating expression 67: Assertion failed
+547. Error evaluating expression 68: Assertion failed
+548. Error evaluating expression 69: Assertion failed
+549. Error evaluating expression 70: Assertion failed
+550. Error evaluating expression 71: Assertion failed
+551. Error evaluating expression 72: Assertion failed
+552. Error evaluating expression 106: Assertion failed
+553. Error evaluating expression 107: Assertion failed
+554. Error evaluating expression 108: Assertion failed
+555. Error evaluating expression 109: Assertion failed
+556. Error evaluating expression 110: Assertion failed
+557. Error evaluating expression 111: Assertion failed
+558. Error evaluating expression 112: Assertion failed
+559. Error evaluating expression 113: Assertion failed
+560. Error evaluating expression 114: Assertion failed
+561. Error evaluating expression 115: Assertion failed
+562. Error evaluating expression 116: Assertion failed
+563. Error evaluating expression 117: Assertion failed
+564. Error evaluating expression 118: Assertion failed
+565. Error evaluating expression 119: Assertion failed
+566. Error evaluating expression 120: Assertion failed
+567. Error evaluating expression 121: Assertion failed
+568. Error evaluating expression 122: Assertion failed
+569. Error evaluating expression 123: Assertion failed
+570. Error evaluating expression 124: Assertion failed
+571. Error evaluating expression 125: Assertion failed
+572. Error evaluating expression 126: Assertion failed
+573. Error evaluating expression 127: Assertion failed
+574. Error evaluating expression 128: Assertion failed
+575. Error evaluating expression 129: Assertion failed
+576. Error evaluating expression 130: Assertion failed
+577. Error evaluating expression 131: Assertion failed
+578. Error evaluating expression 132: Assertion failed
+579. Error evaluating expression 133: Assertion failed
+580. Error evaluating expression 134: Assertion failed
+581. Error evaluating expression 135: Assertion failed
+582. Error evaluating expression 136: Assertion failed
+583. Error evaluating expression 137: Assertion failed
+584. Error evaluating expression 138: Assertion failed
+585. Error evaluating expression 139: Assertion failed
+586. Error evaluating expression 140: Assertion failed
+587. Error evaluating expression 141: Assertion failed
+588. Error evaluating expression 142: Assertion failed
+589. Error evaluating expression 143: Assertion failed
+590. Error evaluating expression 144: Assertion failed
+591. Error evaluating expression 145: Assertion failed
+592. Error evaluating expression 146: Assertion failed
+593. Error evaluating expression 147: Assertion failed
+594. Error evaluating expression 148: Assertion failed
+595. Error evaluating expression 149: Assertion failed
+596. Error evaluating expression 150: Assertion failed
+597. Error evaluating expression 151: Assertion failed
+598. Error evaluating expression 152: Assertion failed
+599. Error evaluating expression 153: Assertion failed
+600. Error evaluating expression 154: Assertion failed
+601. Error evaluating expression 155: Assertion failed
+602. Error evaluating expression 156: Assertion failed
+603. Error evaluating expression 157: Assertion failed
+604. Error evaluating expression 158: Assertion failed
+605. Error evaluating expression 159: Assertion failed
+606. Error evaluating expression 160: Assertion failed
+607. Error evaluating expression 161: Assertion failed
+608. Error evaluating expression 162: Assertion failed
+609. Error evaluating expression 163: Assertion failed
+610. Error evaluating expression 164: Assertion failed
+611. Error evaluating expression 165: Assertion failed
+612. Error evaluating expression 166: Assertion failed
+613. Error evaluating expression 167: Assertion failed
+614. Error evaluating expression 168: Assertion failed
+615. Error evaluating expression 169: Assertion failed
+616. Error evaluating expression 170: Assertion failed
+617. Error evaluating expression 171: Assertion failed
+618. Error evaluating expression 172: Assertion failed
+619. Error evaluating expression 173: Assertion failed
+620. Error evaluating expression 174: Assertion failed
+621. Error evaluating expression 175: Assertion failed
+622. Error evaluating expression 176: Assertion failed
+623. Error evaluating expression 177: Assertion failed
+624. Error evaluating expression 178: Assertion failed
+625. Error evaluating expression 179: Assertion failed
+626. Error evaluating expression 180: Assertion failed
+627. Error evaluating expression 181: Assertion failed
+628. Error evaluating expression 182: Assertion failed
+629. Error evaluating expression 183: Assertion failed
+630. Error evaluating expression 184: Assertion failed
+631. Error evaluating expression 185: Assertion failed
+632. Error evaluating expression 186: Assertion failed
+633. Error evaluating expression 187: Assertion failed
+634. Error evaluating expression 188: Assertion failed
+635. Error evaluating expression 189: Assertion failed
+636. Error evaluating expression 190: Assertion failed
+637. Error evaluating expression 191: Assertion failed
+638. Error evaluating expression 192: Assertion failed
+639. Error evaluating expression 193: Assertion failed
+640. Error evaluating expression 194: Assertion failed
+641. Error evaluating expression 195: Assertion failed
+642. Error evaluating expression 196: Assertion failed
+643. Error evaluating expression 197: Assertion failed
+644. Error evaluating expression 198: Assertion failed
+645. Error evaluating expression 199: Assertion failed
+646. Error evaluating expression 200: Assertion failed
+647. Error evaluating expression 201: Assertion failed
+648. Error evaluating expression 202: Assertion failed
+649. Error evaluating expression 203: Assertion failed
+650. Error evaluating expression 204: Assertion failed
+651. Error evaluating expression 205: Assertion failed
+652. Error evaluating expression 206: Assertion failed
+653. Error evaluating expression 207: Assertion failed
+654. Error evaluating expression 208: Assertion failed
+655. Error evaluating expression 209: Assertion failed
+656. Error evaluating expression 210: Assertion failed
+657. Error evaluating expression 211: Assertion failed
+658. Error evaluating expression 212: Assertion failed
+659. Error evaluating expression 213: Assertion failed
+660. Error evaluating expression 214: Assertion failed
+661. Error evaluating expression 215: Assertion failed
+662. Error evaluating expression 216: Assertion failed
+663. Error evaluating expression 217: Assertion failed
+664. Error evaluating expression 218: Assertion failed
+665. Error evaluating expression 219: Assertion failed
+666. Error evaluating expression 220: Assertion failed
+667. Error evaluating expression 221: Assertion failed
+668. Error evaluating expression 222: Assertion failed
+669. Error evaluating expression 231: EOF during list read
+670. Error evaluating expression 9: Not a function: LOOKUP-TABLE: Not implemented
+671. Error evaluating expression 5: Unbound variable: ACROSS: Not implemented
+672. Error evaluating expression 7: t_symbol_function() takes 0 positional arguments but 1 was given
+673. Error evaluating expression 42: object of type 'int' has no len()
+674. Error evaluating expression 43: object of type 'int' has no len()
+675. Error evaluating expression 44: object of type 'int' has no len()
+676. Error evaluating expression 45: object of type 'int' has no len()
+677. Error evaluating expression 46: object of type 'int' has no len()
+678. Error evaluating expression 16: Unbound variable: LOAD-TEST-PACKAGE: Not implemented
+679. Error evaluating expression 6: Unbound variable: DESCRIBE-OBJECT-TEST-CLASS-01: Not implemented
+680. Error evaluating expression 3: DEFUN: function name must be a symbol: Not implemented
