@@ -1,1 +1,1 @@
-(print (loop for x across #(1 2 3 4 5) collect x))
+(print (remove-duplicates '(1 2 1 3 2) :test #'eql))

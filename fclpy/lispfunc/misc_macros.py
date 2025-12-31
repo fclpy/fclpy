@@ -450,8 +450,12 @@ def t_symbol():
 
 
 @_registry.cl_function('T')
-def t_symbol_function():
-    """Compatibility wrapper returning T symbol."""
+def t_symbol_function(*args):
+    """Compatibility wrapper returning T symbol.
+    
+    Accepts optional arguments to handle cases where T is used as a type
+    specifier in function calls like (coerce x 't).
+    """
     return lisptype.T
 
 

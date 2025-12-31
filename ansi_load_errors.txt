@@ -1,20 +1,19 @@
 ANSI Test Loading Errors
-Generated: 2025-12-31T09:48:21.126940
+Generated: 2025-12-31T09:55:00.597452
 ============================================================
 
-Summary: 680 total errors
+Summary: 678 total errors
 
 Error Categories:
   Unbound variable: 353
   Assertion failed: 268
-  Other: 35
+  Other: 36
   Not implemented: 12
   Not a function: 8
-  argument: 3
   EOF: 1
 
 ============================================================
-UNIQUE ERROR TYPES (234):
+UNIQUE ERROR TYPES (232):
 ============================================================
 
 [1x] 
@@ -246,11 +245,9 @@ UNIQUE ERROR TYPES (234):
 [1x] WITH-SLOTS-CLASS-01: Not implemented
 [2x] Y: Not implemented
 [1x] cannot convert #\\ to character
-[2x] cannot convert Linefeed to character
+[3x] cannot convert Linefeed to character
 [1x] function name must be a symbol: Not implemented
 [5x] object of type 'int' has no len()
-[2x] remove_duplicates() takes 1 positional argument but 3 were given
-[1x] t_symbol_function() takes 0 positional arguments but 1 was given
 
 ============================================================
 ALL ERRORS (FULL):
@@ -567,372 +564,370 @@ ALL ERRORS (FULL):
 309. Error evaluating expression 7: Unbound variable: UPGRADED-TYPE: Not implemented
 310. Error evaluating expression 2: 'lispCons' object is not subscriptable
 311. Error evaluating expression 4: Unbound variable: *PATTERN-SUBLISTS*: Not implemented
-312. Error evaluating expression 6: remove_duplicates() takes 1 positional argument but 3 were given
-313. Error evaluating expression 8: remove_duplicates() takes 1 positional argument but 3 were given
-314. Error evaluating expression 13: Assertion failed
-315. Error evaluating expression 14: Assertion failed
-316. Error evaluating expression 15: Assertion failed
-317. Error evaluating expression 16: Assertion failed
-318. Error evaluating expression 17: Assertion failed
-319. Error evaluating expression 18: Assertion failed
-320. Error evaluating expression 19: Assertion failed
-321. Error evaluating expression 20: Assertion failed
-322. Error evaluating expression 21: Assertion failed
-323. Error evaluating expression 22: Assertion failed
-324. Error evaluating expression 23: Assertion failed
-325. Error evaluating expression 24: Assertion failed
-326. Error evaluating expression 25: Assertion failed
-327. Error evaluating expression 26: Assertion failed
-328. Error evaluating expression 27: Assertion failed
-329. Error evaluating expression 28: Assertion failed
-330. Error evaluating expression 29: Assertion failed
-331. Error evaluating expression 30: Assertion failed
-332. Error evaluating expression 31: Assertion failed
-333. Error evaluating expression 32: Assertion failed
-334. Error evaluating expression 33: Assertion failed
-335. Error evaluating expression 34: Assertion failed
-336. Error evaluating expression 35: Assertion failed
-337. Error evaluating expression 36: Assertion failed
-338. Error evaluating expression 37: Assertion failed
-339. Error evaluating expression 38: Assertion failed
-340. Error evaluating expression 39: Assertion failed
-341. Error evaluating expression 40: Assertion failed
-342. Error evaluating expression 41: Assertion failed
-343. Error evaluating expression 42: Unbound variable: STRUCT-TEST-PACKAGE: Not implemented
-344. Error evaluating expression 43: Assertion failed
-345. Error evaluating expression 44: Assertion failed
-346. Error evaluating expression 45: Assertion failed
-347. Error evaluating expression 46: Assertion failed
-348. Error evaluating expression 47: Assertion failed
-349. Error evaluating expression 48: Assertion failed
-350. Error evaluating expression 50: Assertion failed
-351. Error evaluating expression 52: Assertion failed
-352. Error evaluating expression 54: Assertion failed
-353. Error evaluating expression 55: Assertion failed
-354. Error evaluating expression 56: Assertion failed
-355. Error evaluating expression 57: Assertion failed
-356. Error evaluating expression 58: Assertion failed
-357. Error evaluating expression 60: Assertion failed
-358. Error evaluating expression 62: Assertion failed
-359. Error evaluating expression 64: Assertion failed
-360. Error evaluating expression 66: Assertion failed
-361. Error evaluating expression 68: Assertion failed
-362. Error evaluating expression 69: Assertion failed
-363. Error evaluating expression 70: Assertion failed
-364. Error evaluating expression 71: Assertion failed
-365. Error evaluating expression 72: Assertion failed
-366. Error evaluating expression 74: Assertion failed
-367. Error evaluating expression 76: Assertion failed
-368. Error evaluating expression 78: Assertion failed
-369. Error evaluating expression 80: Assertion failed
-370. Error evaluating expression 81: Assertion failed
-371. Error evaluating expression 82: Assertion failed
-372. Error evaluating expression 84: Assertion failed
-373. Error evaluating expression 91: Assertion failed
-374. Error evaluating expression 92: Assertion failed
-375. Error evaluating expression 93: Assertion failed
-376. Error evaluating expression 94: Assertion failed
-377. Error evaluating expression 95: Assertion failed
-378. Error evaluating expression 96: Assertion failed
-379. Error evaluating expression 97: Assertion failed
-380. Error evaluating expression 98: Assertion failed
-381. Error evaluating expression 14: Unbound variable: EVEN-ARRAY: Not implemented
-382. Error evaluating expression 3: Unbound variable: TAC-1-CLASS: Not implemented
-383. Error evaluating expression 4: Unbound variable: TAC-1A-CLASS: Not implemented
-384. Error evaluating expression 5: Unbound variable: TAC-1B-CLASS: Not implemented
-385. Error evaluating expression 13: Unbound variable: TAC-3-A: Not implemented
-386. Error evaluating expression 14: Unbound variable: TAC-3-B: Not implemented
-387. Error evaluating expression 15: Unbound variable: TAC-3-C: Not implemented
-388. Error evaluating expression 16: Unbound variable: TAC-3-AB: Not implemented
-389. Error evaluating expression 17: Unbound variable: TAC-3-AC: Not implemented
-390. Error evaluating expression 18: Unbound variable: TAC-3-BC: Not implemented
-391. Error evaluating expression 19: Unbound variable: TAC-3-ABC: Not implemented
-392. Error evaluating expression 10: Unbound variable: TYPE-OF.EXAMPLE-CLASS: Not implemented
-393. Error evaluating expression 5: Unbound variable: E: Not implemented
-394. Error evaluating expression 6: Unbound variable: E: Not implemented
-395. Error evaluating expression 7: Unbound variable: E: Not implemented
-396. Error evaluating expression 8: Unbound variable: E: Not implemented
-397. Error evaluating expression 9: Unbound variable: E: Not implemented
-398. Error evaluating expression 10: Unbound variable: E: Not implemented
-399. Error evaluating expression 11: Unbound variable: E: Not implemented
-400. Error evaluating expression 12: Unbound variable: E: Not implemented
-401. Error evaluating expression 13: Unbound variable: E: Not implemented
-402. Error evaluating expression 14: Unbound variable: E: Not implemented
-403. Error evaluating expression 15: Unbound variable: E: Not implemented
-404. Error evaluating expression 16: Unbound variable: E: Not implemented
-405. Error evaluating expression 17: Unbound variable: E: Not implemented
-406. Error evaluating expression 18: Unbound variable: E: Not implemented
-407. Error evaluating expression 19: Unbound variable: E: Not implemented
-408. Error evaluating expression 20: Unbound variable: E: Not implemented
-409. Error evaluating expression 21: Unbound variable: E: Not implemented
-410. Error evaluating expression 22: Unbound variable: E: Not implemented
-411. Error evaluating expression 23: Unbound variable: E: Not implemented
-412. Error evaluating expression 24: Unbound variable: E: Not implemented
-413. Error evaluating expression 25: Unbound variable: E: Not implemented
-414. Error evaluating expression 26: Unbound variable: E: Not implemented
-415. Error evaluating expression 27: Unbound variable: E: Not implemented
-416. Error evaluating expression 28: Unbound variable: E: Not implemented
-417. Error evaluating expression 29: Unbound variable: E: Not implemented
-418. Error evaluating expression 30: Unbound variable: E: Not implemented
-419. Error evaluating expression 31: Unbound variable: E: Not implemented
-420. Error evaluating expression 32: Unbound variable: E: Not implemented
-421. Error evaluating expression 33: Unbound variable: E: Not implemented
-422. Error evaluating expression 34: Unbound variable: E: Not implemented
-423. Error evaluating expression 35: Unbound variable: E: Not implemented
-424. Error evaluating expression 36: Unbound variable: E: Not implemented
-425. Error evaluating expression 37: Unbound variable: E: Not implemented
-426. Error evaluating expression 38: Unbound variable: E: Not implemented
-427. Error evaluating expression 39: Unbound variable: E: Not implemented
-428. Error evaluating expression 40: Unbound variable: E: Not implemented
-429. Error evaluating expression 41: Unbound variable: E: Not implemented
-430. Error evaluating expression 42: Unbound variable: E: Not implemented
-431. Error evaluating expression 43: Unbound variable: E: Not implemented
-432. Error evaluating expression 44: Unbound variable: E: Not implemented
-433. Error evaluating expression 45: Unbound variable: E: Not implemented
-434. Error evaluating expression 46: Unbound variable: E: Not implemented
-435. Error evaluating expression 47: Unbound variable: E: Not implemented
-436. Error evaluating expression 48: Unbound variable: E: Not implemented
-437. Error evaluating expression 49: Unbound variable: E: Not implemented
-438. Error evaluating expression 50: Unbound variable: E: Not implemented
-439. Error evaluating expression 51: Unbound variable: E: Not implemented
-440. Error evaluating expression 52: Unbound variable: E: Not implemented
-441. Error evaluating expression 53: Unbound variable: E: Not implemented
-442. Error evaluating expression 54: Unbound variable: E: Not implemented
-443. Error evaluating expression 55: Unbound variable: E: Not implemented
-444. Error evaluating expression 56: Unbound variable: E: Not implemented
-445. Error evaluating expression 57: Unbound variable: E: Not implemented
-446. Error evaluating expression 58: Unbound variable: E: Not implemented
-447. Error evaluating expression 59: Unbound variable: E: Not implemented
-448. Error evaluating expression 60: Unbound variable: E: Not implemented
-449. Error evaluating expression 61: Unbound variable: E: Not implemented
-450. Error evaluating expression 62: Unbound variable: E: Not implemented
-451. Error evaluating expression 63: Unbound variable: E: Not implemented
-452. Error evaluating expression 64: Unbound variable: E: Not implemented
-453. Error evaluating expression 65: Unbound variable: E: Not implemented
-454. Error evaluating expression 66: Unbound variable: CPL-EXAMPLE-CLASS: Not implemented
-455. Error evaluating expression 67: Unbound variable: E: Not implemented
-456. Error evaluating expression 69: Unbound variable: E: Not implemented
-457. Error evaluating expression 70: Unbound variable: E: Not implemented
-458. Error evaluating expression 71: Unbound variable: E: Not implemented
-459. Error evaluating expression 72: Unbound variable: E: Not implemented
-460. Error evaluating expression 73: Unbound variable: E: Not implemented
-461. Error evaluating expression 75: Unbound variable: E: Not implemented
-462. Error evaluating expression 77: Unbound variable: E: Not implemented
-463. Error evaluating expression 79: Unbound variable: E: Not implemented
-464. Error evaluating expression 80: Unbound variable: E: Not implemented
-465. Error evaluating expression 4: CHARACTER: cannot convert Linefeed to character
-466. Error evaluating expression 4: CHARACTER: cannot convert Linefeed to character
-467. Error evaluating expression 6: Unmatched closing parenthesis
-468. Error evaluating expression 6: Unmatched closing parenthesis
-469. Error evaluating expression 2: Unbound variable: PRINT-LEVEL-TEST-CLASS: Not implemented
-470. Error evaluating expression 6: Unbound variable: PRINT-LEVEL-CONDITION: Not implemented
-471. Error evaluating expression 10: Assertion failed
-472. Error evaluating expression 11: Assertion failed
-473. Error evaluating expression 12: Assertion failed
-474. Error evaluating expression 13: Assertion failed
-475. Error evaluating expression 14: Assertion failed
-476. Error evaluating expression 15: Assertion failed
-477. Error evaluating expression 16: Assertion failed
-478. Error evaluating expression 17: Assertion failed
-479. Error evaluating expression 18: Assertion failed
-480. Error evaluating expression 19: Assertion failed
-481. Error evaluating expression 20: Assertion failed
-482. Error evaluating expression 21: Assertion failed
-483. Error evaluating expression 22: Assertion failed
-484. Error evaluating expression 22: Assertion failed
-485. Error evaluating expression 23: Assertion failed
-486. Error evaluating expression 24: Assertion failed
-487. Error evaluating expression 31: Assertion failed
+312. Error evaluating expression 13: Assertion failed
+313. Error evaluating expression 14: Assertion failed
+314. Error evaluating expression 15: Assertion failed
+315. Error evaluating expression 16: Assertion failed
+316. Error evaluating expression 17: Assertion failed
+317. Error evaluating expression 18: Assertion failed
+318. Error evaluating expression 19: Assertion failed
+319. Error evaluating expression 20: Assertion failed
+320. Error evaluating expression 21: Assertion failed
+321. Error evaluating expression 22: Assertion failed
+322. Error evaluating expression 23: Assertion failed
+323. Error evaluating expression 24: Assertion failed
+324. Error evaluating expression 25: Assertion failed
+325. Error evaluating expression 26: Assertion failed
+326. Error evaluating expression 27: Assertion failed
+327. Error evaluating expression 28: Assertion failed
+328. Error evaluating expression 29: Assertion failed
+329. Error evaluating expression 30: Assertion failed
+330. Error evaluating expression 31: Assertion failed
+331. Error evaluating expression 32: Assertion failed
+332. Error evaluating expression 33: Assertion failed
+333. Error evaluating expression 34: Assertion failed
+334. Error evaluating expression 35: Assertion failed
+335. Error evaluating expression 36: Assertion failed
+336. Error evaluating expression 37: Assertion failed
+337. Error evaluating expression 38: Assertion failed
+338. Error evaluating expression 39: Assertion failed
+339. Error evaluating expression 40: Assertion failed
+340. Error evaluating expression 41: Assertion failed
+341. Error evaluating expression 42: Unbound variable: STRUCT-TEST-PACKAGE: Not implemented
+342. Error evaluating expression 43: Assertion failed
+343. Error evaluating expression 44: Assertion failed
+344. Error evaluating expression 45: Assertion failed
+345. Error evaluating expression 46: Assertion failed
+346. Error evaluating expression 47: Assertion failed
+347. Error evaluating expression 48: Assertion failed
+348. Error evaluating expression 50: Assertion failed
+349. Error evaluating expression 52: Assertion failed
+350. Error evaluating expression 54: Assertion failed
+351. Error evaluating expression 55: Assertion failed
+352. Error evaluating expression 56: Assertion failed
+353. Error evaluating expression 57: Assertion failed
+354. Error evaluating expression 58: Assertion failed
+355. Error evaluating expression 60: Assertion failed
+356. Error evaluating expression 62: Assertion failed
+357. Error evaluating expression 64: Assertion failed
+358. Error evaluating expression 66: Assertion failed
+359. Error evaluating expression 68: Assertion failed
+360. Error evaluating expression 69: Assertion failed
+361. Error evaluating expression 70: Assertion failed
+362. Error evaluating expression 71: Assertion failed
+363. Error evaluating expression 72: Assertion failed
+364. Error evaluating expression 74: Assertion failed
+365. Error evaluating expression 76: Assertion failed
+366. Error evaluating expression 78: Assertion failed
+367. Error evaluating expression 80: Assertion failed
+368. Error evaluating expression 81: Assertion failed
+369. Error evaluating expression 82: Assertion failed
+370. Error evaluating expression 84: Assertion failed
+371. Error evaluating expression 91: Assertion failed
+372. Error evaluating expression 92: Assertion failed
+373. Error evaluating expression 93: Assertion failed
+374. Error evaluating expression 94: Assertion failed
+375. Error evaluating expression 95: Assertion failed
+376. Error evaluating expression 96: Assertion failed
+377. Error evaluating expression 97: Assertion failed
+378. Error evaluating expression 98: Assertion failed
+379. Error evaluating expression 14: Unbound variable: EVEN-ARRAY: Not implemented
+380. Error evaluating expression 3: Unbound variable: TAC-1-CLASS: Not implemented
+381. Error evaluating expression 4: Unbound variable: TAC-1A-CLASS: Not implemented
+382. Error evaluating expression 5: Unbound variable: TAC-1B-CLASS: Not implemented
+383. Error evaluating expression 13: Unbound variable: TAC-3-A: Not implemented
+384. Error evaluating expression 14: Unbound variable: TAC-3-B: Not implemented
+385. Error evaluating expression 15: Unbound variable: TAC-3-C: Not implemented
+386. Error evaluating expression 16: Unbound variable: TAC-3-AB: Not implemented
+387. Error evaluating expression 17: Unbound variable: TAC-3-AC: Not implemented
+388. Error evaluating expression 18: Unbound variable: TAC-3-BC: Not implemented
+389. Error evaluating expression 19: Unbound variable: TAC-3-ABC: Not implemented
+390. Error evaluating expression 10: Unbound variable: TYPE-OF.EXAMPLE-CLASS: Not implemented
+391. Error evaluating expression 5: Unbound variable: E: Not implemented
+392. Error evaluating expression 6: Unbound variable: E: Not implemented
+393. Error evaluating expression 7: Unbound variable: E: Not implemented
+394. Error evaluating expression 8: Unbound variable: E: Not implemented
+395. Error evaluating expression 9: Unbound variable: E: Not implemented
+396. Error evaluating expression 10: Unbound variable: E: Not implemented
+397. Error evaluating expression 11: Unbound variable: E: Not implemented
+398. Error evaluating expression 12: Unbound variable: E: Not implemented
+399. Error evaluating expression 13: Unbound variable: E: Not implemented
+400. Error evaluating expression 14: Unbound variable: E: Not implemented
+401. Error evaluating expression 15: Unbound variable: E: Not implemented
+402. Error evaluating expression 16: Unbound variable: E: Not implemented
+403. Error evaluating expression 17: Unbound variable: E: Not implemented
+404. Error evaluating expression 18: Unbound variable: E: Not implemented
+405. Error evaluating expression 19: Unbound variable: E: Not implemented
+406. Error evaluating expression 20: Unbound variable: E: Not implemented
+407. Error evaluating expression 21: Unbound variable: E: Not implemented
+408. Error evaluating expression 22: Unbound variable: E: Not implemented
+409. Error evaluating expression 23: Unbound variable: E: Not implemented
+410. Error evaluating expression 24: Unbound variable: E: Not implemented
+411. Error evaluating expression 25: Unbound variable: E: Not implemented
+412. Error evaluating expression 26: Unbound variable: E: Not implemented
+413. Error evaluating expression 27: Unbound variable: E: Not implemented
+414. Error evaluating expression 28: Unbound variable: E: Not implemented
+415. Error evaluating expression 29: Unbound variable: E: Not implemented
+416. Error evaluating expression 30: Unbound variable: E: Not implemented
+417. Error evaluating expression 31: Unbound variable: E: Not implemented
+418. Error evaluating expression 32: Unbound variable: E: Not implemented
+419. Error evaluating expression 33: Unbound variable: E: Not implemented
+420. Error evaluating expression 34: Unbound variable: E: Not implemented
+421. Error evaluating expression 35: Unbound variable: E: Not implemented
+422. Error evaluating expression 36: Unbound variable: E: Not implemented
+423. Error evaluating expression 37: Unbound variable: E: Not implemented
+424. Error evaluating expression 38: Unbound variable: E: Not implemented
+425. Error evaluating expression 39: Unbound variable: E: Not implemented
+426. Error evaluating expression 40: Unbound variable: E: Not implemented
+427. Error evaluating expression 41: Unbound variable: E: Not implemented
+428. Error evaluating expression 42: Unbound variable: E: Not implemented
+429. Error evaluating expression 43: Unbound variable: E: Not implemented
+430. Error evaluating expression 44: Unbound variable: E: Not implemented
+431. Error evaluating expression 45: Unbound variable: E: Not implemented
+432. Error evaluating expression 46: Unbound variable: E: Not implemented
+433. Error evaluating expression 47: Unbound variable: E: Not implemented
+434. Error evaluating expression 48: Unbound variable: E: Not implemented
+435. Error evaluating expression 49: Unbound variable: E: Not implemented
+436. Error evaluating expression 50: Unbound variable: E: Not implemented
+437. Error evaluating expression 51: Unbound variable: E: Not implemented
+438. Error evaluating expression 52: Unbound variable: E: Not implemented
+439. Error evaluating expression 53: Unbound variable: E: Not implemented
+440. Error evaluating expression 54: Unbound variable: E: Not implemented
+441. Error evaluating expression 55: Unbound variable: E: Not implemented
+442. Error evaluating expression 56: Unbound variable: E: Not implemented
+443. Error evaluating expression 57: Unbound variable: E: Not implemented
+444. Error evaluating expression 58: Unbound variable: E: Not implemented
+445. Error evaluating expression 59: Unbound variable: E: Not implemented
+446. Error evaluating expression 60: Unbound variable: E: Not implemented
+447. Error evaluating expression 61: Unbound variable: E: Not implemented
+448. Error evaluating expression 62: Unbound variable: E: Not implemented
+449. Error evaluating expression 63: Unbound variable: E: Not implemented
+450. Error evaluating expression 64: Unbound variable: E: Not implemented
+451. Error evaluating expression 65: Unbound variable: E: Not implemented
+452. Error evaluating expression 66: Unbound variable: CPL-EXAMPLE-CLASS: Not implemented
+453. Error evaluating expression 67: Unbound variable: E: Not implemented
+454. Error evaluating expression 69: Unbound variable: E: Not implemented
+455. Error evaluating expression 70: Unbound variable: E: Not implemented
+456. Error evaluating expression 71: Unbound variable: E: Not implemented
+457. Error evaluating expression 72: Unbound variable: E: Not implemented
+458. Error evaluating expression 73: Unbound variable: E: Not implemented
+459. Error evaluating expression 75: Unbound variable: E: Not implemented
+460. Error evaluating expression 77: Unbound variable: E: Not implemented
+461. Error evaluating expression 79: Unbound variable: E: Not implemented
+462. Error evaluating expression 80: Unbound variable: E: Not implemented
+463. Error evaluating expression 4: CHARACTER: cannot convert Linefeed to character
+464. Error evaluating expression 4: CHARACTER: cannot convert Linefeed to character
+465. Error evaluating expression 6: Unmatched closing parenthesis
+466. Error evaluating expression 6: Unmatched closing parenthesis
+467. Error evaluating expression 2: Unbound variable: PRINT-LEVEL-TEST-CLASS: Not implemented
+468. Error evaluating expression 6: Unbound variable: PRINT-LEVEL-CONDITION: Not implemented
+469. Error evaluating expression 10: Assertion failed
+470. Error evaluating expression 11: Assertion failed
+471. Error evaluating expression 12: Assertion failed
+472. Error evaluating expression 13: Assertion failed
+473. Error evaluating expression 14: Assertion failed
+474. Error evaluating expression 15: Assertion failed
+475. Error evaluating expression 16: Assertion failed
+476. Error evaluating expression 17: Assertion failed
+477. Error evaluating expression 18: Assertion failed
+478. Error evaluating expression 19: Assertion failed
+479. Error evaluating expression 20: Assertion failed
+480. Error evaluating expression 21: Assertion failed
+481. Error evaluating expression 22: Assertion failed
+482. Error evaluating expression 22: Assertion failed
+483. Error evaluating expression 23: Assertion failed
+484. Error evaluating expression 24: Assertion failed
+485. Error evaluating expression 31: Assertion failed
+486. Error evaluating expression 32: Assertion failed
+487. Error evaluating expression 33: Assertion failed
 488. Error evaluating expression 32: Assertion failed
 489. Error evaluating expression 33: Assertion failed
-490. Error evaluating expression 32: Assertion failed
-491. Error evaluating expression 33: Assertion failed
-492. Error evaluating expression 34: Assertion failed
-493. Error evaluating expression 35: Assertion failed
-494. Error evaluating expression 36: Assertion failed
-495. Error evaluating expression 38: Assertion failed
-496. Error evaluating expression 39: Assertion failed
-497. Error evaluating expression 40: Assertion failed
-498. Error evaluating expression 41: Assertion failed
-499. Error evaluating expression 44: Assertion failed
-500. Error evaluating expression 45: Assertion failed
-501. Error evaluating expression 46: Assertion failed
-502. Error evaluating expression 49: Assertion failed
-503. Error evaluating expression 50: Assertion failed
-504. Error evaluating expression 66: Assertion failed
-505. Error evaluating expression 67: Assertion failed
-506. Error evaluating expression 68: Assertion failed
-507. Error evaluating expression 69: Assertion failed
-508. Error evaluating expression 70: Assertion failed
-509. Error evaluating expression 71: Assertion failed
-510. Error evaluating expression 72: Assertion failed
-511. Error evaluating expression 73: Assertion failed
-512. Error evaluating expression 74: Assertion failed
-513. Error evaluating expression 34: Assertion failed
-514. Error evaluating expression 35: Assertion failed
-515. Error evaluating expression 36: Assertion failed
-516. Error evaluating expression 37: Assertion failed
-517. Error evaluating expression 38: Assertion failed
-518. Error evaluating expression 39: Assertion failed
-519. Error evaluating expression 40: Assertion failed
-520. Error evaluating expression 41: Assertion failed
-521. Error evaluating expression 42: Assertion failed
-522. Error evaluating expression 43: Assertion failed
-523. Error evaluating expression 44: Assertion failed
-524. Error evaluating expression 45: Assertion failed
-525. Error evaluating expression 46: Assertion failed
-526. Error evaluating expression 47: Assertion failed
-527. Error evaluating expression 48: Assertion failed
-528. Error evaluating expression 49: Assertion failed
-529. Error evaluating expression 50: Assertion failed
-530. Error evaluating expression 51: Assertion failed
-531. Error evaluating expression 52: Assertion failed
-532. Error evaluating expression 53: Assertion failed
-533. Error evaluating expression 54: Assertion failed
-534. Error evaluating expression 55: Assertion failed
-535. Error evaluating expression 56: Assertion failed
-536. Error evaluating expression 57: Assertion failed
-537. Error evaluating expression 58: Assertion failed
-538. Error evaluating expression 59: Assertion failed
-539. Error evaluating expression 60: Assertion failed
-540. Error evaluating expression 61: Assertion failed
-541. Error evaluating expression 62: Assertion failed
-542. Error evaluating expression 63: Assertion failed
-543. Error evaluating expression 64: Assertion failed
-544. Error evaluating expression 65: Assertion failed
-545. Error evaluating expression 66: Assertion failed
-546. Error evaluating expression 67: Assertion failed
-547. Error evaluating expression 68: Assertion failed
-548. Error evaluating expression 69: Assertion failed
-549. Error evaluating expression 70: Assertion failed
-550. Error evaluating expression 71: Assertion failed
-551. Error evaluating expression 72: Assertion failed
-552. Error evaluating expression 106: Assertion failed
-553. Error evaluating expression 107: Assertion failed
-554. Error evaluating expression 108: Assertion failed
-555. Error evaluating expression 109: Assertion failed
-556. Error evaluating expression 110: Assertion failed
-557. Error evaluating expression 111: Assertion failed
-558. Error evaluating expression 112: Assertion failed
-559. Error evaluating expression 113: Assertion failed
-560. Error evaluating expression 114: Assertion failed
-561. Error evaluating expression 115: Assertion failed
-562. Error evaluating expression 116: Assertion failed
-563. Error evaluating expression 117: Assertion failed
-564. Error evaluating expression 118: Assertion failed
-565. Error evaluating expression 119: Assertion failed
-566. Error evaluating expression 120: Assertion failed
-567. Error evaluating expression 121: Assertion failed
-568. Error evaluating expression 122: Assertion failed
-569. Error evaluating expression 123: Assertion failed
-570. Error evaluating expression 124: Assertion failed
-571. Error evaluating expression 125: Assertion failed
-572. Error evaluating expression 126: Assertion failed
-573. Error evaluating expression 127: Assertion failed
-574. Error evaluating expression 128: Assertion failed
-575. Error evaluating expression 129: Assertion failed
-576. Error evaluating expression 130: Assertion failed
-577. Error evaluating expression 131: Assertion failed
-578. Error evaluating expression 132: Assertion failed
-579. Error evaluating expression 133: Assertion failed
-580. Error evaluating expression 134: Assertion failed
-581. Error evaluating expression 135: Assertion failed
-582. Error evaluating expression 136: Assertion failed
-583. Error evaluating expression 137: Assertion failed
-584. Error evaluating expression 138: Assertion failed
-585. Error evaluating expression 139: Assertion failed
-586. Error evaluating expression 140: Assertion failed
-587. Error evaluating expression 141: Assertion failed
-588. Error evaluating expression 142: Assertion failed
-589. Error evaluating expression 143: Assertion failed
-590. Error evaluating expression 144: Assertion failed
-591. Error evaluating expression 145: Assertion failed
-592. Error evaluating expression 146: Assertion failed
-593. Error evaluating expression 147: Assertion failed
-594. Error evaluating expression 148: Assertion failed
-595. Error evaluating expression 149: Assertion failed
-596. Error evaluating expression 150: Assertion failed
-597. Error evaluating expression 151: Assertion failed
-598. Error evaluating expression 152: Assertion failed
-599. Error evaluating expression 153: Assertion failed
-600. Error evaluating expression 154: Assertion failed
-601. Error evaluating expression 155: Assertion failed
-602. Error evaluating expression 156: Assertion failed
-603. Error evaluating expression 157: Assertion failed
-604. Error evaluating expression 158: Assertion failed
-605. Error evaluating expression 159: Assertion failed
-606. Error evaluating expression 160: Assertion failed
-607. Error evaluating expression 161: Assertion failed
-608. Error evaluating expression 162: Assertion failed
-609. Error evaluating expression 163: Assertion failed
-610. Error evaluating expression 164: Assertion failed
-611. Error evaluating expression 165: Assertion failed
-612. Error evaluating expression 166: Assertion failed
-613. Error evaluating expression 167: Assertion failed
-614. Error evaluating expression 168: Assertion failed
-615. Error evaluating expression 169: Assertion failed
-616. Error evaluating expression 170: Assertion failed
-617. Error evaluating expression 171: Assertion failed
-618. Error evaluating expression 172: Assertion failed
-619. Error evaluating expression 173: Assertion failed
-620. Error evaluating expression 174: Assertion failed
-621. Error evaluating expression 175: Assertion failed
-622. Error evaluating expression 176: Assertion failed
-623. Error evaluating expression 177: Assertion failed
-624. Error evaluating expression 178: Assertion failed
-625. Error evaluating expression 179: Assertion failed
-626. Error evaluating expression 180: Assertion failed
-627. Error evaluating expression 181: Assertion failed
-628. Error evaluating expression 182: Assertion failed
-629. Error evaluating expression 183: Assertion failed
-630. Error evaluating expression 184: Assertion failed
-631. Error evaluating expression 185: Assertion failed
-632. Error evaluating expression 186: Assertion failed
-633. Error evaluating expression 187: Assertion failed
-634. Error evaluating expression 188: Assertion failed
-635. Error evaluating expression 189: Assertion failed
-636. Error evaluating expression 190: Assertion failed
-637. Error evaluating expression 191: Assertion failed
-638. Error evaluating expression 192: Assertion failed
-639. Error evaluating expression 193: Assertion failed
-640. Error evaluating expression 194: Assertion failed
-641. Error evaluating expression 195: Assertion failed
-642. Error evaluating expression 196: Assertion failed
-643. Error evaluating expression 197: Assertion failed
-644. Error evaluating expression 198: Assertion failed
-645. Error evaluating expression 199: Assertion failed
-646. Error evaluating expression 200: Assertion failed
-647. Error evaluating expression 201: Assertion failed
-648. Error evaluating expression 202: Assertion failed
-649. Error evaluating expression 203: Assertion failed
-650. Error evaluating expression 204: Assertion failed
-651. Error evaluating expression 205: Assertion failed
-652. Error evaluating expression 206: Assertion failed
-653. Error evaluating expression 207: Assertion failed
-654. Error evaluating expression 208: Assertion failed
-655. Error evaluating expression 209: Assertion failed
-656. Error evaluating expression 210: Assertion failed
-657. Error evaluating expression 211: Assertion failed
-658. Error evaluating expression 212: Assertion failed
-659. Error evaluating expression 213: Assertion failed
-660. Error evaluating expression 214: Assertion failed
-661. Error evaluating expression 215: Assertion failed
-662. Error evaluating expression 216: Assertion failed
-663. Error evaluating expression 217: Assertion failed
-664. Error evaluating expression 218: Assertion failed
-665. Error evaluating expression 219: Assertion failed
-666. Error evaluating expression 220: Assertion failed
-667. Error evaluating expression 221: Assertion failed
-668. Error evaluating expression 222: Assertion failed
-669. Error evaluating expression 231: EOF during list read
-670. Error evaluating expression 9: Not a function: LOOKUP-TABLE: Not implemented
-671. Error evaluating expression 5: CHARACTER: cannot convert #\\ to character
-672. Error evaluating expression 7: t_symbol_function() takes 0 positional arguments but 1 was given
-673. Error evaluating expression 42: object of type 'int' has no len()
-674. Error evaluating expression 43: object of type 'int' has no len()
-675. Error evaluating expression 44: object of type 'int' has no len()
-676. Error evaluating expression 45: object of type 'int' has no len()
-677. Error evaluating expression 46: object of type 'int' has no len()
-678. Error evaluating expression 16: Unbound variable: LOAD-TEST-PACKAGE: Not implemented
-679. Error evaluating expression 6: Unbound variable: DESCRIBE-OBJECT-TEST-CLASS-01: Not implemented
-680. Error evaluating expression 3: DEFUN: function name must be a symbol: Not implemented
+490. Error evaluating expression 34: Assertion failed
+491. Error evaluating expression 35: Assertion failed
+492. Error evaluating expression 36: Assertion failed
+493. Error evaluating expression 38: Assertion failed
+494. Error evaluating expression 39: Assertion failed
+495. Error evaluating expression 40: Assertion failed
+496. Error evaluating expression 41: Assertion failed
+497. Error evaluating expression 44: Assertion failed
+498. Error evaluating expression 45: Assertion failed
+499. Error evaluating expression 46: Assertion failed
+500. Error evaluating expression 49: Assertion failed
+501. Error evaluating expression 50: Assertion failed
+502. Error evaluating expression 66: Assertion failed
+503. Error evaluating expression 67: Assertion failed
+504. Error evaluating expression 68: Assertion failed
+505. Error evaluating expression 69: Assertion failed
+506. Error evaluating expression 70: Assertion failed
+507. Error evaluating expression 71: Assertion failed
+508. Error evaluating expression 72: Assertion failed
+509. Error evaluating expression 73: Assertion failed
+510. Error evaluating expression 74: Assertion failed
+511. Error evaluating expression 34: Assertion failed
+512. Error evaluating expression 35: Assertion failed
+513. Error evaluating expression 36: Assertion failed
+514. Error evaluating expression 37: Assertion failed
+515. Error evaluating expression 38: Assertion failed
+516. Error evaluating expression 39: Assertion failed
+517. Error evaluating expression 40: Assertion failed
+518. Error evaluating expression 41: Assertion failed
+519. Error evaluating expression 42: Assertion failed
+520. Error evaluating expression 43: Assertion failed
+521. Error evaluating expression 44: Assertion failed
+522. Error evaluating expression 45: Assertion failed
+523. Error evaluating expression 46: Assertion failed
+524. Error evaluating expression 47: Assertion failed
+525. Error evaluating expression 48: Assertion failed
+526. Error evaluating expression 49: Assertion failed
+527. Error evaluating expression 50: Assertion failed
+528. Error evaluating expression 51: Assertion failed
+529. Error evaluating expression 52: Assertion failed
+530. Error evaluating expression 53: Assertion failed
+531. Error evaluating expression 54: Assertion failed
+532. Error evaluating expression 55: Assertion failed
+533. Error evaluating expression 56: Assertion failed
+534. Error evaluating expression 57: Assertion failed
+535. Error evaluating expression 58: Assertion failed
+536. Error evaluating expression 59: Assertion failed
+537. Error evaluating expression 60: Assertion failed
+538. Error evaluating expression 61: Assertion failed
+539. Error evaluating expression 62: Assertion failed
+540. Error evaluating expression 63: Assertion failed
+541. Error evaluating expression 64: Assertion failed
+542. Error evaluating expression 65: Assertion failed
+543. Error evaluating expression 66: Assertion failed
+544. Error evaluating expression 67: Assertion failed
+545. Error evaluating expression 68: Assertion failed
+546. Error evaluating expression 69: Assertion failed
+547. Error evaluating expression 70: Assertion failed
+548. Error evaluating expression 71: Assertion failed
+549. Error evaluating expression 72: Assertion failed
+550. Error evaluating expression 106: Assertion failed
+551. Error evaluating expression 107: Assertion failed
+552. Error evaluating expression 108: Assertion failed
+553. Error evaluating expression 109: Assertion failed
+554. Error evaluating expression 110: Assertion failed
+555. Error evaluating expression 111: Assertion failed
+556. Error evaluating expression 112: Assertion failed
+557. Error evaluating expression 113: Assertion failed
+558. Error evaluating expression 114: Assertion failed
+559. Error evaluating expression 115: Assertion failed
+560. Error evaluating expression 116: Assertion failed
+561. Error evaluating expression 117: Assertion failed
+562. Error evaluating expression 118: Assertion failed
+563. Error evaluating expression 119: Assertion failed
+564. Error evaluating expression 120: Assertion failed
+565. Error evaluating expression 121: Assertion failed
+566. Error evaluating expression 122: Assertion failed
+567. Error evaluating expression 123: Assertion failed
+568. Error evaluating expression 124: Assertion failed
+569. Error evaluating expression 125: Assertion failed
+570. Error evaluating expression 126: Assertion failed
+571. Error evaluating expression 127: Assertion failed
+572. Error evaluating expression 128: Assertion failed
+573. Error evaluating expression 129: Assertion failed
+574. Error evaluating expression 130: Assertion failed
+575. Error evaluating expression 131: Assertion failed
+576. Error evaluating expression 132: Assertion failed
+577. Error evaluating expression 133: Assertion failed
+578. Error evaluating expression 134: Assertion failed
+579. Error evaluating expression 135: Assertion failed
+580. Error evaluating expression 136: Assertion failed
+581. Error evaluating expression 137: Assertion failed
+582. Error evaluating expression 138: Assertion failed
+583. Error evaluating expression 139: Assertion failed
+584. Error evaluating expression 140: Assertion failed
+585. Error evaluating expression 141: Assertion failed
+586. Error evaluating expression 142: Assertion failed
+587. Error evaluating expression 143: Assertion failed
+588. Error evaluating expression 144: Assertion failed
+589. Error evaluating expression 145: Assertion failed
+590. Error evaluating expression 146: Assertion failed
+591. Error evaluating expression 147: Assertion failed
+592. Error evaluating expression 148: Assertion failed
+593. Error evaluating expression 149: Assertion failed
+594. Error evaluating expression 150: Assertion failed
+595. Error evaluating expression 151: Assertion failed
+596. Error evaluating expression 152: Assertion failed
+597. Error evaluating expression 153: Assertion failed
+598. Error evaluating expression 154: Assertion failed
+599. Error evaluating expression 155: Assertion failed
+600. Error evaluating expression 156: Assertion failed
+601. Error evaluating expression 157: Assertion failed
+602. Error evaluating expression 158: Assertion failed
+603. Error evaluating expression 159: Assertion failed
+604. Error evaluating expression 160: Assertion failed
+605. Error evaluating expression 161: Assertion failed
+606. Error evaluating expression 162: Assertion failed
+607. Error evaluating expression 163: Assertion failed
+608. Error evaluating expression 164: Assertion failed
+609. Error evaluating expression 165: Assertion failed
+610. Error evaluating expression 166: Assertion failed
+611. Error evaluating expression 167: Assertion failed
+612. Error evaluating expression 168: Assertion failed
+613. Error evaluating expression 169: Assertion failed
+614. Error evaluating expression 170: Assertion failed
+615. Error evaluating expression 171: Assertion failed
+616. Error evaluating expression 172: Assertion failed
+617. Error evaluating expression 173: Assertion failed
+618. Error evaluating expression 174: Assertion failed
+619. Error evaluating expression 175: Assertion failed
+620. Error evaluating expression 176: Assertion failed
+621. Error evaluating expression 177: Assertion failed
+622. Error evaluating expression 178: Assertion failed
+623. Error evaluating expression 179: Assertion failed
+624. Error evaluating expression 180: Assertion failed
+625. Error evaluating expression 181: Assertion failed
+626. Error evaluating expression 182: Assertion failed
+627. Error evaluating expression 183: Assertion failed
+628. Error evaluating expression 184: Assertion failed
+629. Error evaluating expression 185: Assertion failed
+630. Error evaluating expression 186: Assertion failed
+631. Error evaluating expression 187: Assertion failed
+632. Error evaluating expression 188: Assertion failed
+633. Error evaluating expression 189: Assertion failed
+634. Error evaluating expression 190: Assertion failed
+635. Error evaluating expression 191: Assertion failed
+636. Error evaluating expression 192: Assertion failed
+637. Error evaluating expression 193: Assertion failed
+638. Error evaluating expression 194: Assertion failed
+639. Error evaluating expression 195: Assertion failed
+640. Error evaluating expression 196: Assertion failed
+641. Error evaluating expression 197: Assertion failed
+642. Error evaluating expression 198: Assertion failed
+643. Error evaluating expression 199: Assertion failed
+644. Error evaluating expression 200: Assertion failed
+645. Error evaluating expression 201: Assertion failed
+646. Error evaluating expression 202: Assertion failed
+647. Error evaluating expression 203: Assertion failed
+648. Error evaluating expression 204: Assertion failed
+649. Error evaluating expression 205: Assertion failed
+650. Error evaluating expression 206: Assertion failed
+651. Error evaluating expression 207: Assertion failed
+652. Error evaluating expression 208: Assertion failed
+653. Error evaluating expression 209: Assertion failed
+654. Error evaluating expression 210: Assertion failed
+655. Error evaluating expression 211: Assertion failed
+656. Error evaluating expression 212: Assertion failed
+657. Error evaluating expression 213: Assertion failed
+658. Error evaluating expression 214: Assertion failed
+659. Error evaluating expression 215: Assertion failed
+660. Error evaluating expression 216: Assertion failed
+661. Error evaluating expression 217: Assertion failed
+662. Error evaluating expression 218: Assertion failed
+663. Error evaluating expression 219: Assertion failed
+664. Error evaluating expression 220: Assertion failed
+665. Error evaluating expression 221: Assertion failed
+666. Error evaluating expression 222: Assertion failed
+667. Error evaluating expression 231: EOF during list read
+668. Error evaluating expression 9: Not a function: LOOKUP-TABLE: Not implemented
+669. Error evaluating expression 5: CHARACTER: cannot convert #\\ to character
+670. Error evaluating expression 7: CHARACTER: cannot convert Linefeed to character
+671. Error evaluating expression 42: object of type 'int' has no len()
+672. Error evaluating expression 43: object of type 'int' has no len()
+673. Error evaluating expression 44: object of type 'int' has no len()
+674. Error evaluating expression 45: object of type 'int' has no len()
+675. Error evaluating expression 46: object of type 'int' has no len()
+676. Error evaluating expression 16: Unbound variable: LOAD-TEST-PACKAGE: Not implemented
+677. Error evaluating expression 6: Unbound variable: DESCRIBE-OBJECT-TEST-CLASS-01: Not implemented
+678. Error evaluating expression 3: DEFUN: function name must be a symbol: Not implemented

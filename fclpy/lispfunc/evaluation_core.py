@@ -24,6 +24,8 @@ def _get_func_signature_info(func_id: int, func):
     """Get cached signature information for a function.
     
     Returns a tuple of (use_kwargs, kwarg_param_names_frozenset).
+    If kwarg_param_names contains '*', it means the function accepts **kwargs
+    and will accept any keyword argument.
     """
     try:
         sig = inspect.signature(func)
@@ -32,12 +34,19 @@ def _get_func_signature_info(func_id: int, func):
         # Check if function accepts varargs (*args)
         has_var_positional = any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in params)
         
+        # Check if function accepts **kwargs
+        has_var_keyword = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params)
+        
         # Collect the actual keyword parameter names for this function
         kwarg_param_names = set()
         for p in params:
             if (p.kind in (inspect.Parameter.KEYWORD_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
                 and p.default is not inspect.Parameter.empty):
                 kwarg_param_names.add(p.name.lower())
+        
+        # If function accepts **kwargs, mark with '*' to accept any keyword
+        if has_var_keyword:
+            kwarg_param_names.add('*')
         
         use_kwargs = bool(kwarg_param_names) and not has_var_positional
         return (use_kwargs, frozenset(kwarg_param_names))
@@ -459,13 +468,13 @@ def eval(form, env=None):
             
             # Only treat a keyword as a Python kwarg if:
             # 1. The function accepts kwargs
-            # 2. The keyword name matches an actual parameter name
+            # 2. The keyword name matches an actual parameter name, OR function has **kwargs
             if use_kwargs and isinstance(arg_val, lisptype.lispKeyword):
                 # Convert keyword name to Python kwarg name format
                 py_key = arg_val.name.lower().replace('-', '_')
                 
-                # Only treat as kwarg if this matches a function parameter
-                if py_key in kwarg_param_names:
+                # Treat as kwarg if this matches a function parameter OR function accepts **kwargs ('*')
+                if py_key in kwarg_param_names or '*' in kwarg_param_names:
                     # Get the next argument as the value
                     current = cdr(current)
                     if _consp_internal(current):
