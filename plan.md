@@ -10,35 +10,54 @@ fclpy is a Python implementation of Common Lisp. The goal is to achieve ANSI Com
 
 ## Recent Progress (Dec 31, 2025)
 
-### Milestone: ANSI Test Infrastructure Ready
+### ANSI Test Loading Analysis
 
-**Commits**:
-- Fixed LOOP conditional scoping, function namespace lookup, and LISP_CWD support
+**Error capture script**: `scripts/ansi_load_errors.py`
+**Error report**: `ansi_load_errors.txt`
 
-**Key Fixes**:
-- ✅ **Function namespace lookup** - Fixed eval to use `find_func` directly for symbols in function position, preventing variable namespace shadowing (fixed "Not a function: NAME" errors)
-- ✅ **LOOP conditional scoping** - WHEN/UNLESS now only apply to DO body when followed by DO clause; accumulation (APPEND/COLLECT) runs independently (fixed infinite loop in DEFTEST)
-- ✅ **LISP_CWD support** - Added environment variable for separating Python CWD from Lisp working directory (enables embedded Lisp scenarios like running ANSI tests)
-- ✅ **FIND-CLASS** - Now accepts optional errorp and environment arguments per ANSI spec
-- ✅ **Loop timeout warnings** - All loop types (LOOP, DO, DO*, DOTIMES, DOLIST) warn after 2 minutes
+**Loading Results**:
+- `gclload1.lsp` - ✅ Loads cleanly (0 errors)
+- `gclload2.lsp` - ⚠️ 1154 errors during loading
 
-### ANSI Test Suite Status
-- `gclload1.lsp` - ✅ Loads cleanly (~90s for large array initialization)
-- `gclload2.lsp` - ⚠️ Loads with errors (files found correctly with LISP_CWD)
-- Many test files have loading errors due to missing features (CLOS, FORMAT directives, etc.)
+**Error Categories** (from 1154 total):
+| Category | Count | Description |
+|----------|-------|-------------|
+| Unbound variable | 829 | Variables referenced before definition |
+| Assertion failed | 268 | Tests with failing assertions during load |
+| Other | 33 | Miscellaneous errors |
+| Not implemented | 12 | Explicit not-implemented messages |
+| Not a function | 8 | Symbol called as function but isn't |
+| Argument errors | 3 | Wrong argument count/type |
+| EOF | 1 | Premature end of file |
 
-### Next Steps: Clean Load Strategy
-1. **Write loading errors to file** - Capture all errors during gclload2.lsp
-2. **Fix errors incrementally** - Address each issue before re-running
-3. **Track progress** - Document which test categories load cleanly
-4. **Then run DO-TESTS** - Only after clean load
+**Top Unbound Variables**:
+- `PRETTY` (237x) - Macro parameter in def-pprint-test
+- `ELEMENT-TYPE-P` (76x) - Macro parameter in def-open-test
+- `BUILD-FORM` (54x) - Macro parameter in def-open-test
+- `MARGIN` (37x) - Macro parameter in def-pprint-test
+- `CLASS-*` (100+) - CLOS class definitions not loading
 
-### Running ANSI Tests
+**Root Causes**:
+1. **Macro expansion issue** - Macro parameters (PRETTY, BUILD-FORM, etc.) are being looked up as global variables instead of local bindings
+2. **CLOS not implemented** - Many tests define classes with DEFCLASS which isn't fully working
+3. **compile-and-load** - Test infrastructure tries to compile files, which fclpy doesn't support
+
+### Previous Fixes (this session)
+- ✅ Function namespace lookup (fixed "Not a function: NAME")
+- ✅ LOOP conditional scoping (fixed infinite loop in DEFTEST)
+- ✅ LISP_CWD environment variable for path resolution
+- ✅ FIND-CLASS optional arguments
+- ✅ 2-minute loop timeout warnings
+
+### Next Priority: Fix Macro Expansion
+The macro parameter issue is causing 400+ errors. Need to investigate why `&key` parameters with default values aren't being properly bound during macro expansion.
+
+### Running Error Capture
 
 ```powershell
 cd C:\Users\ACER\git\fclpy\fclpy
-$env:LISP_CWD = "C:\Users\ACER\git\fclpy\ansi-test"
-pipenv run python run.py ../ansi-test/gclload1.lsp ../ansi-test/gclload2.lsp
+pipenv run python scripts/ansi_load_errors.py
+# Results in ansi_load_errors.txt
 ```
 
 ---
