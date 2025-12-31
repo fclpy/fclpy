@@ -278,11 +278,21 @@ def typep(object, type_specifier):
         
         elif compound_type == 'SIMPLE-BIT-VECTOR':
             # (SIMPLE-BIT-VECTOR [size]) - for now, treat as vector check
-            return lisptype.lisp_bool(isinstance(object, (list, tuple)))
+            from fclpy.lispfunc.vectors import AdjustableVector
+            return lisptype.lisp_bool(isinstance(object, (list, tuple, AdjustableVector)))
         
         elif compound_type in ('VECTOR', 'SIMPLE-VECTOR', 'ARRAY', 'SIMPLE-ARRAY'):
-            # (VECTOR element-type [size]) etc. - simplified check
-            return lisptype.lisp_bool(isinstance(object, (list, tuple)))
+            # (VECTOR element-type [size]) etc.
+            from fclpy.lispfunc.vectors import AdjustableVector
+            if not isinstance(object, (list, tuple, AdjustableVector)):
+                return lisptype.NIL
+            # Check size if specified (second element in rest, first is element-type)
+            if len(rest) >= 2:
+                size = rest[1]
+                if isinstance(size, int):
+                    if len(object) != size:
+                        return lisptype.NIL
+            return lisptype.T
         
         elif compound_type == 'STRING' or compound_type == 'SIMPLE-STRING' or compound_type == 'BASE-STRING' or compound_type == 'SIMPLE-BASE-STRING':
             # (STRING [size]) - string with optional size
@@ -378,9 +388,11 @@ def typep(object, type_specifier):
     elif type_name == 'STANDARD-OBJECT' or type_name == 'INSTANCE':
         return lisptype.lisp_bool(isinstance(object, classes.LispInstance))
     elif type_name == 'VECTOR' or type_name == 'SIMPLE-VECTOR':
-        return lisptype.lisp_bool(isinstance(object, (list, tuple)))
+        from fclpy.lispfunc.vectors import AdjustableVector
+        return lisptype.lisp_bool(isinstance(object, (list, tuple, AdjustableVector)))
     elif type_name == 'ARRAY':
-        return lisptype.lisp_bool(isinstance(object, (list, tuple)))
+        from fclpy.lispfunc.vectors import AdjustableVector
+        return lisptype.lisp_bool(isinstance(object, (list, tuple, AdjustableVector)))
     elif type_name == 'HASH-TABLE':
         return lisptype.lisp_bool(isinstance(object, dict))
     else:
@@ -402,10 +414,15 @@ def typep(object, type_specifier):
 def type_of(object):
     """Return type of object."""
     from fclpy import classes
+    from fclpy.lispfunc.vectors import AdjustableVector
     
     # Check for user-defined instances first
     if isinstance(object, classes.LispInstance):
         return object.lisp_class.name
+    
+    # Check for vectors (AdjustableVector must come before list/tuple check)
+    if isinstance(object, AdjustableVector):
+        return lisptype.LispSymbol('SIMPLE-VECTOR')
     
     # null() and consp() return Lisp T/NIL objects, compare against lisptype.T
     if null(object) == lisptype.T:
