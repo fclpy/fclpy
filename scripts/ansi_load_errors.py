@@ -31,6 +31,7 @@ def main():
     # Files to load
     gclload1 = os.path.join(ansi_test_dir, 'gclload1.lsp')
     gclload2 = os.path.join(ansi_test_dir, 'gclload2.lsp')
+    rt_lsp = os.path.join(ansi_test_dir, 'rt.lsp')
     
     print(f"ANSI Test Directory: {ansi_test_dir}")
     print(f"Output file: {output_file}")
@@ -42,7 +43,17 @@ def main():
     print("=" * 60)
     print("Loading gclload1.lsp (RT package infrastructure)...")
     print("=" * 60)
-    
+
+    # Ensure the regression-test runtime file (which defines DEFTET/DEFTEST helper macros)
+    # is loaded first in case compile-and-load semantics differ under this loader.
+    print('Loading rt.lsp (regression-test harness) explicitly...')
+    with redirect_stdout(captured_output), redirect_stderr(captured_output):
+        try:
+            runtime.load_and_evaluate_file(rt_lsp, env, verbose=False)
+        except Exception as e:
+            print(f"rt.lsp exception: {e}")
+
+    # Now load the main gclload1 file as usual
     with redirect_stdout(captured_output), redirect_stderr(captured_output):
         try:
             runtime.load_and_evaluate_file(gclload1, env, verbose=False)

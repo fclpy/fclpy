@@ -784,6 +784,8 @@ def eval_loop(form, env):
     accumulation = None  # ('collect'/'append'/'sum'/'count', form)
     accumulation_conditionals = []  # conditionals that apply to accumulation
     finally_forms = []
+    return_form = None  # RETURN clause form to evaluate during loop
+    finally_return_form = None  # RETURN clause in FINALLY section (evaluated at end)
     
     # Parse clauses
     while i < len(forms):
@@ -989,14 +991,32 @@ def eval_loop(form, env):
             i += 2
             
         elif name == 'RETURN':
-            # Immediate return from loop
-            return eval(forms[i+1], env)
+            # Store return form for evaluation during loop execution
+            if i + 1 < len(forms):
+                return_form = forms[i+1]
+                i += 2
+            else:
+                i += 1
             
         elif name == 'FINALLY':
             i += 1
             while i < len(forms):
-                finally_forms.append(forms[i])
-                i += 1
+                f = forms[i]
+                # Check if this form is (RETURN ...) 
+                if _consp_internal(f):
+                    car_f = car(f)
+                    if isinstance(car_f, lisptype.LispSymbol) and car_f.name.upper() == 'RETURN':
+                        # Extract the return value from (RETURN form)
+                        cdr_f = cdr(f)
+                        if _consp_internal(cdr_f):
+                            finally_return_form = car(cdr_f)
+                        i += 1
+                    else:
+                        finally_forms.append(f)
+                        i += 1
+                else:
+                    finally_forms.append(f)
+                    i += 1
                 
         else:
             # Simple loop - just evaluate body repeatedly until explicit return
@@ -1011,6 +1031,7 @@ def eval_loop(form, env):
     accumulated = []
     sum_result = 0
     count_result = 0
+    return_triggered = False  # Flag for when RETURN is executed
 
     aux_first_iter = True
 
@@ -1046,7 +1067,13 @@ def eval_loop(form, env):
     
     def execute_iteration_body(loop_env):
         """Execute one iteration of the loop body."""
-        nonlocal result, accumulated, sum_result, count_result
+        nonlocal result, accumulated, sum_result, count_result, return_triggered
+        
+        # Check for RETURN form and evaluate it if present
+        if return_form is not None:
+            result = eval(return_form, loop_env)
+            return_triggered = True
+            return
         
         # Execute body forms (controlled by main conditionals like WHEN/UNLESS)
         if should_execute_body(loop_env):
@@ -1252,6 +1279,9 @@ def eval_loop(form, env):
                 _bind_driver(loop_env, d)
             bind_aux(loop_env)
             execute_iteration_body(loop_env)
+            
+            if return_triggered:
+                break
 
             for d in iteration_drivers:
                 _step_driver(loop_env, d)
@@ -1261,12 +1291,16 @@ def eval_loop(form, env):
             check_loop_timeout()
             bind_aux(env)
             execute_iteration_body(env)
+            if return_triggered:
+                break
             
     elif iteration_type == 'until':
         while True:
             check_loop_timeout()
             bind_aux(env)
             execute_iteration_body(env)
+            if return_triggered:
+                break
             if lisptype.is_truthy(eval(iteration_test, env)):
                 break
                 
@@ -1276,6 +1310,8 @@ def eval_loop(form, env):
             check_loop_timeout()
             bind_aux(env)
             execute_iteration_body(env)
+            if return_triggered:
+                break
             
     elif iteration_type == 'for-range':
         start = eval(iteration_start, env) if not isinstance(iteration_start, int) else iteration_start
@@ -1294,6 +1330,8 @@ def eval_loop(form, env):
             _bind_varspec(loop_env, iteration_var, cur)
             bind_aux(loop_env)
             execute_iteration_body(loop_env)
+            if return_triggered:
+                break
             cur = cur + step
             
     elif iteration_type == 'for-below':
@@ -1313,6 +1351,8 @@ def eval_loop(form, env):
             _bind_varspec(loop_env, iteration_var, cur)
             bind_aux(loop_env)
             execute_iteration_body(loop_env)
+            if return_triggered:
+                break
             cur = cur + step
             
     elif iteration_type == 'for-in':
@@ -1326,6 +1366,8 @@ def eval_loop(form, env):
             _bind_varspec(loop_env, iteration_var, car(cur))
             bind_aux(loop_env)
             execute_iteration_body(loop_env)
+            if return_triggered:
+                break
             cur = cdr(cur)
             
     elif iteration_type == 'for-on':
@@ -1339,6 +1381,8 @@ def eval_loop(form, env):
             _bind_varspec(loop_env, iteration_var, cur)
             bind_aux(loop_env)
             execute_iteration_body(loop_env)
+            if return_triggered:
+                break
             cur = cdr(cur)
             
     elif iteration_type == 'for-across':
@@ -1354,6 +1398,8 @@ def eval_loop(form, env):
                 _bind_varspec(loop_env, iteration_var, lisptype.Character(char))
                 bind_aux(loop_env)
                 execute_iteration_body(loop_env)
+                if return_triggered:
+                    break
         elif hasattr(seq, '__iter__') and hasattr(seq, '__len__') and not _consp_internal(seq):
             # Array/vector with __iter__ (AdjustableVector, list, tuple, etc.)
             for elem in seq:
@@ -1361,6 +1407,8 @@ def eval_loop(form, env):
                 _bind_varspec(loop_env, iteration_var, elem)
                 bind_aux(loop_env)
                 execute_iteration_body(loop_env)
+                if return_triggered:
+                    break
         else:
             raise lisptype.LispNotImplementedError(f'LOOP FOR ACROSS requires a vector or string, got {type(seq).__name__}')
             
@@ -1386,6 +1434,8 @@ def eval_loop(form, env):
                     break
             
             execute_iteration_body(loop_env)
+            if return_triggered:
+                break
             first_iteration = False
             
             # Step to next value
@@ -1397,15 +1447,42 @@ def eval_loop(form, env):
                 cur_value = eval(iteration_start, loop_env)
                 _bind_varspec(loop_env, iteration_var, cur_value)
                 
+    elif len(iteration_drivers) == 1:
+        # Single driver that wasn't set as iteration_type (e.g., single FOR clause)
+        loop_env = lisptype.Environment(env)
+        driver = iteration_drivers[0]
+        _init_driver(loop_env, driver)
+        
+        while _driver_has_value(driver):
+            check_loop_timeout()
+            if _termination_break(loop_env):
+                break
+            
+            _bind_driver(loop_env, driver)
+            bind_aux(loop_env)
+            execute_iteration_body(loop_env)
+            
+            if return_triggered:
+                break
+            
+            _step_driver(loop_env, driver)
+    
     elif iteration_type is None:
         # No iteration - simple loop body, execute once
         # Or infinite loop if there are body forms
-        if body_forms or accumulation:
+        # If there are body forms, an accumulation, or a RETURN clause
+        # then execute the iteration body once. This covers cases like
+        # (LOOP RETURN 42) which should immediately return 42.
+        if body_forms or accumulation or (return_form is not None):
             execute_iteration_body(env)
     
     # Execute FINALLY forms
     for f in finally_forms:
         result = eval(f, env)
+    
+    # Execute FINALLY RETURN if present (overrides early RETURN)
+    if finally_return_form is not None:
+        result = eval(finally_return_form, env)
     
     # Return accumulated result or last result
     if accumulation:

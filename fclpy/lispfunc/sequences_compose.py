@@ -186,7 +186,25 @@ def concatenate(result_type, *sequences):
     if type_name == 'LIST' or result_type == list:
         result = []
         for seq in sequences:
-            result.extend(seq)
+            # Accept Lisp cons lists, Python lists/tuples, or single elements.
+            if isinstance(seq, lisptype.lispCons):
+                cur = seq
+                while cur is not None and cur != lisptype.NIL and isinstance(cur, lisptype.lispCons):
+                    result.append(cur.car)
+                    cur = cur.cdr
+                # If dotted tail, append as single element
+                if cur is not None and cur != lisptype.NIL:
+                    result.append(cur)
+            elif isinstance(seq, (list, tuple)):
+                result.extend(seq)
+            elif isinstance(seq, lisptype.LispSymbol):
+                # Treat a symbol as a single element in list concatenation
+                result.append(seq)
+            elif seq is None or seq == lisptype.NIL:
+                continue
+            else:
+                # Fallback: single element
+                result.append(seq)
         return result
     elif type_name == 'STRING' or result_type == str:
         # For STRING result, concatenate all elements as strings
@@ -194,16 +212,24 @@ def concatenate(result_type, *sequences):
         for seq in sequences:
             if isinstance(seq, str):
                 result_parts.append(seq)
+            elif isinstance(seq, lisptype.LispSymbol):
+                # Convert symbol to its name
+                result_parts.append(seq.name)
+            elif seq is None or seq == lisptype.NIL:
+                continue
             else:
-                # For non-string sequences, convert each element to a character
-                for elem in seq:
-                    if isinstance(elem, str) and len(elem) == 1:
-                        result_parts.append(elem)
-                    elif isinstance(elem, int):
-                        # Could be a character code
-                        result_parts.append(chr(elem))
-                    else:
-                        result_parts.append(str(elem))
+                # For non-string sequences, try to iterate; if not iterable, stringify
+                try:
+                    for elem in seq:
+                        if isinstance(elem, str) and len(elem) == 1:
+                            result_parts.append(elem)
+                        elif isinstance(elem, int):
+                            # Could be a character code
+                            result_parts.append(chr(elem))
+                        else:
+                            result_parts.append(str(elem))
+                except TypeError:
+                    result_parts.append(str(seq))
         return ''.join(result_parts)
     elif type_name in ('VECTOR', 'SIMPLE-VECTOR'):
         result = []

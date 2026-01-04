@@ -485,10 +485,21 @@ def eval_defmacro(form, env):
         # Evaluate body forms in macro environment, return last result
         result = lisptype.NIL
         cur_body = actual_body
-        while _consp_internal(cur_body):
-            result = eval(car(cur_body), macro_env)
-            cur_body = cdr(cur_body)
-        
+        try:
+            while _consp_internal(cur_body):
+                try:
+                    result = eval(car(cur_body), macro_env)
+                except Exception:
+                    # Log the failing body form and the raw arguments passed
+                    print(f"[DEBUG] MACRO ERROR in {macro_name}: failing_body={car(cur_body)!r} raw_args={call_args!r}")
+                    import traceback
+                    traceback.print_exc()
+                    # Re-raise so higher-level handlers see the same exception
+                    raise
+                cur_body = cdr(cur_body)
+        except Exception:
+            raise
+
         return result
 
     # Mark as macro and register in environment

@@ -1,5 +1,7 @@
 # Plan: Running ANSI Test Suite with FCLPY
 
+> Administrative: The detailed debug summary `DEFSTRUCT_OPT_DEBUG_SUMMARY_UPDATED.md` has been consolidated into this plan and removed from the repository to keep the tree stable. See "Session Notes" and "Recent Progress" below for the same content.
+
 ## Current State Analysis
 
 ### What FCLPY Has (Updated Dec 30, 2025)

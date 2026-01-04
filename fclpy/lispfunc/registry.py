@@ -165,6 +165,8 @@ def register_module(module):
         # Prefer canonical hyphenated Lisp names (e.g. HASH-TABLE-P) over underscore variants
         hyphenated = lisp_name.replace("_", "-")
 
+        
+
         # Derive a shorter canonical form by stripping common implementation suffixes
         # e.g. -FN and -TYPE are often used in Python names; prefer the base Lisp name when safe.
         canonical = hyphenated
@@ -173,9 +175,27 @@ def register_module(module):
         elif hyphenated.endswith("-TYPE"):
             canonical = hyphenated[:-5]
 
-        # If the canonical (stripped) form already exists, don't create a duplicate.
+        # If the canonical (stripped) form already exists, prefer non-stub implementations.
         if canonical in function_registry or canonical in special_registry:
-            continue
+            # If an existing entry points to evaluation_stubs, allow overwrite by clearing it.
+            existing = function_registry.get(canonical) or special_registry.get(canonical)
+            try:
+                existing_py = existing.py_name if hasattr(existing, 'py_name') else (existing.get('py_name') if isinstance(existing, dict) else None)
+                if existing_py:
+                    import fclpy.lispfunc as _lispfunc_mod
+                    existing_fn = getattr(_lispfunc_mod, existing_py, None)
+                    if existing_fn is not None and getattr(existing_fn, '__module__', '').endswith('evaluation_stubs'):
+                        # Remove the existing stub entry so this module can register a real impl
+                        if canonical in function_registry:
+                            del function_registry[canonical]
+                        if canonical in special_registry:
+                            del special_registry[canonical]
+                    else:
+                        # Existing implementation is not a stub; skip creating a duplicate.
+                        continue
+            except Exception:
+                # On any error inspecting existing entry, conservatively skip.
+                continue
 
         # If an explicit registration already exists for the hyphenated or underscored form, prefer it.
         if hyphenated in function_registry or hyphenated in special_registry:

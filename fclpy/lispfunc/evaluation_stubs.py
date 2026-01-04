@@ -28,7 +28,6 @@ def handler_case(form, *clauses):
     raise lisptype.LispNotImplementedError("HANDLER-CASE")
 
 
-@_registry.cl_function('IGNORE-ERRORS')
 def ignore_errors(*body):
     """Ignore errors in body."""
     from .evaluation_core import eval
@@ -41,19 +40,16 @@ def ignore_errors(*body):
         return None
 
 
-@_registry.cl_function('PROG1')
 def prog1(first_form, *forms):
     """Return first argument after (stub) evaluating remaining forms."""
     return first_form
 
 
-@_registry.cl_function('PROG2')
 def prog2(first_form, second_form, *forms):
     """Return second argument after (stub) evaluating remaining forms."""
     return second_form
 
 
-@_registry.cl_function('LAMBDA')
 def lambda_fn(*args):
     """LAMBDA special form (function stub for registration).
     
@@ -97,34 +93,29 @@ def ignorable(*args):
     return None
 
 
-@_registry.cl_function('DEFINE-MODIFY-MACRO')
 def define_modify_macro(name, lambda_list, function, **kwargs):
     """Define modify macro."""
     raise lisptype.LispNotImplementedError("DEFINE-MODIFY-MACRO")
 
 
-@_registry.cl_function('SET')
 def set(symbol, value):
     """Set the value of a symbol (dynamic variable)."""
     # For now, just return the value - proper symbol table management later
     return value
 
 
-@_registry.cl_function('BOUNDP')
 def boundp(symbol):
     """Test if symbol has a value binding."""
     # For now, assume most symbols are bound - proper implementation later
     return lisptype.T
 
 
-@_registry.cl_function('MAKUNBOUND')
 def makunbound(symbol):
     """Make symbol unbound."""
     # For now, just return the symbol - proper implementation later
     return symbol
 
 
-@_registry.cl_function('VALUES')
 def values(*args):
     """Return multiple values.
     
@@ -142,7 +133,6 @@ def values(*args):
         return lisptype.MultipleValues(*args)
 
 
-@_registry.cl_function('VALUES-LIST')
 def values_list(lst):
     """Return multiple values from a list.
     
@@ -156,7 +146,6 @@ def values_list(lst):
     return lisptype.MultipleValues.from_list(lst)
 
 
-@_registry.cl_function('MULTIPLE-VALUE-RETURN')
 def multiple_value_return(*args):
     """Return multiple values (alias for VALUES).
     
@@ -166,7 +155,6 @@ def multiple_value_return(*args):
     return values(*args)
 
 
-@_registry.cl_function('MAKE-CHAR-CODE-CONVERSION')
 def make_char_code_conversion(from_encoding, to_encoding):
     """Create a character code conversion function.
     
@@ -187,7 +175,6 @@ def make_char_code_conversion(from_encoding, to_encoding):
     return convert
 
 
-@_registry.cl_function('MULTIPLE-VALUE-LIST')
 def multiple_value_list(values):
     """Convert multiple values to a list.
     
@@ -206,7 +193,6 @@ def multiple_value_list(values):
         return lisptype.lispCons(values, lisptype.NIL)
 
 
-@_registry.cl_function('NTH-VALUE')
 def nth_value(n, values):
     """Extract the Nth value from multiple values.
     
@@ -236,7 +222,6 @@ def nth_value(n, values):
             return lisptype.NIL
 
 
-@_registry.cl_function('MULTIPLE-VALUE-PROG1')
 def multiple_value_prog1(first_form, *rest):
     """Execute PROG1 with multiple values support (stub).
     
@@ -293,13 +278,11 @@ def compile_fn(name, definition=None):
     return None  # Simplified
 
 
-@_registry.cl_function('THE')
 def the(type_spec, form):
     """Type declaration."""
     return form
 
 
-@_registry.cl_function('LOCALLY')
 def locally(*body):
     """Local declarations."""
     result = None
@@ -308,7 +291,6 @@ def locally(*body):
     return result
 
 
-@_registry.cl_function('DESTRUCTURING-BIND')
 def destructuring_bind(lambda_list, expression, *body):
     """Destructuring bind."""
     result = None
@@ -318,43 +300,36 @@ def destructuring_bind(lambda_list, expression, *body):
 
 
 # Assignment and modification operations
-@_registry.cl_function('DECF')
 def decf(place, delta=1):
     """Decrement place (stub returns numeric result)."""
     return place - delta  # Simplified
 
 
-@_registry.cl_function('PSETF')
 def psetf(*pairs):
     """Parallel setf (stub)."""
     return None  # Simplified
 
 
-@_registry.cl_function('SETF')
 def setf(*pairs):
     """Set place (stub)."""
     return None  # Simplified
 
 
-@_registry.cl_function('SHIFTF')
 def shiftf(*places):
     """Shift places (stub)."""
     return None  # Simplified
 
 
-@_registry.cl_function('ROTATEF')
 def rotatef(*places):
     """Rotate places (stub)."""
     return None  # Simplified
 
 
-@_registry.cl_function('PSETQ')
 def psetq(*pairs):
     """Parallel setq (stub)."""
     return None  # Simplified
 
 
-@_registry.cl_function('BLOCK')
 def block(name, *body):
     """Execute block with optional return-from."""
     # For now, just evaluate body forms in sequence - proper implementation later
@@ -364,14 +339,12 @@ def block(name, *body):
     return result
 
 
-@_registry.cl_function('RETURN-FROM')
 def return_from(name, value=None):
     """Return from named block."""
     # For now, just return the value - proper implementation later
     return value
 
 
-@_registry.cl_function('CATCH')
 def catch(tag, *body):
     """Catch thrown values."""
     # For now, just evaluate body - proper implementation later
@@ -381,14 +354,12 @@ def catch(tag, *body):
     return result
 
 
-@_registry.cl_function('THROW')
 def throw(tag, value=None):
     """Throw value to catch."""
     # For now, just return the value - proper implementation later
     return value
 
 
-@_registry.cl_function('TAGBODY')
 def tagbody(*forms):
     """Execute forms with tags for GO."""
     # For now, just evaluate non-tag forms - proper implementation later
@@ -399,21 +370,18 @@ def tagbody(*forms):
     return result
 
 
-@_registry.cl_function('GO')
 def go(tag):
     """Go to tag in tagbody."""
     # For now, just return None - proper implementation later
     return None
 
 
-@_registry.cl_function('UNWIND-PROTECT')
 def unwind_protect(protected_form, *cleanup_forms):
     """Execute protected form with cleanup."""
     # For now, just execute protected form - proper implementation later
     return protected_form
 
 
-@_registry.cl_function('AND')
 def and_fn(*args):
     """Logical AND of arguments."""
     result = True
@@ -424,7 +392,6 @@ def and_fn(*args):
     return result
 
 
-@_registry.cl_function('OR')
 def or_fn(*args):
     """Logical OR of arguments."""
     for arg in args:
@@ -433,7 +400,6 @@ def or_fn(*args):
     return None
 
 
-@_registry.cl_function('PROG')
 def prog(*body):
     """Execute prog block."""
     # For now, just evaluate forms - proper implementation later
@@ -443,7 +409,6 @@ def prog(*body):
     return result
 
 
-@_registry.cl_function('WHEN')
 def when_fn(test, *body):
     """Execute body if test is true."""
     if test:
@@ -454,7 +419,6 @@ def when_fn(test, *body):
     return None
 
 
-@_registry.cl_function('UNLESS')
 def unless_fn(test, *body):
     """Execute body if test is false."""
     if not test:
@@ -465,35 +429,30 @@ def unless_fn(test, *body):
     return None
 
 
-@_registry.cl_function('CASE')
 def case_fn(keyform, *clauses):
     """Case statement."""
     # For now, return None - proper implementation later
     return None
 
 
-@_registry.cl_function('COND')
 def cond_fn(*clauses):
     """Conditional statement."""
     # For now, return None - proper implementation later
     return None
 
 
-@_registry.cl_function('DO')
 def do_fn(*args):
     """Do loop."""
     # For now, return None - proper implementation later
     return None
 
 
-@_registry.cl_function('DOLIST')
 def dolist(*args):
     """Dolist loop."""
     # For now, return None - proper implementation later
     return None
 
 
-@_registry.cl_function('DOTIMES')
 def dotimes(*args):
     """Dotimes loop."""
     # For now, return None - proper implementation later
