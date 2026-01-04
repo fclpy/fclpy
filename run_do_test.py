@@ -1,0 +1,26 @@
+#!/usr/bin/env python3
+import os, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from fclpy import runtime
+from fclpy.lispfunc import setup_environment, eval_string
+
+env = setup_environment()
+base = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+init_lsp = os.path.join(base, 'ansi-test', 'init.lsp')
+rt = os.path.join(base, 'ansi-test', 'rt.lsp')
+rt_test = os.path.join(base, 'ansi-test', 'rt-test.lsp')
+
+if os.path.exists(init_lsp):
+	print('Loading init.lsp...')
+	runtime.load_and_evaluate_file(init_lsp, env, verbose=False)
+else:
+	print('init.lsp not found; continuing')
+
+print('Loading rt.lsp...')
+runtime.load_and_evaluate_file(rt, env, verbose=False)
+print('Loading rt-test.lsp...')
+runtime.load_and_evaluate_file(rt_test, env, verbose=False)
+
+print("Running (in-package :cl-test) (do-test 'do-test-1)")
+res = eval_string("(in-package :cl-test) (do-test 'do-test-1)", env)
+print('Result:', res)
