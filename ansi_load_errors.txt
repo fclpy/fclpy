@@ -1,13 +1,13 @@
 ANSI Test Loading Errors
-Generated: 2025-12-31T11:35:36.181084
+Generated: 2026-01-04T13:18:02.672583
 ============================================================
 
-Summary: 575 total errors
+Summary: 570 total errors
 
 Error Categories:
   Unbound variable: 268
   Assertion failed: 202
-  Other: 85
+  Other: 80
   argument: 9
   Not a function: 6
   Not implemented: 2
@@ -15,7 +15,7 @@ Error Categories:
   EOF: 1
 
 ============================================================
-UNIQUE ERROR TYPES (497):
+UNIQUE ERROR TYPES (496):
 ============================================================
 
 [1x] 'LispSymbol' object is not iterable | expr=(DEFSTRUCT-WITH-TESTS (STRUCT-TEST-04
@@ -302,7 +302,6 @@ UNIQUE ERROR TYPES (497):
 [1x] DEFUN: function name must be a symbol: Not implemented | expr=(DEFUN (SETF FUNCT
 [1x] EOF during list read | expr=(DEF-FORMAT-TEST FORMAT.^.\[.3 '~{~[X~;Y~0^NO~;Z~;~^
 [1x] Expected a class, got T | expr=(DEFTEST DEFGENERIC.29 (LET ((FN (EVAL (QUOTE (DE
-[5x] LENGTH: int is not a sequence | expr=(DEF-SYNTAX-BIT-VECTOR-TEST SYNTAX.SHARP-AS
 [1x] NIL | expr=(ERROR NIL (QUOTE BAD))
 [1x] Not a function: C: Not implemented | expr=(C)
 [1x] Not a function: DT: Not implemented | expr=(LOOP FOR ELEMENT-TYPE IN (QUOTE (CHA
@@ -1088,10 +1087,5 @@ ALL ERRORS (FULL):
 566. Error evaluating expression 231 in C:\Users\ACER\git\fclpy\ansi-test\printer\format\format-circumflex.lsp: EOF during list read | expr=(DEF-FORMAT-TEST FORMAT.^.\[.3 '~{~[X~;Y~0^NO~;Z~;~^~]~}' ((QUOTE (0 1 2 3 4))) 'XY')
 567. Error evaluating expression 9 in C:\Users\ACER\git\fclpy\ansi-test\reader\readtable-case.lsp: Not a function: LOOKUP-TABLE: Not implemented | expr=(SYMBOL-MACROLET ((LOOKUP-TABLE (QUOTE (:SYMBOL ('zebra' 'Zebra' 'ZEBRA' 'zebr\\a' 'zebr\\A' 'ZEBR\\a' 'ZEBR\\A' 'Zebr\\a' 'Zebr\\A') :UPCASE ('ZEBRA' 'ZEBRA' 'ZEBRA' 'ZEBRa' 'ZEBRA' 'ZEBRa' 'ZEBRA' 'ZEBRa' 'ZEBRA') :DOWNCASE ('zebra' 'zebra' 'zebra' 'zebra' 'zebrA' 'zebra' 'zebrA' 'zebra' 'zebrA') :PRESERVE ('zebra' 'Zebra' 'ZEBRA' 'zebra' 'zebrA' 'ZEBRa' 'ZEBRA' 'Zebra' 'ZebrA') :INVERT ('ZEBRA' 'Zebra' 'zebra' 'ZEBRa' 'ZEBRA' 'zebra' 'zebrA' 'Zebra' 'ZebrA'))))) (MACROLET ((DEF-READTABLE-CASE-TEST (READER-CASE) (QUASIQUOTE (DEFTEST (UNQUOTE (INTERN (CONCATENATE (QUOTE STRING) 'READTABLE-CASE.CASE-' (SYMBOL-NAME READER-CASE)) (FIND-PACKAGE :CL-TEST))) (LET ((*READTABLE* (COPY-READTABLE))) (SETF (READTABLE-CASE *READTABLE*) (UNQUOTE READER-CASE)) (MAPCAR (FUNCTION (LAMBDA (X) (SYMBOL-NAME (READ-FROM-STRING X)))) (QUOTE (UNQUOTE (GETF LOOKUP-TABLE :SYMBOL))))) (UNQUOTE (GETF LOOKUP-TABLE READER-CASE)))))) (DEF-READTABLE-CASE-TEST :UPCASE) (DEF-READTABLE-CASE-TEST :DOWNCASE) (DEF-READTABLE-CASE-TEST :PRESERVE) (DEF-READTABLE-CASE-TEST :INVERT)))
 568. Error evaluating expression 5 in C:\Users\ACER\git\fclpy\ansi-test\reader\set-syntax-from-char.lsp: CHARACTER: cannot convert #\\ to character | expr=(LOOP FOR C ACROSS '\\|!"#$%&\'()*,;<=>?@[]^_`~{}+-/abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ' DO (EVAL (QUASIQUOTE (DEF-SET-SYNTAX-FROM-CHAR-ALPHABETIC-TRAIT-TEST (UNQUOTE C)))))
-569. Error evaluating expression 42 in C:\Users\ACER\git\fclpy\ansi-test\reader\syntax.lsp: LENGTH: int is not a sequence | expr=(DEF-SYNTAX-BIT-VECTOR-TEST SYNTAX.SHARP-ASTERISK.5 '#2*1' 1 1)
-570. Error evaluating expression 43 in C:\Users\ACER\git\fclpy\ansi-test\reader\syntax.lsp: LENGTH: int is not a sequence | expr=(DEF-SYNTAX-BIT-VECTOR-TEST SYNTAX.SHARP-ASTERISK.6 '#2*0' 0 0)
-571. Error evaluating expression 44 in C:\Users\ACER\git\fclpy\ansi-test\reader\syntax.lsp: LENGTH: int is not a sequence | expr=(DEF-SYNTAX-BIT-VECTOR-TEST SYNTAX.SHARP-ASTERISK.7 '#5*010' 0 1 0 0 0)
-572. Error evaluating expression 45 in C:\Users\ACER\git\fclpy\ansi-test\reader\syntax.lsp: LENGTH: int is not a sequence | expr=(DEF-SYNTAX-BIT-VECTOR-TEST SYNTAX.SHARP-ASTERISK.8 '#7*0101' 0 1 0 1 1 1 1)
-573. Error evaluating expression 46 in C:\Users\ACER\git\fclpy\ansi-test\reader\syntax.lsp: LENGTH: int is not a sequence | expr=(DEF-SYNTAX-BIT-VECTOR-TEST SYNTAX.SHARP-ASTERISK.9 '#10*01010' 0 1 0 1 0 0 0 0 0 0)
-574. Error evaluating expression 6 in C:\Users\ACER\git\fclpy\ansi-test\environment\describe.lsp: Unbound variable: DESCRIBE-OBJECT-TEST-CLASS-01: Not implemented | expr=(DEFCLASS DESCRIBE-OBJECT-TEST-CLASS-01 NIL ((S1 :INITARG :S1) (S2 :INITARG :S2) (S3 :INITARG :S3)))
-575. Error evaluating expression 3 in C:\Users\ACER\git\fclpy\ansi-test\environment\trace.lsp: DEFUN: function name must be a symbol: Not implemented | expr=(DEFUN (SETF FUNCTION-TO-TRACE) (VAL ARG) (SETF (CAR ARG) VAL))
+569. Error evaluating expression 6 in C:\Users\ACER\git\fclpy\ansi-test\environment\describe.lsp: Unbound variable: DESCRIBE-OBJECT-TEST-CLASS-01: Not implemented | expr=(DEFCLASS DESCRIBE-OBJECT-TEST-CLASS-01 NIL ((S1 :INITARG :S1) (S2 :INITARG :S2) (S3 :INITARG :S3)))
+570. Error evaluating expression 3 in C:\Users\ACER\git\fclpy\ansi-test\environment\trace.lsp: DEFUN: function name must be a symbol: Not implemented | expr=(DEFUN (SETF FUNCTION-TO-TRACE) (VAL ARG) (SETF (CAR ARG) VAL))

@@ -55,12 +55,10 @@ def _get_func_signature_info(func_id: int, func):
 
 
 def get_func_signature_info(func):
-    """Get signature info for a function, using cache."""
-    # Use id() to create a hashable key for the function
+    """Get signature info for a function, using cached helper."""
     return _get_func_signature_info(id(func), func)
 
 
-# Exception classes for non-local exits
 class ReturnFromException(Exception):
     """Exception raised by RETURN-FROM to exit a BLOCK."""
     def __init__(self, tag, value):
@@ -125,10 +123,11 @@ def parse_lambda_list(lambda_list):
     # Parse the lambda list
     current_section = 'required'
     current = lambda_list
-    
+    whole = None
+
     while _consp_internal(current):
         param = car(current)
-        
+
         # Check for section markers
         if isinstance(param, lisptype.LispSymbol):
             marker = param.name.upper()
@@ -136,7 +135,8 @@ def parse_lambda_list(lambda_list):
                 current_section = 'optional'
                 current = cdr(current)
                 continue
-            elif marker == '&REST':
+            elif marker == '&REST' or marker == '&BODY':
+                # &BODY is a Common Lisp synonym for &REST
                 current_section = 'rest'
                 current = cdr(current)
                 continue
@@ -148,7 +148,16 @@ def parse_lambda_list(lambda_list):
                 current_section = 'aux'
                 current = cdr(current)
                 continue
-        
+            elif marker == '&WHOLE':
+                # &WHOLE takes a single following symbol which is bound to the
+                # entire macro form; consume that symbol and record it.
+                next_sym = car(cdr(current)) if _consp_internal(cdr(current)) else None
+                if isinstance(next_sym, lisptype.LispSymbol):
+                    whole = next_sym
+                # Advance past &WHOLE and its parameter
+                current = cdr(cdr(current))
+                continue
+
         # Add parameter to appropriate section
         if current_section == 'required':
             if isinstance(param, lisptype.LispSymbol):
@@ -175,15 +184,17 @@ def parse_lambda_list(lambda_list):
             elif _consp_internal(param):
                 # Aux with init: (name init)
                 aux.append(param)
-        
+
         current = cdr(current)
-    
+
+    # Include whole in returned structure so macro handling can bind it
     return {
         'required': required,
         'optional': optional,
         'rest': rest,
         'keyword': keyword,
-        'aux': aux
+        'aux': aux,
+        'whole': whole
     }
 
 

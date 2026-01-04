@@ -371,6 +371,17 @@ def eval_defmacro(form, env):
         macro_env = lisptype.Environment(parent=env)
         
         arg_idx = 0
+
+        # If this macro expects a &WHOLE parameter, the caller will pass
+        # the whole form as the first argument; bind it and advance arg index.
+        whole_param = parsed_params.get('whole') if isinstance(parsed_params, dict) else None
+        if whole_param is not None:
+            if len(call_args) > 0:
+                macro_env.add_variable(whole_param, call_args[0])
+                arg_idx = 1
+            else:
+                macro_env.add_variable(whole_param, lisptype.NIL)
+                arg_idx = 1
         
         # Bind required parameters
         for param in required_params:
@@ -482,6 +493,9 @@ def eval_defmacro(form, env):
 
     # Mark as macro and register in environment
     setattr(macro_callable, '__is_macro__', True)
+    # Mark whether this macro expects a &WHOLE parameter so callers can pass it
+    if isinstance(parsed_params, dict) and parsed_params.get('whole') is not None:
+        setattr(macro_callable, '__expects_whole__', True)
     
     # Find the global/root environment for defining the macro
     # DEFMACRO always creates global macro bindings (like DEFUN)
@@ -553,6 +567,9 @@ def eval_macroexpand_1(form, env):
     
     # If there's a non-nil tail, that's an error, but for now just ignore it
     try:
+        # If macro callable expects the whole form (via &WHOLE), pass it
+        if getattr(macro_func, '__expects_whole__', False):
+            return macro_func(form_to_expand, *args_list)
         return macro_func(*args_list)
     except Exception:
         # If macro expansion fails, return form unchanged
