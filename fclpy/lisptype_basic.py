@@ -379,6 +379,41 @@ class lispCons(lispList):
     def __iter__(self):
         return lispConsIterator(self)
 
+    def __len__(self):
+        count = 0
+        current = self
+        while isinstance(current, lispCons):
+            count += 1
+            current = current.cdr
+        return count
+
+    def _to_sequence(self):
+        seq = []
+        current = self
+        while isinstance(current, lispCons):
+            seq.append(current.car)
+            current = current.cdr
+        return seq
+
+    def __getitem__(self, index):
+        # Support slicing and integer indexing to behave like a sequence
+        if isinstance(index, slice):
+            seq = self._to_sequence()
+            return tuple(seq[index])
+        if isinstance(index, int):
+            if index < 0:
+                seq = self._to_sequence()
+                return seq[index]
+            current = self
+            i = index
+            while i > 0 and isinstance(current, lispCons):
+                current = current.cdr
+                i -= 1
+            if not isinstance(current, lispCons):
+                raise IndexError('list index out of range')
+            return current.car
+        raise TypeError('list indices must be integers or slices')
+
 
 class MultipleValues(lispT):
     """Represents multiple return values in Common Lisp.
