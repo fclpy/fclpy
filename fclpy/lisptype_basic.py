@@ -98,6 +98,12 @@ class lispNull(lispList):
         return "NIL"
     def __repr__(self):
         return "NIL"
+    def __iter__(self):
+        # NIL should act as an empty sequence for iteration contexts
+        return iter(())
+
+    def __len__(self):
+        return 0
 
 NIL = lispNull()
 
