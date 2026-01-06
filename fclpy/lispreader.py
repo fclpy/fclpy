@@ -64,7 +64,11 @@ class LispReader():
                 y = self.stream.read_char()
                 if y is None or self.stream.eof():
                     raise Exception("reader-error")
-                return self.read_8(y.upper())
+                # Use placeholder for escaped colons
+                if y == ':':
+                    return self.read_8('\x00')  # Placeholder for escaped colon
+                else:
+                    return self.read_8(y.upper())
             elif self.multiple_escape_character(x):
                 return self.read_9("")
             else:
@@ -75,6 +79,16 @@ class LispReader():
             y = self.stream.read_char()
             if y is None:
                 more = False
+            elif self.single_escape_character(y):
+                # Handle backslash escape within token
+                escaped = self.stream.read_char()
+                if escaped is None:
+                    raise Exception("reader-error: EOF after escape")
+                # Use placeholder for escaped colons
+                if escaped == ':':
+                    token = token + '\x00'
+                else:
+                    token = token + escaped.upper()
             elif self.terminating_macro_character(y):
                 self.stream.unread_char(y)
                 more = False
@@ -136,7 +150,10 @@ class LispReader():
             return lisptype.lispKeyword(name.upper())
         
         # Handle package-qualified symbols (PKG:SYM or PKG::SYM)
-        if ':' in token and not token.startswith(':'):
+        # Only treat as package-qualified if contains a real colon (not escaped placeholder \x00)
+        # Create a temporary version without placeholders to check
+        token_check = token.replace('\x00', '')
+        if ':' in token_check and not token.startswith(':'):
             return self._read_package_qualified_symbol(token)
         
         # Get current package from state
@@ -145,7 +162,9 @@ class LispReader():
         if current_pkg is None:
             current_pkg = lisptype.COMMON_LISP_USER_PACKAGE
         
-        name_upper = token.upper()
+        # Restore escaped colons in the token before interning
+        token_restored = token.replace('\x00', ':')
+        name_upper = token_restored.upper()
         
         # First check if symbol exists in current package
         sym, status = current_pkg.find_symbol(name_upper)
@@ -164,21 +183,27 @@ class LispReader():
                     if sym is not None:
                         return sym
         
-        # Not found - intern in current package
-        return current_pkg.intern_symbol(token)
+        # Not found - intern in current package (with restored colons)
+        return current_pkg.intern_symbol(token_restored)
     
     def _read_package_qualified_symbol(self, token):
         """Read a package-qualified symbol like PKG:SYM or PKG::SYM."""
+        # Restore escaped colons (\x00 placeholder) before processing
+        # but only after determining if this is package-qualified
         if '::' in token:
             # Internal symbol access
             parts = token.split('::', 1)
             pkg_name = parts[0].upper()
             sym_name = parts[1].upper() if len(parts) > 1 else ''
+            # Restore escaped colons in symbol name
+            sym_name = sym_name.replace('\x00', ':')
         else:
             # External symbol access
             parts = token.split(':', 1)
             pkg_name = parts[0].upper()
             sym_name = parts[1].upper() if len(parts) > 1 else ''
+            # Restore escaped colons in symbol name
+            sym_name = sym_name.replace('\x00', ':')
         
         # Find the package
         pkg = lisptype.find_package(pkg_name)

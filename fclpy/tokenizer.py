@@ -345,9 +345,35 @@ class Tokenizer:
         if self._peek() == '|':
             return self._read_escaped_symbol(start_line, start_col)
         
-        # Regular symbol: letters, digits, and special chars (excluding .)
-        while self._peek() and (self._peek().isalnum() or self._peek() in '_-+*/<>=!?@#$%^&'):
-            sym += self._advance()
+        # Regular symbol: letters, digits, and special chars
+        # In Common Lisp, backslash escapes the next character, making it part of the symbol
+        # Dots are also allowed in symbol names (e.g., format.:*.2)
+        # Use a placeholder (\x00) for escaped colons so package parsing doesn't split on them
+        while self._peek():
+            char = self._peek()
+            
+            # Handle backslash escape
+            if char == '\\':
+                self._advance()  # consume backslash
+                next_char = self._peek()
+                if next_char:
+                    escaped_char = self._advance()
+                    # Use placeholder for escaped colons to prevent package parsing
+                    if escaped_char == ':':
+                        sym += '\x00'  # Placeholder for escaped colon
+                    else:
+                        sym += escaped_char  # add the escaped character (without backslash)
+                else:
+                    raise ValueError("Backslash at end of input")
+            # Check for symbol constituent characters
+            elif char.isalnum() or char in '_-+*/<>=!?@#$%^&.:':
+                sym += self._advance()
+            # Check for terminating characters (whitespace, parens, etc.)
+            elif char in ' \t\n\r()[]{};\'"`,':
+                break
+            else:
+                # Unknown character, stop reading
+                break
         
         if not sym:
             return None

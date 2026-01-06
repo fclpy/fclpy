@@ -264,7 +264,18 @@ class Readtable:
                 if c:
                     stream.unread_char(c)
                 break
-            token += c
+            # Handle backslash escape
+            if c == '\\':
+                escaped = stream.read_char()
+                if not escaped:
+                    raise Exception("reader-error: EOF after escape")
+                # Use placeholder for escaped colons
+                if escaped == ':':
+                    token += '\x00'
+                else:
+                    token += escaped
+            else:
+                token += c
         from . import lisptype
         from . import state
         
@@ -275,7 +286,9 @@ class Readtable:
             return lisptype.lispKeyword(name.upper())
         
         # Handle package-qualified symbols (PKG:SYM or PKG::SYM)
-        if ':' in token and not token.startswith(':'):
+        # Only treat as package-qualified if contains a real colon (not escaped placeholder \x00)
+        token_check = token.replace('\x00', '')
+        if ':' in token_check and not token.startswith(':'):
             return self._read_package_qualified_symbol(token)
         
         # Get current package
@@ -283,7 +296,9 @@ class Readtable:
         if current_pkg is None:
             current_pkg = lisptype.COMMON_LISP_USER_PACKAGE
         
-        name_upper = token.upper()
+        # Restore escaped colons before interning
+        token_restored = token.replace('\x00', ':')
+        name_upper = token_restored.upper()
         
         # First check if symbol exists in current package
         sym, status = current_pkg.find_symbol(name_upper)
@@ -303,7 +318,7 @@ class Readtable:
                         return sym
         
         # Not found - intern in current package
-        return current_pkg.intern_symbol(token)
+        return current_pkg.intern_symbol(token_restored)
     
     def _read_package_qualified_symbol(self, token):
         """Read a package-qualified symbol like PKG:SYM or PKG::SYM.
@@ -318,11 +333,15 @@ class Readtable:
             parts = token.split('::', 1)
             pkg_name = parts[0].upper()
             sym_name = parts[1].upper() if len(parts) > 1 else ''
+            # Restore escaped colons in symbol name
+            sym_name = sym_name.replace('\x00', ':')
         else:
             # External symbol access
             parts = token.split(':', 1)
             pkg_name = parts[0].upper()
             sym_name = parts[1].upper() if len(parts) > 1 else ''
+            # Restore escaped colons in symbol name
+            sym_name = sym_name.replace('\x00', ':')
         
         # Find the package
         pkg = lisptype.find_package(pkg_name)

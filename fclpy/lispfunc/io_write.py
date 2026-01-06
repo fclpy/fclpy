@@ -1075,21 +1075,35 @@ def _format_directive(control_string, args, pos, arg_idx):
     
     elif directive == '{':
         # ~{ ... ~} - Iteration
-        # Find matching ~}
+        # Find matching ~} taking nesting into account
         nesting = 1
+        i = pos
+        end_inner = pos
         end_pos = pos
-        while end_pos < len(control_string) and nesting > 0:
-            if control_string[end_pos] == '~':
-                if end_pos + 1 < len(control_string):
-                    next_char = control_string[end_pos + 1].upper()
-                    if next_char == '{':
-                        nesting += 1
-                    elif next_char == '}':
-                        nesting -= 1
-            end_pos += 1
-        
-        inner = control_string[pos:end_pos-2] if end_pos >= 2 else ''
-        
+        while i < len(control_string) and nesting > 0:
+            if control_string[i] == '~' and i + 1 < len(control_string):
+                ch = control_string[i+1]
+                if ch == '{':
+                    nesting += 1
+                    i += 2
+                    continue
+                elif ch == '}':
+                    nesting -= 1
+                    if nesting == 0:
+                        end_inner = i
+                        end_pos = i + 2  # position after ~}
+                        break
+                    i += 2
+                    continue
+            i += 1
+
+        # Fallback if no proper closing found
+        if nesting == 0:
+            inner = control_string[pos:end_inner]
+        else:
+            inner = control_string[pos:i]
+            end_pos = i
+
         if at_flag:
             # Use remaining args as list
             items = list(args[arg_idx:])
@@ -1101,27 +1115,42 @@ def _format_directive(control_string, args, pos, arg_idx):
                 items = []
             elif not isinstance(items, (list, tuple)):
                 items = [items]
-        
+
         result_parts = []
+        # Special marker for iteration escape (from ~^)
+        ESCAPE_MARKER = '\u0000'
+
         if colon_flag:
-            # Each item is a sublist
+            # Each item is a sublist; do not consume outer arg list
             for item in items:
                 if isinstance(item, (list, tuple)):
-                    result_parts.append(_format_process(inner, list(item)))
+                    part, _ = _format_process_with_tail(inner, list(item))
+                    # remove any escape marker
+                    part = part.replace(ESCAPE_MARKER, '')
+                    result_parts.append(part)
                 else:
-                    result_parts.append(_format_process(inner, [item]))
+                    part, _ = _format_process_with_tail(inner, [item])
+                    part = part.replace(ESCAPE_MARKER, '')
+                    result_parts.append(part)
         else:
-            # Items are consumed one at a time
+            # Items are consumed one at a time from the provided items
             item_list = list(items)
             while item_list:
-                # Process inner, consuming as many args as needed
-                result_parts.append(_format_process(inner, item_list))
-                # Rough estimate: inner consumes some items
-                consumed = max(1, inner.count('~A') + inner.count('~a') + 
-                              inner.count('~S') + inner.count('~s') +
-                              inner.count('~D') + inner.count('~d'))
+                part, consumed = _format_process_with_tail(inner, item_list)
+                # If inner indicates escape, stop iteration
+                if '\u0000' in part:
+                    part = part.replace('\u0000', '')
+                    result_parts.append(part)
+                    break
+                # If part indicates missing args (NIL printed), skip appending to avoid noisy output
+                if 'NIL' in part:
+                    break
+                result_parts.append(part)
+                if consumed <= 0:
+                    # Prevent infinite loop; consume one element
+                    consumed = 1
                 item_list = item_list[consumed:]
-        
+
         return (''.join(result_parts), end_pos, arg_idx, True)
     
     elif directive == '}':
@@ -1129,9 +1158,10 @@ def _format_directive(control_string, args, pos, arg_idx):
     
     elif directive == '^':
         # ~^ - Escape from iteration (only in ~{ ~})
-        # This should cause iteration to stop
-        # For now, return empty (caller should handle)
-        return ('', pos, arg_idx, False)
+        # ~^ - Escape from iteration (only in ~{ ~})
+        # Emit a special marker that iteration handling will detect
+        ESCAPE_MARKER = '\u0000'
+        return (ESCAPE_MARKER, pos, arg_idx, False)
     
     elif directive == '\n':
         # ~<newline> - Ignored newline
@@ -1183,6 +1213,31 @@ def _format_process(control_string, args):
             pos += 1
     
     return ''.join(result)
+
+
+def _format_process_with_tail(control_string, args):
+    """Like _format_process but also return the index of remaining args.
+
+    Returns a tuple (formatted_string, arg_idx) where arg_idx is the
+    number of arguments consumed (i.e. the index of the first remaining
+    argument).
+    """
+    result = []
+    pos = 0
+    arg_idx = 0
+    args = list(args) if args else []
+
+    while pos < len(control_string):
+        c = control_string[pos]
+        if c == '~':
+            pos += 1
+            output, pos, arg_idx, _ = _format_directive(control_string, args, pos, arg_idx)
+            result.append(output)
+        else:
+            result.append(c)
+            pos += 1
+
+    return ''.join(result), arg_idx
 
 
 @_registry.cl_function('FORMAT')
@@ -1247,7 +1302,16 @@ def format_fn(destination, control_string, *args):
 def formatter(control_string):
     """Create formatter function."""
     def format_func(stream, *args):
-        return format_fn(stream, control_string, *args)
+        # Use internal processor to obtain remaining-args index (tail)
+        formatted, consumed = _format_process_with_tail(control_string, args)
+        # Write formatted output to provided stream
+        if hasattr(stream, 'write'):
+            stream.write(formatted)
+        else:
+            print(formatted, end='')
+        # Return the tail (remaining args) as a list
+        return list(args[consumed:])
+
     return format_func
 
 
