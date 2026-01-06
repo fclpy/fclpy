@@ -136,7 +136,7 @@ def decode_float(float_num):
 def integer_decode_float(float_num):
     """Integer decode of float."""
     if float_num == 0.0:
-        return 0, 0, 1
+        return lisptype.MultipleValues([0, 0, 1])
     
     sign = 1 if float_num >= 0 else -1
     abs_float = abs(float_num)
@@ -147,7 +147,7 @@ def integer_decode_float(float_num):
     int_mantissa = int(mantissa * (2 ** 53))
     int_exponent = exponent - 53
     
-    return int_mantissa, int_exponent, sign
+    return lisptype.MultipleValues([int_mantissa, int_exponent, sign])
 
 
 @_registry.cl_function('SCALE-FLOAT')
