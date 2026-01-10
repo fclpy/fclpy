@@ -60,7 +60,7 @@ def acons(x, v, seq):
 @_registry.cl_function('LISTP')
 def listp(obj):
     """Test if object is a list (either nil or a cons cell)."""
-    return lisptype.lisp_bool(obj is None or type(obj) is lisptype.lispCons)
+    return lisptype.lisp_bool(obj is lisptype.NIL or type(obj) is lisptype.lispCons)
 
 
 @_registry.cl_function('SYMBOLP')

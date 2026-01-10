@@ -64,6 +64,14 @@ def load_and_evaluate_file(filename, environment=None, verbose=False, timing=Fal
         if verbose or timing:
             print(f"[{time.time() - start_time:.3f}s] Loading file: {filename}")
         
+        # Ensure there's a known current package while reading the file so
+        # reader conditionals and IN-PACKAGE forms behave deterministically.
+        import fclpy.state as state
+        old_pkg = getattr(state, 'current_package', None)
+        # Default to COMMON-LISP-USER while loading a file when no package set
+        if old_pkg is None:
+            state.current_package = lisptype.COMMON_LISP_USER_PACKAGE
+
         with open(filename, 'r', encoding='utf-8') as f:
             content = f.read()
         
@@ -139,7 +147,14 @@ def load_and_evaluate_file(filename, environment=None, verbose=False, timing=Fal
                 # Print a traceback when explicitly requested (or in verbose mode).
                 if verbose or os.environ.get('FCLPY_LOAD_TRACEBACK') == '1':
                     traceback.print_exc()
-        
+        # After loading, restore previous package if we changed it
+        try:
+            if old_pkg is None:
+                # Reset to previous (None) to preserve caller state
+                import fclpy.state as state
+                state.current_package = None
+        except Exception:
+            pass
         # Final timing report
         if verbose or timing:
             elapsed = time.time() - start_time

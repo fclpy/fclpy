@@ -16,11 +16,54 @@ def defclass(name, direct_superclasses=None, slots=None, **options):
     - Simple inheritance (single parent)
     - Documentation
     """
+    # Coerce Lisp-style list arguments (NIL or cons lists) into Python lists
+    def _to_py_list(x):
+        # NIL -> []
+        if x is None or x == lisptype.NIL:
+            return []
+        # Handle lispCons
+        if hasattr(x, 'car') and hasattr(x, 'cdr'):
+            out = []
+            cur = x
+            while cur is not None and cur != lisptype.NIL:
+                out.append(cur.car)
+                cur = cur.cdr
+            return out
+        # Already a Python sequence
+        if isinstance(x, (list, tuple)):
+            return list(x)
+        # Single element
+        return [x]
+
     if direct_superclasses is None:
         direct_superclasses = []
+    else:
+        direct_superclasses = _to_py_list(direct_superclasses)
+
     if slots is None:
         slots = []
+    else:
+        slots = _to_py_list(slots)
     
+    # Parse direct_superclasses into class objects
+    parsed_superclasses = []
+    for sc in direct_superclasses:
+        # If given as a symbol, look up the class by name
+        if isinstance(sc, lisptype.LispSymbol):
+            found = classes.find_class(sc.name)
+            if found is None:
+                raise NameError(f"Superclass not found: {sc.name}")
+            parsed_superclasses.append(found)
+        elif isinstance(sc, classes.LispClass):
+            parsed_superclasses.append(sc)
+        elif isinstance(sc, str):
+            found = classes.find_class(sc)
+            if found is None:
+                raise NameError(f"Superclass not found: {sc}")
+            parsed_superclasses.append(found)
+        else:
+            raise TypeError(f"Invalid superclass spec: {sc}")
+
     # Parse slot specifications into SlotDefinition objects
     slot_defs = []
     for slot_spec in slots:
@@ -91,10 +134,10 @@ def defclass(name, direct_superclasses=None, slots=None, **options):
         documentation=documentation
     )
     
-    # Register it
+    # Register it and return the created class object
     lisp_class = classes.register_class(lisp_class)
-    
-    return name  # DEFCLASS returns the class name
+    # Per expected runtime behavior, DEFCLASS returns the class name symbol
+    return name
 
 
 @_registry.cl_function('MAKE-INSTANCE')

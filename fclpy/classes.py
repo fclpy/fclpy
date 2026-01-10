@@ -203,40 +203,7 @@ def defclass(
     if slot_specs is None:
         slot_specs = []
     
-    # Parse slot specifications
-    slots = []
-    for spec in slot_specs:
-        if isinstance(spec, LispSymbol):
-            # Simple slot name
-            slot = SlotDefinition(name=spec)
-        elif isinstance(spec, dict):
-            # Slot with options
-            slot_name = spec.get('name')
-            if not slot_name:
-                raise ValueError("Slot spec must have a 'name'")
-            
-            slot = SlotDefinition(
-                name=slot_name,
-                type_spec=spec.get('type'),
-                initform=spec.get('initform'),
-                initarg=spec.get('initarg'),
-                allocation=spec.get('allocation', 'instance'),
-                documentation=spec.get('documentation')
-            )
-        else:
-            raise TypeError(f"Invalid slot spec: {spec}")
-        
-        slots.append(slot)
-    
-    # Create and register the class
-    cls = make_class(
-        name=name,
-        direct_superclasses=direct_superclasses,
-        direct_slots=slots,
-        documentation=documentation
-    )
-    
-    return register_class(cls)
+    raise NotImplementedError("Use the runtime DEFCLASS implementation in fclpy.lispfunc.classes")
 
 
 def make_instance(

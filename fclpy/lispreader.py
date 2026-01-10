@@ -165,6 +165,15 @@ class LispReader():
         # Restore escaped colons in the token before interning
         token_restored = token.replace('\x00', ':')
         name_upper = token_restored.upper()
+
+        # Special-case the canonical Lisp booleans/empty-list: NIL and T
+        # In Common Lisp, NIL is both the symbol and the empty list; the
+        # reader should return the canonical NIL object rather than a
+        # fresh symbol. Similarly, T should return the global T symbol.
+        if name_upper == 'NIL':
+            return lisptype.NIL
+        if name_upper == 'T':
+            return lisptype.T
         
         # First check if symbol exists in current package
         sym, status = current_pkg.find_symbol(name_upper)
