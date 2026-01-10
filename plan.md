@@ -98,6 +98,30 @@ fclpy is a Python implementation of Common Lisp. The goal is to achieve ANSI Com
 - ✅ DEF-READTABLE-CASE-TEST error **eliminated** — local macros now expand correctly
 - Error count: 97 → 96 total errors (both fixes combined)
 
+---
+
+### ✅ Fixed: `DEFSETF` Special Form (Jan 10)
+
+**Original symptom**: Loader reported multiple errors like: `[1x] Not a function: N: Not implemented | expr=(DEFSETF DEFSETF.4-ACCESSOR (N SEQ) (VAL) ...`
+
+**Root cause**: `DEFSETF` was registered as a regular function, causing its arguments to be evaluated. DEFSETF has two forms, and both require unevaluated symbol/list arguments:
+- Short form: `(DEFSETF access-fn update-fn [documentation])`
+- Long form: `(DEFSETF access-fn lambda-list (store-vars) [decl] [doc] body...)`
+
+**Solution implemented**:
+1. **Unregistered DEFSETF as function** in `misc_macros.py`.
+2. **Registered DEFSETF as a special form** in `evaluation_special_registrations.py`.
+3. **Implemented DEFSETF handler** in `evaluation_core.py`:
+   - Detects short vs long form based on second argument type
+   - Short form: stores update-fn symbol and optional docstring
+   - Long form: stores lambda-list, store-vars, declarations, body, and captures lexical environment
+   - Stores setf expanders in `global_env.setf_expanders` dict for later use by SETF
+   - Returns access-fn symbol as specified by ANSI CL
+
+**Result**:
+- ✅ All "Not a function" errors **eliminated** (N, Y, ACCESSOR-5-1-2-6)
+- Error count: 96 → 92 total errors
+
 ### Fixes Completed This Session
 - ✅ Loader diagnostics + gclload1 regression kept clean (0 errors)
 - ✅ Environment lookup caching (gclload2 performance)

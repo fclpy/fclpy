@@ -159,9 +159,10 @@ def symbol_macrolet(definitions, *body):
     return result
 
 
-@_registry.cl_function('DEFINE-COMPILER-MACRO')
+## `DEFINE-COMPILER-MACRO` is a special form handled by the evaluator;
+## do not register it as a regular function here.
 def define_compiler_macro(name, lambda_list, *body):
-    """Define compiler macro (stub)."""
+    """Define compiler macro (stub kept for reference)."""
     return name
 
 

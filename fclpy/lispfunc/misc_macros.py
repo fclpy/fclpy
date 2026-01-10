@@ -976,9 +976,10 @@ def defstruct(name_and_options, *slots):
     return struct_name
 
 
-@_registry.cl_function('DEFTYPE')
+## `DEFTYPE` is a special form handled by the evaluator;
+## do not register it as a regular function here.
 def deftype(name, lambda_list, *body):
-    """Define type."""
+    """Define type (stub kept for reference)."""
     return name
 
 

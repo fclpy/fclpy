@@ -618,6 +618,84 @@ def eval(form, env=None):
                 
                 # Return the access-fn symbol as specified by ANSI CL
                 return access_fn
+            elif operator.name == 'DEFINE-COMPILER-MACRO':
+                # (DEFINE-COMPILER-MACRO name lambda-list &body body)
+                # Arguments should NOT be evaluated - just return the name
+                args = cdr(form)
+                if args is None or args == lisptype.NIL:
+                    raise lisptype.LispError("DEFINE-COMPILER-MACRO requires a name")
+                
+                name = car(args)
+                # Store compiler macro info if needed (stub for now)
+                # Return the name symbol as specified by ANSI CL
+                return name
+            elif operator.name == 'DEFINE-CONDITION':
+                # (DEFINE-CONDITION name parent-types slot-specs &rest options)
+                # Arguments should NOT be evaluated - the name is a symbol
+                args = cdr(form)
+                if args is None or args == lisptype.NIL:
+                    raise lisptype.LispError("DEFINE-CONDITION requires a name")
+                
+                name = car(args)
+                if not isinstance(name, lisptype.LispSymbol):
+                    raise lisptype.LispError("DEFINE-CONDITION: name must be a symbol")
+                
+                # Get parent types and slot specs (unevaluated)
+                rest = cdr(args)
+                parent_types = car(rest) if _consp_internal(rest) else lisptype.NIL
+                rest2 = cdr(rest) if _consp_internal(rest) else lisptype.NIL
+                slot_specs = car(rest2) if _consp_internal(rest2) else lisptype.NIL
+                
+                # Get or create the global conditions storage
+                global_env = env
+                while global_env.parent is not None:
+                    global_env = global_env.parent
+                
+                if not hasattr(global_env, 'conditions'):
+                    global_env.conditions = {}
+                
+                # Store condition definition
+                global_env.conditions[name.name] = {
+                    'name': name,
+                    'parent_types': parent_types,
+                    'slot_specs': slot_specs
+                }
+                
+                # Return the name symbol
+                return name
+            elif operator.name == 'DEFTYPE':
+                # (DEFTYPE name lambda-list &body body)
+                # Arguments should NOT be evaluated - the name is a symbol
+                args = cdr(form)
+                if args is None or args == lisptype.NIL:
+                    raise lisptype.LispError("DEFTYPE requires a name")
+                
+                name = car(args)
+                if not isinstance(name, lisptype.LispSymbol):
+                    raise lisptype.LispError("DEFTYPE: name must be a symbol")
+                
+                rest = cdr(args)
+                lambda_list = car(rest) if _consp_internal(rest) else lisptype.NIL
+                body = cdr(rest) if _consp_internal(rest) else lisptype.NIL
+                
+                # Get or create the global types storage
+                global_env = env
+                while global_env.parent is not None:
+                    global_env = global_env.parent
+                
+                if not hasattr(global_env, 'user_types'):
+                    global_env.user_types = {}
+                
+                # Store type definition
+                global_env.user_types[name.name] = {
+                    'name': name,
+                    'lambda_list': lambda_list,
+                    'body': body,
+                    'env': env  # Capture lexical environment
+                }
+                
+                # Return the name symbol
+                return name
             elif operator.name == 'DEFPACKAGE':
                 # DEFPACKAGE is a macro in Common Lisp - option clauses must not be evaluated.
                 # Example: (DEFPACKAGE 'FOO (:USE 'CL) (:INTERN 'A 'B) (:EXPORT 'A))

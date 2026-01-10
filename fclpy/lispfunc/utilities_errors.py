@@ -5,9 +5,10 @@ from fclpy.lispfunc import registry as _registry
 
 
 # --- Condition definition and handling ---
-@_registry.cl_function('DEFINE-CONDITION')
+## `DEFINE-CONDITION` is a special form handled by the evaluator;
+## do not register it as a regular function here.
 def define_condition(name, parent_types, slot_specs, *options):
-    """Define condition type."""
+    """Define condition type (stub kept for reference)."""
     return name
 
 

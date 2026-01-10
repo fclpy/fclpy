@@ -279,6 +279,24 @@ def special_defsetf(*args):
     raise lisptype.LispNotImplementedError('DEFSETF (evaluated in evaluator)')
 
 
+@_registry.cl_special('DEFINE-COMPILER-MACRO')
+def special_define_compiler_macro(*args):
+    """DEFINE-COMPILER-MACRO special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('DEFINE-COMPILER-MACRO (evaluated in evaluator)')
+
+
+@_registry.cl_special('DEFINE-CONDITION')
+def special_define_condition(*args):
+    """DEFINE-CONDITION special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('DEFINE-CONDITION (evaluated in evaluator)')
+
+
+@_registry.cl_special('DEFTYPE')
+def special_deftype(*args):
+    """DEFTYPE special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('DEFTYPE (evaluated in evaluator)')
+
+
 @_registry.cl_special('MACROEXPAND-1')
 def special_macroexpand_1(*args):
     """MACROEXPAND-1 special form (handled by evaluator)."""
