@@ -565,21 +565,36 @@ class Tokenizer:
     
     def _read_character(self, start_line: int, start_col: int) -> Optional[Token]:
         """Read a character literal #\\X."""
+        # Build a robust character literal token. Ensure there is at least
+        # one character after the backslash and reject malformed forms
+        # so the reader doesn't receive an incomplete "#\\" value.
         char_str = "#"
-        # Consume the backslash and add it to the token value
-        if self._peek() == '\\':
-            char_str += self._advance()  # Add the backslash
-        else:
-            # If no backslash, it's malformed
+
+        # Expect a backslash next
+        if self._peek() != '\\':
             raise ValueError(f"Expected backslash after # at line {start_line}, col {start_col}")
-        
-        char_str += self._advance()  # First character after backslash
-        
-        # Check for named characters (like Space, Newline, etc.)
-        if self._peek() and self._peek().isalpha():
+
+        # Consume backslash
+        char_str += self._advance()
+
+        # Next character must exist
+        next_ch = self._peek()
+        if not next_ch:
+            raise ValueError(f"Unexpected EOF after #\\ at line {start_line}, col {start_col}")
+
+        # If it's alphabetic, read a named character (e.g. Space, Newline)
+        if next_ch.isalpha():
+            # consume first alpha
+            char_str += self._advance()
             while self._peek() and self._peek().isalpha():
                 char_str += self._advance()
-        
+        else:
+            # Single-character literal (e.g. #\\A, #\\|)
+            # Do not accept whitespace or delimiter as the character
+            if next_ch.isspace():
+                raise ValueError(f"Malformed character literal (whitespace) at line {start_line}, col {start_col}")
+            char_str += self._advance()
+
         return Token(TokenType.CHARACTER, char_str, start_line, start_col)
     
     def _read_comment(self):

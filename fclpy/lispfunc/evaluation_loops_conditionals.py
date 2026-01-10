@@ -1257,10 +1257,9 @@ def eval_loop(form, env):
         if kind == 'for-across':
             seq = driver['_seq']
             idx = driver['_idx']
-            if isinstance(seq, str):
-                _bind_varspec(loop_env, var, lisptype.Character(seq[idx]))
-            else:
-                _bind_varspec(loop_env, var, seq[idx])
+            # Return plain characters (strings) for string sequences.
+            # The rest of the system treats characters as single-char strings.
+            _bind_varspec(loop_env, var, seq[idx])
             return
         if kind in ('for-range', 'for-below'):
             _bind_varspec(loop_env, var, driver['_cur'])
@@ -1422,10 +1421,11 @@ def eval_loop(form, env):
         
         # Handle different sequence types
         if isinstance(seq, str):
-            # String - iterate over characters
+            # String - iterate over characters as plain strings (not Character objects).
+            # The rest of the system treats characters as single-char strings.
             for char in seq:
                 check_loop_timeout()
-                _bind_varspec(loop_env, iteration_var, lisptype.Character(char))
+                _bind_varspec(loop_env, iteration_var, char)
                 bind_aux(loop_env)
                 execute_iteration_body(loop_env)
                 if return_triggered:

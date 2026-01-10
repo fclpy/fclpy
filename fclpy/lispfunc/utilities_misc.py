@@ -98,6 +98,8 @@ from .misc_packages import (
     macroexpand_1,
 )
 
+from .classes import defclass
+
 from .misc_macros import (
     with_accessors,
     with_compilation_unit,
@@ -171,7 +173,6 @@ from .misc_macros import (
     with_package_iterator,
     declaim,
     declare,
-    defclass,
     defconstant,
     defgeneric,
     defpackage,

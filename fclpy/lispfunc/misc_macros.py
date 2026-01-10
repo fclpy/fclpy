@@ -121,6 +121,7 @@ def load(filespec, verbose=None, print_p=None, if_does_not_exist=None,
         filespec: Path to file (string or pathname)
         verbose: If true, print loading messages
         print_p: If true, print values of evaluated forms
+
         if_does_not_exist: :ERROR (default), :LOAD (try anyway), or NIL (return NIL)
         external_format: Character encoding (not fully supported)
     
@@ -731,12 +732,6 @@ def declaim(*declarations):
 def declare(*declarations):
     """Local declaration."""
     return lisptype.NIL
-
-
-@_registry.cl_function('DEFCLASS')
-def defclass(name, superclasses, slots, *options):
-    """Define class."""
-    return name
 
 
 @_registry.cl_function('DEFCONSTANT')
