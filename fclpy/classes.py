@@ -179,33 +179,6 @@ def make_class(
     return cls
 
 
-def defclass(
-    name: LispSymbol,
-    direct_superclasses: Optional[List[LispClass]] = None,
-    slot_specs: Optional[List[Any]] = None,
-    documentation: Optional[str] = None
-) -> LispClass:
-    """DEFCLASS function: define and register a new class.
-    
-    This is a simplified version that handles basic slot definitions.
-    
-    Args:
-        name: Symbol naming the class
-        direct_superclasses: List of parent classes
-        slot_specs: List of slot specifications (each can be a symbol or dict)
-        documentation: Documentation string
-    
-    Returns:
-        The created and registered LispClass object
-    """
-    if direct_superclasses is None:
-        direct_superclasses = []
-    if slot_specs is None:
-        slot_specs = []
-    
-    raise NotImplementedError("Use the runtime DEFCLASS implementation in fclpy.lispfunc.classes")
-
-
 def make_instance(
     class_name: str,
     **initargs

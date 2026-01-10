@@ -781,7 +781,7 @@ def eval_loop(form, env):
     
     conditionals = []  # list of ('when'/'unless', test_form)
     body_forms = []
-    accumulation = None  # ('collect'/'append'/'sum'/'count', form)
+    accumulation = None  # ('collect'/'append'/'sum'/'count'/'always'/'thereis', form)
     accumulation_conditionals = []  # conditionals that apply to accumulation
     finally_forms = []
     return_form = None  # RETURN clause form to evaluate during loop
@@ -800,6 +800,7 @@ def eval_loop(form, env):
             clause_stop = ('FOR', 'WHILE', 'UNTIL', 'REPEAT', 'DO', 'DOING',
                            'COLLECT', 'COLLECTING', 'APPEND', 'APPENDING',
                            'NCONC', 'NCONCING', 'SUM', 'SUMMING', 'COUNT', 'COUNTING',
+                           'ALWAYS', 'THEREIS',
                            'WHEN', 'UNLESS', 'IF', 'RETURN', 'FINALLY')
 
             # Parse the FOR clause into either a driver (IN/ON/ACROSS/FROM...) or an aux binding (=
@@ -954,6 +955,7 @@ def eval_loop(form, env):
                 if fname in ('FOR', 'WHILE', 'UNTIL', 'REPEAT', 'DO', 'DOING',
                              'COLLECT', 'COLLECTING', 'APPEND', 'APPENDING',
                              'NCONC', 'NCONCING', 'SUM', 'SUMMING', 'COUNT', 'COUNTING',
+                             'ALWAYS', 'THEREIS',
                              'WHEN', 'UNLESS', 'IF', 'RETURN', 'FINALLY'):
                     break
                 body_forms.append(f)
@@ -988,6 +990,20 @@ def eval_loop(form, env):
             if not body_forms:
                 accumulation_conditionals = list(conditionals)
             accumulation = ('count', forms[i+1])
+            i += 2
+            
+        elif name == 'ALWAYS':
+            # ALWAYS test-form - returns T if test is true for all iterations, NIL otherwise
+            if not body_forms:
+                accumulation_conditionals = list(conditionals)
+            accumulation = ('always', forms[i+1])
+            i += 2
+            
+        elif name == 'THEREIS':
+            # THEREIS test-form - returns the test result if true for any iteration, NIL otherwise
+            if not body_forms:
+                accumulation_conditionals = list(conditionals)
+            accumulation = ('thereis', forms[i+1])
             i += 2
             
         elif name == 'RETURN':
@@ -1031,6 +1047,8 @@ def eval_loop(form, env):
     accumulated = []
     sum_result = 0
     count_result = 0
+    always_failed = False  # Track if ALWAYS test failed
+    thereis_result = None  # Track result from THEREIS test
     return_triggered = False  # Flag for when RETURN is executed
 
     aux_first_iter = True
@@ -1067,7 +1085,7 @@ def eval_loop(form, env):
     
     def execute_iteration_body(loop_env):
         """Execute one iteration of the loop body."""
-        nonlocal result, accumulated, sum_result, count_result, return_triggered
+        nonlocal result, accumulated, sum_result, count_result, always_failed, thereis_result, return_triggered
         
         # Check for RETURN form and evaluate it if present
         if return_form is not None:
@@ -1107,6 +1125,18 @@ def eval_loop(form, env):
             elif acc_type == 'count':
                 if lisptype.is_truthy(acc_value):
                     count_result += 1
+            elif acc_type == 'always':
+                # ALWAYS: test form should be true for all iterations
+                # If test is false for any iteration, set always_failed flag
+                if not lisptype.is_truthy(acc_value):
+                    always_failed = True
+                    return_triggered = True  # Exit loop immediately
+            elif acc_type == 'thereis':
+                # THEREIS: return the value if it's true (non-nil/non-false)
+                if lisptype.is_truthy(acc_value):
+                    thereis_result = acc_value
+                    return_triggered = True  # Exit loop immediately
+
     
     # Main loop execution with timeout warning
     loop_start_time = time.time()
@@ -1499,6 +1529,18 @@ def eval_loop(form, env):
             return sum_result
         elif acc_type == 'count':
             return count_result
+        elif acc_type == 'always':
+            # ALWAYS returns T if test was true for all iterations (including vacuous truth)
+            # Returns NIL if test failed for any iteration
+            return lisptype.NIL if always_failed else lisptype.T
+        elif acc_type == 'thereis':
+            # THEREIS returns the value if true for any iteration, otherwise NIL
+            return thereis_result if thereis_result is not None else lisptype.NIL
+    
+    # Ensure we always return a Lisp value, never None
+    # If result is still None (no body executed, no return form), return NIL
+    if result is None:
+        return lisptype.NIL
     
     return result
 

@@ -369,6 +369,29 @@ def eval_defmacro(form, env):
     def macro_callable(*call_args):
         # Create a new environment extending the definition environment
         macro_env = lisptype.Environment(parent=env)
+
+        # Normalize NIL symbol arguments to the canonical NIL object so
+        # Lisp predicates (LISTP, NULL, etc.) behave correctly inside macros.
+        new_args = []
+        for a in call_args:
+            if isinstance(a, lisptype.LispSymbol) and a.name.upper() == 'NIL':
+                new_args.append(lisptype.NIL)
+            else:
+                new_args.append(a)
+        call_args = tuple(new_args)
+
+        # Debugging: for the problematic macro, print detailed arg info
+        try:
+            if isinstance(macro_name, lisptype.LispSymbol) and macro_name.name == 'DEFCLASS-WITH-TESTS':
+                try:
+                    print('[DEBUG] MACRO CALL ARGS for DEFCLASS-WITH-TESTS:')
+                    for i, a in enumerate(call_args):
+                        is_nil = (a is lisptype.NIL)
+                        print(f'  arg[{i}]: repr={a!r} type={type(a)} is_nil={is_nil} is_none={a is None}')
+                except Exception:
+                    pass
+        except Exception:
+            pass
         
         arg_idx = 0
 
@@ -482,6 +505,29 @@ def eval_defmacro(form, env):
         if not _consp_internal(actual_body):
             return lisptype.NIL
 
+        # Debug: for DEFCLASS-WITH-TESTS, dump the initial parameter bindings
+        try:
+            if isinstance(macro_name, lisptype.LispSymbol) and macro_name.name == 'DEFCLASS-WITH-TESTS':
+                try:
+                    reqs = parsed_params.get('required', [])
+                    print('[DEBUG] Macro parameter bindings (post-binding):')
+                    for p in reqs:
+                        try:
+                            val = macro_env.find_variable(p)
+                        except Exception:
+                            val = '<unbound>'
+                        print(f'  {p.name} = {val!r} (type={type(val)})')
+                    if parsed_params.get('rest'):
+                        rest_sym = parsed_params.get('rest')
+                        try:
+                            print(f'  &rest {rest_sym.name} = {macro_env.find_variable(rest_sym)!r}')
+                        except Exception:
+                            print(f'  &rest {rest_sym.name} = <unbound>')
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
         # Evaluate body forms in macro environment, return last result
         result = lisptype.NIL
         cur_body = actual_body
@@ -526,7 +572,6 @@ def eval_defmacro(form, env):
         if not hasattr(macro_name, 'plist'):
             macro_name.plist = {}
         macro_name.plist['DOCUMENTATION'] = docstring
-    
     return macro_name
 
 
