@@ -242,6 +242,12 @@ def eval(form, env=None):
     
     # Symbols - look up in environment
     if isinstance(form, lisptype.LispSymbol):
+        # Check for symbol-macros first (SYMBOL-MACROLET)
+        symbol_macro_expansion = env.get_symbol_macro(form)
+        if symbol_macro_expansion is not None:
+            # Expand the symbol-macro and evaluate the result
+            return eval(symbol_macro_expansion, env)
+        
         # Check variable bindings first - use has_variable to handle None values
         if env.has_variable(form):
             return env.find_variable(form)
@@ -445,6 +451,42 @@ def eval(form, env=None):
                 # Don't evaluate - pass the symbol/keyword directly
                 from .utilities_symbols import in_package
                 return in_package(name_arg)
+            elif operator.name == 'SYMBOL-MACROLET':
+                # (SYMBOL-MACROLET ((sym1 expansion1) (sym2 expansion2) ...) body-form...)
+                # Create symbol-macro bindings in a new environment and evaluate body
+                args = cdr(form)
+                if args is None or args == lisptype.NIL:
+                    raise lisptype.LispError("SYMBOL-MACROLET requires bindings")
+                
+                bindings_form = car(args)
+                body_forms = cdr(args)
+                
+                # Create a new child environment for the symbol-macrolet scope
+                new_env = lisptype.Environment(parent=env)
+                
+                # Process bindings: ((sym1 expansion1) (sym2 expansion2) ...)
+                if _consp_internal(bindings_form):
+                    binding_list = bindings_form
+                    while _consp_internal(binding_list):
+                        binding = car(binding_list)
+                        if _consp_internal(binding):
+                            sym = car(binding)
+                            expansion = car(cdr(binding)) if _consp_internal(cdr(binding)) else lisptype.NIL
+                            if isinstance(sym, lisptype.LispSymbol):
+                                # Store symbol-macro as a special binding
+                                # We'll mark it with a wrapper so lookup knows it's a symbol-macro
+                                new_env.add_symbol_macro(sym, expansion)
+                        binding_list = cdr(binding_list)
+                
+                # Evaluate body forms in the new environment with symbol-macros active
+                result = lisptype.NIL
+                body = body_forms
+                while _consp_internal(body):
+                    form_in_body = car(body)
+                    result = eval(form_in_body, new_env)
+                    body = cdr(body)
+                
+                return result
             elif operator.name == 'DEFPACKAGE':
                 # DEFPACKAGE is a macro in Common Lisp - option clauses must not be evaluated.
                 # Example: (DEFPACKAGE 'FOO (:USE 'CL) (:INTERN 'A 'B) (:EXPORT 'A))

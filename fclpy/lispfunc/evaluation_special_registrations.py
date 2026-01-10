@@ -261,6 +261,11 @@ def special_quasiquote(*args):
     """QUASIQUOTE special form (handled by evaluator)."""
     raise lisptype.LispNotImplementedError('QUASIQUOTE (evaluated in evaluator)')
 
+@_registry.cl_special('SYMBOL-MACROLET')
+def special_symbol_macrolet(*args):
+    """SYMBOL-MACROLET special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('SYMBOL-MACROLET (evaluated in evaluator)')
+
 
 @_registry.cl_special('MACROEXPAND-1')
 def special_macroexpand_1(*args):

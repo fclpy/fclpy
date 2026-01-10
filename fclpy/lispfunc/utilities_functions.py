@@ -146,9 +146,11 @@ def macrolet(definitions, *body):
     return result
 
 
-@_registry.cl_function('SYMBOL-MACROLET')
+## `SYMBOL-MACROLET` is a special form handled by the evaluator; do not
+## register it as a regular function here. The evaluator should provide
+## the actual runtime semantics (or raise NotImplemented until implemented).
 def symbol_macrolet(definitions, *body):
-    """Symbol macros (stub)."""
+    """Symbol macros (stub kept for reference)."""
     result = None
     for form in body:
         result = form

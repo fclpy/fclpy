@@ -30,6 +30,7 @@ class Environment(lispT):
         self.parent = parent
         self.bindings = None  # Singly-linked list of Binding objects
         self.function_bindings = None  # Singly-linked list of FunctionBinding objects
+        self.symbol_macros = {}  # Dict of symbol-macro bindings: symbol.name -> expansion
 
         # Fast name-based caches to speed up legacy APIs (find_func/find_variable).
         # These legacy lookups compare by symbol.name, not by symbol identity.
@@ -225,6 +226,37 @@ class Environment(lispT):
         # Create new binding if not found
         self.add_variable(sym, value)
         return value
+    
+    def add_symbol_macro(self, symbol, expansion):
+        """Add a symbol-macro binding (for SYMBOL-MACROLET).
+        
+        Symbol macros are replaced with their expansion whenever the symbol
+        is evaluated or used in a form (except in QUOTE contexts).
+        
+        Args:
+            symbol: LispSymbol to bind as a symbol-macro
+            expansion: The expansion form (unevaluated)
+        """
+        if isinstance(symbol, LispSymbol):
+            self.symbol_macros[symbol.name] = expansion
+    
+    def get_symbol_macro(self, symbol):
+        """Get a symbol-macro expansion if it exists.
+        
+        Looks up the symbol-macro in this environment and parent environments.
+        
+        Args:
+            symbol: LispSymbol to look up
+            
+        Returns:
+            The expansion form if a symbol-macro binding exists, else None
+        """
+        if isinstance(symbol, LispSymbol):
+            if symbol.name in self.symbol_macros:
+                return self.symbol_macros[symbol.name]
+            if self.parent:
+                return self.parent.get_symbol_macro(symbol)
+        return None
     
     def read_module(self, mod):
         """Legacy: read functions from a module."""

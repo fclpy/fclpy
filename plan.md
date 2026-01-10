@@ -47,6 +47,20 @@ fclpy is a Python implementation of Common Lisp. The goal is to achieve ANSI Com
 - Some remaining LOOP edge-cases (now down to 2 LOOP-category loader errors)
 - Various Python type errors in edge cases (e.g., cons/list sequence APIs)
 
+### Next Load Error: `Not a function: LOOKUP-TABLE`
+
+**Symptom**: Loader reports: `[1x] Not a function: LOOKUP-TABLE: Not implemented | expr=(SYMBOL-MACROLET ((LOOKUP-T ...` (see `ansi_load_errors.txt`).
+
+**Impact**: Blocks loading of test files that use `symbol-macrolet`/`lookup-table` macro patterns.
+
+**Proposed next steps**:
+- **Investigate**: Find where `SYMBOL-MACROLET` and lookup-table expansion are handled (reader/loader/compiler).
+- **Implement**: Add `LOOKUP-TABLE` expansion/support so instances are not treated as function calls. Likely implement as a macro expansion or create a symbol-macro binding handler in the evaluator/loader.
+- **Test**: Re-run `scripts/ansi_load_errors.py` and targeted loader for failing files to confirm the error is resolved.
+- **Document**: Record the change and the failing forms in `ansi_load_errors.txt` and update this `plan.md`.
+
+Add to TODOs: implement LOOKUP-TABLE handling and verify load passes.
+
 ### Fixes Completed This Session
 - ✅ Loader diagnostics + gclload1 regression kept clean (0 errors)
 - ✅ Environment lookup caching (gclload2 performance)
