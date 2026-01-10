@@ -1380,7 +1380,7 @@ def eval_defclass(form, env):
     
     options_rest = cdr(slots_rest) if _consp_internal(slots_rest) else lisptype.NIL
     
-    # Parse slot definitions
+    # Parse slot definitions - convert to format expected by defclass function
     slots_list = []
     if slots_form is not None and slots_form != lisptype.NIL:
         current = slots_form
@@ -1388,30 +1388,18 @@ def eval_defclass(form, env):
             slot_spec = car(current)
             # Slot spec can be just a symbol or a list
             if isinstance(slot_spec, lisptype.LispSymbol):
-                slots_list.append({'name': slot_spec.name})
+                # Simple slot: just a symbol
+                slots_list.append(slot_spec)
             elif _consp_internal(slot_spec):
-                slot_name = car(slot_spec)
-                if isinstance(slot_name, lisptype.LispSymbol):
-                    slot_dict = {'name': slot_name.name}
-                    # Parse slot options like :initarg, :initform, etc.
-                    slot_opts = cdr(slot_spec)
-                    while _consp_internal(slot_opts):
-                        opt_key = car(slot_opts)
-                        slot_opts = cdr(slot_opts)
-                        if _consp_internal(slot_opts):
-                            opt_value = car(slot_opts)
-                            slot_opts = cdr(slot_opts)
-                            if isinstance(opt_key, lisptype.lispKeyword):
-                                opt_name = opt_key.name.lower()
-                                if opt_name == 'initarg':
-                                    slot_dict['initarg'] = opt_value
-                                elif opt_name == 'initform':
-                                    slot_dict['initform'] = opt_value
-                                elif opt_name == 'reader':
-                                    slot_dict['reader'] = opt_value
-                                elif opt_name == 'writer':
-                                    slot_dict['writer'] = opt_value
-                    slots_list.append(slot_dict)
+                # Complex slot: (name :key1 val1 :key2 val2 ...)
+                # Convert to list format: [name_symbol, :key1, val1, :key2, val2, ...]
+                slot_list = []
+                slot_spec_current = slot_spec
+                while _consp_internal(slot_spec_current):
+                    element = car(slot_spec_current)
+                    slot_list.append(element)
+                    slot_spec_current = cdr(slot_spec_current)
+                slots_list.append(slot_list)
             current = cdr(current)
     
     # Parse options
