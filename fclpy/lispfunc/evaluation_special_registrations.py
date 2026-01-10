@@ -267,6 +267,12 @@ def special_symbol_macrolet(*args):
     raise lisptype.LispNotImplementedError('SYMBOL-MACROLET (evaluated in evaluator)')
 
 
+@_registry.cl_special('MACROLET')
+def special_macrolet(*args):
+    """MACROLET special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('MACROLET (evaluated in evaluator)')
+
+
 @_registry.cl_special('MACROEXPAND-1')
 def special_macroexpand_1(*args):
     """MACROEXPAND-1 special form (handled by evaluator)."""

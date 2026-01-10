@@ -137,9 +137,11 @@ def compiler_macro_function(name, environment=None):
     return None
 
 
-@_registry.cl_function('MACROLET')
+## `MACROLET` is a special form handled by the evaluator; do not
+## register it as a regular function here. The evaluator creates local
+## macro bindings and evaluates body forms with those macros in scope.
 def macrolet(definitions, *body):
-    """Local macros (stub)."""
+    """Local macros (stub kept for reference)."""
     result = None
     for form in body:
         result = form

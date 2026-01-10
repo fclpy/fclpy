@@ -348,25 +348,23 @@ def eval_defun(form, env):
     return func_name
 
 
-def eval_defmacro(form, env):
-    """Evaluate DEFMACRO special form: register a macro in the environment.
-
-    This creates a Python callable that evaluates the macro body in an
-    environment where the parameters are bound to the arguments. This allows
-    QUASIQUOTE/UNQUOTE to work correctly in macro templates.
-    """
-    from .evaluation_core import eval
+def _create_macro_function(macro_name, lambda_list, body, env):
+    """Create a macro function callable from lambda-list and body.
     
-    args = cdr(form)
-    if not _consp_internal(args) or not _consp_internal(cdr(args)):
-        raise lisptype.LispNotImplementedError("DEFMACRO requires a name, lambda-list and body")
-
-    macro_name = car(args)
-    lambda_list = car(cdr(args))
-    body = cdr(cdr(args))
-
-    if not isinstance(macro_name, lisptype.LispSymbol):
-        raise lisptype.LispNotImplementedError("DEFMACRO: macro name must be a symbol")
+    This is used by both DEFMACRO and MACROLET to create macro functions.
+    The resulting function has __is_macro__ = True and captures the defining
+    environment for proper lexical scoping.
+    
+    Args:
+        macro_name: LispSymbol for the macro name (used for debugging)
+        lambda_list: Lisp list of parameter specifications
+        body: Lisp list of body forms
+        env: The environment where the macro is defined (captured for closure)
+    
+    Returns:
+        A callable with __is_macro__ = True
+    """
+    from .evaluation_core import eval, parse_lambda_list
 
     # Extract docstring if present (first form in body can be a string)
     docstring = None
@@ -377,8 +375,7 @@ def eval_defmacro(form, env):
             docstring = first_form
             actual_body = cdr(body)
 
-    # Parse lambda list to handle &optional, &rest, &key, etc.
-    from .evaluation_core import parse_lambda_list
+    # Parse lambda list to handle &optional, &rest, &key, &whole etc.
     parsed_params = parse_lambda_list(lambda_list)
     
     required_params = parsed_params.get('required', [])
@@ -391,8 +388,7 @@ def eval_defmacro(form, env):
         # Create a new environment extending the definition environment
         macro_env = lisptype.Environment(parent=env)
 
-        # Normalize NIL symbol arguments to the canonical NIL object so
-        # Lisp predicates (LISTP, NULL, etc.) behave correctly inside macros.
+        # Normalize NIL symbol arguments to the canonical NIL object
         new_args = []
         for a in call_args:
             if isinstance(a, lisptype.LispSymbol) and a.name.upper() == 'NIL':
@@ -400,24 +396,10 @@ def eval_defmacro(form, env):
             else:
                 new_args.append(a)
         call_args = tuple(new_args)
-
-        # Debugging: for the problematic macro, print detailed arg info
-        try:
-            if isinstance(macro_name, lisptype.LispSymbol) and macro_name.name == 'DEFCLASS-WITH-TESTS':
-                try:
-                    print('[DEBUG] MACRO CALL ARGS for DEFCLASS-WITH-TESTS:')
-                    for i, a in enumerate(call_args):
-                        is_nil = (a is lisptype.NIL)
-                        print(f'  arg[{i}]: repr={a!r} type={type(a)} is_nil={is_nil} is_none={a is None}')
-                except Exception:
-                    pass
-        except Exception:
-            pass
         
         arg_idx = 0
 
-        # If this macro expects a &WHOLE parameter, the caller will pass
-        # the whole form as the first argument; bind it and advance arg index.
+        # Handle &WHOLE parameter
         whole_param = parsed_params.get('whole') if isinstance(parsed_params, dict) else None
         if whole_param is not None:
             if len(call_args) > 0:
@@ -438,14 +420,12 @@ def eval_defmacro(form, env):
         # Bind optional parameters
         for param in optional_params:
             if isinstance(param, lisptype.LispSymbol):
-                # Simple optional (name)
                 if arg_idx < len(call_args):
                     macro_env.add_variable(param, call_args[arg_idx])
                     arg_idx += 1
                 else:
                     macro_env.add_variable(param, lisptype.NIL)
             elif _consp_internal(param):
-                # Optional with default (name default)
                 opt_name = car(param)
                 opt_default = car(cdr(param)) if _consp_internal(cdr(param)) else lisptype.NIL
                 if arg_idx < len(call_args):
@@ -454,11 +434,10 @@ def eval_defmacro(form, env):
                 else:
                     macro_env.add_variable(opt_name, eval(opt_default, macro_env))
         
-        # Bind &rest parameter to remaining arguments as a list
+        # Bind &rest parameter
         if rest_param:
             remaining_args = call_args[arg_idx:]
             if remaining_args:
-                # Convert to Lisp list
                 rest_list = lisptype.NIL
                 for arg in reversed(remaining_args):
                     rest_list = cons(arg, rest_list)
@@ -466,14 +445,12 @@ def eval_defmacro(form, env):
             else:
                 macro_env.add_variable(rest_param, lisptype.NIL)
         
-        # Bind keyword parameters
-        # First, initialize all keyword params to their defaults and supplied-p to NIL
+        # Bind keyword parameters with defaults and supplied-p
         for param_spec in keyword_params:
             if _consp_internal(param_spec):
                 param = car(param_spec)
                 rest = cdr(param_spec)
                 default_form = car(rest) if _consp_internal(rest) else None
-                # Check for supplied-p parameter (third element)
                 rest2 = cdr(rest) if _consp_internal(rest) else None
                 supplied_p = car(rest2) if _consp_internal(rest2) else None
             else:
@@ -481,18 +458,16 @@ def eval_defmacro(form, env):
                 default_form = None
                 supplied_p = None
             
-            # Default value
             if default_form is not None:
                 default_value = eval(default_form, macro_env)
                 macro_env.add_variable(param, default_value)
             else:
                 macro_env.add_variable(param, lisptype.NIL)
             
-            # Initialize supplied-p to NIL (not supplied yet)
             if supplied_p is not None:
                 macro_env.add_variable(supplied_p, lisptype.NIL)
         
-        # Now process actual keyword arguments from the call
+        # Process actual keyword arguments
         keyword_start = arg_idx
         i = keyword_start
         while i < len(call_args) - 1:
@@ -501,7 +476,6 @@ def eval_defmacro(form, env):
             
             if isinstance(key, lisptype.lispKeyword):
                 key_name = key.name.upper()
-                # Find matching parameter
                 for param_spec in keyword_params:
                     if _consp_internal(param_spec):
                         param = car(param_spec)
@@ -514,7 +488,6 @@ def eval_defmacro(form, env):
                     
                     if isinstance(param, lisptype.LispSymbol) and param.name.upper() == key_name:
                         macro_env.add_variable(param, value)
-                        # Set supplied-p to T when keyword is provided
                         if supplied_p is not None:
                             macro_env.add_variable(supplied_p, lisptype.T)
                         break
@@ -526,54 +499,49 @@ def eval_defmacro(form, env):
         if not _consp_internal(actual_body):
             return lisptype.NIL
 
-        # Debug: for DEFCLASS-WITH-TESTS, dump the initial parameter bindings
-        try:
-            if isinstance(macro_name, lisptype.LispSymbol) and macro_name.name == 'DEFCLASS-WITH-TESTS':
-                try:
-                    reqs = parsed_params.get('required', [])
-                    print('[DEBUG] Macro parameter bindings (post-binding):')
-                    for p in reqs:
-                        try:
-                            val = macro_env.find_variable(p)
-                        except Exception:
-                            val = '<unbound>'
-                        print(f'  {p.name} = {val!r} (type={type(val)})')
-                    if parsed_params.get('rest'):
-                        rest_sym = parsed_params.get('rest')
-                        try:
-                            print(f'  &rest {rest_sym.name} = {macro_env.find_variable(rest_sym)!r}')
-                        except Exception:
-                            print(f'  &rest {rest_sym.name} = <unbound>')
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
         # Evaluate body forms in macro environment, return last result
         result = lisptype.NIL
         cur_body = actual_body
-        try:
-            while _consp_internal(cur_body):
-                try:
-                    result = eval(car(cur_body), macro_env)
-                except Exception:
-                    # Log the failing body form and the raw arguments passed
-                    print(f"[DEBUG] MACRO ERROR in {macro_name}: failing_body={car(cur_body)!r} raw_args={call_args!r}")
-                    import traceback
-                    traceback.print_exc()
-                    # Re-raise so higher-level handlers see the same exception
-                    raise
-                cur_body = cdr(cur_body)
-        except Exception:
-            raise
+        while _consp_internal(cur_body):
+            result = eval(car(cur_body), macro_env)
+            cur_body = cdr(cur_body)
 
         return result
 
-    # Mark as macro and register in environment
+    # Mark as macro
     setattr(macro_callable, '__is_macro__', True)
-    # Mark whether this macro expects a &WHOLE parameter so callers can pass it
     if isinstance(parsed_params, dict) and parsed_params.get('whole') is not None:
         setattr(macro_callable, '__expects_whole__', True)
+    
+    # Store docstring if present
+    if docstring and isinstance(macro_name, lisptype.LispSymbol):
+        if not hasattr(macro_name, 'plist'):
+            macro_name.plist = {}
+        macro_name.plist['DOCUMENTATION'] = docstring
+    
+    return macro_callable
+
+
+def eval_defmacro(form, env):
+    """Evaluate DEFMACRO special form: register a macro in the environment.
+
+    This creates a Python callable that evaluates the macro body in an
+    environment where the parameters are bound to the arguments. This allows
+    QUASIQUOTE/UNQUOTE to work correctly in macro templates.
+    """
+    args = cdr(form)
+    if not _consp_internal(args) or not _consp_internal(cdr(args)):
+        raise lisptype.LispNotImplementedError("DEFMACRO requires a name, lambda-list and body")
+
+    macro_name = car(args)
+    lambda_list = car(cdr(args))
+    body = cdr(cdr(args))
+
+    if not isinstance(macro_name, lisptype.LispSymbol):
+        raise lisptype.LispNotImplementedError("DEFMACRO: macro name must be a symbol")
+
+    # Create the macro function using the shared helper
+    macro_callable = _create_macro_function(macro_name, lambda_list, body, env)
     
     # Find the global/root environment for defining the macro
     # DEFMACRO always creates global macro bindings (like DEFUN)
@@ -588,11 +556,6 @@ def eval_defmacro(form, env):
     if env is not global_env:
         env.add_function(macro_name, macro_callable)
     
-    # Store docstring on the macro symbol's property list
-    if docstring:
-        if not hasattr(macro_name, 'plist'):
-            macro_name.plist = {}
-        macro_name.plist['DOCUMENTATION'] = docstring
     return macro_name
 
 

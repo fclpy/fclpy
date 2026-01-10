@@ -47,19 +47,31 @@ fclpy is a Python implementation of Common Lisp. The goal is to achieve ANSI Com
 - Some remaining LOOP edge-cases (now down to 2 LOOP-category loader errors)
 - Various Python type errors in edge cases (e.g., cons/list sequence APIs)
 
-### Next Load Error: `Not a function: LOOKUP-TABLE`
+### ✅ Fixed: `SYMBOL-MACROLET` and Symbol-Macro Expansion (Jan 10)
 
-**Symptom**: Loader reports: `[1x] Not a function: LOOKUP-TABLE: Not implemented | expr=(SYMBOL-MACROLET ((LOOKUP-T ...` (see `ansi_load_errors.txt`).
+**Original symptom**: Loader reported: `[1x] Not a function: LOOKUP-TABLE: Not implemented | expr=(SYMBOL-MACROLET ((LOOKUP-T ...`
 
-**Impact**: Blocks loading of test files that use `symbol-macrolet`/`lookup-table` macro patterns.
+**Root cause**: `SYMBOL-MACROLET` was registered as a regular function instead of being handled as a special form by the evaluator. This prevented proper symbol-macro expansion.
 
-**Proposed next steps**:
-- **Investigate**: Find where `SYMBOL-MACROLET` and lookup-table expansion are handled (reader/loader/compiler).
-- **Implement**: Add `LOOKUP-TABLE` expansion/support so instances are not treated as function calls. Likely implement as a macro expansion or create a symbol-macro binding handler in the evaluator/loader.
-- **Test**: Re-run `scripts/ansi_load_errors.py` and targeted loader for failing files to confirm the error is resolved.
-- **Document**: Record the change and the failing forms in `ansi_load_errors.txt` and update this `plan.md`.
+**Solution implemented**:
+1. **Unregistered SYMBOL-MACROLET as function** in `utilities_functions.py` (left stub for reference).
+2. **Registered SYMBOL-MACROLET as a special form** stub in `evaluation_special_registrations.py` to signal evaluator should handle it.
+3. **Added symbol-macro support to Environment class** (`lisptype_extended.py`):
+   - Added `symbol_macros` dict to store symbol-macro bindings
+   - Added `add_symbol_macro(symbol, expansion)` method
+   - Added `get_symbol_macro(symbol)` method with parent-environment chain lookup
+4. **Implemented SYMBOL-MACROLET handler** in `evaluation_core.py`:
+   - Creates child environment with symbol-macro bindings from form
+   - Evaluates body forms in that environment
+   - Symbol references are expanded before variable/function lookup
+5. **Added symbol-macro expansion to symbol eval** in `evaluation_core.py`:
+   - Check `env.get_symbol_macro(form)` **before** variable lookup
+   - If found, expand and re-evaluate the expansion form
 
-Add to TODOs: implement LOOKUP-TABLE handling and verify load passes.
+**Result**: 
+- ✅ LOOKUP-TABLE error **eliminated** — now properly expanded within SYMBOL-MACROLET scope
+- Error progression now moves to next issue: `DEF-READTABLE-CASE-TEST` (MACROLET not yet implemented)
+- Error count: Still 97 total (different category composition but same count)
 
 ### Fixes Completed This Session
 - ✅ Loader diagnostics + gclload1 regression kept clean (0 errors)

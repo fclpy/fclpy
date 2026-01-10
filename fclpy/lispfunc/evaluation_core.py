@@ -487,6 +487,48 @@ def eval(form, env=None):
                     body = cdr(body)
                 
                 return result
+            elif operator.name == 'MACROLET':
+                # (MACROLET ((name lambda-list . body) ...) body-form...)
+                # Create local macro bindings in a new environment and evaluate body
+                args = cdr(form)
+                if args is None or args == lisptype.NIL:
+                    raise lisptype.LispError("MACROLET requires bindings")
+                
+                bindings_form = car(args)
+                body_forms = cdr(args)
+                
+                # Create a new child environment for the macrolet scope
+                new_env = lisptype.Environment(parent=env)
+                
+                # Process macro bindings: ((name lambda-list . body) ...)
+                if _consp_internal(bindings_form):
+                    binding_list = bindings_form
+                    while _consp_internal(binding_list):
+                        binding = car(binding_list)
+                        if _consp_internal(binding):
+                            macro_name = car(binding)
+                            rest = cdr(binding)
+                            if _consp_internal(rest):
+                                lambda_list = car(rest)
+                                macro_body = cdr(rest)
+                                
+                                if isinstance(macro_name, lisptype.LispSymbol):
+                                    # Create a macro function from the lambda-list and body
+                                    # Similar to DEFMACRO but local to this environment
+                                    from .evaluation_special_forms import _create_macro_function
+                                    macro_func = _create_macro_function(macro_name, lambda_list, macro_body, new_env)
+                                    new_env.add_function(macro_name, macro_func)
+                        binding_list = cdr(binding_list)
+                
+                # Evaluate body forms in the new environment with local macros active
+                result = lisptype.NIL
+                body = body_forms
+                while _consp_internal(body):
+                    form_in_body = car(body)
+                    result = eval(form_in_body, new_env)
+                    body = cdr(body)
+                
+                return result
             elif operator.name == 'DEFPACKAGE':
                 # DEFPACKAGE is a macro in Common Lisp - option clauses must not be evaluated.
                 # Example: (DEFPACKAGE 'FOO (:USE 'CL) (:INTERN 'A 'B) (:EXPORT 'A))
