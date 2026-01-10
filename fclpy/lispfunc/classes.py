@@ -261,6 +261,9 @@ def set_slot_value(value, instance, slot_name):
 @_registry.cl_function('CLASS-NAME')
 def class_name(lisp_class):
     """CLASS-NAME: Get the name of a class."""
+    # Handle T specially - it represents the universal type
+    if isinstance(lisp_class, lisptype.LispSymbol) and lisp_class.name.upper() == 'T':
+        return lisptype.LispSymbol('T')
     if not isinstance(lisp_class, classes.LispClass):
         raise TypeError(f"Expected a class, got {lisp_class}")
     return lisp_class.name
@@ -269,6 +272,9 @@ def class_name(lisp_class):
 @_registry.cl_function('CLASS-DIRECT-SLOTS')
 def class_direct_slots(lisp_class):
     """CLASS-DIRECT-SLOTS: Get direct slots of a class (not inherited)."""
+    # Handle T specially - it has no slots
+    if isinstance(lisp_class, lisptype.LispSymbol) and lisp_class.name.upper() == 'T':
+        return []
     if not isinstance(lisp_class, classes.LispClass):
         raise TypeError(f"Expected a class, got {lisp_class}")
     
@@ -279,6 +285,9 @@ def class_direct_slots(lisp_class):
 @_registry.cl_function('CLASS-SLOTS')
 def class_slots(lisp_class):
     """CLASS-SLOTS: Get all slots of a class (including inherited)."""
+    # Handle T specially - it has no slots
+    if isinstance(lisp_class, lisptype.LispSymbol) and lisp_class.name.upper() == 'T':
+        return []
     if not isinstance(lisp_class, classes.LispClass):
         raise TypeError(f"Expected a class, got {lisp_class}")
     
@@ -290,6 +299,9 @@ def class_slots(lisp_class):
 @_registry.cl_function('CLASS-SUPERCLASSES')
 def class_superclasses(lisp_class):
     """CLASS-SUPERCLASSES: Get direct superclasses of a class."""
+    # Handle T specially - it has no superclasses (it's the root)
+    if isinstance(lisp_class, lisptype.LispSymbol) and lisp_class.name.upper() == 'T':
+        return lisptype.NIL
     if not isinstance(lisp_class, classes.LispClass):
         raise TypeError(f"Expected a class, got {lisp_class}")
     

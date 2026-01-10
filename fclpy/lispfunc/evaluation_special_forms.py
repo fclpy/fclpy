@@ -1528,20 +1528,28 @@ def eval_defgeneric(form, env):
                             # If param_type is a symbol, try to look it up as a class
                             if isinstance(param_type, lisptype.LispSymbol):
                                 class_obj = None
-                                # Check if it's in the classes registry
+                                param_type_name = param_type.name.upper()
+                                
+                                # Handle T specially - it means unspecialized
+                                if param_type_name == 'T':
+                                    specializers.append(None)
+                                    params_for_method.append(param_name)
+                                    spec_current = cdr(spec_current)
+                                    continue
+                                
+                                # Try to find the class in the registry
                                 try:
                                     import fclpy.classes
                                     class_obj = fclpy.classes.find_class(param_type.name)
                                 except Exception:
                                     pass
-                                # If not found and it's T, use None (unspecialized)
-                                if param_type.name.upper() == 'T' and class_obj is None:
-                                    specializers.append(None)
-                                elif class_obj:
+                                
+                                if class_obj:
                                     specializers.append(class_obj)
                                 else:
-                                    # Keep as symbol if not found (for compatibility)
-                                    specializers.append(param_type)
+                                    # Class not found - use None (unspecialized) as fallback
+                                    # This prevents errors when the class isn't in the registry yet
+                                    specializers.append(None)
                             else:
                                 specializers.append(param_type)
                             
