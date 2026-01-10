@@ -270,18 +270,6 @@ def eval(form, env=None):
             # Defensive: if registry lookup fails, ignore and raise below
             pass
         # If not found in either, raise error
-        # Debug: if this is the problematic OPT symbol, print surrounding env info
-        try:
-            if form.name.upper() == 'OPT':
-                try:
-                    print(f"[DEBUG] Unbound variable lookup for OPT in env: {env}")
-                    # Attempt to dump known variable names in this environment
-                    vars_list = list(getattr(env, '_variable_map', {}).keys())
-                    print(f"[DEBUG] env._variable_map keys: {vars_list}")
-                except Exception:
-                    pass
-        except Exception:
-            pass
         raise lisptype.LispNotImplementedError(f"Unbound variable: {form.name}")
     
     # Lists - function calls or special forms
@@ -976,9 +964,9 @@ def eval(form, env=None):
                 def _designator_to_name(x):
                     x = _unquote(x)
                     if isinstance(x, lisptype.lispKeyword):
-                        return x.name
+                        return x.name if hasattr(x, 'name') else str(x)
                     if isinstance(x, lisptype.LispSymbol):
-                        return x.name
+                        return x.name if hasattr(x, 'name') else str(x)
                     if isinstance(x, str):
                         return x
                     return str(x)
@@ -1052,29 +1040,12 @@ def eval(form, env=None):
                 while _consp_internal(current):
                     raw_args.append(car(current))
                     current = cdr(current)
-                # Debugging: log raw args for DEFSTRUCT-WITH-TESTS to inspect binding
                 try:
-                    if operator.name == 'DEFSTRUCT-WITH-TESTS':
-                        try:
-                            print("[DEBUG] MACRO RAW ARGS for DEFSTRUCT-WITH-TESTS:")
-                            for i, a in enumerate(raw_args):
-                                print(f"  arg[{i}]: type={type(a)} repr={a}")
-                        except Exception:
-                            pass
-
                     # If the macro expects the whole form (via &WHOLE), pass it
                     if getattr(func_binding, '__expects_whole__', False):
                         expanded = func_binding(form, *raw_args)
                     else:
                         expanded = func_binding(*raw_args)
-
-                    # Additional debug: show the expansion for DEFSTRUCT-WITH-TESTS
-                    try:
-                        if operator.name == 'DEFSTRUCT-WITH-TESTS':
-                            print("[DEBUG] MACRO EXPANDED for DEFSTRUCT-WITH-TESTS:")
-                            print(repr(expanded))
-                    except Exception:
-                        pass
                 except TypeError:
                     # Defensive fallback: call without whole if signature mismatch
                     expanded = func_binding(*raw_args)
