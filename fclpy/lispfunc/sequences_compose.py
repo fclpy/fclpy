@@ -26,7 +26,7 @@ def length(sequence):
             count += 1
             current = current.cdr
         return count
-    elif isinstance(sequence, (str, list, tuple, AdjustableVector)):
+    elif isinstance(sequence, (str, list, tuple, AdjustableVector, lisptype.LispString)):
         return len(sequence)
     else:
         raise lisptype.LispTypeError(f"LENGTH: {type(sequence).__name__} is not a sequence",

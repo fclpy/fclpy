@@ -182,7 +182,7 @@ class Reader:
             )
         elif token.type == TokenType.STRING:
             self._consume_token()
-            return token.value
+            return lisptype.LispString(token.value)
         elif token.type == TokenType.CHARACTER:
             self._consume_token()
             return parse_character_token(token)

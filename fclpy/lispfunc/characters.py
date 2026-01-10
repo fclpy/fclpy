@@ -338,10 +338,15 @@ def standard_char_p(character):
 @_registry.cl_function('CHAR')
 def char(string, index):
     """Get character at index in string."""
-    if isinstance(string, str) and 0 <= index < len(string):
+    if isinstance(string, lisptype.LispString):
+        if 0 <= index < len(string):
+            return string[index]
+        else:
+            raise lisptype.LispError(f"CHAR: index {index} out of bounds for string of length {len(string)}")
+    elif isinstance(string, str) and 0 <= index < len(string):
         return string[index]
     
-    if not isinstance(string, str):
+    if not isinstance(string, (str, lisptype.LispString)):
         raise lisptype.LispTypeError("CHAR: first argument must be a string",
                                     expected_type="STRING",
                                     actual_value=string)
@@ -357,24 +362,26 @@ def schar(string, index):
 @_registry.cl_function('STRING')
 def string_fn(designator):
     """Convert to string."""
-    if isinstance(designator, str):
-        return designator
+    if isinstance(designator, lisptype.LispString):
+        return designator  # Already a mutable string
+    elif isinstance(designator, str):
+        return lisptype.LispString(designator)
     elif isinstance(designator, (list, tuple)):
-        return ''.join(str(x) for x in designator)
+        return lisptype.LispString(''.join(str(x) for x in designator))
     else:
-        return str(designator)
+        return lisptype.LispString(str(designator))
 
 
 @_registry.cl_function('STRINGP')
 def stringp(object):
     """Test if object is a string."""
-    return lisptype.lisp_bool(isinstance(object, str))
+    return lisptype.lisp_bool(isinstance(object, (str, lisptype.LispString)))
 
 
 @_registry.cl_function('SIMPLE-STRING-P')
 def simple_string_p(object):
     """Test if object is a simple string."""
-    return lisptype.lisp_bool(isinstance(object, str))
+    return lisptype.lisp_bool(isinstance(object, (str, lisptype.LispString)))
 
 
 @_registry.cl_function('MAKE-STRING')
@@ -414,7 +421,7 @@ def make_string(size, initial_element=None, element_type=None):
                                     expected_type="CHARACTER",
                                     actual_value=initial_element)
     
-    return fill_char * size
+    return lisptype.LispString(fill_char * size)
 
 
 @_registry.cl_function('STRING-CAPITALIZE')

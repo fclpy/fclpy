@@ -63,6 +63,12 @@ def special_setq(*args):
     raise lisptype.LispNotImplementedError('SETQ (evaluated in evaluator)')
 
 
+@_registry.cl_special('SETF')
+def special_setf(*args):
+    """SETF special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('SETF (evaluated in evaluator)')
+
+
 @_registry.cl_special('DEFVAR')
 def special_defvar(*args):
     """DEFVAR special form (handled by evaluator)."""

@@ -6,6 +6,13 @@ import fclpy.lisptype as lisptype
 from . import registry as _registry
 
 
+def _ensure_string(obj):
+    """Convert LispString to Python string if needed."""
+    if isinstance(obj, lisptype.LispString):
+        return str(obj)
+    return obj
+
+
 class Pathname:
     """A Pathname object representing a file path with components."""
     
@@ -15,6 +22,7 @@ class Pathname:
         Args:
             path_str: Path string (can include directory, filename, extension)
         """
+        path_str = _ensure_string(path_str)
         self.original = str(path_str)
         
         # Parse path using pathlib
@@ -119,7 +127,7 @@ def pathname_directory(pathname):
     Returns:
         Directory string or NIL
     """
-    if isinstance(pathname, str):
+    if isinstance(pathname, (str, lisptype.LispString)):
         pathname = Pathname(pathname)
     elif not isinstance(pathname, Pathname):
         raise TypeError(f"Expected Pathname, got {type(pathname)}")
@@ -139,7 +147,7 @@ def pathname_name(pathname):
     Returns:
         Filename string or NIL
     """
-    if isinstance(pathname, str):
+    if isinstance(pathname, (str, lisptype.LispString)):
         pathname = Pathname(pathname)
     elif not isinstance(pathname, Pathname):
         raise TypeError(f"Expected Pathname, got {type(pathname)}")
@@ -159,7 +167,7 @@ def pathname_type(pathname):
     Returns:
         Extension string or NIL
     """
-    if isinstance(pathname, str):
+    if isinstance(pathname, (str, lisptype.LispString)):
         pathname = Pathname(pathname)
     elif not isinstance(pathname, Pathname):
         raise TypeError(f"Expected Pathname, got {type(pathname)}")
@@ -233,7 +241,7 @@ def file_namestring(pathname):
     Returns:
         Filename with extension (if any)
     """
-    if isinstance(pathname, str):
+    if isinstance(pathname, (str, lisptype.LispString)):
         pathname = Pathname(pathname)
     elif not isinstance(pathname, Pathname):
         raise TypeError(f"Expected Pathname, got {type(pathname)}")
@@ -251,7 +259,7 @@ def directory_namestring(pathname):
     Returns:
         Directory string
     """
-    if isinstance(pathname, str):
+    if isinstance(pathname, (str, lisptype.LispString)):
         pathname = Pathname(pathname)
     elif not isinstance(pathname, Pathname):
         raise TypeError(f"Expected Pathname, got {type(pathname)}")
@@ -271,7 +279,7 @@ def pathname_without_name_type(pathname):
     Returns:
         Pathname with only directory
     """
-    if isinstance(pathname, str):
+    if isinstance(pathname, (str, lisptype.LispString)):
         pathname = Pathname(pathname)
     elif not isinstance(pathname, Pathname):
         raise TypeError(f"Expected Pathname, got {type(pathname)}")
@@ -454,7 +462,7 @@ def merge_pathnames(pathname, defaults=None):
     Returns:
         Merged pathname
     """
-    if isinstance(pathname, str):
+    if isinstance(pathname, (str, lisptype.LispString)):
         pathname = Pathname(pathname)
     elif not isinstance(pathname, Pathname):
         raise TypeError(f"Expected Pathname, got {type(pathname)}")
@@ -462,7 +470,7 @@ def merge_pathnames(pathname, defaults=None):
     if defaults is None:
         return pathname
     
-    if isinstance(defaults, str):
+    if isinstance(defaults, (str, lisptype.LispString)):
         defaults = Pathname(defaults)
     elif not isinstance(defaults, Pathname):
         raise TypeError(f"Expected Pathname, got {type(defaults)}")

@@ -642,7 +642,11 @@ def make_string_input_stream(string, start=0, end=None):
         (make-string-input-stream \"hello world\")
         (make-string-input-stream \"hello world\" 0 5)
     """
-    if not isinstance(string, str):
+    # Convert LispString to Python string
+    import fclpy.lisptype as lisptype
+    if isinstance(string, lisptype.LispString):
+        string = str(string)
+    elif not isinstance(string, str):
         raise TypeError(f"Expected string, got {type(string)}")
     if end is None:
         end = len(string)

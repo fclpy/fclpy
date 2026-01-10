@@ -441,6 +441,80 @@ class LispString(lispSequence):
             self._data = self._data[:new_size]
         if self.fill_pointer is not None and self.fill_pointer > new_size:
             self.fill_pointer = new_size
+    
+    # Common Python string methods for compatibility
+    def upper(self):
+        """Return uppercase copy."""
+        return LispString(str(self).upper())
+    
+    def lower(self):
+        """Return lowercase copy."""
+        return LispString(str(self).lower())
+    
+    def capitalize(self):
+        """Return capitalized copy."""
+        return LispString(str(self).capitalize())
+    
+    def strip(self, chars=None):
+        """Return stripped copy."""
+        return LispString(str(self).strip(chars))
+    
+    def lstrip(self, chars=None):
+        """Return left-stripped copy."""
+        return LispString(str(self).lstrip(chars))
+    
+    def rstrip(self, chars=None):
+        """Return right-stripped copy."""
+        return LispString(str(self).rstrip(chars))
+    
+    def find(self, sub, start=0, end=None):
+        """Find substring."""
+        return str(self).find(str(sub) if isinstance(sub, LispString) else sub, start, end)
+    
+    def rfind(self, sub, start=0, end=None):
+        """Find substring from right."""
+        return str(self).rfind(str(sub) if isinstance(sub, LispString) else sub, start, end)
+    
+    def replace(self, old, new, count=-1):
+        """Return copy with replacements."""
+        old_str = str(old) if isinstance(old, LispString) else old
+        new_str = str(new) if isinstance(new, LispString) else new
+        return LispString(str(self).replace(old_str, new_str, count))
+    
+    def startswith(self, prefix, start=0, end=None):
+        """Check if string starts with prefix."""
+        prefix_str = str(prefix) if isinstance(prefix, LispString) else prefix
+        return str(self).startswith(prefix_str, start, end)
+    
+    def endswith(self, suffix, start=0, end=None):
+        """Check if string ends with suffix."""
+        suffix_str = str(suffix) if isinstance(suffix, LispString) else suffix
+        return str(self).endswith(suffix_str, start, end)
+    
+    def isalpha(self):
+        """Check if all characters are alphabetic."""
+        return str(self).isalpha()
+    
+    def isdigit(self):
+        """Check if all characters are digits."""
+        return str(self).isdigit()
+    
+    def isalnum(self):
+        """Check if all characters are alphanumeric."""
+        return str(self).isalnum()
+    
+    def isspace(self):
+        """Check if all characters are whitespace."""
+        return str(self).isspace()
+    
+    def split(self, sep=None, maxsplit=-1):
+        """Split string."""
+        sep_str = str(sep) if isinstance(sep, LispString) else sep
+        return [LispString(s) for s in str(self).split(sep_str, maxsplit)]
+    
+    def join(self, iterable):
+        """Join strings."""
+        return LispString(str(self).join(str(s) if isinstance(s, LispString) else s for s in iterable))
 
 
 class lispConsIterator:    

@@ -239,7 +239,8 @@ class Readtable:
                     result += next_c
             else:
                 result += c
-        return result
+        from . import lisptype
+        return lisptype.LispString(result)
     
     def _read_quote(self, stream):
         """Read a quoted expression"""
