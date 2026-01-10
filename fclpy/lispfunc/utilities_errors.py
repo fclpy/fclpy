@@ -26,8 +26,21 @@ def signal_fn(datum, *arguments):
 
 @_registry.cl_function('ERROR')
 def error_fn(datum, *arguments):
-    """Signal error condition (stop execution)."""
-    raise Exception(str(datum))
+    """Signal error condition (stop execution).
+    
+    If datum is a string (format control), format it with arguments.
+    """
+    # Import format_fn here to avoid circular import
+    from fclpy.lispfunc.io_write import format_fn
+    
+    # If datum is a string, use FORMAT to process it
+    if isinstance(datum, (str, lisptype.LispString)):
+        control_str = str(datum)
+        # Use format with nil destination to get a string
+        message = format_fn(lisptype.NIL, control_str, *arguments)
+        raise Exception(message)
+    else:
+        raise Exception(str(datum))
 
 
 @_registry.cl_function('WARN')

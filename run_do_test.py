@@ -21,6 +21,7 @@ runtime.load_and_evaluate_file(rt, env, verbose=False)
 print('Loading rt-test.lsp...')
 runtime.load_and_evaluate_file(rt_test, env, verbose=False)
 
-print("Running (in-package :cl-test) (do-test 'do-test-1)")
-res = eval_string("(in-package :cl-test) (do-test 'do-test-1)", env)
+test_lisp = "(in-package :cl-test) (do-test 'char=.1)"
+print("Running %s" % test_lisp)
+res = eval_string(test_lisp, env)
 print('Result:', res)
