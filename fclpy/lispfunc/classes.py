@@ -362,10 +362,15 @@ def add_method(gf, specializers, method_func):
     else:
         spec_list = [specializers]
     
-    # Convert NIL or T to None (no specializer)
+    # Convert NIL, T, or T-like symbols to None (no specializer)
     parsed_specs = []
     for spec in spec_list:
-        if spec is None or spec is lisptype.NIL or spec is lisptype.T:
+        if spec is None or spec is lisptype.NIL:
+            parsed_specs.append(None)
+        elif spec is lisptype.T:
+            parsed_specs.append(None)
+        elif isinstance(spec, lisptype.LispSymbol) and spec.name.upper() == 'T':
+            # Handle T symbols from parsed forms (compare by name, not identity)
             parsed_specs.append(None)
         elif isinstance(spec, classes.LispClass):
             parsed_specs.append(spec)

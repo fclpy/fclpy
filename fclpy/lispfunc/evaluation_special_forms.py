@@ -1386,7 +1386,28 @@ def eval_defgeneric(form, env):
                             # Specialized: (param-name type)
                             param_name = car(param_spec)
                             param_type = car(cdr(param_spec))
-                            specializers.append(param_type)
+                            
+                            # Try to resolve the type to a class
+                            # If param_type is a symbol, try to look it up as a class
+                            if isinstance(param_type, lisptype.LispSymbol):
+                                class_obj = None
+                                # Check if it's in the classes registry
+                                try:
+                                    from . import classes as classes_module
+                                    class_obj = classes_module.find_class(param_type.name)
+                                except Exception:
+                                    pass
+                                # If not found and it's T, use None (unspecialized)
+                                if param_type.name.upper() == 'T' and class_obj is None:
+                                    specializers.append(None)
+                                elif class_obj:
+                                    specializers.append(class_obj)
+                                else:
+                                    # Keep as symbol if not found (for compatibility)
+                                    specializers.append(param_type)
+                            else:
+                                specializers.append(param_type)
+                            
                             params_for_method.append(param_name)
                         else:
                             # Unspecialized: just param-name (matches any type)
