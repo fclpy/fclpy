@@ -529,6 +529,95 @@ def eval(form, env=None):
                     body = cdr(body)
                 
                 return result
+            elif operator.name == 'DEFSETF':
+                # DEFSETF has two forms:
+                # Short form: (DEFSETF access-fn update-fn [documentation])
+                # Long form:  (DEFSETF access-fn lambda-list (store-var...) [decl] [doc] form...)
+                # Arguments should NOT be evaluated - they are symbol names and code templates
+                args = cdr(form)
+                if args is None or args == lisptype.NIL:
+                    raise lisptype.LispError("DEFSETF requires arguments")
+                
+                access_fn = car(args)
+                rest = cdr(args)
+                
+                if not isinstance(access_fn, lisptype.LispSymbol):
+                    raise lisptype.LispError("DEFSETF: access-fn must be a symbol")
+                
+                if rest is None or rest == lisptype.NIL:
+                    raise lisptype.LispError("DEFSETF requires at least two arguments")
+                
+                second_arg = car(rest)
+                third_and_beyond = cdr(rest)
+                
+                # Determine if short or long form based on second argument type
+                is_short_form = isinstance(second_arg, lisptype.LispSymbol)
+                
+                # Get or create the global setf-expanders storage
+                global_env = env
+                while global_env.parent is not None:
+                    global_env = global_env.parent
+                
+                if not hasattr(global_env, 'setf_expanders'):
+                    global_env.setf_expanders = {}
+                
+                if is_short_form:
+                    # Short form: (DEFSETF access-fn update-fn [documentation])
+                    update_fn = second_arg
+                    doc_string = None
+                    if _consp_internal(third_and_beyond):
+                        doc_form = car(third_and_beyond)
+                        if isinstance(doc_form, str):
+                            doc_string = doc_form
+                    
+                    # Store the setf expander info for later use by SETF macro
+                    global_env.setf_expanders[access_fn.name] = {
+                        'type': 'short',
+                        'update_fn': update_fn,
+                        'documentation': doc_string
+                    }
+                else:
+                    # Long form: (DEFSETF access-fn lambda-list (store-var...) [decl] [doc] form...)
+                    lambda_list = second_arg
+                    
+                    if not _consp_internal(third_and_beyond):
+                        raise lisptype.LispError("DEFSETF long form requires store variables")
+                    
+                    store_vars = car(third_and_beyond)
+                    body = cdr(third_and_beyond)
+                    
+                    # Parse optional declarations and docstring from body
+                    declarations = []
+                    doc_string = None
+                    actual_body = body
+                    
+                    while _consp_internal(actual_body):
+                        form_item = car(actual_body)
+                        if _consp_internal(form_item):
+                            op = car(form_item)
+                            if isinstance(op, lisptype.LispSymbol) and op.name == 'DECLARE':
+                                declarations.append(form_item)
+                                actual_body = cdr(actual_body)
+                                continue
+                        if isinstance(form_item, str) and doc_string is None:
+                            doc_string = form_item
+                            actual_body = cdr(actual_body)
+                            continue
+                        break
+                    
+                    # Store the setf expander info for long form
+                    global_env.setf_expanders[access_fn.name] = {
+                        'type': 'long',
+                        'lambda_list': lambda_list,
+                        'store_vars': store_vars,
+                        'declarations': declarations,
+                        'documentation': doc_string,
+                        'body': actual_body,
+                        'env': env  # Capture lexical environment
+                    }
+                
+                # Return the access-fn symbol as specified by ANSI CL
+                return access_fn
             elif operator.name == 'DEFPACKAGE':
                 # DEFPACKAGE is a macro in Common Lisp - option clauses must not be evaluated.
                 # Example: (DEFPACKAGE 'FOO (:USE 'CL) (:INTERN 'A 'B) (:EXPORT 'A))

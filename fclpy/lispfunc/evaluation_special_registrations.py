@@ -273,6 +273,12 @@ def special_macrolet(*args):
     raise lisptype.LispNotImplementedError('MACROLET (evaluated in evaluator)')
 
 
+@_registry.cl_special('DEFSETF')
+def special_defsetf(*args):
+    """DEFSETF special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('DEFSETF (evaluated in evaluator)')
+
+
 @_registry.cl_special('MACROEXPAND-1')
 def special_macroexpand_1(*args):
     """MACROEXPAND-1 special form (handled by evaluator)."""

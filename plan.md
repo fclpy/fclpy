@@ -70,8 +70,33 @@ fclpy is a Python implementation of Common Lisp. The goal is to achieve ANSI Com
 
 **Result**: 
 - ✅ LOOKUP-TABLE error **eliminated** — now properly expanded within SYMBOL-MACROLET scope
-- Error progression now moves to next issue: `DEF-READTABLE-CASE-TEST` (MACROLET not yet implemented)
-- Error count: Still 97 total (different category composition but same count)
+
+---
+
+### ✅ Fixed: `MACROLET` Local Macro Definitions (Jan 10)
+
+**Original symptom**: After SYMBOL-MACROLET fix, loader reported: `[1x] Not a function: DEF-READTABLE-CASE-TEST: Not implemented | expr=(SYMBOL-MACROLET ...`
+
+**Root cause**: `MACROLET` was registered as a regular function instead of being handled as a special form. The test used MACROLET to define a local macro `DEF-READTABLE-CASE-TEST`, which wasn't being expanded.
+
+**Solution implemented**:
+1. **Unregistered MACROLET as function** in `utilities_functions.py`.
+2. **Registered MACROLET as a special form** in `evaluation_special_registrations.py`.
+3. **Extracted `_create_macro_function`** helper in `evaluation_special_forms.py`:
+   - Shared by both DEFMACRO and MACROLET
+   - Handles lambda list parsing (&optional, &rest, &key, &whole)
+   - Creates closure with proper lexical environment
+   - Sets `__is_macro__ = True` attribute
+4. **Implemented MACROLET handler** in `evaluation_core.py`:
+   - Creates child environment for local macro scope
+   - Parses each `(name lambda-list . body)` binding
+   - Creates macro functions and adds to local environment
+   - Evaluates body forms in that environment
+5. **Refactored eval_defmacro** to use `_create_macro_function` (code deduplication).
+
+**Result**:
+- ✅ DEF-READTABLE-CASE-TEST error **eliminated** — local macros now expand correctly
+- Error count: 97 → 96 total errors (both fixes combined)
 
 ### Fixes Completed This Session
 - ✅ Loader diagnostics + gclload1 regression kept clean (0 errors)

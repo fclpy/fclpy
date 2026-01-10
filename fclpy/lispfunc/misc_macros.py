@@ -280,9 +280,10 @@ def define_setf_expander(access_fn, lambda_list, *body):
     return access_fn
 
 
-@_registry.cl_function('DEFSETF')
+## `DEFSETF` is a special form handled by the evaluator; do not
+## register it as a regular function here. Arguments should not be evaluated.
 def defsetf(access_fn, update_fn, documentation=None):
-    """Define setf function."""
+    """Define setf function (stub kept for reference)."""
     return access_fn
 
 
