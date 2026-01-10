@@ -665,7 +665,9 @@ _original_find_class = find_class
 
 def find_class(name: str) -> Optional[LispClass]:
     """Find a class by name, initializing built-in classes if needed."""
-    _init_builtin_classes()
+    global _builtin_classes_initialized
+    if not _builtin_classes_initialized:
+        _init_builtin_classes()
     return _original_find_class(name)
 
 
@@ -677,6 +679,11 @@ def find_class(name: str) -> Optional[LispClass]:
 
 def _init_builtin_classes():
     """Initialize built-in type classes."""
+    global _builtin_classes_initialized
+    if _builtin_classes_initialized:
+        return
+    _builtin_classes_initialized = True
+    
     from fclpy.lisptype import COMMON_LISP_PACKAGE
     
     # Create a list of built-in type names
@@ -741,6 +748,27 @@ def _init_builtin_classes():
         'READTABLE',
         'RANDOM-STATE',
         'CONDITION',
+        'WARNING',
+        'STYLE-WARNING',
+        'SIMPLE-CONDITION',
+        'SIMPLE-WARNING',
+        'SIMPLE-ERROR',
+        'SIMPLE-TYPE-ERROR',
+        'ERROR',
+        'TYPE-ERROR',
+        'PARSE-ERROR',
+        'PROGRAM-ERROR',
+        'CONTROL-ERROR',
+        'READER-ERROR',
+        'UNDEFINED-FUNCTION',
+        'UNDEFINED-VARIABLE',
+        'DIVISION-BY-ZERO',
+        'FLOATING-POINT-INVALID-OPERATION',
+        'FLOATING-POINT-OVERFLOW',
+        'FLOATING-POINT-UNDERFLOW',
+        'CELL-ERROR',
+        'UNBOUND-VARIABLE',
+        'UNBOUND-SLOT',
         'RESTART',
         'METHOD-COMBINATION',
     ]
@@ -751,11 +779,126 @@ def _init_builtin_classes():
     register_class(t_class)
     
     # Create all other built-in type classes with T as superclass
+    # except for condition classes which have a proper hierarchy
+    condition_classes = {
+        'CONDITION', 'WARNING', 'STYLE-WARNING', 'SIMPLE-CONDITION',
+        'SIMPLE-WARNING', 'SIMPLE-ERROR', 'SIMPLE-TYPE-ERROR',
+        'ERROR', 'TYPE-ERROR', 'PARSE-ERROR', 'PROGRAM-ERROR', 'CONTROL-ERROR',
+        'READER-ERROR', 'UNDEFINED-FUNCTION', 'UNDEFINED-VARIABLE',
+        'DIVISION-BY-ZERO', 'FLOATING-POINT-INVALID-OPERATION',
+        'FLOATING-POINT-OVERFLOW', 'FLOATING-POINT-UNDERFLOW',
+        'CELL-ERROR', 'UNBOUND-VARIABLE', 'UNBOUND-SLOT'
+    }
+    
     for type_name in builtin_types:
         if type_name == 'T':
             continue  # Already created
+        
         sym = COMMON_LISP_PACKAGE.intern_symbol(type_name)
-        cls = LispClass(name=sym, direct_superclasses=[t_class], direct_slots=[])
+        
+        # Build proper condition hierarchy
+        if type_name in condition_classes:
+            if type_name == 'CONDITION':
+                # CONDITION is a direct subclass of T
+                cls = LispClass(name=sym, direct_superclasses=[t_class], direct_slots=[])
+            elif type_name in ('WARNING', 'ERROR'):
+                # WARNING and ERROR are direct subclasses of CONDITION
+                condition_cls = _original_find_class('CONDITION')
+                if condition_cls is None:
+                    # Fallback to T if CONDITION not yet created
+                    condition_cls = t_class
+                cls = LispClass(name=sym, direct_superclasses=[condition_cls], direct_slots=[])
+            elif type_name == 'SIMPLE-CONDITION':
+                # SIMPLE-CONDITION is a direct subclass of CONDITION
+                condition_cls = _original_find_class('CONDITION')
+                if condition_cls is None:
+                    condition_cls = t_class
+                cls = LispClass(name=sym, direct_superclasses=[condition_cls], direct_slots=[])
+            elif type_name == 'SIMPLE-WARNING':
+                # SIMPLE-WARNING inherits from both SIMPLE-CONDITION and WARNING
+                warning_cls = _original_find_class('WARNING')
+                simple_condition_cls = _original_find_class('SIMPLE-CONDITION')
+                if warning_cls is None:
+                    warning_cls = t_class
+                if simple_condition_cls is None:
+                    simple_condition_cls = t_class
+                cls = LispClass(name=sym, direct_superclasses=[simple_condition_cls, warning_cls], direct_slots=[])
+            elif type_name == 'SIMPLE-ERROR':
+                # SIMPLE-ERROR inherits from both SIMPLE-CONDITION and ERROR
+                error_cls = _original_find_class('ERROR')
+                simple_condition_cls = _original_find_class('SIMPLE-CONDITION')
+                if error_cls is None:
+                    error_cls = t_class
+                if simple_condition_cls is None:
+                    simple_condition_cls = t_class
+                cls = LispClass(name=sym, direct_superclasses=[simple_condition_cls, error_cls], direct_slots=[])
+            elif type_name == 'TYPE-ERROR':
+                # TYPE-ERROR is a subclass of ERROR
+                error_cls = _original_find_class('ERROR')
+                if error_cls is None:
+                    error_cls = t_class
+                cls = LispClass(name=sym, direct_superclasses=[error_cls], direct_slots=[])
+            elif type_name == 'SIMPLE-TYPE-ERROR':
+                # SIMPLE-TYPE-ERROR is both SIMPLE-ERROR and TYPE-ERROR
+                simple_error_cls = _original_find_class('SIMPLE-ERROR')
+                type_error_cls = _original_find_class('TYPE-ERROR')
+                if simple_error_cls is None:
+                    simple_error_cls = t_class
+                if type_error_cls is None:
+                    type_error_cls = t_class
+                cls = LispClass(name=sym, direct_superclasses=[simple_error_cls, type_error_cls], direct_slots=[])
+            elif type_name in ('PARSE-ERROR', 'PROGRAM-ERROR', 'CONTROL-ERROR', 'READER-ERROR'):
+                # These are direct subclasses of ERROR
+                error_cls = _original_find_class('ERROR')
+                if error_cls is None:
+                    error_cls = t_class
+                cls = LispClass(name=sym, direct_superclasses=[error_cls], direct_slots=[])
+            elif type_name in ('UNDEFINED-FUNCTION', 'UNDEFINED-VARIABLE'):
+                # These are subclasses of CELL-ERROR
+                cell_error_cls = _original_find_class('CELL-ERROR')
+                if cell_error_cls is None:
+                    # Fallback to ERROR
+                    cell_error_cls = _original_find_class('ERROR')
+                    if cell_error_cls is None:
+                        cell_error_cls = t_class
+                cls = LispClass(name=sym, direct_superclasses=[cell_error_cls], direct_slots=[])
+            elif type_name == 'CELL-ERROR':
+                # CELL-ERROR is a subclass of ERROR
+                error_cls = _original_find_class('ERROR')
+                if error_cls is None:
+                    error_cls = t_class
+                cls = LispClass(name=sym, direct_superclasses=[error_cls], direct_slots=[])
+            elif type_name in ('DIVISION-BY-ZERO', 'FLOATING-POINT-INVALID-OPERATION',
+                               'FLOATING-POINT-OVERFLOW', 'FLOATING-POINT-UNDERFLOW'):
+                # These are subclasses of ARITHMETIC-ERROR (which is an ERROR)
+                error_cls = _original_find_class('ERROR')
+                if error_cls is None:
+                    error_cls = t_class
+                cls = LispClass(name=sym, direct_superclasses=[error_cls], direct_slots=[])
+            elif type_name == 'UNBOUND-VARIABLE':
+                # UNBOUND-VARIABLE is a subclass of UNDEFINED-VARIABLE
+                undefined_var_cls = _original_find_class('UNDEFINED-VARIABLE')
+                if undefined_var_cls is None:
+                    undefined_var_cls = _original_find_class('CELL-ERROR')
+                    if undefined_var_cls is None:
+                        undefined_var_cls = t_class
+                cls = LispClass(name=sym, direct_superclasses=[undefined_var_cls], direct_slots=[])
+            elif type_name == 'UNBOUND-SLOT':
+                # UNBOUND-SLOT is a subclass of CELL-ERROR
+                cell_error_cls = _original_find_class('CELL-ERROR')
+                if cell_error_cls is None:
+                    cell_error_cls = t_class
+                cls = LispClass(name=sym, direct_superclasses=[cell_error_cls], direct_slots=[])
+            else:
+                # Default condition class as ERROR subclass
+                error_cls = _original_find_class('ERROR')
+                if error_cls is None:
+                    error_cls = t_class
+                cls = LispClass(name=sym, direct_superclasses=[error_cls], direct_slots=[])
+        else:
+            # All other classes are direct subclasses of T
+            cls = LispClass(name=sym, direct_superclasses=[t_class], direct_slots=[])
+        
         register_class(cls)
 
 

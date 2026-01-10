@@ -139,6 +139,7 @@ def eval_defun(form, env):
     - &optional parameters with default values
     - &rest parameter for collecting remaining arguments
     - &key parameters for keyword arguments
+    - Function names as symbols or (SETF symbol) for setf functions
     """
     from .evaluation_core import eval, parse_lambda_list
     import fclpy.state as state
@@ -147,12 +148,32 @@ def eval_defun(form, env):
     if not _consp_internal(args) or not _consp_internal(cdr(args)):
         raise lisptype.LispNotImplementedError("DEFUN requires at least 2 arguments")
     
-    func_name = car(args)
+    func_name_spec = car(args)
     param_list = car(cdr(args))
     body = cdr(cdr(args))
     
-    if not isinstance(func_name, lisptype.LispSymbol):
-        raise lisptype.LispNotImplementedError("DEFUN: function name must be a symbol")
+    # func_name_spec can be a symbol or (SETF symbol) for setf functions
+    if isinstance(func_name_spec, lisptype.LispSymbol):
+        # Simple function name
+        func_name = func_name_spec
+        is_setf = False
+    elif _consp_internal(func_name_spec):
+        # (SETF symbol) form for setf functions
+        setf_sym = car(func_name_spec)
+        if not (isinstance(setf_sym, lisptype.LispSymbol) and setf_sym.name == 'SETF'):
+            raise lisptype.LispNotImplementedError("DEFUN: function name must be a symbol or (SETF symbol)")
+        rest = cdr(func_name_spec)
+        if not _consp_internal(rest):
+            raise lisptype.LispNotImplementedError("DEFUN: (SETF symbol) requires a symbol")
+        actual_func_name = car(rest)
+        if not isinstance(actual_func_name, lisptype.LispSymbol):
+            raise lisptype.LispNotImplementedError("DEFUN: (SETF symbol) requires symbol as second element")
+        # Create a synthetic symbol for the setf function: (SETF |name|)
+        # For storage, we create a LispSymbol with a compound name
+        func_name = lisptype.LispSymbol(f"(SETF {actual_func_name.name})")
+        is_setf = True
+    else:
+        raise lisptype.LispNotImplementedError("DEFUN: function name must be a symbol or (SETF symbol)")
     
     # Extract docstring if present (first form in body can be a string)
     docstring = None
