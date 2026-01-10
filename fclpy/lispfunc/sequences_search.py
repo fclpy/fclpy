@@ -392,10 +392,22 @@ def mismatch(sequence1, sequence2, **kwargs):
 
 @_registry.cl_function('MEMBER')
 def member(item, list_seq, test=None, test_not=None, key=None):
-    """Find member in list."""
+    """Find member in list.
+    
+    Returns the tail of list starting at the first element equal to item,
+    or None if item is not found.
+    """
+    # Handle NIL and None as empty lists
+    if list_seq is None or list_seq == lisptype.NIL:
+        return None
+    
     # Convert lispCons to list
     if hasattr(list_seq, 'car') and hasattr(list_seq, 'cdr'):
         list_seq = _seq_to_list(list_seq)
+    
+    # Handle non-iterable types (defensive - shouldn't happen in correct code)
+    if not hasattr(list_seq, '__iter__'):
+        return None
     
     for x in list_seq:
         if (key(x) if key else x) == item:

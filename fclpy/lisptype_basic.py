@@ -317,6 +317,132 @@ class Character(lispT):
         raise ValueError(f"Unknown named character: {name}")
 
 
+class LispString(lispSequence):
+    """Common Lisp STRING type - a mutable sequence of characters.
+    
+    Unlike Python strings, Common Lisp strings are mutable.
+    This class stores characters in a list for mutability while
+    providing string-like behavior.
+    """
+    
+    def __init__(self, content='', element_type=None, fill_pointer=None, adjustable=False):
+        """Initialize a LispString.
+        
+        Args:
+            content: Initial string content (str or sequence of characters)
+            element_type: Element type (CHARACTER or BASE-CHAR)
+            fill_pointer: Fill pointer for variable-length strings
+            adjustable: Whether the string is adjustable
+        """
+        if isinstance(content, str):
+            self._data = list(content)
+        elif isinstance(content, LispString):
+            self._data = list(content._data)
+        elif hasattr(content, '__iter__'):
+            # Convert sequence of characters
+            self._data = [c.char if isinstance(c, Character) else str(c) for c in content]
+        else:
+            self._data = list(str(content))
+        
+        self.element_type = element_type
+        self.fill_pointer = fill_pointer
+        self.adjustable = adjustable
+    
+    def __repr__(self):
+        """Return string representation for reading."""
+        # Escape special characters for Lisp reader
+        content = ''.join(self._data)
+        escaped = content.replace('\\', '\\\\').replace('"', '\\"')
+        return f'"{escaped}"'
+    
+    def __str__(self):
+        """Return Python string representation."""
+        return ''.join(self._data)
+    
+    def __len__(self):
+        """Return string length (respecting fill-pointer if set)."""
+        if self.fill_pointer is not None:
+            return self.fill_pointer
+        return len(self._data)
+    
+    def __getitem__(self, index):
+        """Get character at index."""
+        if isinstance(index, slice):
+            return LispString(''.join(self._data[index]))
+        return self._data[index]
+    
+    def __setitem__(self, index, value):
+        """Set character at index (mutable!)."""
+        if isinstance(value, Character):
+            value = value.char
+        elif isinstance(value, str) and len(value) == 1:
+            pass  # Already a character
+        else:
+            raise TypeError(f"String element must be a character, got {type(value)}")
+        
+        if isinstance(index, slice):
+            # Handle slice assignment
+            if isinstance(value, str):
+                self._data[index] = list(value)
+            else:
+                self._data[index] = value
+        else:
+            self._data[index] = value
+    
+    def __iter__(self):
+        """Iterate over characters."""
+        limit = self.fill_pointer if self.fill_pointer is not None else len(self._data)
+        return iter(self._data[:limit])
+    
+    def __eq__(self, other):
+        """Compare strings."""
+        if isinstance(other, LispString):
+            return str(self) == str(other)
+        elif isinstance(other, str):
+            return str(self) == other
+        return False
+    
+    def __hash__(self):
+        """Allow strings to be used in sets/dicts (hash immutable view)."""
+        return hash(str(self))
+    
+    def __add__(self, other):
+        """Concatenate strings."""
+        if isinstance(other, LispString):
+            return LispString(str(self) + str(other))
+        elif isinstance(other, str):
+            return LispString(str(self) + other)
+        raise TypeError(f"Cannot concatenate LispString with {type(other)}")
+    
+    def __contains__(self, item):
+        """Check if character is in string."""
+        if isinstance(item, Character):
+            item = item.char
+        return item in self._data
+    
+    @property
+    def actual_length(self):
+        """Return actual allocated length (ignoring fill-pointer)."""
+        return len(self._data)
+    
+    def copy(self):
+        """Return a mutable copy of this string."""
+        result = LispString(self._data[:])
+        result.element_type = self.element_type
+        result.fill_pointer = self.fill_pointer
+        result.adjustable = self.adjustable
+        return result
+    
+    def resize(self, new_size, fill_char=' '):
+        """Resize the string (for ADJUST-ARRAY)."""
+        if new_size > len(self._data):
+            self._data.extend([fill_char] * (new_size - len(self._data)))
+        elif new_size < len(self._data):
+            self._data = self._data[:new_size]
+        if self.fill_pointer is not None and self.fill_pointer > new_size:
+            self.fill_pointer = new_size
+
+
 class lispConsIterator:    
     def __init__(self, cons):
         self.cons = cons
@@ -518,7 +644,7 @@ __all__ = [
     'LispEndOfFileError', 'LispEnvironmentError',
     # Core Types
     'lispT', 'lispSequence', 'lispList', 'lispNull', 'LispSymbol',
-    'lispKeyword', 'Character', 'lispCons', 'lispConsIterator',
+    'lispKeyword', 'Character', 'LispString', 'lispCons', 'lispConsIterator',
     # Constants
     'NIL', 'T',
     # Symbol Operations

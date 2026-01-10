@@ -211,7 +211,8 @@ def eval(form, env=None):
         eval_if, eval_setq, eval_defun, eval_defmacro, eval_macroexpand_1,
         eval_macro_function, eval_lambda, eval_declare, eval_declaim,
         eval_defvar, eval_defparameter, eval_defconstant, eval_defstruct, eval_pop,
-        eval_incf, eval_decf, eval_defclass, eval_defgeneric, eval_defmethod, eval_define_method_combination
+        eval_incf, eval_decf, eval_defclass, eval_defgeneric, eval_defmethod, eval_define_method_combination,
+        eval_destructuring_bind
     )
     from .evaluation_control_flow import (
         eval_block, eval_return_from, eval_catch, eval_throw,
@@ -352,6 +353,8 @@ def eval(form, env=None):
                 return eval_defconstant(form, env)
             elif operator.name == 'DEFSTRUCT':
                 return eval_defstruct(form, env)
+            elif operator.name == 'DESTRUCTURING-BIND':
+                return eval_destructuring_bind(form, env)
             elif operator.name == 'DEFCLASS':
                 return eval_defclass(form, env)
             elif operator.name == 'DEFGENERIC':

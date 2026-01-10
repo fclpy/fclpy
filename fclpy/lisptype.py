@@ -18,7 +18,7 @@ __all__ = [
     'LispNotImplementedError', 'LispTypeError', 'LispError',
     'LispEndOfFileError', 'LispEnvironmentError',
     'lispT', 'lispSequence', 'lispList', 'lispNull', 'LispSymbol',
-    'lispKeyword', 'Character', 'lispCons', 'lispConsIterator',
+    'lispKeyword', 'Character', 'LispString', 'lispCons', 'lispConsIterator',
     'NIL', 'T',
     'symbol_value', 'set_symbol_value', 'symbol_function',
     'set_symbol_function', 'symbol_plist', 'set_symbol_plist',

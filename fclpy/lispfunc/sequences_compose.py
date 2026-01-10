@@ -299,13 +299,19 @@ def subseq(sequence, start, end=None):
 
 @_registry.cl_function('COPY-SEQ')
 def copy_seq(sequence):
-    """Copy sequence."""
+    """Copy sequence.
+    
+    For strings, returns a mutable LispString copy.
+    """
     if isinstance(sequence, list):
         return list(sequence)
     elif isinstance(sequence, tuple):
         return tuple(sequence)
+    elif isinstance(sequence, lisptype.LispString):
+        return sequence.copy()
     elif isinstance(sequence, str):
-        return str(sequence)
+        # Return mutable LispString so REPLACE etc. can modify it
+        return lisptype.LispString(sequence)
     else:
         return sequence
 
@@ -339,15 +345,30 @@ def fill(sequence, item, start=0, end=None):
 
 @_registry.cl_function('REPLACE')
 def replace(sequence1, sequence2, **kwargs):
-    """Replace elements of sequence1 with elements of sequence2."""
+    """Replace elements of sequence1 with elements of sequence2.
+    
+    Note: sequence1 must be mutable. For strings, use LispString (from COPY-SEQ).
+    """
+    # Convert immutable Python strings to LispString
+    if isinstance(sequence1, str):
+        sequence1 = lisptype.LispString(sequence1)
+    
     start1 = kwargs.get('start1', 0)
     end1 = kwargs.get('end1', len(sequence1))
     start2 = kwargs.get('start2', 0)
     end2 = kwargs.get('end2', len(sequence2))
     
+    # Convert source string if needed
+    if isinstance(sequence2, str):
+        src_chars = sequence2
+    elif isinstance(sequence2, lisptype.LispString):
+        src_chars = str(sequence2)
+    else:
+        src_chars = sequence2
+    
     for i, j in zip(range(start1, end1), range(start2, end2)):
-        if i < len(sequence1) and j < len(sequence2):
-            sequence1[i] = sequence2[j]
+        if i < len(sequence1) and j < len(src_chars):
+            sequence1[i] = src_chars[j]
     
     return sequence1
 

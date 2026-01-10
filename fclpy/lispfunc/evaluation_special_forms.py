@@ -689,6 +689,76 @@ def eval_macro_function(form, env):
     return lisptype.NIL
 
 
+def eval_destructuring_bind(form, env):
+    """Evaluate DESTRUCTURING-BIND special form.
+
+    Syntax: (DESTRUCTURING-BIND lambda-list expression &body body)
+    This binds variables according to the lambda-list by destructuring the
+    evaluated expression, then evaluates the body forms with those bindings.
+    """
+    from .evaluation_core import eval
+
+    args = cdr(form)
+    if not _consp_internal(args) or not _consp_internal(cdr(args)):
+        raise lisptype.LispNotImplementedError("DESTRUCTURING-BIND requires a pattern, an expression and body")
+
+    pattern = car(args)
+    expr_form = car(cdr(args))
+    body = cdr(cdr(args))
+
+    # Evaluate the expression to destructure
+    expr_val = eval(expr_form, env)
+
+    # Create a new environment for the bindings
+    bind_env = lisptype.Environment(parent=env)
+
+    def _bind(pat, val):
+        # Bind a symbol directly
+        if isinstance(pat, lisptype.LispSymbol):
+            bind_env.add_variable(pat, val if val is not None else lisptype.NIL)
+            return
+
+        # If pattern is not a cons, nothing to bind
+        if not _consp_internal(pat):
+            return
+
+        # Collect pattern elements and detect dotted-tail
+        pats = []
+        cur = pat
+        while _consp_internal(cur):
+            pats.append(car(cur))
+            cur = cdr(cur)
+
+        dotted_tail = None
+        if isinstance(cur, lisptype.LispSymbol):
+            dotted_tail = cur
+
+        # Walk value as list and bind elements
+        cur_val = val
+        for i, p in enumerate(pats):
+            if _consp_internal(cur_val):
+                v = car(cur_val)
+                _bind(p, v)
+                cur_val = cdr(cur_val)
+            else:
+                _bind(p, lisptype.NIL)
+
+        # Bind dotted tail to remaining list
+        if dotted_tail is not None:
+            bind_env.add_variable(dotted_tail, cur_val if cur_val is not None else lisptype.NIL)
+
+    _bind(pattern, expr_val)
+
+    # Evaluate body forms in bind_env
+    result = lisptype.NIL
+    cur = body
+    while _consp_internal(cur):
+        result = eval(car(cur), bind_env)
+        cur = cdr(cur)
+
+    return result
+
+
 def eval_lambda(form, env):
     """Evaluate LAMBDA special form."""
     from .evaluation_core import eval
