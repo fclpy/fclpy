@@ -1316,6 +1316,134 @@ def eval_pop(form, env):
     raise lisptype.LispNotImplementedError(f"POP not implemented for place: {place}")
 
 
+def eval_defclass(form, env):
+    """Evaluate DEFCLASS special form.
+    
+    DEFCLASS defines a new class (CLOS). The name should not be evaluated,
+    but superclasses should be looked up as class objects.
+    
+    Syntax:
+        (defclass name (superclass*) (slot-spec*) option*)
+    
+    Slot specs:
+        (slot-name [:initarg keyword] [:initform form] [:reader name] [:writer name])
+    
+    Options:
+        (:metaclass class)
+        (:documentation string)
+    """
+    from .evaluation_core import eval
+    import fclpy.classes
+    
+    # Import the defclass function directly
+    from fclpy.lispfunc.classes import defclass
+    
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("DEFCLASS requires at least a name and superclass list")
+    
+    # Get class name (NOT evaluated - it's a symbol to define)
+    class_name = car(args)
+    if not isinstance(class_name, lisptype.LispSymbol):
+        raise lisptype.LispNotImplementedError("DEFCLASS: class name must be a symbol")
+    
+    # Get superclasses list
+    rest = cdr(args)
+    if not _consp_internal(rest):
+        raise lisptype.LispNotImplementedError("DEFCLASS requires a superclass list")
+    
+    superclasses_form = car(rest)
+    slots_rest = cdr(rest)
+    
+    # Parse superclasses: convert symbols to class objects
+    superclasses_list = []
+    if superclasses_form is not None and superclasses_form != lisptype.NIL:
+        current = superclasses_form
+        while _consp_internal(current):
+            sc = car(current)
+            if isinstance(sc, lisptype.LispSymbol):
+                # Try to look up the class
+                sc_class = fclpy.classes.find_class(sc.name)
+                if sc_class is not None:
+                    superclasses_list.append(sc_class)
+                else:
+                    # If not found as a class, treat as forward reference
+                    superclasses_list.append(sc)
+            else:
+                superclasses_list.append(sc)
+            current = cdr(current)
+    
+    # Get slot definitions
+    slots_form = None
+    if _consp_internal(slots_rest):
+        slots_form = car(slots_rest)
+    
+    options_rest = cdr(slots_rest) if _consp_internal(slots_rest) else lisptype.NIL
+    
+    # Parse slot definitions
+    slots_list = []
+    if slots_form is not None and slots_form != lisptype.NIL:
+        current = slots_form
+        while _consp_internal(current):
+            slot_spec = car(current)
+            # Slot spec can be just a symbol or a list
+            if isinstance(slot_spec, lisptype.LispSymbol):
+                slots_list.append({'name': slot_spec.name})
+            elif _consp_internal(slot_spec):
+                slot_name = car(slot_spec)
+                if isinstance(slot_name, lisptype.LispSymbol):
+                    slot_dict = {'name': slot_name.name}
+                    # Parse slot options like :initarg, :initform, etc.
+                    slot_opts = cdr(slot_spec)
+                    while _consp_internal(slot_opts):
+                        opt_key = car(slot_opts)
+                        slot_opts = cdr(slot_opts)
+                        if _consp_internal(slot_opts):
+                            opt_value = car(slot_opts)
+                            slot_opts = cdr(slot_opts)
+                            if isinstance(opt_key, lisptype.lispKeyword):
+                                opt_name = opt_key.name.lower()
+                                if opt_name == 'initarg':
+                                    slot_dict['initarg'] = opt_value
+                                elif opt_name == 'initform':
+                                    slot_dict['initform'] = opt_value
+                                elif opt_name == 'reader':
+                                    slot_dict['reader'] = opt_value
+                                elif opt_name == 'writer':
+                                    slot_dict['writer'] = opt_value
+                    slots_list.append(slot_dict)
+            current = cdr(current)
+    
+    # Parse options
+    metaclass = None
+    documentation = None
+    if _consp_internal(options_rest):
+        current = options_rest
+        while _consp_internal(current):
+            option = car(current)
+            if _consp_internal(option):
+                opt_key = car(option)
+                if isinstance(opt_key, lisptype.lispKeyword):
+                    opt_name = opt_key.name.lower()
+                    opt_vals = cdr(option)
+                    if opt_name == 'metaclass' and _consp_internal(opt_vals):
+                        metaclass = car(opt_vals)
+                    elif opt_name == 'documentation' and _consp_internal(opt_vals):
+                        documentation = car(opt_vals)
+            current = cdr(current)
+    
+    # Call the defclass function to create the class
+    result = defclass(
+        class_name,
+        direct_superclasses=superclasses_list,
+        slots=slots_list,
+        metaclass=metaclass,
+        documentation=documentation
+    )
+    
+    return class_name
+
+
 def eval_defgeneric(form, env):
     """Evaluate DEFGENERIC special form.
     
@@ -1382,6 +1510,27 @@ def eval_defgeneric(form, env):
                     spec_current = specialized_lambda_list
                     while _consp_internal(spec_current):
                         param_spec = car(spec_current)
+                        
+                        # Skip lambda-list keywords like &KEY, &OPTIONAL, &REST, etc.
+                        if isinstance(param_spec, lisptype.LispSymbol):
+                            spec_keyword = param_spec.name.upper()
+                            if spec_keyword.startswith('&'):
+                                # Skip this keyword and consume the rest (which are key/value pairs or args)
+                                # For &KEY, we need to skip key-var pairs
+                                # For &OPTIONAL, &REST, we just move to the next element
+                                spec_current = cdr(spec_current)
+                                
+                                # If it's &KEY, skip the key-value pairs
+                                if spec_keyword == '&KEY':
+                                    while _consp_internal(spec_current):
+                                        next_item = car(spec_current)
+                                        # If it's a symbol starting with &, we hit another keyword, stop
+                                        if isinstance(next_item, lisptype.LispSymbol) and next_item.name.upper().startswith('&'):
+                                            break
+                                        # Otherwise skip the key variable
+                                        spec_current = cdr(spec_current)
+                                continue
+                        
                         if _consp_internal(param_spec):
                             # Specialized: (param-name type)
                             param_name = car(param_spec)
@@ -1393,8 +1542,8 @@ def eval_defgeneric(form, env):
                                 class_obj = None
                                 # Check if it's in the classes registry
                                 try:
-                                    from . import classes as classes_module
-                                    class_obj = classes_module.find_class(param_type.name)
+                                    import fclpy.classes
+                                    class_obj = fclpy.classes.find_class(param_type.name)
                                 except Exception:
                                     pass
                                 # If not found and it's T, use None (unspecialized)
@@ -1691,6 +1840,7 @@ __all__ = [
     'eval_defparameter',
     'eval_defconstant',
     'eval_defstruct',
+    'eval_defclass',
     'eval_pop',
     'eval_defgeneric',
     'eval_defmethod',
