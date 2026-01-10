@@ -1,14 +1,14 @@
 ANSI Test Loading Errors
-Generated: 2026-01-10T19:48:27.545349
+Generated: 2026-01-10T19:49:38.296873
 ============================================================
 
 Summary: 97 total errors
 
 Error Categories:
-  Other: 62
+  Other: 61
   Unbound variable: 21
   argument: 9
-  Not a function: 3
+  Not a function: 4
   Not implemented: 1
   LOOP: 1
 
@@ -16,6 +16,7 @@ Error Categories:
 UNIQUE ERROR TYPES (83):
 ============================================================
 
+[1x] Not a function: DEF-READTABLE-CASE-TEST: Not implemented | expr=(SYMBOL-MACROLET
 [1x] Not a function: N: Not implemented | expr=(DEFPARAMETER *DEFSETF.4-VALS* (MULTIP
 [1x] Not a function: Y: Not implemented | expr=(DEFSETF DEFSETF.5-ACCESSOR (Y) (VAL) 
 [1x] Not a function: Y: Not implemented | expr=(LET ((Z (QUOTE CAR))) (DEFSETF DEFSET
@@ -36,7 +37,6 @@ UNIQUE ERROR TYPES (83):
 [1x] Unmatched closing parenthesis | expr=(DEFUN DEFSTRUCT-WITH-TESTS-FUN (NAME-AND-O
 [4x] both arguments should be Rational instances | expr=(DEFCONSTANT +RATIONAL-MOST-N
 [4x] both arguments should be Rational instances | expr=(DEFCONSTANT +RATIONAL-MOST-P
-[1x] module 'fclpy.lispenv' has no attribute 'Environment' | expr=(SYMBOL-MACROLET ((
 [1x] | expr=(DEFSTRUCT-WITH-TESTS (STRUCT-TEST-04) A B C)
 [1x] | expr=(DEFSTRUCT-WITH-TESTS (STRUCT-TEST-05 :CONSTRUCTOR) A05 B05 C05)
 [1x] | expr=(DEFSTRUCT-WITH-TESTS (STRUCT-TEST-06 (:CONSTRUCTOR)) A06 B06 C06)
@@ -200,4 +200,4 @@ ALL ERRORS (FULL):
 94. Error evaluating expression 96 in C:\Users\ACER\git\fclpy\ansi-test\structures\structures-02.lsp:  | expr=(DEFSTRUCT-WITH-TESTS (STRUCT-TEST-68 (:INCLUDE STRUCT-TEST-67)) C D)
 95. Error evaluating expression 14 in C:\Users\ACER\git\fclpy\ansi-test\auxiliary\types-aux.fasl: Unbound variable: EVEN-ARRAY: Not implemented | expr=(DEFTYPE EVEN-ARRAY (&OPTIONAL TYPE SIZE) (QUASIQUOTE (AND (ARRAY (UNQUOTE TYPE) (UNQUOTE SIZE)) (SATISFIES EVEN-SIZE-P))))
 96. Error evaluating expression 6 in C:\Users\ACER\git\fclpy\ansi-test\printer\print-level.lsp: Unbound variable: PRINT-LEVEL-CONDITION: Not implemented | expr=(DEFINE-CONDITION PRINT-LEVEL-CONDITION (CONDITION) (A B C))
-97. Error evaluating expression 9 in C:\Users\ACER\git\fclpy\ansi-test\reader\readtable-case.lsp: module 'fclpy.lispenv' has no attribute 'Environment' | expr=(SYMBOL-MACROLET ((LOOKUP-TABLE (QUOTE (:SYMBOL ('zebra' 'Zebra' 'ZEBRA' 'zebr\\a' 'zebr\\A' 'ZEBR\\a' 'ZEBR\\A' 'Zebr\\a' 'Zebr\\A') :UPCASE ('ZEBRA' 'ZEBRA' 'ZEBRA' 'ZEBRa' 'ZEBRA' 'ZEBRa' 'ZEBRA' 'ZEBRa' 'ZEBRA') :DOWNCASE ('zebra' 'zebra' 'zebra' 'zebra' 'zebrA' 'zebra' 'zebrA' 'zebra' 'zebrA') :PRESERVE ('zebra' 'Zebra' 'ZEBRA' 'zebra' 'zebrA' 'ZEBRa' 'ZEBRA' 'Zebra' 'ZebrA') :INVERT ('ZEBRA' 'Zebra' 'zebra' 'ZEBRa' 'ZEBRA' 'zebra' 'zebrA' 'Zebra' 'ZebrA'))))) (MACROLET ((DEF-READTABLE-CASE-TEST (READER-CASE) (QUASIQUOTE (DEFTEST (UNQUOTE (INTERN (CONCATENATE (QUOTE STRING) 'READTABLE-CASE.CASE-' (SYMBOL-NAME READER-CASE)) (FIND-PACKAGE :CL-TEST))) (LET ((*READTABLE* (COPY-READTABLE))) (SETF (READTABLE-CASE *READTABLE*) (UNQUOTE READER-CASE)) (MAPCAR (FUNCTION (LAMBDA (X) (SYMBOL-NAME (READ-FROM-STRING X)))) (QUOTE (UNQUOTE (GETF LOOKUP-TABLE :SYMBOL))))) (UNQUOTE (GETF LOOKUP-TABLE READER-CASE)))))) (DEF-READTABLE-CASE-TEST :UPCASE) (DEF-READTABLE-CASE-TEST :DOWNCASE) (DEF-READTABLE-CASE-TEST :PRESERVE) (DEF-READTABLE-CASE-TEST :INVERT)))
+97. Error evaluating expression 9 in C:\Users\ACER\git\fclpy\ansi-test\reader\readtable-case.lsp: Not a function: DEF-READTABLE-CASE-TEST: Not implemented | expr=(SYMBOL-MACROLET ((LOOKUP-TABLE (QUOTE (:SYMBOL ('zebra' 'Zebra' 'ZEBRA' 'zebr\\a' 'zebr\\A' 'ZEBR\\a' 'ZEBR\\A' 'Zebr\\a' 'Zebr\\A') :UPCASE ('ZEBRA' 'ZEBRA' 'ZEBRA' 'ZEBRa' 'ZEBRA' 'ZEBRa' 'ZEBRA' 'ZEBRa' 'ZEBRA') :DOWNCASE ('zebra' 'zebra' 'zebra' 'zebra' 'zebrA' 'zebra' 'zebrA' 'zebra' 'zebrA') :PRESERVE ('zebra' 'Zebra' 'ZEBRA' 'zebra' 'zebrA' 'ZEBRa' 'ZEBRA' 'Zebra' 'ZebrA') :INVERT ('ZEBRA' 'Zebra' 'zebra' 'ZEBRa' 'ZEBRA' 'zebra' 'zebrA' 'Zebra' 'ZebrA'))))) (MACROLET ((DEF-READTABLE-CASE-TEST (READER-CASE) (QUASIQUOTE (DEFTEST (UNQUOTE (INTERN (CONCATENATE (QUOTE STRING) 'READTABLE-CASE.CASE-' (SYMBOL-NAME READER-CASE)) (FIND-PACKAGE :CL-TEST))) (LET ((*READTABLE* (COPY-READTABLE))) (SETF (READTABLE-CASE *READTABLE*) (UNQUOTE READER-CASE)) (MAPCAR (FUNCTION (LAMBDA (X) (SYMBOL-NAME (READ-FROM-STRING X)))) (QUOTE (UNQUOTE (GETF LOOKUP-TABLE :SYMBOL))))) (UNQUOTE (GETF LOOKUP-TABLE READER-CASE)))))) (DEF-READTABLE-CASE-TEST :UPCASE) (DEF-READTABLE-CASE-TEST :DOWNCASE) (DEF-READTABLE-CASE-TEST :PRESERVE) (DEF-READTABLE-CASE-TEST :INVERT)))
