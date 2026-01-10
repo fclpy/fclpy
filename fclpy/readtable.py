@@ -282,9 +282,9 @@ class Readtable:
         
         # If symbol starts with a leading colon, treat it as a keyword
         if token.startswith(':'):
-            # Create a keyword with the name after the colon
+            # Intern keyword with the name after the colon
             name = token[1:]
-            return lisptype.lispKeyword(name.upper())
+            return lisptype.intern_keyword(name.upper())
         
         # Handle package-qualified symbols (PKG:SYM or PKG::SYM)
         # Only treat as package-qualified if contains a real colon (not escaped placeholder \x00)

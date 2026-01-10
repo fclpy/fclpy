@@ -272,9 +272,9 @@ class FclpyREPL:
             return self.parse_function_call(text)
         else:
             # Assume it's a symbol
-            # Keywords of the form :FOO should be returned as lispKeyword
+            # Keywords of the form :FOO should be interned as keywords
             if text.startswith(':'):
-                return lisptype.lispKeyword(text[1:].upper())
+                return lisptype.intern_keyword(text[1:].upper())
             return lisptype.LispSymbol(text.upper())
     
     def parse_function_call(self, text):
@@ -295,7 +295,7 @@ class FclpyREPL:
             else:
                 # Handle keyword arguments like :FOO
                 if arg.startswith(':'):
-                    args = lisptype.lispCons(lisptype.lispKeyword(arg[1:].upper()), args)
+                    args = lisptype.lispCons(lisptype.intern_keyword(arg[1:].upper()), args)
                 else:
                     args = lisptype.lispCons(lisptype.LispSymbol(arg.upper()), args)
         

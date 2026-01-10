@@ -202,6 +202,10 @@ def char_greater_equal(*characters):  # alias
 @_registry.cl_function('CHARACTER')
 def character(designator):
     """Convert to character."""
+    # Convert LispString to Python string for processing
+    if isinstance(designator, lisptype.LispString):
+        designator = str(designator)
+    
     if isinstance(designator, str):
         if len(designator) == 1:
             return designator

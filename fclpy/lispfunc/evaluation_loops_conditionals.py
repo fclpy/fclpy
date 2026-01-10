@@ -489,7 +489,7 @@ def make_lambda_closure(lambda_list, body, env):
                     rest_param = param
                     mode = 'after_rest'  # Only one &rest param
                 elif mode == 'key':
-                    key_params.append((lisptype.lispKeyword(param.name), param, lisptype.NIL))
+                    key_params.append((lisptype.intern_keyword(param.name), param, lisptype.NIL))
                 elif mode == 'aux':
                     pass  # &aux params are local bindings, handle later
         elif _consp_internal(param):
@@ -505,7 +505,7 @@ def make_lambda_closure(lambda_list, body, env):
                     actual_name = car(cdr(pname))
                     key_params.append((keyword, actual_name, pdefault))
                 else:
-                    key_params.append((lisptype.lispKeyword(pname.name), pname, pdefault))
+                    key_params.append((lisptype.intern_keyword(pname.name), pname, pdefault))
         current = cdr(current)
     
     def closure_function(*args):

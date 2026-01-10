@@ -143,11 +143,11 @@ class LispReader():
                 normalized = normalized.replace(marker, 'E')
             return float(normalized)
         # Otherwise it's a symbol
-        # Keywords start with ':' and should be read as keywords interned in KEYWORD package
+        # Keywords start with ':' and should be interned in KEYWORD package
         if token.startswith(":"):
-            # strip leading ':' and return a keyword object (keywords are self-evaluating)
+            # strip leading ':' and return an interned keyword (keywords are self-evaluating)
             name = token[1:]
-            return lisptype.lispKeyword(name.upper())
+            return lisptype.intern_keyword(name.upper())
         
         # Handle package-qualified symbols (PKG:SYM or PKG::SYM)
         # Only treat as package-qualified if contains a real colon (not escaped placeholder \x00)
