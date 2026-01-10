@@ -193,10 +193,19 @@ def denominator(rational):
 
 
 @_registry.cl_function('RATIONAL')
-def rational(n, d=1):
-    """Create rational number from numerator and denominator"""
+def rational(number):
+    """Convert a real number to a rational.
+    
+    If number is already rational (integer or Fraction), returns it.
+    If number is a float, converts it to an exact rational representation.
+    """
     from fractions import Fraction
-    return Fraction(n, d)
+    if isinstance(number, int):
+        return number
+    if isinstance(number, Fraction):
+        return number
+    # Float - convert to exact rational
+    return Fraction(number)
 
 
 @_registry.cl_function('RATIONALIZE')
@@ -355,6 +364,42 @@ def logcount(integer):
 def logtest(integer1, integer2):
     """Test if any bits are set in both integers."""
     return (integer1 & integer2) != 0
+
+
+@_registry.cl_function('LOGANDC1')
+def logandc1(integer1, integer2):
+    """AND with complement of first arg: (logand (lognot integer1) integer2)."""
+    return ~integer1 & integer2
+
+
+@_registry.cl_function('LOGANDC2')
+def logandc2(integer1, integer2):
+    """AND with complement of second arg: (logand integer1 (lognot integer2))."""
+    return integer1 & ~integer2
+
+
+@_registry.cl_function('LOGNAND')
+def lognand(integer1, integer2):
+    """NOT of AND: (lognot (logand integer1 integer2))."""
+    return ~(integer1 & integer2)
+
+
+@_registry.cl_function('LOGNOR')
+def lognor(integer1, integer2):
+    """NOT of OR: (lognot (logior integer1 integer2))."""
+    return ~(integer1 | integer2)
+
+
+@_registry.cl_function('LOGORC1')
+def logorc1(integer1, integer2):
+    """OR with complement of first arg: (logior (lognot integer1) integer2)."""
+    return ~integer1 | integer2
+
+
+@_registry.cl_function('LOGORC2')
+def logorc2(integer1, integer2):
+    """OR with complement of second arg: (logior integer1 (lognot integer2))."""
+    return integer1 | ~integer2
 
 
 @_registry.cl_function('BYTE')
@@ -769,6 +814,7 @@ __all__ = [
     'numberp', 'integerp', 'floatp', 'complexp', 'realp', 'rationalp',
     'imagpart', 'realpart', 'conjugate', 'phase', 'cis',
     'logand', 'logior', 'logxor', 'lognot', 'logeqv', 'ash',
+    'logandc1', 'logandc2', 'lognand', 'lognor', 'logorc1', 'logorc2',
     'integer_length', 'logbitp', 'logcount', 'logtest',
     'byte_fn', 'byte_size', 'byte_position', 'ldb', 'ldb_test', 'dpb',
     'deposit_field', 'mask_field',

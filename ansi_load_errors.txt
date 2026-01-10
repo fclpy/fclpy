@@ -1,25 +1,21 @@
 ANSI Test Loading Errors
-Generated: 2026-01-10T21:22:30.182930
+Generated: 2026-01-10T21:30:54.742591
 ============================================================
 
-Summary: 18 total errors
+Summary: 9 total errors
 
 Error Categories:
-  argument: 9
   Unbound variable: 7
-  Not implemented: 1
   Assertion failed: 1
+  argument: 1
 
 ============================================================
-UNIQUE ERROR TYPES (7):
+UNIQUE ERROR TYPES (4):
 ============================================================
 
 [1x] Assertion failed: NIL | expr=(DEFSTRUCT-WITH-TESTS STRUCT-TEST-66 NIL)
 [1x] Unbound variable: : Not implemented | expr=
 [6x] Unbound variable: UPGRADED-TYPE: Not implemented | expr=(DEF-UCPT-TEST UPGRADED-
-[1x] Undefined function: LOGANDC1: Not implemented | expr=(DEFPARAMETER *BOOLE-FNS* (
-[4x] both arguments should be Rational instances | expr=(DEFCONSTANT +RATIONAL-MOST-N
-[4x] both arguments should be Rational instances | expr=(DEFCONSTANT +RATIONAL-MOST-P
 [1x] pushnew() missing 2 required positional arguments: 'item' and 'place' | expr=(DE
 
 ============================================================
@@ -27,20 +23,11 @@ ALL ERRORS (FULL):
 ============================================================
 
 1. Error evaluating expression 27 in C:\Users\ACER\git\fclpy\ansi-test\data-and-control-flow\defsetf.lsp: Unbound variable: : Not implemented | expr=
-2. Error evaluating expression 6 in C:\Users\ACER\git\fclpy\ansi-test\auxiliary\numbers-aux.fasl: both arguments should be Rational instances | expr=(DEFCONSTANT +RATIONAL-MOST-NEGATIVE-SHORT-FLOAT+ (RATIONAL-SAFELY MOST-NEGATIVE-SHORT-FLOAT))
-3. Error evaluating expression 7 in C:\Users\ACER\git\fclpy\ansi-test\auxiliary\numbers-aux.fasl: both arguments should be Rational instances | expr=(DEFCONSTANT +RATIONAL-MOST-NEGATIVE-SINGLE-FLOAT+ (RATIONAL-SAFELY MOST-NEGATIVE-SINGLE-FLOAT))
-4. Error evaluating expression 8 in C:\Users\ACER\git\fclpy\ansi-test\auxiliary\numbers-aux.fasl: both arguments should be Rational instances | expr=(DEFCONSTANT +RATIONAL-MOST-NEGATIVE-DOUBLE-FLOAT+ (RATIONAL-SAFELY MOST-NEGATIVE-DOUBLE-FLOAT))
-5. Error evaluating expression 9 in C:\Users\ACER\git\fclpy\ansi-test\auxiliary\numbers-aux.fasl: both arguments should be Rational instances | expr=(DEFCONSTANT +RATIONAL-MOST-NEGATIVE-LONG-FLOAT+ (RATIONAL-SAFELY MOST-NEGATIVE-LONG-FLOAT))
-6. Error evaluating expression 10 in C:\Users\ACER\git\fclpy\ansi-test\auxiliary\numbers-aux.fasl: both arguments should be Rational instances | expr=(DEFCONSTANT +RATIONAL-MOST-POSITIVE-SHORT-FLOAT+ (RATIONAL-SAFELY MOST-POSITIVE-SHORT-FLOAT))
-7. Error evaluating expression 11 in C:\Users\ACER\git\fclpy\ansi-test\auxiliary\numbers-aux.fasl: both arguments should be Rational instances | expr=(DEFCONSTANT +RATIONAL-MOST-POSITIVE-SINGLE-FLOAT+ (RATIONAL-SAFELY MOST-POSITIVE-SINGLE-FLOAT))
-8. Error evaluating expression 12 in C:\Users\ACER\git\fclpy\ansi-test\auxiliary\numbers-aux.fasl: both arguments should be Rational instances | expr=(DEFCONSTANT +RATIONAL-MOST-POSITIVE-DOUBLE-FLOAT+ (RATIONAL-SAFELY MOST-POSITIVE-DOUBLE-FLOAT))
-9. Error evaluating expression 13 in C:\Users\ACER\git\fclpy\ansi-test\auxiliary\numbers-aux.fasl: both arguments should be Rational instances | expr=(DEFCONSTANT +RATIONAL-MOST-POSITIVE-LONG-FLOAT+ (RATIONAL-SAFELY MOST-POSITIVE-LONG-FLOAT))
-10. Error evaluating expression 3 in C:\Users\ACER\git\fclpy\ansi-test\numbers\boole.lsp: Undefined function: LOGANDC1: Not implemented | expr=(DEFPARAMETER *BOOLE-FNS* (LIST (FUNCTION (LAMBDA (X Y) (DECLARE (IGNORE Y)) X)) (FUNCTION (LAMBDA (X Y) (DECLARE (IGNORE X)) Y)) (FUNCTION LOGAND) (FUNCTION LOGANDC1) (FUNCTION LOGANDC2) (FUNCTION (LAMBDA (X Y) (DECLARE (IGNORE Y)) (LOGNOT X))) (FUNCTION (LAMBDA (X Y) (DECLARE (IGNORE X)) (LOGNOT Y))) (CONSTANTLY 0) (FUNCTION LOGEQV) (FUNCTION LOGIOR) (FUNCTION LOGNAND) (FUNCTION LOGNOR) (FUNCTION LOGORC1) (FUNCTION LOGORC2) (CONSTANTLY -1) (FUNCTION LOGXOR)))
-11. Error evaluating expression 2 in C:\Users\ACER\git\fclpy\ansi-test\numbers\upgraded-complex-part-type.lsp: Unbound variable: UPGRADED-TYPE: Not implemented | expr=(DEF-UCPT-TEST UPGRADED-COMPLEX-PART-TYPE.1 (QUOTE (REAL INTEGER RATIONAL RATIO FLOAT SHORT-FLOAT SINGLE-FLOAT DOUBLE-FLOAT LONG-FLOAT FIXNUM BIGNUM BIT UNSIGNED-BYTE SIGNED-BYTE)))
-12. Error evaluating expression 3 in C:\Users\ACER\git\fclpy\ansi-test\numbers\upgraded-complex-part-type.lsp: Unbound variable: UPGRADED-TYPE: Not implemented | expr=(DEF-UCPT-TEST UPGRADED-COMPLEX-PART-TYPE.2 (MAPCAR (FUNCTION FIND-CLASS) (QUOTE (REAL FLOAT INTEGER RATIONAL RATIO))))
-13. Error evaluating expression 4 in C:\Users\ACER\git\fclpy\ansi-test\numbers\upgraded-complex-part-type.lsp: Unbound variable: UPGRADED-TYPE: Not implemented | expr=(DEF-UCPT-TEST UPGRADED-COMPLEX-PART-TYPE.3 (MAPCAR (FUNCTION CLASS-OF) (QUOTE (1.0 1.0 1.0 1.0))))
-14. Error evaluating expression 5 in C:\Users\ACER\git\fclpy\ansi-test\numbers\upgraded-complex-part-type.lsp: Unbound variable: UPGRADED-TYPE: Not implemented | expr=(DEF-UCPT-TEST UPGRADED-COMPLEX-PART-TYPE.4 (LOOP FOR I FROM 1 TO 100 COLLECT (QUASIQUOTE (UNSIGNED-BYTE (UNQUOTE I)))))
-15. Error evaluating expression 6 in C:\Users\ACER\git\fclpy\ansi-test\numbers\upgraded-complex-part-type.lsp: Unbound variable: UPGRADED-TYPE: Not implemented | expr=(DEF-UCPT-TEST UPGRADED-COMPLEX-PART-TYPE.5 (LOOP FOR I FROM 1 TO 100 COLLECT (QUASIQUOTE (SIGNED-BYTE (UNQUOTE I)))))
-16. Error evaluating expression 7 in C:\Users\ACER\git\fclpy\ansi-test\numbers\upgraded-complex-part-type.lsp: Unbound variable: UPGRADED-TYPE: Not implemented | expr=(DEF-UCPT-TEST UPGRADED-COMPLEX-PART-TYPE.6 (LOOP FOR I = 1 THEN (* I 2) REPEAT 100 COLLECT (CLASS-OF I)))
-17. Error evaluating expression 91 in C:\Users\ACER\git\fclpy\ansi-test\structures\structures-02.lsp: pushnew() missing 2 required positional arguments: 'item' and 'place' | expr=(DEFSTRUCT-WITH-TESTS :STRUCT-TEST-63 A63 B63 C63)
-18. Error evaluating expression 94 in C:\Users\ACER\git\fclpy\ansi-test\structures\structures-02.lsp: Assertion failed: NIL | expr=(DEFSTRUCT-WITH-TESTS STRUCT-TEST-66 NIL)
+2. Error evaluating expression 2 in C:\Users\ACER\git\fclpy\ansi-test\numbers\upgraded-complex-part-type.lsp: Unbound variable: UPGRADED-TYPE: Not implemented | expr=(DEF-UCPT-TEST UPGRADED-COMPLEX-PART-TYPE.1 (QUOTE (REAL INTEGER RATIONAL RATIO FLOAT SHORT-FLOAT SINGLE-FLOAT DOUBLE-FLOAT LONG-FLOAT FIXNUM BIGNUM BIT UNSIGNED-BYTE SIGNED-BYTE)))
+3. Error evaluating expression 3 in C:\Users\ACER\git\fclpy\ansi-test\numbers\upgraded-complex-part-type.lsp: Unbound variable: UPGRADED-TYPE: Not implemented | expr=(DEF-UCPT-TEST UPGRADED-COMPLEX-PART-TYPE.2 (MAPCAR (FUNCTION FIND-CLASS) (QUOTE (REAL FLOAT INTEGER RATIONAL RATIO))))
+4. Error evaluating expression 4 in C:\Users\ACER\git\fclpy\ansi-test\numbers\upgraded-complex-part-type.lsp: Unbound variable: UPGRADED-TYPE: Not implemented | expr=(DEF-UCPT-TEST UPGRADED-COMPLEX-PART-TYPE.3 (MAPCAR (FUNCTION CLASS-OF) (QUOTE (1.0 1.0 1.0 1.0))))
+5. Error evaluating expression 5 in C:\Users\ACER\git\fclpy\ansi-test\numbers\upgraded-complex-part-type.lsp: Unbound variable: UPGRADED-TYPE: Not implemented | expr=(DEF-UCPT-TEST UPGRADED-COMPLEX-PART-TYPE.4 (LOOP FOR I FROM 1 TO 100 COLLECT (QUASIQUOTE (UNSIGNED-BYTE (UNQUOTE I)))))
+6. Error evaluating expression 6 in C:\Users\ACER\git\fclpy\ansi-test\numbers\upgraded-complex-part-type.lsp: Unbound variable: UPGRADED-TYPE: Not implemented | expr=(DEF-UCPT-TEST UPGRADED-COMPLEX-PART-TYPE.5 (LOOP FOR I FROM 1 TO 100 COLLECT (QUASIQUOTE (SIGNED-BYTE (UNQUOTE I)))))
+7. Error evaluating expression 7 in C:\Users\ACER\git\fclpy\ansi-test\numbers\upgraded-complex-part-type.lsp: Unbound variable: UPGRADED-TYPE: Not implemented | expr=(DEF-UCPT-TEST UPGRADED-COMPLEX-PART-TYPE.6 (LOOP FOR I = 1 THEN (* I 2) REPEAT 100 COLLECT (CLASS-OF I)))
+8. Error evaluating expression 91 in C:\Users\ACER\git\fclpy\ansi-test\structures\structures-02.lsp: pushnew() missing 2 required positional arguments: 'item' and 'place' | expr=(DEFSTRUCT-WITH-TESTS :STRUCT-TEST-63 A63 B63 C63)
+9. Error evaluating expression 94 in C:\Users\ACER\git\fclpy\ansi-test\structures\structures-02.lsp: Assertion failed: NIL | expr=(DEFSTRUCT-WITH-TESTS STRUCT-TEST-66 NIL)

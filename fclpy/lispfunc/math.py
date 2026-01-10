@@ -19,6 +19,7 @@ __all__ = [
     'numberp', 'integerp', 'floatp', 'complexp', 'realp', 'rationalp',
     'imagpart', 'realpart', 'conjugate', 'phase', 'cis',
     'logand', 'logior', 'logxor', 'lognot', 'logeqv', 'ash',
+    'logandc1', 'logandc2', 'lognand', 'lognor', 'logorc1', 'logorc2',
     'integer_length', 'logbitp', 'logcount', 'logtest',
     'byte_fn', 'byte_size', 'byte_position', 'ldb', 'ldb_test', 'dpb',
     'deposit_field', 'mask_field',
