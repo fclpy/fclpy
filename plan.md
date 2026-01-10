@@ -68,8 +68,8 @@ pipenv run python scripts/ansi_load_errors.py
 
 ### Prerequisites
 
-- Python 3.10+
-- pipenv for dependency management
+ - Python 3.10+
+ - pipenv (required) — use `pipenv run` for all Python commands and dependency management
 
 ### Initial Setup
 
@@ -77,6 +77,8 @@ pipenv run python scripts/ansi_load_errors.py
 pipenv install --dev
 pipenv --venv
 ```
+
+**Important:** Always run Python and project scripts through Pipenv. Do not call the system `python` or `pip` directly; instead use `pipenv run <command>` (for example `pipenv run python scripts/ansi_load_errors.py`).
 
 ### Running Tests
 
@@ -181,7 +183,7 @@ git reset --hard HEAD; git clean -fd    # Emergency rollback
 
 1. **Run tests after every change**: `pipenv run pytest -q`
 2. **Never commit with failing tests**
-3. **Use `pipenv run` for all Python commands**
+3. **Always run Python commands via `pipenv run` (required)**
 4. **Use PowerShell syntax** (`;` not `&&`)
 5. **One task at a time**, test, commit, repeat
 
