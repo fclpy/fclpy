@@ -227,7 +227,8 @@ class LispReader():
         return c is not None
     
     def whitespace_char(self,c):
-        return c is not None and c in [" ","\t","\n","\r"]
+        # Include form feed (\x0c) and vertical tab (\x0b) as whitespace per CL standard
+        return c is not None and c in [" ","\t","\n","\r","\x0c","\x0b"]
        
     def eof(self,c):
         return c != c
