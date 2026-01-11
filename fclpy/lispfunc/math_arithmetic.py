@@ -193,13 +193,23 @@ def denominator(rational):
 
 
 @_registry.cl_function('RATIONAL')
-def rational(number):
-    """Convert a real number to a rational.
+def rational(number, denominator=None):
+    """Convert a real number to a rational, or create a fraction from numerator/denominator.
     
-    If number is already rational (integer or Fraction), returns it.
-    If number is a float, converts it to an exact rational representation.
+    With one argument:
+        If number is already rational (integer or Fraction), returns it.
+        If number is a float, converts it to an exact rational representation.
+    
+    With two arguments:
+        Creates a Fraction from numerator and denominator (automatically reduced).
     """
     from fractions import Fraction
+    
+    # Two-argument form: create fraction from numerator/denominator
+    if denominator is not None:
+        return Fraction(number, denominator)
+    
+    # One-argument form: convert to rational
     if isinstance(number, int):
         return number
     if isinstance(number, Fraction):

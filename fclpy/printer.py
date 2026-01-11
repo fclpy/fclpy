@@ -8,7 +8,7 @@ for different types of Lisp objects.
 import fclpy.lisptype as lisptype
 from fclpy.lisptype import (
     LispSymbol, lispKeyword, Character, lispCons, lispNull, NIL,
-    lispNull as LispNull
+    lispNull as LispNull, LispString
 )
 
 
@@ -58,8 +58,8 @@ def _print_object(obj, escape=True):
         return str(obj)
     elif isinstance(obj, float):
         return str(obj)
-    elif isinstance(obj, str):
-        return _print_string(obj, escape)
+    elif isinstance(obj, (str, LispString)):
+        return _print_string(str(obj), escape)
     elif isinstance(obj, lispKeyword):
         return _print_keyword(obj)
     elif isinstance(obj, LispSymbol):

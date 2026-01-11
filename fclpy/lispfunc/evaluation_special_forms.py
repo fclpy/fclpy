@@ -180,8 +180,8 @@ def eval_defun(form, env):
     actual_body = body
     if _consp_internal(body):
         first_form = car(body)
-        if isinstance(first_form, str):
-            docstring = first_form
+        if isinstance(first_form, (str, lisptype.LispString)):
+            docstring = str(first_form)  # Convert to Python str for storage
             actual_body = cdr(body)
     
     # Parse the lambda list
@@ -371,8 +371,8 @@ def _create_macro_function(macro_name, lambda_list, body, env):
     actual_body = body
     if _consp_internal(body):
         first_form = car(body)
-        if isinstance(first_form, str):
-            docstring = first_form
+        if isinstance(first_form, (str, lisptype.LispString)):
+            docstring = str(first_form)  # Convert to Python str for storage
             actual_body = cdr(body)
 
     # Parse lambda list to handle &optional, &rest, &key, &whole etc.
@@ -540,6 +540,13 @@ def eval_defmacro(form, env):
     if not isinstance(macro_name, lisptype.LispSymbol):
         raise lisptype.LispNotImplementedError("DEFMACRO: macro name must be a symbol")
 
+    # Extract docstring if present (first form in body can be a string)
+    docstring = None
+    if _consp_internal(body):
+        first_form = car(body)
+        if isinstance(first_form, (str, lisptype.LispString)):
+            docstring = str(first_form)  # Convert to Python str for storage
+    
     # Create the macro function using the shared helper
     macro_callable = _create_macro_function(macro_name, lambda_list, body, env)
     
@@ -555,6 +562,12 @@ def eval_defmacro(form, env):
     # Also add to the current environment for immediate visibility
     if env is not global_env:
         env.add_function(macro_name, macro_callable)
+    
+    # Store docstring on the macro symbol's property list
+    if docstring:
+        if not hasattr(macro_name, 'plist'):
+            macro_name.plist = {}
+        macro_name.plist['DOCUMENTATION'] = docstring
     
     return macro_name
 

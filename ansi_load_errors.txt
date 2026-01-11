@@ -1,20 +1,19 @@
 ANSI Test Loading Errors
-Generated: 2026-01-10T21:30:54.742591
+Generated: 2026-01-11T12:06:38.747028
 ============================================================
 
-Summary: 9 total errors
+Summary: 8 total errors
 
 Error Categories:
-  Unbound variable: 7
+  Unbound variable: 6
   Assertion failed: 1
   argument: 1
 
 ============================================================
-UNIQUE ERROR TYPES (4):
+UNIQUE ERROR TYPES (3):
 ============================================================
 
 [1x] Assertion failed: NIL | expr=(DEFSTRUCT-WITH-TESTS STRUCT-TEST-66 NIL)
-[1x] Unbound variable: : Not implemented | expr=
 [6x] Unbound variable: UPGRADED-TYPE: Not implemented | expr=(DEF-UCPT-TEST UPGRADED-
 [1x] pushnew() missing 2 required positional arguments: 'item' and 'place' | expr=(DE
 
@@ -22,12 +21,11 @@ UNIQUE ERROR TYPES (4):
 ALL ERRORS (FULL):
 ============================================================
 
-1. Error evaluating expression 27 in C:\Users\ACER\git\fclpy\ansi-test\data-and-control-flow\defsetf.lsp: Unbound variable: : Not implemented | expr=
-2. Error evaluating expression 2 in C:\Users\ACER\git\fclpy\ansi-test\numbers\upgraded-complex-part-type.lsp: Unbound variable: UPGRADED-TYPE: Not implemented | expr=(DEF-UCPT-TEST UPGRADED-COMPLEX-PART-TYPE.1 (QUOTE (REAL INTEGER RATIONAL RATIO FLOAT SHORT-FLOAT SINGLE-FLOAT DOUBLE-FLOAT LONG-FLOAT FIXNUM BIGNUM BIT UNSIGNED-BYTE SIGNED-BYTE)))
-3. Error evaluating expression 3 in C:\Users\ACER\git\fclpy\ansi-test\numbers\upgraded-complex-part-type.lsp: Unbound variable: UPGRADED-TYPE: Not implemented | expr=(DEF-UCPT-TEST UPGRADED-COMPLEX-PART-TYPE.2 (MAPCAR (FUNCTION FIND-CLASS) (QUOTE (REAL FLOAT INTEGER RATIONAL RATIO))))
-4. Error evaluating expression 4 in C:\Users\ACER\git\fclpy\ansi-test\numbers\upgraded-complex-part-type.lsp: Unbound variable: UPGRADED-TYPE: Not implemented | expr=(DEF-UCPT-TEST UPGRADED-COMPLEX-PART-TYPE.3 (MAPCAR (FUNCTION CLASS-OF) (QUOTE (1.0 1.0 1.0 1.0))))
-5. Error evaluating expression 5 in C:\Users\ACER\git\fclpy\ansi-test\numbers\upgraded-complex-part-type.lsp: Unbound variable: UPGRADED-TYPE: Not implemented | expr=(DEF-UCPT-TEST UPGRADED-COMPLEX-PART-TYPE.4 (LOOP FOR I FROM 1 TO 100 COLLECT (QUASIQUOTE (UNSIGNED-BYTE (UNQUOTE I)))))
-6. Error evaluating expression 6 in C:\Users\ACER\git\fclpy\ansi-test\numbers\upgraded-complex-part-type.lsp: Unbound variable: UPGRADED-TYPE: Not implemented | expr=(DEF-UCPT-TEST UPGRADED-COMPLEX-PART-TYPE.5 (LOOP FOR I FROM 1 TO 100 COLLECT (QUASIQUOTE (SIGNED-BYTE (UNQUOTE I)))))
-7. Error evaluating expression 7 in C:\Users\ACER\git\fclpy\ansi-test\numbers\upgraded-complex-part-type.lsp: Unbound variable: UPGRADED-TYPE: Not implemented | expr=(DEF-UCPT-TEST UPGRADED-COMPLEX-PART-TYPE.6 (LOOP FOR I = 1 THEN (* I 2) REPEAT 100 COLLECT (CLASS-OF I)))
-8. Error evaluating expression 91 in C:\Users\ACER\git\fclpy\ansi-test\structures\structures-02.lsp: pushnew() missing 2 required positional arguments: 'item' and 'place' | expr=(DEFSTRUCT-WITH-TESTS :STRUCT-TEST-63 A63 B63 C63)
-9. Error evaluating expression 94 in C:\Users\ACER\git\fclpy\ansi-test\structures\structures-02.lsp: Assertion failed: NIL | expr=(DEFSTRUCT-WITH-TESTS STRUCT-TEST-66 NIL)
+1. Error evaluating expression 2 in C:\Users\ACER\git\fclpy\ansi-test\numbers\upgraded-complex-part-type.lsp: Unbound variable: UPGRADED-TYPE: Not implemented | expr=(DEF-UCPT-TEST UPGRADED-COMPLEX-PART-TYPE.1 (QUOTE (REAL INTEGER RATIONAL RATIO FLOAT SHORT-FLOAT SINGLE-FLOAT DOUBLE-FLOAT LONG-FLOAT FIXNUM BIGNUM BIT UNSIGNED-BYTE SIGNED-BYTE)))
+2. Error evaluating expression 3 in C:\Users\ACER\git\fclpy\ansi-test\numbers\upgraded-complex-part-type.lsp: Unbound variable: UPGRADED-TYPE: Not implemented | expr=(DEF-UCPT-TEST UPGRADED-COMPLEX-PART-TYPE.2 (MAPCAR (FUNCTION FIND-CLASS) (QUOTE (REAL FLOAT INTEGER RATIONAL RATIO))))
+3. Error evaluating expression 4 in C:\Users\ACER\git\fclpy\ansi-test\numbers\upgraded-complex-part-type.lsp: Unbound variable: UPGRADED-TYPE: Not implemented | expr=(DEF-UCPT-TEST UPGRADED-COMPLEX-PART-TYPE.3 (MAPCAR (FUNCTION CLASS-OF) (QUOTE (1.0 1.0 1.0 1.0))))
+4. Error evaluating expression 5 in C:\Users\ACER\git\fclpy\ansi-test\numbers\upgraded-complex-part-type.lsp: Unbound variable: UPGRADED-TYPE: Not implemented | expr=(DEF-UCPT-TEST UPGRADED-COMPLEX-PART-TYPE.4 (LOOP FOR I FROM 1 TO 100 COLLECT (QUASIQUOTE (UNSIGNED-BYTE (UNQUOTE I)))))
+5. Error evaluating expression 6 in C:\Users\ACER\git\fclpy\ansi-test\numbers\upgraded-complex-part-type.lsp: Unbound variable: UPGRADED-TYPE: Not implemented | expr=(DEF-UCPT-TEST UPGRADED-COMPLEX-PART-TYPE.5 (LOOP FOR I FROM 1 TO 100 COLLECT (QUASIQUOTE (SIGNED-BYTE (UNQUOTE I)))))
+6. Error evaluating expression 7 in C:\Users\ACER\git\fclpy\ansi-test\numbers\upgraded-complex-part-type.lsp: Unbound variable: UPGRADED-TYPE: Not implemented | expr=(DEF-UCPT-TEST UPGRADED-COMPLEX-PART-TYPE.6 (LOOP FOR I = 1 THEN (* I 2) REPEAT 100 COLLECT (CLASS-OF I)))
+7. Error evaluating expression 91 in C:\Users\ACER\git\fclpy\ansi-test\structures\structures-02.lsp: pushnew() missing 2 required positional arguments: 'item' and 'place' | expr=(DEFSTRUCT-WITH-TESTS :STRUCT-TEST-63 A63 B63 C63)
+8. Error evaluating expression 94 in C:\Users\ACER\git\fclpy\ansi-test\structures\structures-02.lsp: Assertion failed: NIL | expr=(DEFSTRUCT-WITH-TESTS STRUCT-TEST-66 NIL)
