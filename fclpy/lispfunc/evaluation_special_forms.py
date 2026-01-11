@@ -1105,7 +1105,10 @@ def eval_defstruct(form, env):
     slot_specs = cdr(args)
     
     # Parse name and options
-    if isinstance(name_and_options, lisptype.LispSymbol):
+    if isinstance(name_and_options, lisptype.lispKeyword):
+        # Keywords cannot be structure names
+        raise lisptype.LispError(f"DEFSTRUCT: structure name cannot be a keyword: {name_and_options}")
+    elif isinstance(name_and_options, lisptype.LispSymbol):
         struct_name = name_and_options
         conc_name = struct_name.name + '-'
         constructor_name = 'MAKE-' + struct_name.name
@@ -1114,6 +1117,11 @@ def eval_defstruct(form, env):
         include_parent = None
     elif _consp_internal(name_and_options):
         struct_name = car(name_and_options)
+        # Validate that struct_name is a symbol, not a keyword
+        if isinstance(struct_name, lisptype.lispKeyword):
+            raise lisptype.LispError(f"DEFSTRUCT: structure name cannot be a keyword: {struct_name}")
+        if not isinstance(struct_name, lisptype.LispSymbol):
+            raise lisptype.LispNotImplementedError(f"DEFSTRUCT: structure name must be a symbol, got {type(struct_name)}")
         conc_name = struct_name.name + '-'  # Default prefix
         constructor_name = 'MAKE-' + struct_name.name
         copier_name = 'COPY-' + struct_name.name
