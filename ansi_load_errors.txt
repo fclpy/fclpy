@@ -1,20 +1,17 @@
 ANSI Test Loading Errors
-Generated: 2026-01-11T12:37:24.500506
+Generated: 2026-01-11T12:55:29.094700
 ============================================================
 
-Summary: 1 total errors
+Summary: 0 total errors
 
 Error Categories:
-  Assertion failed: 1
 
 ============================================================
-UNIQUE ERROR TYPES (1):
+UNIQUE ERROR TYPES (0):
 ============================================================
 
-[1x] Assertion failed: NIL | expr=(DEFSTRUCT-WITH-TESTS STRUCT-TEST-66 NIL)
 
 ============================================================
 ALL ERRORS (FULL):
 ============================================================
 
-1. Error evaluating expression 94 in C:\Users\ACER\git\fclpy\ansi-test\structures\structures-02.lsp: Assertion failed: NIL | expr=(DEFSTRUCT-WITH-TESTS STRUCT-TEST-66 NIL)

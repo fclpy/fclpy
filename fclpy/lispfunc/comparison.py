@@ -380,7 +380,9 @@ def typep(object, type_specifier):
     elif type_name == 'STRING':
         return lisptype.lisp_bool(isinstance(object, str))
     elif type_name == 'SYMBOL':
-        return lisptype.lisp_bool(isinstance(object, lisptype.LispSymbol))
+        # In Common Lisp, NIL is both the empty list AND the symbol NIL
+        # So we need to accept both LispSymbol instances and NIL
+        return lisptype.lisp_bool(isinstance(object, lisptype.LispSymbol) or object is lisptype.NIL or isinstance(object, lisptype.lispNull))
     elif type_name == 'KEYWORD':
         return lisptype.lisp_bool(isinstance(object, lisptype.lispKeyword))
     elif type_name == 'FUNCTION':
@@ -395,6 +397,10 @@ def typep(object, type_specifier):
         return lisptype.lisp_bool(isinstance(object, (list, tuple, AdjustableVector)))
     elif type_name == 'HASH-TABLE':
         return lisptype.lisp_bool(isinstance(object, dict))
+    elif type_name == 'BOOLEAN':
+        # In Common Lisp, BOOLEAN is equivalent to (OR NULL (EQL T))
+        # i.e., only NIL and T are booleans
+        return lisptype.lisp_bool(object is lisptype.NIL or isinstance(object, lisptype.lispNull) or object is lisptype.T)
     else:
         # Try to find a user-defined class with this name
         try:
