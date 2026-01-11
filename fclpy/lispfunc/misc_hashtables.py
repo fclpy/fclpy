@@ -38,7 +38,7 @@ def maphash(function, hashtable):
     """Apply function to all hash table entries."""
     if isinstance(hashtable, dict):
         for k, v in list(hashtable.items()):
-            if not k.startswith('__hashmeta__'):
+            if not (isinstance(k, str) and k.startswith('__hashmeta__')):
                 function(k, v)
     return lisptype.NIL
 
@@ -47,7 +47,7 @@ def maphash(function, hashtable):
 def clrhash(hashtable):
     """Clear all entries from hash table."""
     if isinstance(hashtable, dict):
-        meta = {k: v for k, v in hashtable.items() if k.startswith('__hashmeta__')}
+        meta = {k: v for k, v in hashtable.items() if isinstance(k, str) and k.startswith('__hashmeta__')}
         hashtable.clear()
         hashtable.update(meta)
     return hashtable

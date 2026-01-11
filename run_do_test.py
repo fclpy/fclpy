@@ -16,11 +16,6 @@ if os.path.exists(init_lsp):
 else:
 	print('init.lsp not found; continuing')
 
-print('Loading rt.lsp...')
-runtime.load_and_evaluate_file(rt, env, verbose=False)
-print('Loading rt-test.lsp...')
-runtime.load_and_evaluate_file(rt_test, env, verbose=False)
-
 test_lisp = "(in-package :cl-test) (do-test 'char=.1)"
 print("Running %s" % test_lisp)
 res = eval_string(test_lisp, env)
