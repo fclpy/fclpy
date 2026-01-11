@@ -169,16 +169,38 @@ class Environment(lispT):
     
     def add_variable(self, symbol, value):
         """Legacy: add a variable binding (use bind)."""
+        # Accept either a direct LispSymbol or a cons of the form
+        # (:KEYWORD var) where the variable is the second element.
+        # This handles lambda-list key argument syntaxes that present
+        # parameter names as a cons pairing a keyword and a symbol.
+        from .lisptype_basic import lispCons
+
+        if isinstance(symbol, lispCons):
+            # Attempt to extract the actual variable from the cdr
+            try:
+                cdr = symbol.cdr
+                actual = cdr.car if isinstance(cdr, lispCons) else None
+            except Exception:
+                actual = None
+
+            if isinstance(actual, LispSymbol):
+                symbol = actual
+            else:
+                raise TypeError(f"add_variable: {symbol} is not a symbol, has type {type(symbol)}")
+
+        if not isinstance(symbol, LispSymbol):
+            raise TypeError(f"add_variable: {symbol} is not a symbol, has type {type(symbol)}")
+
         self.variable_bindings = Binding(symbol, value, self.variable_bindings, self)
-        try:
-            self._variable_map[symbol.name] = value
-        except Exception:
-            pass
+        self._variable_map[symbol.name] = value
+
     
     def has_variable(self, sym):
         """Check if a variable binding exists (distinguishes unbound from bound-to-None)."""
         b = self.variable_bindings
         while b is not None:
+            if type(b.symbol) is lispCons or type(sym) is lispCons:
+                print(f"[DEBUG] has_variable: comparing cons types b.symbol({type(b.symbol)}) sym({type(sym)})")
             if b.symbol.name == sym.name:
                 return True
             b = b.next
@@ -643,7 +665,7 @@ class Warning(Condition):
     pass
 
 
-class Error(Condition):
+class Error(Condition, BaseException):
     """Base class for error conditions."""
     pass
 
