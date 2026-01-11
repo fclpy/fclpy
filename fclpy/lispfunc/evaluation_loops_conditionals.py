@@ -581,20 +581,35 @@ def make_lambda_closure(lambda_list, body, env):
 def eval_quasiquote(form, env):
     """Evaluate a QUASIQUOTE form by processing UNQUOTE and UNQUOTE-SPLICING.
 
-    This is a simplified quasiquote evaluator that handles common patterns:
+    This quasiquote evaluator handles common patterns including nested quasiquotes:
     - (QUASIQUOTE x) where x is a list will return a new list where elements
       of the form (UNQUOTE e) are replaced with the evaluated value of e,
       and elements of the form (UNQUOTE-SPLICING e) are spliced into the list.
-    - Nested quasiquotes are not fully supported beyond a single level.
+    - Nested quasiquotes are properly handled with nesting level tracking.
     """
     from .evaluation_core import eval
     
     expr = car(cdr(form))
 
-    def _quasi(obj):
-        # If an explicit (UNQUOTE e) form, evaluate and return its value
+    def _quasi(obj, level=1):
+        """Process quasiquote at given nesting level.
+        
+        level=1 means we're at the outermost quasiquote.
+        level>1 means we're inside nested quasiquotes.
+        """
+        # If an explicit (UNQUOTE e) form
         if _consp_internal(obj) and isinstance(car(obj), lisptype.LispSymbol) and car(obj).name == 'UNQUOTE':
-            return eval(car(cdr(obj)), env)
+            if level == 1:
+                # At outermost level, evaluate the unquote
+                return eval(car(cdr(obj)), env)
+            else:
+                # Inside nested quasiquote, decrease level and recurse
+                return cons(car(obj), cons(_quasi(car(cdr(obj)), level - 1), lisptype.NIL))
+        
+        # If an explicit (QUASIQUOTE e) form - entering nested quasiquote
+        if _consp_internal(obj) and isinstance(car(obj), lisptype.LispSymbol) and car(obj).name == 'QUASIQUOTE':
+            # Increase nesting level
+            return cons(car(obj), cons(_quasi(car(cdr(obj)), level + 1), lisptype.NIL))
 
         # If atom, return as-is
         if not _consp_internal(obj):
@@ -609,30 +624,49 @@ def eval_quasiquote(form, env):
             if _consp_internal(item) and isinstance(car(item), lisptype.LispSymbol):
                 name = car(item).name
                 if name == 'UNQUOTE-SPLICING':
-                    val = eval(car(cdr(item)), env)
-                    # If val is NIL, splice nothing (empty)
-                    if val is lisptype.NIL or val is None:
-                        pass  # Don't append anything
-                    # If val is a lispCons, iterate its elements
-                    elif isinstance(val, lisptype.lispCons):
-                        for v in val:
-                            parts.append(v)
-                    elif isinstance(val, (list, tuple)):
-                        for v in val:
-                            parts.append(v)
+                    if level == 1:
+                        # At outermost level, evaluate and splice
+                        val = eval(car(cdr(item)), env)
+                        # If val is NIL, splice nothing (empty)
+                        if val is lisptype.NIL or val is None:
+                            pass  # Don't append anything
+                        # If val is a lispCons, iterate its elements
+                        elif isinstance(val, lisptype.lispCons):
+                            for v in val:
+                                parts.append(v)
+                        elif isinstance(val, (list, tuple)):
+                            for v in val:
+                                parts.append(v)
+                        else:
+                            parts.append(val)
+                        cur = cdr(cur)
+                        continue
                     else:
-                        parts.append(val)
-                    cur = cdr(cur)
-                    continue
+                        # Inside nested quasiquote, decrease level and preserve structure
+                        parts.append(cons(car(item), cons(_quasi(car(cdr(item)), level - 1), lisptype.NIL)))
+                        cur = cdr(cur)
+                        continue
                 elif name == 'UNQUOTE':
-                    val = eval(car(cdr(item)), env)
-                    parts.append(val)
+                    if level == 1:
+                        # At outermost level, evaluate
+                        val = eval(car(cdr(item)), env)
+                        parts.append(val)
+                        cur = cdr(cur)
+                        continue
+                    else:
+                        # Inside nested quasiquote, decrease level and preserve structure
+                        parts.append(cons(car(item), cons(_quasi(car(cdr(item)), level - 1), lisptype.NIL)))
+                        cur = cdr(cur)
+                        continue
+                elif name == 'QUASIQUOTE':
+                    # Entering nested quasiquote, increase level
+                    parts.append(cons(car(item), cons(_quasi(car(cdr(item)), level + 1), lisptype.NIL)))
                     cur = cdr(cur)
                     continue
 
             # Otherwise, recursively quasiquote the item
             if _consp_internal(item):
-                parts.append(_quasi(item))
+                parts.append(_quasi(item, level))
             else:
                 parts.append(item)
 
@@ -645,6 +679,7 @@ def eval_quasiquote(form, env):
         return res
 
     return _quasi(expr)
+
 
 
 def eval_prog1(form, env):
