@@ -132,7 +132,10 @@ def iterate(sequence, start=0, end=None, key=None, test=None):
     Returns:
         SequenceIterator instance for the sequence.
     """
-    if not isinstance(sequence, (list, str, tuple)):
+    # Check if it's a lispCons (has car and cdr attributes)
+    is_lisp_cons = hasattr(sequence, 'car') and hasattr(sequence, 'cdr')
+    
+    if not isinstance(sequence, (list, str, tuple)) and not is_lisp_cons:
         raise TypeError(f"iterate: unsupported sequence type {type(sequence).__name__}")
     
     return SequenceIterator(sequence, start, end, key, test)
