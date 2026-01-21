@@ -301,6 +301,14 @@ class Readtable:
         token_restored = token.replace('\x00', ':')
         name_upper = token_restored.upper()
         
+        # CRITICAL: In Common Lisp, NIL is both the symbol and the empty list; the
+        # reader should return the canonical NIL object rather than a
+        # fresh symbol. Similarly, T should return the global T symbol.
+        if name_upper == 'NIL':
+            return lisptype.NIL
+        if name_upper == 'T':
+            return lisptype.T
+        
         # First check if symbol exists in current package
         sym, status = current_pkg.find_symbol(name_upper)
         if sym is not None:
@@ -801,6 +809,11 @@ class Readtable:
         # Create an uninterned symbol (not in any package)
         # Use uppercase for consistency with CL standard
         name = token.upper()
+        # Special case: T and NIL should return the canonical symbols
+        if name == 'T':
+            return lisptype.T
+        elif name == 'NIL':
+            return lisptype.NIL
         return lisptype.LispSymbol(name, package=None)
 
     def _read_complex_number(self, stream):

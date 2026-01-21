@@ -263,7 +263,7 @@ def class_name(lisp_class):
     """CLASS-NAME: Get the name of a class."""
     # Handle T specially - it represents the universal type
     if isinstance(lisp_class, lisptype.LispSymbol) and lisp_class.name.upper() == 'T':
-        return lisptype.LispSymbol('T')
+        return lisptype.T
     if not isinstance(lisp_class, classes.LispClass):
         raise TypeError(f"Expected a class, got {lisp_class}")
     return lisp_class.name

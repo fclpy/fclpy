@@ -114,6 +114,7 @@ class LispSymbol(lispT):
         self.value = None        # Symbol's value (for SETQ)
         self.function = None     # Symbol's function definition (for DEFUN)
         self.plist = {}          # Property list (for PUTPROP/GETPROP)
+    
     def __repr__(self):
         return self.name
 

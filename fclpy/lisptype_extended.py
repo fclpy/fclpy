@@ -336,6 +336,7 @@ class Package(lispT):
         # Uppercase the name per Common Lisp standard
         name = name.upper()
         
+        # DEBUG: Trace T intern attempts
         # First check if symbol already exists in this package
         if name in self.symbols:
             symbol = self.symbols[name]
@@ -355,6 +356,14 @@ class Package(lispT):
                     if sym is not None:
                         # Return the inherited symbol (don't create a new one)
                         return sym
+        
+        # Symbol not found anywhere - BUT check for T
+        # T should ALWAYS return the canonical symbol
+        # NOTE: We do NOT do this for NIL, because NIL needs a symbol representation
+        # for use in classes, defstruct, etc. The canonical NIL (lispNull) is for
+        # the empty list, not for the symbol.
+        if name == 'T':
+            return T  # Return canonical T
         
         # Symbol not found anywhere - create new one in this package
         symbol = LispSymbol(name, package=self)
@@ -444,7 +453,17 @@ class Package(lispT):
 # Global packages
 KEYWORD_PACKAGE = Package("KEYWORD")
 COMMON_LISP_PACKAGE = Package("COMMON-LISP")
+
+# CRITICAL: Inject the canonical T symbol into COMMON-LISP package
+# T is created without a package in lisptype_basic.py
+# We must register it in the COMMON-LISP package so that intern_symbol finds it
+COMMON_LISP_PACKAGE.symbols['T'] = T
+COMMON_LISP_PACKAGE.external_symbols.add('T')
+T.package = COMMON_LISP_PACKAGE
+
 COMMON_LISP_USER_PACKAGE = Package("COMMON-LISP-USER", use_packages=["COMMON-LISP"])
+
+
 
 
 def make_package(name, use_packages=None, nick_names=None):

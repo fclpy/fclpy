@@ -466,7 +466,7 @@ def type_of(object):
     elif callable(object):
         return lisptype.LispSymbol('FUNCTION')
     else:
-        return lisptype.LispSymbol('T')
+        return lisptype.T
 
 
 @_registry.cl_function('SUBTYPEP')
