@@ -153,8 +153,9 @@ def package_use_list(package):
     """Get packages this package uses."""
     pkg = package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)) if package else getattr(state, 'current_package', None)
     if pkg is None:
-        return []
-    return list(pkg.use_list)
+        return lisptype.NIL
+    result = list(pkg.use_list)
+    return result if result else lisptype.NIL
 
 
 @_registry.cl_function('PACKAGE-USED-BY-LIST')
@@ -162,12 +163,12 @@ def package_used_by_list(package):
     """Get packages that use this package."""
     pkg = package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)) if package else getattr(state, 'current_package', None)
     if pkg is None:
-        return []
+        return lisptype.NIL
     used_by = []
     for p in list({id(p): p for p in state.packages.values()}.values()):
         if pkg in getattr(p, 'use_list', []):
             used_by.append(p)
-    return used_by
+    return used_by if used_by else lisptype.NIL
 
 
 @_registry.cl_function('PACKAGE-SHADOWING-SYMBOLS')
@@ -175,13 +176,13 @@ def package_shadowing_symbols(package):
     """Get shadowing symbols in package."""
     pkg = package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)) if package else getattr(state, 'current_package', None)
     if pkg is None:
-        return []
+        return lisptype.NIL
     syms = []
     for name in getattr(pkg, 'shadowing_symbols', set()):
         s = pkg.symbols.get(name)
         if s is not None:
             syms.append(s)
-    return syms
+    return syms if syms else lisptype.NIL
 
 
 @_registry.cl_function('PACKAGE-EXTERNAL-SYMBOLS')
@@ -192,14 +193,14 @@ def package_external_symbols(package):
     """
     pkg = package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)) if package else getattr(state, 'current_package', None)
     if pkg is None:
-        return []
+        return lisptype.NIL
     syms = []
     external_names = getattr(pkg, 'external_symbols', set())
     for name in external_names:
         s = pkg.symbols.get(name)
         if s is not None:
             syms.append(s)
-    return syms
+    return syms if syms else lisptype.NIL
 
 
 @_registry.cl_function('PACKAGE-INTERNAL-SYMBOLS')
@@ -210,13 +211,13 @@ def package_internal_symbols(package):
     """
     pkg = package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)) if package else getattr(state, 'current_package', None)
     if pkg is None:
-        return []
+        return lisptype.NIL
     syms = []
     external_names = getattr(pkg, 'external_symbols', set())
     for name, sym in pkg.symbols.items():
         if name not in external_names:
             syms.append(sym)
-    return syms
+    return syms if syms else lisptype.NIL
 
 
 @_registry.cl_function('LIST-ALL-PACKAGES')

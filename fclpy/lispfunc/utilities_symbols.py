@@ -161,11 +161,27 @@ def intern(name, package=None):
 
 @_registry.cl_function('FIND-SYMBOL')
 def find_symbol(name, package=None):
-    """Find a symbol in a package."""
+    """Find a symbol in a package.
+    
+    Returns two values:
+    1. The symbol (or NIL if not found)
+    2. Status: :INTERNAL, :EXTERNAL, :INHERITED, or NIL if not found
+    """
     pkg = package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)) if package else getattr(state, 'current_package', None)
     if pkg is None:
-        return None
-    return pkg.find_symbol(name)
+        return lisptype.MultipleValues(lisptype.NIL, lisptype.NIL)
+    
+    symbol, status = pkg.find_symbol(name)
+    if symbol is None:
+        return lisptype.MultipleValues(lisptype.NIL, lisptype.NIL)
+    
+    # Convert status string to keyword
+    if status:
+        status_keyword = lisptype.lispKeyword(status[1:])  # Remove leading ':'
+    else:
+        status_keyword = lisptype.NIL
+    
+    return lisptype.MultipleValues(symbol, status_keyword)
 
 
 @_registry.cl_function('FIND-PACKAGE')

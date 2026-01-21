@@ -109,16 +109,18 @@ def parse_lambda_list(lambda_list):
     - rest: single rest parameter symbol or None
     - keyword: list of keyword parameter specs (symbol or [symbol, default])
     - aux: list of auxiliary parameter specs (symbol or [symbol, init])
+    - environment: single environment parameter symbol or None
     
     Supported format:
     (req1 req2 &optional opt1 (opt2 default2) &rest rest-var 
-     &key key1 (key2 default2) &aux (aux1 init1))
+     &key key1 (key2 default2) &aux (aux1 init1) &environment env)
     """
     required = []
     optional = []
     rest = None
     keyword = []
     aux = []
+    environment = None
     
     # Parse the lambda list
     current_section = 'required'
@@ -148,6 +150,10 @@ def parse_lambda_list(lambda_list):
                 current_section = 'aux'
                 current = cdr(current)
                 continue
+            elif marker == '&ALLOW-OTHER-KEYS':
+                # Skip this marker - it's informational
+                current = cdr(current)
+                continue
             elif marker == '&WHOLE':
                 # &WHOLE takes a single following symbol which is bound to the
                 # entire macro form; consume that symbol and record it.
@@ -155,6 +161,15 @@ def parse_lambda_list(lambda_list):
                 if isinstance(next_sym, lisptype.LispSymbol):
                     whole = next_sym
                 # Advance past &WHOLE and its parameter
+                current = cdr(cdr(current))
+                continue
+            elif marker == '&ENVIRONMENT':
+                # &ENVIRONMENT takes a single following symbol which is bound to
+                # the lexical environment; consume that symbol and record it.
+                next_sym = car(cdr(current)) if _consp_internal(cdr(current)) else None
+                if isinstance(next_sym, lisptype.LispSymbol):
+                    environment = next_sym
+                # Advance past &ENVIRONMENT and its parameter
                 current = cdr(cdr(current))
                 continue
 
@@ -187,14 +202,15 @@ def parse_lambda_list(lambda_list):
 
         current = cdr(current)
 
-    # Include whole in returned structure so macro handling can bind it
+    # Include whole and environment in returned structure so macro handling can bind them
     return {
         'required': required,
         'optional': optional,
         'rest': rest,
         'keyword': keyword,
         'aux': aux,
-        'whole': whole
+        'whole': whole,
+        'environment': environment
     }
 
 
@@ -864,6 +880,65 @@ def eval(form, env=None):
                 
                 # Return the access-fn symbol as specified by ANSI CL
                 return access_fn
+            elif operator.name == 'DEFINE-SETF-EXPANDER':
+                # (DEFINE-SETF-EXPANDER access-fn lambda-list [[declaration* | documentation]] form*)
+                # This is a macro - arguments should NOT be evaluated
+                args = cdr(form)
+                if args is None or args == lisptype.NIL:
+                    raise lisptype.LispError("DEFINE-SETF-EXPANDER requires arguments")
+                
+                access_fn = car(args)
+                rest = cdr(args)
+                
+                if not isinstance(access_fn, lisptype.LispSymbol):
+                    raise lisptype.LispError("DEFINE-SETF-EXPANDER: access-fn must be a symbol")
+                
+                if rest is None or rest == lisptype.NIL:
+                    raise lisptype.LispError("DEFINE-SETF-EXPANDER requires a lambda-list")
+                
+                lambda_list = car(rest)
+                body = cdr(rest)
+                
+                # Get or create the global setf-expanders storage
+                global_env = env
+                while global_env.parent is not None:
+                    global_env = global_env.parent
+                
+                if not hasattr(global_env, 'setf_expanders'):
+                    global_env.setf_expanders = {}
+                
+                # Parse optional declarations and docstring from body
+                declarations = []
+                doc_string = None
+                actual_body = body
+                
+                while _consp_internal(actual_body):
+                    form_item = car(actual_body)
+                    if _consp_internal(form_item):
+                        op = car(form_item)
+                        if isinstance(op, lisptype.LispSymbol) and op.name == 'DECLARE':
+                            declarations.append(form_item)
+                            actual_body = cdr(actual_body)
+                            continue
+                    if isinstance(form_item, str) and doc_string is None:
+                        doc_string = form_item
+                        actual_body = cdr(actual_body)
+                        continue
+                    break
+                
+                # Store the setf expander info - similar to long-form DEFSETF
+                # but uses &ENVIRONMENT in the lambda list for macro environment
+                global_env.setf_expanders[access_fn.name] = {
+                    'type': 'expander',
+                    'lambda_list': lambda_list,
+                    'declarations': declarations,
+                    'documentation': doc_string,
+                    'body': actual_body,
+                    'env': env  # Capture lexical environment
+                }
+                
+                # Return the access-fn symbol as specified by ANSI CL
+                return access_fn
             elif operator.name == 'DEFINE-COMPILER-MACRO':
                 # (DEFINE-COMPILER-MACRO name lambda-list &body body)
                 # Arguments should NOT be evaluated - just return the name
@@ -1074,7 +1149,10 @@ def eval(form, env=None):
             func = eval(operator, env)
             
         if not callable(func):
-            raise lisptype.LispNotImplementedError(f"Not a function: {operator}")
+            # When func is None, it means the symbol has no function binding
+            if isinstance(operator, lisptype.LispSymbol):
+                raise lisptype.LispNotImplementedError(operator.name, "Undefined function")
+            raise lisptype.LispError(f"Not a function: {operator}")
         
         # Get cached signature info for keyword argument handling
         use_kwargs, kwarg_param_names = get_func_signature_info(func)

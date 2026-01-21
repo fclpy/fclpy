@@ -375,13 +375,14 @@ def _create_macro_function(macro_name, lambda_list, body, env):
             docstring = str(first_form)  # Convert to Python str for storage
             actual_body = cdr(body)
 
-    # Parse lambda list to handle &optional, &rest, &key, &whole etc.
+    # Parse lambda list to handle &optional, &rest, &key, &whole, &environment etc.
     parsed_params = parse_lambda_list(lambda_list)
     
     required_params = parsed_params.get('required', [])
     optional_params = parsed_params.get('optional', [])
     rest_param = parsed_params.get('rest', None)
     keyword_params = parsed_params.get('keyword', [])
+    environment_param = parsed_params.get('environment', None)
 
     # Create the macro callable
     def macro_callable(*call_args):
@@ -408,6 +409,10 @@ def _create_macro_function(macro_name, lambda_list, body, env):
             else:
                 macro_env.add_variable(whole_param, lisptype.NIL)
                 arg_idx = 1
+        
+        # Handle &ENVIRONMENT parameter - bind it to the current environment
+        if environment_param is not None:
+            macro_env.add_variable(environment_param, env)
         
         # Bind required parameters
         for param in required_params:

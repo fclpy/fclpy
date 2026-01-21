@@ -926,6 +926,72 @@ def _format_directive(control_string, args, pos, arg_idx):
                 result = _format_process(str(fmt_str) if fmt_str else '', [fmt_args] if fmt_args else [])
         return (result, pos, arg_idx, True)
     
+    elif directive == '<':
+        # ~< ... ~> - Justification/Logical block
+        # This is a complex directive for text justification and pretty printing
+        # For now, implement a simplified version that processes content between separators
+        # Find matching ~>
+        nesting = 1
+        end_pos = pos
+        segments = []
+        segment_start = pos
+        
+        while end_pos < len(control_string) and nesting > 0:
+            if control_string[end_pos] == '~':
+                if end_pos + 1 < len(control_string):
+                    # Skip any modifiers to find directive char
+                    j = end_pos + 1
+                    while j < len(control_string) and control_string[j] in '0123456789,:#@':
+                        j += 1
+                    if j < len(control_string):
+                        next_char = control_string[j].upper()
+                        has_colon = ':' in control_string[end_pos+1:j]
+                        
+                        if next_char == '<':
+                            nesting += 1
+                            end_pos = j + 1
+                        elif next_char == '>':
+                            nesting -= 1
+                            if nesting == 0:
+                                # Found the closing ~>
+                                segments.append(control_string[segment_start:end_pos])
+                                end_pos = j + 1  # Position after the closing >
+                                break
+                            end_pos = j + 1
+                        elif next_char == ';' and nesting == 1:
+                            # Separator within the justification block
+                            segments.append(control_string[segment_start:end_pos])
+                            segment_start = j + 1
+                            end_pos = j + 1
+                        else:
+                            end_pos = j + 1
+                    else:
+                        end_pos += 1
+                else:
+                    end_pos += 1
+            else:
+                end_pos += 1
+        else:
+            # If we exited the loop without finding closing ~>
+            segments.append(control_string[segment_start:])
+            end_pos = len(control_string)
+        
+        # For simplified implementation: 
+        # - If there are multiple segments separated by ~:;, use the last non-empty one
+        # - Process it with remaining args
+        result = ''
+        if segments:
+            # Look for the last segment (after the final ~:; separator)
+            # This handles the pattern ~<prefix~:;main content~> where we want the main content
+            segment_to_use = segments[-1] if segments else ''
+            result = _format_process(segment_to_use, args[arg_idx:])
+        
+        return (result, end_pos, arg_idx, False)
+    
+    elif directive == '>':
+        # End of justification - should not be reached directly
+        return ('', pos, arg_idx, False)
+    
     elif directive == '(':
         # ~( ... ~) - Case conversion
         # Find matching ~)
@@ -990,6 +1056,9 @@ def _format_directive(control_string, args, pos, arg_idx):
         # ~[ ... ~] - Conditional
         # Find the clauses and closing ~]
         nesting = 1
+        angle_nesting = 0  # Track ~< ~> nesting
+        paren_nesting = 0  # Track ~( ~) nesting
+        brace_nesting = 0  # Track ~{ ~} nesting
         clauses = []
         clause_start = pos
         i = pos
@@ -1014,7 +1083,26 @@ def _format_directive(control_string, args, pos, arg_idx):
                                 clauses.append(control_string[clause_start:i])
                                 end_pos = j + 1  # Position after ]
                             i = j + 1
-                        elif d == ';' and nesting == 1:
+                        elif d == '<':
+                            angle_nesting += 1
+                            i = j + 1
+                        elif d == '>':
+                            angle_nesting -= 1
+                            i = j + 1
+                        elif d == '(':
+                            paren_nesting += 1
+                            i = j + 1
+                        elif d == ')':
+                            paren_nesting -= 1
+                            i = j + 1
+                        elif d == '{':
+                            brace_nesting += 1
+                            i = j + 1
+                        elif d == '}':
+                            brace_nesting -= 1
+                            i = j + 1
+                        elif d == ';' and nesting == 1 and angle_nesting == 0 and paren_nesting == 0 and brace_nesting == 0:
+                            # Only treat as clause separator if we're not inside nested ~< ~> or ~( ~) or ~{ ~}
                             clauses.append(control_string[clause_start:i])
                             # Check for :; (default clause)
                             if ':' in control_string[i+1:j+1]:
