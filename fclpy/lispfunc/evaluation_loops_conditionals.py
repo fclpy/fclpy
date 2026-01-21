@@ -16,21 +16,21 @@ def eval_when(form, env):
     
     args = cdr(form)
     if not _consp_internal(args):
-        return None
+        return lisptype.NIL
     
     test_form = car(args)
     body = cdr(args)
     
     test_result = eval(test_form, env)
-    if test_result is not None and test_result != lisptype.NIL:
-        result = None
+    if lisptype.is_truthy(test_result):
+        result = lisptype.NIL
         current_body = body
         while _consp_internal(current_body):
             result = eval(car(current_body), env)
             current_body = cdr(current_body)
-        return result
-    else:
-        return None
+        return lisptype.NIL if result is None else result
+
+    return lisptype.NIL
 
 
 def eval_unless(form, env):
@@ -39,21 +39,21 @@ def eval_unless(form, env):
     
     args = cdr(form)
     if not _consp_internal(args):
-        return None
+        return lisptype.NIL
     
     test_form = car(args)
     body = cdr(args)
     
     test_result = eval(test_form, env)
-    if test_result is None or test_result == lisptype.NIL:
-        result = None
+    if not lisptype.is_truthy(test_result):
+        result = lisptype.NIL
         current_body = body
         while _consp_internal(current_body):
             result = eval(car(current_body), env)
             current_body = cdr(current_body)
-        return result
-    else:
-        return None
+        return lisptype.NIL if result is None else result
+
+    return lisptype.NIL
 
 
 def eval_eval_when(form, env):
@@ -141,15 +141,15 @@ def eval_and(form, env):
     from .evaluation_core import eval
     
     args = cdr(form)
-    result = True  # AND with no arguments is T
+    result = lisptype.T  # AND with no arguments is T
     
     while _consp_internal(args):
         result = eval(car(args), env)
-        if result is None or result == lisptype.NIL:
-            return None
+        if not lisptype.is_truthy(result):
+            return lisptype.NIL
         args = cdr(args)
     
-    return result
+    return lisptype.NIL if result is None else result
 
 
 def eval_or(form, env):

@@ -250,7 +250,13 @@ def eval(form, env=None):
     env = resolve_environment(env)
     
     # Self-evaluating forms
-    if form is None or isinstance(form, (int, float, str, bool)):
+    # Normalize Python-level sentinels into Lisp equivalents to avoid type
+    # mismatches (e.g., Python True vs Lisp symbol T) leaking into Lisp code.
+    if form is None:
+        return lisptype.NIL
+    if isinstance(form, bool):
+        return lisptype.T if form else lisptype.NIL
+    if isinstance(form, (int, float, str)):
         return form
     # Keywords are self-evaluating in Common Lisp semantics
     if isinstance(form, lisptype.lispKeyword):
@@ -1192,9 +1198,16 @@ def eval(form, env=None):
         
         # Call function
         if kwargs:
-            return func(*eval_args, **kwargs)
+            result = func(*eval_args, **kwargs)
         else:
-            return func(*eval_args)
+            result = func(*eval_args)
+
+        # Normalize common Python return values into Lisp objects.
+        if result is None:
+            return lisptype.NIL
+        if isinstance(result, bool):
+            return lisptype.T if result else lisptype.NIL
+        return result
     
     return form
 
