@@ -13,7 +13,8 @@ from fclpy.readtable import get_current_readtable
 def setup_env():
     """Create environment with standard bindings."""
     lispenv.setup_standard_environment()
-    return lispenv.current_environment
+    import fclpy.state as state
+    return state.current_environment
 
 
 def read_str(code):

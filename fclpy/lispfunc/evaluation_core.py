@@ -12,6 +12,7 @@ import fclpy.lispenv as lispenv  # environment setup utilities
 from fclpy.lisptype import resolve_environment, LispEnvironmentError
 import inspect
 from functools import lru_cache
+import sys
 
 # Register special operator handlers into the builtin registry
 from . import registry as _registry
@@ -283,7 +284,31 @@ def eval(form, env=None):
         try:
             py_name = _registry.get_function_py_name(form.name)
             if py_name:
+                # Ensure the standard environment and lispfunc exports are loaded
+                try:
+                    lispenv.setup_standard_environment()
+                except Exception:
+                    pass
                 fn = getattr(lispfunc, py_name, None)
+                if fn is None:
+                    # Try importing common lispfunc submodules to resolve circular imports
+                    try:
+                        import importlib
+                        for sub in ('core', 'math', 'sequences', 'vectors', 'streams', 'pathnames', 'hashtables', 'evaluation', 'comparison', 'characters', 'io', 'io_read', 'io_write', 'utilities', 'classes', 'misc_macros'):
+                            try:
+                                mod = importlib.import_module(f'fclpy.lispfunc.{sub}')
+                                fn = getattr(mod, py_name, None)
+                                if fn:
+                                    # expose on package module for future lookups
+                                    try:
+                                        setattr(lispfunc, py_name, fn)
+                                    except Exception:
+                                        pass
+                                    break
+                            except Exception:
+                                continue
+                    except Exception:
+                        pass
                 if fn:
                     # Bind into environment for faster future lookups
                     env.add_function(form, fn)
@@ -291,7 +316,17 @@ def eval(form, env=None):
         except Exception:
             # Defensive: if registry lookup fails, ignore and raise below
             pass
-        # If not found in either, raise error
+        # If not found in either, dump diagnostic info and raise error
+        try:
+            # Diagnostic: show where symbol might live
+            pkg = getattr(form, 'package', None)
+            pkg_name = pkg.name if pkg is not None else None
+            reg_name = _registry.get_function_py_name(form.name)
+            cl_pkg = lisptype.find_package('COMMON-LISP')
+            in_cl = (form.name in getattr(cl_pkg, 'symbols', {})) if cl_pkg else False
+            sys.stderr.write(f"[DIAG] Unbound variable lookup: name={form.name} package={pkg_name} registry_py_name={reg_name} in_common_lisp={in_cl}\n")
+        except Exception:
+            pass
         raise lisptype.LispNotImplementedError(f"Unbound variable: {form.name}")
     
     # Lists - function calls or special forms
@@ -325,8 +360,26 @@ def eval(form, env=None):
                     # Then check the registry
                     py_name = _registry.get_function_py_name(name.name)
                     if py_name:
+                        try:
+                            lispenv.setup_standard_environment()
+                        except Exception:
+                            pass
+                        import importlib
                         import fclpy.lispfunc as lispfunc_module
                         func = getattr(lispfunc_module, py_name, None)
+                        if func is None:
+                            for sub in ('core', 'math', 'sequences', 'vectors', 'streams', 'pathnames', 'hashtables', 'evaluation', 'comparison', 'characters', 'io', 'io_read', 'io_write', 'utilities', 'classes', 'misc_macros'):
+                                try:
+                                    mod = importlib.import_module(f'fclpy.lispfunc.{sub}')
+                                    func = getattr(mod, py_name, None)
+                                    if func is not None:
+                                        try:
+                                            setattr(lispfunc_module, py_name, func)
+                                        except Exception:
+                                            pass
+                                        break
+                                except Exception:
+                                    continue
                         if func is not None:
                             return func
                     raise lisptype.LispNotImplementedError(f"Undefined function: {name.name}")
@@ -1166,19 +1219,68 @@ def eval(form, env=None):
                 try:
                     py_name = _registry.get_function_py_name(operator.name)
                     if py_name:
-                        fn = getattr(lispfunc, py_name, None)
-                        if fn:
-                            env.add_function(operator, fn)
-                            func = fn
+                        # Ensure environment is populated
+                        try:
+                            lispenv.setup_standard_environment()
+                        except Exception:
+                            pass
+                        
+                        # Try environment lookup again
+                        func = env.find_func(operator)
+                        
+                        # If still not found and we're in a child environment, 
+                        # check the parent/global environment
+                        if func is None:
+                            global_env = env
+                            while global_env.parent is not None:
+                                global_env = global_env.parent
+                            if global_env is not env:
+                                func = global_env.find_func(operator)
+                        
+                        # If STILL not found, try to get it from lispfunc directly
+                        if func is None:
+                            fn = getattr(lispfunc, py_name, None)
+                            if fn is None:
+                                # Try importing submodules
+                                try:
+                                    import importlib
+                                    for sub in ('core', 'math', 'sequences', 'vectors', 'streams', 'pathnames', 'hashtables', 'evaluation', 'comparison', 'characters', 'io', 'io_read', 'io_write', 'utilities', 'classes', 'misc_macros'):
+                                        try:
+                                            mod = importlib.import_module(f'fclpy.lispfunc.{sub}')
+                                            fn = getattr(mod, py_name, None)
+                                            if fn:
+                                                try:
+                                                    setattr(lispfunc, py_name, fn)
+                                                except Exception:
+                                                    pass
+                                                break
+                                        except Exception:
+                                            continue
+                                except Exception:
+                                    pass
+                            if fn:
+                                # Add to both current and global environment
+                                env.add_function(operator, fn)
+                                func = fn
                 except Exception:
                     pass
         else:
             # For non-symbol operators (e.g., lambda forms), evaluate to get function
             func = eval(operator, env)
-            
-        if not callable(func):
+        
+        # Verify we have a callable function before proceeding
+        if func is None or not callable(func):
             # When func is None, it means the symbol has no function binding
             if isinstance(operator, lisptype.LispSymbol):
+                try:
+                    pkg = getattr(operator, 'package', None)
+                    pkg_name = pkg.name if pkg is not None else None
+                    reg_name = _registry.get_function_py_name(operator.name)
+                    cl_pkg = lisptype.find_package('COMMON-LISP')
+                    in_cl = (operator.name in getattr(cl_pkg, 'symbols', {})) if cl_pkg else False
+                    sys.stderr.write(f"[DIAG] Undefined function lookup: name={operator.name} package={pkg_name} registry_py_name={reg_name} in_common_lisp={in_cl}\n")
+                except Exception:
+                    pass
                 raise lisptype.LispNotImplementedError(operator.name, "Undefined function")
             raise lisptype.LispError(f"Not a function: {operator}")
         

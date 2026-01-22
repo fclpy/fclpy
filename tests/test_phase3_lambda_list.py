@@ -20,7 +20,11 @@ def env():
     """Setup a clean environment for each test."""
     state.current_environment = None
     state.functions_loaded = False
-    return setup_standard_environment()
+    env_obj = setup_standard_environment()
+    yield env_obj
+    # Cleanup after test to avoid leaking state to other tests
+    state.current_environment = None
+    state.functions_loaded = False
 
 
 class TestParseLambdaList:

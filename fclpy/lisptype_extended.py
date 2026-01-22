@@ -430,10 +430,18 @@ class Package(lispT):
         Args:
             name: Symbol name (string) or LispSymbol
         """
+        symbol_obj = name
         if isinstance(name, LispSymbol):
             name = name.name
+        else:
+            # name is a string, look it up
+            symbol_obj = self.symbols.get(name)
+        
         if name in self.symbols:
+            # Store both the name string and the symbol object for compatibility
             self.external_symbols.add(name)
+            if symbol_obj:
+                self.external_symbols.add(symbol_obj)
     
     def import_symbol(self, symbol):
         """Import a symbol into this package.

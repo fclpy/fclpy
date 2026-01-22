@@ -16,8 +16,20 @@ def setup_standard_environment():
     All function and special form registrations come from the decorator
     registry in fclpy.lispfunc.
     """
-    if state.functions_loaded:
-        return state.current_environment
+    # If functions were already loaded, return the environment.
+    # BUT: if current_environment is None, always re-initialize (test reset)
+    # OR: if functions_loaded is False (test explicitly reset), re-initialize
+    if state.functions_loaded and state.current_environment is not None:
+        # Extra safety check: ensure key functions are actually bound
+        # This catches cases where state is corrupted across test boundaries
+        try:
+            star_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*')
+            if state.current_environment.find_func(star_sym) is not None:
+                return state.current_environment
+            # If multiplication operator is missing, environment is stale - reinitialize
+        except Exception:
+            pass
+    
     if state.current_environment is None:
         state.current_environment = fclpy.lisptype.Environment()
 
@@ -81,26 +93,26 @@ def setup_standard_environment():
             state.current_environment.add_variable(load_pathname_sym, fclpy.lisptype.NIL)
         
         # *COMPILE-FILE-TRUENAME* - pathname of file being compiled (NIL if not compiling)
-        compile_file_truename_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*COMPILE-FILE-TRUENAME*')
+        compile_file_truename_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*COMPILE-FILE-TRUENAME*')
         if state.current_environment.find_variable(compile_file_truename_sym) is None:
             state.current_environment.add_variable(compile_file_truename_sym, fclpy.lisptype.NIL)
         
         # *COMPILE-FILE-PATHNAME* - pathname of file being compiled (NIL if not compiling)
-        compile_file_pathname_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*COMPILE-FILE-PATHNAME*')
+        compile_file_pathname_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*COMPILE-FILE-PATHNAME*')
         if state.current_environment.find_variable(compile_file_pathname_sym) is None:
             state.current_environment.add_variable(compile_file_pathname_sym, fclpy.lisptype.NIL)
         
         # *DEFAULT-PATHNAME-DEFAULTS* - default pathname for pathname functions
         # Initialize to current directory as a Pathname object
         from fclpy.lispfunc.pathnames import Pathname
-        default_pathname_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*DEFAULT-PATHNAME-DEFAULTS*')
+        default_pathname_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*DEFAULT-PATHNAME-DEFAULTS*')
         if state.current_environment.find_variable(default_pathname_sym) is None:
             cwd_pathname = Pathname(os.getcwd())
             state.current_environment.add_variable(default_pathname_sym, cwd_pathname)
         
         # *FEATURES* - list of feature keywords for #+/- conditional read
         # Standard features include: :FCLPY (our implementation), :COMMON-LISP
-        features_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*FEATURES*')
+        features_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*FEATURES*')
         if state.current_environment.find_variable(features_sym) is None:
             # Create a basic features list with our implementation identifier
             fclpy_feature = fclpy.lisptype.intern_keyword('FCLPY')
@@ -116,78 +128,78 @@ def setup_standard_environment():
         from fclpy.lispfunc.streams import Stream
         
         # *STANDARD-INPUT* - The stream from which input is read by default
-        standard_input_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*STANDARD-INPUT*')
+        standard_input_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*STANDARD-INPUT*')
         if state.current_environment.find_variable(standard_input_sym) is None:
             stdin_stream = Stream('*STANDARD-INPUT*', sys.stdin, 'input')
             state.current_environment.add_variable(standard_input_sym, stdin_stream)
         
         # *STANDARD-OUTPUT* - The stream to which output is sent by default
-        standard_output_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*STANDARD-OUTPUT*')
+        standard_output_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*STANDARD-OUTPUT*')
         if state.current_environment.find_variable(standard_output_sym) is None:
             stdout_stream = Stream('*STANDARD-OUTPUT*', sys.stdout, 'output')
             state.current_environment.add_variable(standard_output_sym, stdout_stream)
         
         # *ERROR-OUTPUT* - The stream for error output
-        error_output_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*ERROR-OUTPUT*')
+        error_output_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*ERROR-OUTPUT*')
         if state.current_environment.find_variable(error_output_sym) is None:
             stderr_stream = Stream('*ERROR-OUTPUT*', sys.stderr, 'output')
             state.current_environment.add_variable(error_output_sym, stderr_stream)
         
         # *TRACE-OUTPUT* - The stream for trace output
-        trace_output_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*TRACE-OUTPUT*')
+        trace_output_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*TRACE-OUTPUT*')
         if state.current_environment.find_variable(trace_output_sym) is None:
             state.current_environment.add_variable(trace_output_sym, stdout_stream)
         
         # *DEBUG-IO* - The stream for interactive debugging
-        debug_io_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*DEBUG-IO*')
+        debug_io_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*DEBUG-IO*')
         if state.current_environment.find_variable(debug_io_sym) is None:
             state.current_environment.add_variable(debug_io_sym, stdout_stream)
         
         # *QUERY-IO* - The stream for user queries
-        query_io_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*QUERY-IO*')
+        query_io_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*QUERY-IO*')
         if state.current_environment.find_variable(query_io_sym) is None:
             state.current_environment.add_variable(query_io_sym, stdout_stream)
         
         # *TERMINAL-IO* - The stream connected to the user's terminal
-        terminal_io_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*TERMINAL-IO*')
+        terminal_io_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*TERMINAL-IO*')
         if state.current_environment.find_variable(terminal_io_sym) is None:
             state.current_environment.add_variable(terminal_io_sym, stdout_stream)
         
         # Printer/reader control variables
         # *LOAD-VERBOSE* - whether LOAD should print messages
-        load_verbose_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*LOAD-VERBOSE*')
+        load_verbose_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*LOAD-VERBOSE*')
         if state.current_environment.find_variable(load_verbose_sym) is None:
             state.current_environment.add_variable(load_verbose_sym, fclpy.lisptype.NIL)
         
         # *LOAD-PRINT* - whether LOAD should print values
-        load_print_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*LOAD-PRINT*')
+        load_print_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*LOAD-PRINT*')
         if state.current_environment.find_variable(load_print_sym) is None:
             state.current_environment.add_variable(load_print_sym, fclpy.lisptype.NIL)
         
         # *COMPILE-VERBOSE* - whether COMPILE-FILE should print messages
-        compile_verbose_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*COMPILE-VERBOSE*')
+        compile_verbose_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*COMPILE-VERBOSE*')
         if state.current_environment.find_variable(compile_verbose_sym) is None:
             state.current_environment.add_variable(compile_verbose_sym, fclpy.lisptype.NIL)
         
         # *COMPILE-PRINT* - whether COMPILE-FILE should print values
-        compile_print_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*COMPILE-PRINT*')
+        compile_print_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*COMPILE-PRINT*')
         if state.current_environment.find_variable(compile_print_sym) is None:
             state.current_environment.add_variable(compile_print_sym, fclpy.lisptype.NIL)
         
         # *READTABLE* - the current readtable used for reading
         from fclpy.readtable import get_current_readtable
-        readtable_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*READTABLE*')
+        readtable_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*READTABLE*')
         if state.current_environment.find_variable(readtable_sym) is None:
             state.current_environment.add_variable(readtable_sym, get_current_readtable())
         
         # *PACKAGE* - current package (if not already set from state)
-        package_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*PACKAGE*')
+        package_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*PACKAGE*')
         if state.current_environment.find_variable(package_sym) is None:
             current_pkg = getattr(state, 'current_package', None) or fclpy.lisptype.COMMON_LISP_USER_PACKAGE
             state.current_environment.add_variable(package_sym, current_pkg)
         
         # *PRINT-PPRINT-DISPATCH* - the current pretty print dispatch table
-        pprint_dispatch_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*PRINT-PPRINT-DISPATCH*')
+        pprint_dispatch_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*PRINT-PPRINT-DISPATCH*')
         if state.current_environment.find_variable(pprint_dispatch_sym) is None:
             # Create a simple pprint dispatch table object
             class PprintDispatchTable:
@@ -384,47 +396,47 @@ def setup_standard_environment():
         
         # === Array and Character Limits (ANSI CL constants) ===
         # CHAR-CODE-LIMIT - upper exclusive bound for character codes
-        char_code_limit_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('CHAR-CODE-LIMIT')
+        char_code_limit_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('CHAR-CODE-LIMIT')
         if state.current_environment.find_variable(char_code_limit_sym) is None:
             state.current_environment.add_variable(char_code_limit_sym, 1114112)  # Unicode max + 1
         
         # ARRAY-DIMENSION-LIMIT - exclusive upper bound for array dimension
-        array_dimension_limit_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('ARRAY-DIMENSION-LIMIT')
+        array_dimension_limit_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('ARRAY-DIMENSION-LIMIT')
         if state.current_environment.find_variable(array_dimension_limit_sym) is None:
             state.current_environment.add_variable(array_dimension_limit_sym, 2**31)
         
         # ARRAY-RANK-LIMIT - exclusive upper bound for array rank
-        array_rank_limit_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('ARRAY-RANK-LIMIT')
+        array_rank_limit_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('ARRAY-RANK-LIMIT')
         if state.current_environment.find_variable(array_rank_limit_sym) is None:
             state.current_environment.add_variable(array_rank_limit_sym, 64)
         
         # ARRAY-TOTAL-SIZE-LIMIT - exclusive upper bound for total elements
-        array_total_size_limit_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('ARRAY-TOTAL-SIZE-LIMIT')
+        array_total_size_limit_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('ARRAY-TOTAL-SIZE-LIMIT')
         if state.current_environment.find_variable(array_total_size_limit_sym) is None:
             state.current_environment.add_variable(array_total_size_limit_sym, 2**31)
         
         # CALL-ARGUMENTS-LIMIT - exclusive upper bound for function arguments
-        call_arguments_limit_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('CALL-ARGUMENTS-LIMIT')
+        call_arguments_limit_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('CALL-ARGUMENTS-LIMIT')
         if state.current_environment.find_variable(call_arguments_limit_sym) is None:
             state.current_environment.add_variable(call_arguments_limit_sym, 2**20)
         
         # LAMBDA-PARAMETERS-LIMIT - exclusive upper bound for lambda parameters
-        lambda_parameters_limit_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('LAMBDA-PARAMETERS-LIMIT')
+        lambda_parameters_limit_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('LAMBDA-PARAMETERS-LIMIT')
         if state.current_environment.find_variable(lambda_parameters_limit_sym) is None:
             state.current_environment.add_variable(lambda_parameters_limit_sym, 2**20)
         
         # MULTIPLE-VALUES-LIMIT - exclusive upper bound for number of multiple values
-        multiple_values_limit_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('MULTIPLE-VALUES-LIMIT')
+        multiple_values_limit_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('MULTIPLE-VALUES-LIMIT')
         if state.current_environment.find_variable(multiple_values_limit_sym) is None:
             state.current_environment.add_variable(multiple_values_limit_sym, 2**20)
         
         # LAMBDA-LIST-KEYWORDS - list of lambda list keyword symbols
-        lambda_list_keywords_sym = fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('LAMBDA-LIST-KEYWORDS')
+        lambda_list_keywords_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('LAMBDA-LIST-KEYWORDS')
         if state.current_environment.find_variable(lambda_list_keywords_sym) is None:
             # Create a list of lambda list keywords
             keywords = ['&ALLOW-OTHER-KEYS', '&AUX', '&BODY', '&ENVIRONMENT', '&KEY',
                        '&OPTIONAL', '&REST', '&WHOLE']
-            keyword_syms = [fclpy.lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol(k) for k in keywords]
+            keyword_syms = [fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol(k) for k in keywords]
             # Build list from end
             keywords_list = fclpy.lisptype.NIL
             for k in reversed(keyword_syms):
@@ -484,5 +496,9 @@ def setup_standard_environment():
         # Defensive: if initialization fails, continue
         pass
 
+    # Update module-level variable for backward compatibility with code that uses lispenv.current_environment
+    global current_environment
+    current_environment = state.current_environment
+    
     state.functions_loaded = True
     return state.current_environment

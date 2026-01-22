@@ -36,6 +36,11 @@ from .math import (_s_plus_, _s_minus_, _s_star_, _s_slash_, _s_eq_, _s_lt_, _s_
 from .io import _s_print_
 from .sequences import list_s_star_
 
+# Explicitly import critical I/O functions to ensure they're always available
+# (avoids timing issues with circular imports during evaluation)
+from .io_write import print_fn, prin1, princ, terpri, fresh_line, write, write_char, write_string, write_line
+from .io_read import read, read_line, read_char, peek_char
+
 # Create aliases for functions that conflict with Python builtins
 list = list_fn
 round = round_fn

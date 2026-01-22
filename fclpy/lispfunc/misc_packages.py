@@ -137,7 +137,8 @@ def package_name(package):
 @_registry.cl_function('PACKAGE-NICKNAMES')
 def package_nicknames(package):
     """Get package nicknames."""
-    return getattr(package, 'nicknames', [])
+    # Package class uses `nick_names`; accept either for compatibility
+    return getattr(package, 'nick_names', getattr(package, 'nicknames', []))
 
 
 @_registry.cl_function('RENAME-PACKAGE')
