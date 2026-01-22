@@ -581,8 +581,30 @@ def eval(form, env=None):
                                         # Long form - just accept for now
                                         pass
                                 else:
-                                    # Unknown place type - just silently accept (many place types exist)
-                                    pass
+                                    # Try generic struct accessor: look for SET-<accessor-name>
+                                    setter_name = f"SET-{op_name}"
+                                    setter_sym = lisptype.LispSymbol(setter_name)
+                                    setter_func = env.find_func(setter_sym)
+                                    if setter_func is None:
+                                        # Try looking up in registry
+                                        py_name = _registry.get_function_py_name(setter_name)
+                                        if py_name:
+                                            import fclpy.lispfunc as lispfunc
+                                            setter_func = getattr(lispfunc, py_name, None)
+                                    
+                                    if setter_func:
+                                        # Call the setter with the target object and all evaluated place args
+                                        target_obj = eval(car(place_args), env)
+                                        eval_place_args = [target_obj]
+                                        pa = cdr(place_args)
+                                        while _consp_internal(pa):
+                                            eval_place_args.append(eval(car(pa), env))
+                                            pa = cdr(pa)
+                                        eval_place_args.append(result)
+                                        setter_func(*eval_place_args)
+                                    else:
+                                        # Unknown place type - just silently accept (many place types exist)
+                                        pass
                         else:
                             raise lisptype.LispNotImplementedError(f"SETF: place operator must be a symbol, got {place_op}")
                     else:
