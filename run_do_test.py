@@ -16,7 +16,9 @@ if os.path.exists(init_lsp):
 else:
 	print('init.lsp not found; continuing')
 
-test_lisp = "(in-package :cl-test) (do-test 'char=.1)"
+# test_lisp = "(in-package :cl-test) (do-test 'char=.1)"
+test_lisp = "(in-package :cl-test) (do-test 'symbol-&allow-other-keys)"
+
 print("Running %s" % test_lisp)
 res = eval_string(test_lisp, env)
 print('Result:', res)
