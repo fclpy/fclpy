@@ -335,10 +335,19 @@ def remprop(symbol, indicator):
 
 @_registry.cl_function('SYMBOL-PLIST')
 def symbol_plist(symbol):
-    """Get symbol's property list."""
-    if hasattr(symbol, 'plist'):
-        return symbol.plist
-    return None
+    """Get symbol's property list as a Lisp list.
+    
+    Returns a proper Lisp plist (indicator value indicator value ...)
+    or NIL if the symbol has no properties.
+    """
+    if hasattr(symbol, 'plist') and symbol.plist:
+        # Convert Python dict to Lisp plist
+        result = lisptype.NIL
+        for key, value in reversed(list(symbol.plist.items())):
+            result = lisptype.lispCons(value, result)
+            result = lisptype.lispCons(key, result)
+        return result
+    return lisptype.NIL
 
 
 @_registry.cl_function('REMF')

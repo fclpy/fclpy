@@ -175,9 +175,9 @@ def find_symbol(name, package=None):
     if symbol is None:
         return lisptype.MultipleValues(lisptype.NIL, lisptype.NIL)
     
-    # Convert status string to keyword
+    # Convert status string to keyword (use intern_keyword for proper interning)
     if status:
-        status_keyword = lisptype.lispKeyword(status[1:])  # Remove leading ':'
+        status_keyword = lisptype.intern_keyword(status[1:])  # Remove leading ':'
     else:
         status_keyword = lisptype.NIL
     

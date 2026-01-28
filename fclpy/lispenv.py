@@ -432,11 +432,15 @@ def setup_standard_environment():
         
         # LAMBDA-LIST-KEYWORDS - list of lambda list keyword symbols
         lambda_list_keywords_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('LAMBDA-LIST-KEYWORDS')
+        fclpy.lisptype.COMMON_LISP_PACKAGE.export_symbol(lambda_list_keywords_sym)
         if state.current_environment.find_variable(lambda_list_keywords_sym) is None:
             # Create a list of lambda list keywords
             keywords = ['&ALLOW-OTHER-KEYS', '&AUX', '&BODY', '&ENVIRONMENT', '&KEY',
                        '&OPTIONAL', '&REST', '&WHOLE']
             keyword_syms = [fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol(k) for k in keywords]
+            # Export all lambda list keyword symbols (ANSI CL requires them to be external)
+            for k in keyword_syms:
+                fclpy.lisptype.COMMON_LISP_PACKAGE.export_symbol(k)
             # Build list from end
             keywords_list = fclpy.lisptype.NIL
             for k in reversed(keyword_syms):
