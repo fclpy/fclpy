@@ -237,6 +237,36 @@ def package_error_package(condition):
     return None
 
 
+@_registry.cl_function('TYPE-ERROR-DATUM')
+def type_error_datum(*args):
+    """Get the datum (offending value) from a type-error condition."""
+    if len(args) != 1:
+        raise lisptype.LispProgramError(
+            f"TYPE-ERROR-DATUM: wrong number of arguments (got {len(args)}, expected 1)"
+        )
+    condition = args[0]
+    # If condition is a LispTypeError, get its actual_value attribute
+    if isinstance(condition, lisptype.LispTypeError):
+        return getattr(condition, 'actual_value', lisptype.NIL)
+    # If it's a string representation of an error, return NIL
+    return lisptype.NIL
+
+
+@_registry.cl_function('TYPE-ERROR-EXPECTED-TYPE')
+def type_error_expected_type(*args):
+    """Get the expected type from a type-error condition."""
+    if len(args) != 1:
+        raise lisptype.LispProgramError(
+            f"TYPE-ERROR-EXPECTED-TYPE: wrong number of arguments (got {len(args)}, expected 1)"
+        )
+    condition = args[0]
+    # If condition is a LispTypeError, get its expected_type attribute
+    if isinstance(condition, lisptype.LispTypeError):
+        return getattr(condition, 'expected_type', lisptype.NIL)
+    # If it's a string representation of an error, return NIL
+    return lisptype.NIL
+
+
 __all__ = [
     'define_condition',
     'make_condition',
@@ -266,4 +296,6 @@ __all__ = [
     'method_combination_error',
     'invalid_method_error',
     'package_error_package',
+    'type_error_datum',
+    'type_error_expected_type',
 ]

@@ -64,28 +64,48 @@ def listp(obj):
 
 
 @_registry.cl_function('SYMBOLP')
-def symbolp(obj):
+def symbolp(*args):
     """Test if object is a symbol."""
+    if len(args) != 1:
+        raise lisptype.LispProgramError(
+            f"SYMBOLP: wrong number of arguments (got {len(args)}, expected 1)"
+        )
+    obj = args[0]
     return lisptype.lisp_bool(type(obj) is lisptype.LispSymbol)
 
 
 @_registry.cl_function('KEYWORDP')
-def keywordp(obj):
+def keywordp(*args):
     """Test if object is a keyword."""
+    if len(args) != 1:
+        raise lisptype.LispProgramError(
+            f"KEYWORDP: wrong number of arguments (got {len(args)}, expected 1)"
+        )
+    obj = args[0]
     return lisptype.lisp_bool(type(obj) is lisptype.lispKeyword)
 
 
 @_registry.cl_function('HASH-TABLE-P')
-def hash_table_p(obj):
+def hash_table_p(*args):
     """Test if object is a hash table."""
+    if len(args) != 1:
+        raise lisptype.LispProgramError(
+            f"HASH-TABLE-P: wrong number of arguments (got {len(args)}, expected 1)"
+        )
+    obj = args[0]
     return lisptype.lisp_bool(isinstance(obj, dict))
 
 
 from . import registry as _registry  # ensure decorator availability for new predicates
 
 @_registry.cl_function('PACKAGEP')
-def packagep(obj):
+def packagep(*args):
     """Test if object is a package."""
+    if len(args) != 1:
+        raise lisptype.LispProgramError(
+            f"PACKAGEP: wrong number of arguments (got {len(args)}, expected 1)"
+        )
+    obj = args[0]
     return lisptype.lisp_bool(isinstance(obj, lisptype.Package))
 
 
@@ -100,8 +120,13 @@ def make_package_fn(name, nicknames=None, use_list=None):
 
 
 @_registry.cl_function('ARRAY-HAS-FILL-POINTER-P')
-def array_has_fill_pointer_p(array):
+def array_has_fill_pointer_p(*args):
     """Test if array has a fill pointer."""
+    if len(args) != 1:
+        raise lisptype.LispProgramError(
+            f"ARRAY-HAS-FILL-POINTER-P: wrong number of arguments (got {len(args)}, expected 1)"
+        )
+    array = args[0]
     return lisptype.lisp_bool(hasattr(array, '_fill_pointer'))
 
 
@@ -282,8 +307,13 @@ def rest(x):
 
 
 @_registry.cl_function('BUTLAST')
-def butlast(seq):
+def butlast(*args):
     """Return all but the last element of SEQ (stub using Python slicing)."""
+    if len(args) < 1 or len(args) > 2:
+        raise lisptype.LispProgramError(
+            f"BUTLAST: wrong number of arguments (got {len(args)}, expected 1-2)"
+        )
+    seq = args[0]
     try:
         return tuple(seq[:-1])
     except Exception:
@@ -334,12 +364,17 @@ def remprop(symbol, indicator):
 
 
 @_registry.cl_function('SYMBOL-PLIST')
-def symbol_plist(symbol):
+def symbol_plist(*args):
     """Get symbol's property list as a Lisp list.
     
     Returns a proper Lisp plist (indicator value indicator value ...)
     or NIL if the symbol has no properties.
     """
+    if len(args) != 1:
+        raise lisptype.LispProgramError(
+            f"SYMBOL-PLIST: wrong number of arguments (got {len(args)}, expected 1)"
+        )
+    symbol = args[0]
     if hasattr(symbol, 'plist') and symbol.plist:
         # Convert Python dict to Lisp plist
         result = lisptype.NIL
@@ -530,14 +565,23 @@ def internal_time_units_per_second():
 
 
 @_registry.cl_function('ARRAY-ELEMENT-TYPE')
-def array_element_type(array):
+def array_element_type(*args):
     """Get array element type."""
+    if len(args) != 1:
+        raise lisptype.LispProgramError(
+            f"ARRAY-ELEMENT-TYPE: wrong number of arguments (got {len(args)}, expected 1)"
+        )
     return 'T'
 
 
 @_registry.cl_function('ARRAY-RANK')
-def array_rank(array):
+def array_rank(*args):
     """Get array rank."""
+    if len(args) != 1:
+        raise lisptype.LispProgramError(
+            f"ARRAY-RANK: wrong number of arguments (got {len(args)}, expected 1)"
+        )
+    array = args[0]
     try:
         return len(array.shape)
     except:
@@ -545,8 +589,13 @@ def array_rank(array):
 
 
 @_registry.cl_function('ARRAY-TOTAL-SIZE')
-def array_total_size(array):
+def array_total_size(*args):
     """Get array total size."""
+    if len(args) != 1:
+        raise lisptype.LispProgramError(
+            f"ARRAY-TOTAL-SIZE: wrong number of arguments (got {len(args)}, expected 1)"
+        )
+    array = args[0]
     try:
         return array.size
     except:
@@ -591,8 +640,13 @@ def get_internal_run_time():
 
 
 @_registry.cl_function('SLEEP')
-def sleep_fn(seconds):
+def sleep_fn(*args):
     """Sleep for seconds."""
+    if len(args) != 1:
+        raise lisptype.LispProgramError(
+            f"SLEEP: wrong number of arguments (got {len(args)}, expected 1)"
+        )
+    seconds = args[0]
     import time
     time.sleep(seconds)
     return None
@@ -604,8 +658,13 @@ def standard_char_p(char):
 
 
 @_registry.cl_function('GRAPHIC-CHAR-P')
-def graphic_char_p(char):
+def graphic_char_p(*args):
     """Test if graphic character."""
+    if len(args) != 1:
+        raise lisptype.LispProgramError(
+            f"GRAPHIC-CHAR-P: wrong number of arguments (got {len(args)}, expected 1)"
+        )
+    char = args[0]
     return char.isprintable()
 
 

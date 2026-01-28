@@ -16,7 +16,7 @@ from .lisptype_extended import *  # noqa: F401, F403
 __all__ = [
     # From lisptype_basic
     'LispNotImplementedError', 'LispTypeError', 'LispError',
-    'LispEndOfFileError', 'LispEnvironmentError',
+    'LispEndOfFileError', 'LispEnvironmentError', 'LispProgramError',
     'lispT', 'lispSequence', 'lispList', 'lispNull', 'LispSymbol',
     'lispKeyword', 'Character', 'LispString', 'lispCons', 'lispConsIterator',
     'NIL', 'T',

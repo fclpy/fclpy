@@ -236,7 +236,7 @@ def eval(form, env=None):
         eval_unwind_protect, eval_tagbody, eval_go
     )
     from .evaluation_loops_conditionals import (
-        eval_when, eval_unless, eval_cond, eval_and, eval_or,
+        eval_when, eval_unless, eval_cond, eval_case, eval_and, eval_or,
         eval_progn, eval_locally, eval_prog1, eval_prog2, eval_time, eval_let, eval_letstar, eval_quasiquote,
         eval_loop, eval_eval_when, eval_do, eval_do_star, eval_dolist, eval_dotimes,
         eval_do_symbols, eval_do_external_symbols, eval_do_all_symbols,
@@ -687,6 +687,8 @@ def eval(form, env=None):
                 return eval_eval_when(form, env)
             elif operator.name == 'COND':
                 return eval_cond(form, env)
+            elif operator.name == 'CASE':
+                return eval_case(form, env)
             elif operator.name == 'AND':
                 return eval_and(form, env)
             elif operator.name == 'OR':

@@ -8,45 +8,159 @@ from fclpy.lispfunc import registry as _registry
 
 # --- Symbol operations ---
 @_registry.cl_function('SYMBOL-NAME')
-def symbol_name(symbol):
+def symbol_name(*args):
     """Get the name of a symbol."""
+    if len(args) != 1:
+        raise lisptype.LispProgramError(
+            f"SYMBOL-NAME: wrong number of arguments (got {len(args)}, expected 1)"
+        )
+    symbol = args[0]
     if hasattr(symbol, 'name'):
         return symbol.name
     return str(symbol)
 
 
 @_registry.cl_function('SYMBOL-PACKAGE')
-def symbol_package(symbol):
+def symbol_package(*args):
     """Get the package a symbol belongs to."""
+    if len(args) != 1:
+        raise lisptype.LispProgramError(
+            f"SYMBOL-PACKAGE: wrong number of arguments (got {len(args)}, expected 1)"
+        )
+    symbol = args[0]
     return getattr(symbol, 'package', None)
 
 
 @_registry.cl_function('SYMBOL-VALUE')
-def symbol_value(symbol):
+def symbol_value(*args):
     """Get the value bound to a symbol."""
+    if len(args) != 1:
+        raise lisptype.LispProgramError(
+            f"SYMBOL-VALUE: wrong number of arguments (got {len(args)}, expected 1)"
+        )
+    symbol = args[0]
     return getattr(symbol, 'value', None)
 
 
 @_registry.cl_function('MAKE-SYMBOL')
-def make_symbol(name):
+def make_symbol(*args):
     """Create a new uninterned symbol."""
+    if len(args) != 1:
+        raise lisptype.LispProgramError(
+            f"MAKE-SYMBOL: wrong number of arguments (got {len(args)}, expected 1)"
+        )
+    name = args[0]
     return lisptype.LispSymbol(str(name))
 
 
 @_registry.cl_function('COPY-SYMBOL')
-def copy_symbol(symbol, copy_props=None):
+def copy_symbol(*args):
     """Copy a symbol, optionally copying properties."""
+    if len(args) < 1 or len(args) > 2:
+        raise lisptype.LispProgramError(
+            f"COPY-SYMBOL: wrong number of arguments (got {len(args)}, expected 1-2)"
+        )
+    symbol = args[0]
     return make_symbol(symbol_name(symbol))
 
 
 # --- Gensym (unique symbol generation) ---
-_gensym_counter = 0
+# Initialize *GENSYM-COUNTER* as a special variable
+_gensym_counter_symbol = None
 
-def gensym(prefix="G"):
-    """Generate unique symbol with prefix."""
-    global _gensym_counter
-    _gensym_counter += 1
-    return lisptype.LispSymbol(f"{prefix}{_gensym_counter}")
+def _get_gensym_counter_symbol():
+    """Get the *GENSYM-COUNTER* symbol, creating it if needed."""
+    global _gensym_counter_symbol
+    if _gensym_counter_symbol is None:
+        _gensym_counter_symbol = lisptype.COMMON_LISP_PACKAGE.intern_symbol('*GENSYM-COUNTER*')
+        # Set initial value to 0
+        _gensym_counter_symbol.value = 0
+    return _gensym_counter_symbol
+
+def _get_gensym_counter(env=None):
+    """Get current value of *GENSYM-COUNTER* from environment or symbol."""
+    sym = _get_gensym_counter_symbol()
+    # Try environment first (for LET bindings)
+    if env is not None:
+        try:
+            val = env.find_variable(sym)
+            if val is not None:
+                return val
+        except Exception:
+            pass
+    # Fall back to symbol value
+    val = getattr(sym, 'value', None)
+    if val is None:
+        return 0
+    return val
+
+def _set_gensym_counter(value, env=None):
+    """Set *GENSYM-COUNTER* in environment or symbol."""
+    sym = _get_gensym_counter_symbol()
+    # Try environment first (for LET bindings)
+    if env is not None:
+        try:
+            env.set_variable(sym, value)
+            return
+        except Exception:
+            pass
+    # Fall back to symbol value
+    sym.value = value
+
+@_registry.cl_function('GENSYM')
+def gensym(*args):
+    """Generate unique symbol with prefix.
+    
+    (gensym) - uses "G" prefix and *gensym-counter*, increments counter
+    (gensym string) - uses string prefix and *gensym-counter*, increments counter
+    (gensym integer) - uses "G" prefix and integer, does NOT increment counter
+    """
+    if len(args) > 1:
+        raise lisptype.LispProgramError(
+            f"GENSYM: wrong number of arguments (got {len(args)}, expected 0-1)"
+        )
+    
+    # Get current environment from state
+    env = getattr(state, 'current_environment', None)
+    
+    prefix = "G"
+    use_counter = True
+    explicit_number = None
+    
+    if len(args) == 1:
+        arg = args[0]
+        if isinstance(arg, str) or isinstance(arg, lisptype.LispString):
+            prefix = str(arg)
+        elif isinstance(arg, int) and arg >= 0:
+            # Integer argument: use it as the number, don't increment counter
+            explicit_number = arg
+            use_counter = False
+        else:
+            raise lisptype.LispTypeError(
+                f"GENSYM: argument must be a string or non-negative integer, got {type(arg).__name__}",
+                expected_type="(OR STRING UNSIGNED-BYTE)",
+                actual_value=arg
+            )
+    
+    if use_counter:
+        counter = _get_gensym_counter(env)
+        # Validate counter
+        if not isinstance(counter, int) or counter < 0:
+            raise lisptype.LispTypeError(
+                f"*GENSYM-COUNTER* must be a non-negative integer, got {counter}",
+                expected_type="(INTEGER 0 *)",
+                actual_value=counter
+            )
+        number = counter
+        # Increment counter after using it
+        _set_gensym_counter(counter + 1, env)
+    else:
+        number = explicit_number
+    
+    # Create uninterned symbol
+    sym = lisptype.LispSymbol(f"{prefix}{number}")
+    sym.package = None  # Ensure it's uninterned
+    return sym
 
 
 # --- Package operations ---
@@ -57,12 +171,17 @@ def get_current_package():
 
 
 @_registry.cl_function('IN-PACKAGE')
-def in_package(name):
+def in_package(*args):
     """Set current package and return it.
     
     This updates both state.current_package and the *PACKAGE* variable
     in the current environment for proper dynamic binding behavior.
     """
+    if len(args) != 1:
+        raise lisptype.LispProgramError(
+            f"IN-PACKAGE: wrong number of arguments (got {len(args)}, expected 1)"
+        )
+    name = args[0]
     if isinstance(name, lisptype.Package):
         pkg = name
     else:
@@ -185,14 +304,24 @@ def find_symbol(name, package=None):
 
 
 @_registry.cl_function('FIND-PACKAGE')
-def find_package(name):
+def find_package(*args):
     """Find a package by name."""
+    if len(args) != 1:
+        raise lisptype.LispProgramError(
+            f"FIND-PACKAGE: wrong number of arguments (got {len(args)}, expected 1)"
+        )
+    name = args[0]
     return lisptype.find_package(str(name))
 
 
 @_registry.cl_function('FIND-ALL-SYMBOLS')
-def find_all_symbols(name):
+def find_all_symbols(*args):
     """Find all symbols with given name across all packages."""
+    if len(args) != 1:
+        raise lisptype.LispProgramError(
+            f"FIND-ALL-SYMBOLS: wrong number of arguments (got {len(args)}, expected 1)"
+        )
+    name = args[0]
     results = []
     for pkg in list({id(p): p for p in state.packages.values()}.values()):
         sym, status = pkg.find_symbol(name)

@@ -198,6 +198,14 @@ def setup_standard_environment():
             current_pkg = getattr(state, 'current_package', None) or fclpy.lisptype.COMMON_LISP_USER_PACKAGE
             state.current_environment.add_variable(package_sym, current_pkg)
         
+        # *GENSYM-COUNTER* - counter used by GENSYM
+        gensym_counter_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*GENSYM-COUNTER*')
+        fclpy.lisptype.COMMON_LISP_PACKAGE.export_symbol(gensym_counter_sym)
+        if state.current_environment.find_variable(gensym_counter_sym) is None:
+            state.current_environment.add_variable(gensym_counter_sym, 0)
+            # Also set symbol value for direct access
+            gensym_counter_sym.value = 0
+        
         # *PRINT-PPRINT-DISPATCH* - the current pretty print dispatch table
         pprint_dispatch_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*PRINT-PPRINT-DISPATCH*')
         if state.current_environment.find_variable(pprint_dispatch_sym) is None:

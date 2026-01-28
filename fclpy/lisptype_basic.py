@@ -46,6 +46,16 @@ class LispEnvironmentError(LispError):
     pass
 
 
+class LispProgramError(LispError):
+    """Exception for Common Lisp PROGRAM-ERROR condition.
+    
+    This is signaled when a program violates language rules that should be
+    detected at run time, such as wrong number of arguments to a function.
+    """
+    def __init__(self, message="Program error"):
+        super().__init__(message)
+
+
 class Binding:
     def __init__(self,symbol,value,next,env=None):
         self.symbol = symbol
@@ -716,7 +726,7 @@ class MultipleValues(lispT):
 __all__ = [
     # Exceptions
     'LispNotImplementedError', 'LispTypeError', 'LispError',
-    'LispEndOfFileError', 'LispEnvironmentError',
+    'LispEndOfFileError', 'LispEnvironmentError', 'LispProgramError',
     # Core Types
     'lispT', 'lispSequence', 'lispList', 'lispNull', 'LispSymbol',
     'lispKeyword', 'Character', 'LispString', 'lispCons', 'lispConsIterator',

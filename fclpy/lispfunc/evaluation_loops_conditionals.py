@@ -136,6 +136,79 @@ def eval_cond(form, env):
     return None
 
 
+def eval_case(form, env):
+    """Evaluate CASE special form.
+    
+    Syntax: (CASE keyform {normal-clause}* [otherwise-clause])
+    normal-clause ::= (keys form*)
+    otherwise-clause ::= ({otherwise | t} form*)
+    keys ::= key | (key*)
+    
+    Evaluates keyform, then compares with EQL to keys in each clause.
+    Returns NIL if no clause matches.
+    """
+    from .evaluation_core import eval
+    from .comparison import eql
+    
+    args = cdr(form)
+    if not _consp_internal(args):
+        return lisptype.NIL
+    
+    # Evaluate keyform
+    keyform = car(args)
+    key_value = eval(keyform, env)
+    
+    clauses = cdr(args)
+    
+    while _consp_internal(clauses):
+        clause = car(clauses)
+        if _consp_internal(clause):
+            keys = car(clause)
+            forms = cdr(clause)
+            
+            # Check for OTHERWISE or T (final catch-all clause)
+            if isinstance(keys, lisptype.LispSymbol):
+                if keys.name in ('OTHERWISE', 'T'):
+                    # Execute forms and return
+                    result = lisptype.NIL
+                    while _consp_internal(forms):
+                        result = eval(car(forms), env)
+                        forms = cdr(forms)
+                    return result
+                else:
+                    # Single key - compare with EQL
+                    if eql(key_value, keys):
+                        result = lisptype.NIL
+                        while _consp_internal(forms):
+                            result = eval(car(forms), env)
+                            forms = cdr(forms)
+                        return result
+            elif _consp_internal(keys):
+                # List of keys - check each with EQL
+                current_key = keys
+                while _consp_internal(current_key):
+                    k = car(current_key)
+                    if eql(key_value, k):
+                        result = lisptype.NIL
+                        while _consp_internal(forms):
+                            result = eval(car(forms), env)
+                            forms = cdr(forms)
+                        return result
+                    current_key = cdr(current_key)
+            else:
+                # Atomic key (number, character, etc.) - compare with EQL
+                if eql(key_value, keys):
+                    result = lisptype.NIL
+                    while _consp_internal(forms):
+                        result = eval(car(forms), env)
+                        forms = cdr(forms)
+                    return result
+        
+        clauses = cdr(clauses)
+    
+    return lisptype.NIL
+
+
 def eval_and(form, env):
     """Evaluate AND special form."""
     from .evaluation_core import eval
@@ -2096,6 +2169,7 @@ __all__ = [
     'eval_when',
     'eval_unless',
     'eval_cond',
+    'eval_case',
     'eval_and',
     'eval_or',
     'eval_progn',

@@ -497,10 +497,12 @@ def eval_handler_case(form, env):
     # Condition type hierarchy for matching
     # In CL, arithmetic-error is a subtype of error
     # type-error is a subtype of error
+    # program-error is a subtype of error
     # All errors are subtypes of condition
     condition_hierarchy = {
         'ARITHMETIC-ERROR': ['ARITHMETIC-ERROR', 'ERROR', 'SERIOUS-CONDITION', 'CONDITION', 'T'],
         'TYPE-ERROR': ['TYPE-ERROR', 'ERROR', 'SERIOUS-CONDITION', 'CONDITION', 'T'],
+        'PROGRAM-ERROR': ['PROGRAM-ERROR', 'ERROR', 'SERIOUS-CONDITION', 'CONDITION', 'T'],
         'ERROR': ['ERROR', 'SERIOUS-CONDITION', 'CONDITION', 'T'],
         'SERIOUS-CONDITION': ['SERIOUS-CONDITION', 'CONDITION', 'T'],
         'CONDITION': ['CONDITION', 'T'],
@@ -510,14 +512,15 @@ def eval_handler_case(form, env):
         """Check if error matches the handler condition type."""
         handler_type_name = handler_type.upper() if isinstance(handler_type, str) else handler_type.name.upper()
         
+        # PROGRAM-ERROR matches LispProgramError
+        if isinstance(error, lisptype.LispProgramError):
+            return handler_type_name in condition_hierarchy.get('PROGRAM-ERROR', ['PROGRAM-ERROR', 'ERROR', 'CONDITION', 'T'])
         # TYPE-ERROR matches LispTypeError
-        if handler_type_name in ('TYPE-ERROR', 'ARITHMETIC-ERROR', 'ERROR', 'SERIOUS-CONDITION', 'CONDITION', 'T'):
-            if isinstance(error, lisptype.LispTypeError):
-                # LispTypeError is both a type-error and can be arithmetic-error for numeric operations
-                return handler_type_name in condition_hierarchy.get('TYPE-ERROR', ['TYPE-ERROR', 'ERROR', 'CONDITION', 'T'])
-            elif isinstance(error, lisptype.LispError):
-                # Generic error
-                return handler_type_name in condition_hierarchy.get('ERROR', ['ERROR', 'CONDITION', 'T'])
+        elif isinstance(error, lisptype.LispTypeError):
+            return handler_type_name in condition_hierarchy.get('TYPE-ERROR', ['TYPE-ERROR', 'ERROR', 'CONDITION', 'T'])
+        elif isinstance(error, lisptype.LispError):
+            # Generic error
+            return handler_type_name in condition_hierarchy.get('ERROR', ['ERROR', 'CONDITION', 'T'])
         return False
     
     try:
@@ -541,7 +544,8 @@ def eval_handler_case(form, env):
                         new_env = lisptype.Environment(parent=env)
                         if _consp_internal(var_list):
                             var = car(var_list)
-                            new_env.add_variable(var, str(e))
+                            # Store the actual exception object, not just its string
+                            new_env.add_variable(var, e)
                         
                         # Evaluate clause body
                         result = lisptype.NIL

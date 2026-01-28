@@ -111,6 +111,8 @@ __all__ = [
     'method_combination_error',
     'invalid_method_error',
     'package_error_package',
+    'type_error_datum',
+    'type_error_expected_type',
     
     # Hash tables, arrays, CLOS, WITH macros, misc (utilities_misc)
     'make_hash_table',
