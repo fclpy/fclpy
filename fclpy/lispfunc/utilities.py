@@ -19,7 +19,6 @@ __all__ = [
     'get_universal_time',
     'decode_universal_time',
     'get_decoded_time',
-    'time_fn',
     'sleep',
     'lisp_implementation_type',
     'lisp_implementation_version',
@@ -261,9 +260,7 @@ __all__ = [
     'call_arguments_limit',
     'multiple_values_limit',
     'char_code_limit',
-    'do_symbols',
-    'do_external_symbols',
-    'do_all_symbols',
+    # do_symbols, do_external_symbols, do_all_symbols are now special forms
     'with_package_iterator',
     'declaim',
     'declare',

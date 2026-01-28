@@ -698,22 +698,23 @@ def char_code_limit():
 
 
 # --- Symbol iteration ---
-@_registry.cl_function('DO-SYMBOLS')
-def do_symbols(spec, *body):
-    """Iterate over symbols in package."""
-    return lisptype.NIL
+# These are special forms handled by the evaluator
+@_registry.cl_special('DO-SYMBOLS')
+def do_symbols_special(form):
+    """Iterate over symbols in package. Handled by evaluator."""
+    raise lisptype.LispNotImplementedError('DO-SYMBOLS', 'special form handled by evaluator')
 
 
-@_registry.cl_function('DO-EXTERNAL-SYMBOLS')
-def do_external_symbols(spec, *body):
-    """Iterate over external symbols in package."""
-    return lisptype.NIL
+@_registry.cl_special('DO-EXTERNAL-SYMBOLS')
+def do_external_symbols_special(form):
+    """Iterate over external symbols in package. Handled by evaluator."""
+    raise lisptype.LispNotImplementedError('DO-EXTERNAL-SYMBOLS', 'special form handled by evaluator')
 
 
-@_registry.cl_function('DO-ALL-SYMBOLS')
-def do_all_symbols(spec, *body):
-    """Iterate over all symbols in all packages."""
-    return lisptype.NIL
+@_registry.cl_special('DO-ALL-SYMBOLS')
+def do_all_symbols_special(form):
+    """Iterate over all symbols in all packages. Handled by evaluator."""
+    raise lisptype.LispNotImplementedError('DO-ALL-SYMBOLS', 'special form handled by evaluator')
 
 
 @_registry.cl_function('WITH-PACKAGE-ITERATOR')
@@ -1273,9 +1274,7 @@ __all__ = [
     'call_arguments_limit',
     'multiple_values_limit',
     'char_code_limit',
-    'do_symbols',
-    'do_external_symbols',
-    'do_all_symbols',
+    # do_symbols, do_external_symbols, do_all_symbols are now special forms
     'with_package_iterator',
     'declaim',
     'declare',

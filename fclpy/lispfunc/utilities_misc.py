@@ -167,9 +167,7 @@ from .misc_macros import (
     call_arguments_limit,
     multiple_values_limit,
     char_code_limit,
-    do_symbols,
-    do_external_symbols,
-    do_all_symbols,
+    # do_symbols, do_external_symbols, do_all_symbols are now special forms
     with_package_iterator,
     declaim,
     declare,
@@ -354,9 +352,7 @@ __all__ = [
     'call_arguments_limit',
     'multiple_values_limit',
     'char_code_limit',
-    'do_symbols',
-    'do_external_symbols',
-    'do_all_symbols',
+    # do_symbols, do_external_symbols, do_all_symbols are now special forms
     'with_package_iterator',
     'declaim',
     'declare',

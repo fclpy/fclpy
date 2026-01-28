@@ -34,11 +34,18 @@ def get_decoded_time():
     return decode_universal_time(get_universal_time())
 
 
-@_registry.cl_function('TIME')
-def time_fn():
-    """Return current time in seconds since epoch."""
-    import time as _time
-    return _time.time()
+@_registry.cl_special('TIME')
+def time_special(form):
+    """TIME special form stub - actual implementation in evaluator.
+    
+    In Common Lisp, TIME is a macro/special form that:
+    1. Evaluates its argument form
+    2. Prints timing/resource usage information to *TRACE-OUTPUT*
+    3. Returns the value(s) of the form
+    
+    This stub exists so TIME is registered; the evaluator handles the actual execution.
+    """
+    raise lisptype.LispNotImplementedError('TIME', 'special form handled by evaluator')
 
 
 def sleep(seconds):
@@ -269,7 +276,6 @@ __all__ = [
     'get_universal_time',
     'decode_universal_time',
     'get_decoded_time',
-    'time_fn',
     'sleep',
     'lisp_implementation_type',
     'lisp_implementation_version',

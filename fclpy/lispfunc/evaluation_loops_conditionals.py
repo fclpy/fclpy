@@ -724,6 +724,46 @@ def eval_prog2(form, env):
     return result
 
 
+def eval_time(form, env):
+    """Evaluate TIME special form.
+    
+    TIME evaluates the form and prints timing information to *TRACE-OUTPUT*.
+    Returns the result of evaluating the form.
+    
+    Usage: (TIME form)
+    """
+    from .evaluation_core import eval
+    
+    args = cdr(form)
+    if not _consp_internal(args):
+        return lisptype.NIL
+    
+    form_to_time = car(args)
+    
+    # Record start time (using process time for execution time)
+    start_real = time.time()
+    start_cpu = time.process_time()
+    
+    # Evaluate the form
+    result = eval(form_to_time, env)
+    
+    # Record end time
+    end_real = time.time()
+    end_cpu = time.process_time()
+    
+    # Calculate elapsed times
+    real_elapsed = end_real - start_real
+    cpu_elapsed = end_cpu - start_cpu
+    
+    # Print timing info (like SBCL format) to stderr (*TRACE-OUTPUT*)
+    # Convert to seconds with 3 decimal places
+    print(f"Evaluation took:", file=sys.stderr)
+    print(f"  {cpu_elapsed:.6f} seconds of CPU time", file=sys.stderr)
+    print(f"  {real_elapsed:.6f} seconds of real time", file=sys.stderr)
+    
+    return result
+
+
 def eval_loop(form, env):
     """Evaluate LOOP special form with lexical environment support.
     
@@ -1871,6 +1911,187 @@ def eval_dotimes(form, env):
     return eval(result_form, loop_env)
 
 
+def eval_do_symbols(form, env):
+    """Evaluate DO-SYMBOLS special form.
+    
+    (DO-SYMBOLS (var [package [result-form]]) declaration* {tag | statement}*)
+    
+    Iterates over all symbols accessible in the package.
+    """
+    from .evaluation_core import eval
+    import fclpy.state as state
+    
+    args = cdr(form)
+    if not _consp_internal(args):
+        return lisptype.NIL
+    
+    # Parse (var [package [result-form]])
+    var_clause = car(args)
+    body = cdr(args)
+    
+    if not _consp_internal(var_clause):
+        raise lisptype.LispNotImplementedError("DO-SYMBOLS requires (var [package]) clause")
+    
+    var = car(var_clause)
+    rest = cdr(var_clause)
+    package_form = car(rest) if _consp_internal(rest) else lisptype.NIL
+    result_form = car(cdr(rest)) if _consp_internal(rest) and _consp_internal(cdr(rest)) else lisptype.NIL
+    
+    # Get the package
+    if package_form is None or package_form == lisptype.NIL:
+        pkg = getattr(state, 'current_package', lisptype.COMMON_LISP_USER_PACKAGE)
+    else:
+        pkg_designator = eval(package_form, env)
+        if isinstance(pkg_designator, lisptype.Package):
+            pkg = pkg_designator
+        else:
+            pkg = lisptype.find_package(str(pkg_designator))
+        if pkg is None:
+            raise lisptype.LispError(f"Package not found: {pkg_designator}")
+    
+    # Create loop environment
+    loop_env = lisptype.Environment(env)
+    loop_env.set_variable(var, lisptype.NIL)
+    
+    # Iterate over all symbols in package (internal + external)
+    for name, sym in pkg.symbols.items():
+        loop_env.set_variable(var, sym)
+        current = body
+        while _consp_internal(current):
+            eval(car(current), loop_env)
+            current = cdr(current)
+    
+    # Also iterate over inherited symbols from used packages
+    for used_pkg in getattr(pkg, 'use_list', []):
+        if used_pkg is not None:
+            external_names = getattr(used_pkg, 'external_symbols', set())
+            for item in external_names:
+                # Handle both string names and LispSymbol objects
+                if isinstance(item, lisptype.LispSymbol):
+                    sym = item
+                else:
+                    sym = used_pkg.symbols.get(item)
+                if sym is not None:
+                    loop_env.set_variable(var, sym)
+                    current = body
+                    while _consp_internal(current):
+                        eval(car(current), loop_env)
+                        current = cdr(current)
+    
+    # Set var to NIL for result form
+    loop_env.set_variable(var, lisptype.NIL)
+    return eval(result_form, loop_env)
+
+
+def eval_do_external_symbols(form, env):
+    """Evaluate DO-EXTERNAL-SYMBOLS special form.
+    
+    (DO-EXTERNAL-SYMBOLS (var [package [result-form]]) declaration* {tag | statement}*)
+    
+    Iterates over all external (exported) symbols in the package.
+    """
+    from .evaluation_core import eval
+    import fclpy.state as state
+    
+    args = cdr(form)
+    if not _consp_internal(args):
+        return lisptype.NIL
+    
+    # Parse (var [package [result-form]])
+    var_clause = car(args)
+    body = cdr(args)
+    
+    if not _consp_internal(var_clause):
+        raise lisptype.LispNotImplementedError("DO-EXTERNAL-SYMBOLS requires (var [package]) clause")
+    
+    var = car(var_clause)
+    rest = cdr(var_clause)
+    package_form = car(rest) if _consp_internal(rest) else lisptype.NIL
+    result_form = car(cdr(rest)) if _consp_internal(rest) and _consp_internal(cdr(rest)) else lisptype.NIL
+    
+    # Get the package
+    if package_form is None or package_form == lisptype.NIL:
+        pkg = getattr(state, 'current_package', lisptype.COMMON_LISP_USER_PACKAGE)
+    else:
+        pkg_designator = eval(package_form, env)
+        if isinstance(pkg_designator, lisptype.Package):
+            pkg = pkg_designator
+        else:
+            pkg = lisptype.find_package(str(pkg_designator))
+        if pkg is None:
+            raise lisptype.LispError(f"Package not found: {pkg_designator}")
+    
+    # Create loop environment
+    loop_env = lisptype.Environment(env)
+    loop_env.set_variable(var, lisptype.NIL)
+    
+    # Iterate over external symbols only
+    # Note: external_symbols may contain strings (symbol names) or LispSymbol objects
+    external_names = getattr(pkg, 'external_symbols', set())
+    for item in external_names:
+        # Handle both string names and LispSymbol objects
+        if isinstance(item, lisptype.LispSymbol):
+            sym = item
+        else:
+            # It's a string name, look up the symbol
+            sym = pkg.symbols.get(item)
+        if sym is not None:
+            loop_env.set_variable(var, sym)
+            current = body
+            while _consp_internal(current):
+                eval(car(current), loop_env)
+                current = cdr(current)
+    
+    # Set var to NIL for result form
+    loop_env.set_variable(var, lisptype.NIL)
+    return eval(result_form, loop_env)
+
+
+def eval_do_all_symbols(form, env):
+    """Evaluate DO-ALL-SYMBOLS special form.
+    
+    (DO-ALL-SYMBOLS (var [result-form]) declaration* {tag | statement}*)
+    
+    Iterates over all symbols in all registered packages.
+    """
+    from .evaluation_core import eval
+    import fclpy.state as state
+    
+    args = cdr(form)
+    if not _consp_internal(args):
+        return lisptype.NIL
+    
+    # Parse (var [result-form])
+    var_clause = car(args)
+    body = cdr(args)
+    
+    if not _consp_internal(var_clause):
+        raise lisptype.LispNotImplementedError("DO-ALL-SYMBOLS requires (var) clause")
+    
+    var = car(var_clause)
+    result_form = car(cdr(var_clause)) if _consp_internal(cdr(var_clause)) else lisptype.NIL
+    
+    # Create loop environment
+    loop_env = lisptype.Environment(env)
+    loop_env.set_variable(var, lisptype.NIL)
+    
+    # Get all unique packages
+    unique_packages = {id(p): p for p in state.packages.values()}
+    
+    # Iterate over all symbols in all packages
+    for pkg in unique_packages.values():
+        for name, sym in pkg.symbols.items():
+            loop_env.set_variable(var, sym)
+            current = body
+            while _consp_internal(current):
+                eval(car(current), loop_env)
+                current = cdr(current)
+    
+    # Set var to NIL for result form
+    loop_env.set_variable(var, lisptype.NIL)
+    return eval(result_form, loop_env)
+
+
 __all__ = [
     'eval_when',
     'eval_unless',
@@ -1884,9 +2105,13 @@ __all__ = [
     'eval_quasiquote',
     'eval_prog1',
     'eval_prog2',
+    'eval_time',
     'eval_loop',
     'eval_do',
     'eval_do_star',
     'eval_dolist',
     'eval_dotimes',
+    'eval_do_symbols',
+    'eval_do_external_symbols',
+    'eval_do_all_symbols',
 ]

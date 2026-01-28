@@ -237,8 +237,9 @@ def eval(form, env=None):
     )
     from .evaluation_loops_conditionals import (
         eval_when, eval_unless, eval_cond, eval_and, eval_or,
-        eval_progn, eval_locally, eval_prog1, eval_prog2, eval_let, eval_letstar, eval_quasiquote,
+        eval_progn, eval_locally, eval_prog1, eval_prog2, eval_time, eval_let, eval_letstar, eval_quasiquote,
         eval_loop, eval_eval_when, eval_do, eval_do_star, eval_dolist, eval_dotimes,
+        eval_do_symbols, eval_do_external_symbols, eval_do_all_symbols,
         eval_flet, eval_labels
     )
     from .evaluation_conditions import (
@@ -694,6 +695,8 @@ def eval(form, env=None):
                 return eval_prog1(form, env)
             elif operator.name == 'PROG2':
                 return eval_prog2(form, env)
+            elif operator.name == 'TIME':
+                return eval_time(form, env)
             elif operator.name == 'DEFVAR':
                 return eval_defvar(form, env)
             elif operator.name == 'DEFPARAMETER':
@@ -784,6 +787,12 @@ def eval(form, env=None):
                 return eval_dolist(form, env)
             elif operator.name == 'DOTIMES':
                 return eval_dotimes(form, env)
+            elif operator.name == 'DO-SYMBOLS':
+                return eval_do_symbols(form, env)
+            elif operator.name == 'DO-EXTERNAL-SYMBOLS':
+                return eval_do_external_symbols(form, env)
+            elif operator.name == 'DO-ALL-SYMBOLS':
+                return eval_do_all_symbols(form, env)
             elif operator.name == 'IN-PACKAGE':
                 # IN-PACKAGE is a macro in Common Lisp - it doesn't evaluate its argument
                 # (in-package #:cl-test) -> call in_package with symbol CL-TEST
@@ -1279,6 +1288,17 @@ def eval(form, env=None):
                     cl_pkg = lisptype.find_package('COMMON-LISP')
                     in_cl = (operator.name in getattr(cl_pkg, 'symbols', {})) if cl_pkg else False
                     sys.stderr.write(f"[DIAG] Undefined function lookup: name={operator.name} package={pkg_name} registry_py_name={reg_name} in_common_lisp={in_cl}\n")
+                    # Print the entire form being evaluated for context
+                    try:
+                        from fclpy.lispfunc.io_write import prin1_to_string
+                        form_str = prin1_to_string(form)
+                        sys.stderr.write(f"[DIAG] Full form: {form_str}\n")
+                    except Exception as diag_exc:
+                        sys.stderr.write(f"[DIAG] Full form (repr): {repr(form)}\n")
+                    # Print stack trace to see call chain
+                    import traceback
+                    sys.stderr.write("[DIAG] Python call stack:\n")
+                    traceback.print_stack(limit=15, file=sys.stderr)
                 except Exception:
                     pass
                 raise lisptype.LispNotImplementedError(operator.name, "Undefined function")
