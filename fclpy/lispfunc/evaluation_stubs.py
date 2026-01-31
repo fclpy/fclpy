@@ -345,9 +345,10 @@ def the(type_spec, form):
 
 def locally(*body):
     """Local declarations."""
+    from .evaluation_core import eval
     result = None
     for form in body:
-        result = form
+        result = eval(form)
     return result
 
 
