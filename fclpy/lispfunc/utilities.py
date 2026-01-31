@@ -250,6 +250,7 @@ __all__ = [
     'list_all_packages',
     'unintern',
     'unexport',
+    'delete_package',
     'shadowing_import',
     'shadow',
     'use_package',

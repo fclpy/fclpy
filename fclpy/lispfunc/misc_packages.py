@@ -314,6 +314,41 @@ def unuse_package(packages, package=None):
     return lisptype.T
 
 
+@_registry.cl_function('DELETE-PACKAGE')
+def delete_package(package):
+    """Delete a package by instance or name.
+
+    Removes the package from the global package registry and
+    from other packages' use-lists. Returns T if deleted, NIL otherwise.
+    """
+    pkg = package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package))
+    if pkg is None:
+        return lisptype.NIL
+
+    # Remove any entries in state.packages that point to this package
+    keys_to_remove = [k for k, v in list(state.packages.items()) if v is pkg]
+    for k in keys_to_remove:
+        try:
+            del state.packages[k]
+        except Exception:
+            pass
+
+    # Remove from other packages' use lists (supporting different attribute names)
+    for p in list(state.packages.values()):
+        try:
+            if hasattr(p, 'use_packages') and pkg in getattr(p, 'use_packages'):
+                getattr(p, 'use_packages').remove(pkg)
+        except Exception:
+            pass
+        try:
+            if hasattr(p, 'use_list') and pkg in getattr(p, 'use_list'):
+                getattr(p, 'use_list').remove(pkg)
+        except Exception:
+            pass
+
+    return lisptype.T
+
+
 # --- Macro expansion ---
 @_registry.cl_function('MACROEXPAND')
 def macroexpand(form, environment=None):
@@ -338,6 +373,7 @@ __all__ = [
     'list_all_packages',
     'unintern',
     'unexport',
+    'delete_package',
     'shadowing_import',
     'shadow',
     'use_package',

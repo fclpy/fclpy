@@ -43,10 +43,12 @@ def setup_standard_environment():
         # Functions - intern into COMMON-LISP package and export
         for lisp_name, meta in _registry.function_registry.items():
             # meta is now a RegistryEntry, not a dict
-            py_name = meta.py_name if hasattr(meta, 'py_name') else (meta.get('py_name') if isinstance(meta, dict) else None)
-            if not py_name:
-                continue
-            fn = getattr(lispfunc, py_name, None)
+            # Prefer the stored callable; fall back to getattr for legacy entries
+            fn = getattr(meta, 'func', None)
+            if fn is None:
+                py_name = meta.py_name if hasattr(meta, 'py_name') else (meta.get('py_name') if isinstance(meta, dict) else None)
+                if py_name:
+                    fn = getattr(lispfunc, py_name, None)
             if fn:
                 # Intern the symbol into the COMMON-LISP package and export it
                 # so other packages that use CL can access it
@@ -57,8 +59,12 @@ def setup_standard_environment():
         # Specials - intern into COMMON-LISP package and export
         for lisp_name, meta in _registry.special_registry.items():
             # meta is now a RegistryEntry, not a dict
-            py_name = meta.py_name if hasattr(meta, 'py_name') else (meta.get('py_name') if isinstance(meta, dict) else None)
-            fn = getattr(lispfunc, py_name, None) if py_name else None
+            # Prefer the stored callable; fall back to getattr for legacy entries
+            fn = getattr(meta, 'func', None)
+            if fn is None:
+                py_name = meta.py_name if hasattr(meta, 'py_name') else (meta.get('py_name') if isinstance(meta, dict) else None)
+                if py_name:
+                    fn = getattr(lispfunc, py_name, None)
             sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol(lisp_name)
             fclpy.lisptype.COMMON_LISP_PACKAGE.export_symbol(sym)
             if state.current_environment.find_func(sym) is None:

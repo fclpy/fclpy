@@ -19,6 +19,7 @@ class RegistryEntry:
     documentation: Optional[str] = None    # Docstring or help text
     side_effects: bool = False             # Whether the function has side effects
     extra: Dict = field(default_factory=dict)  # Additional metadata fields
+    func: Optional[Callable] = None        # The actual Python callable
     
     def get(self, key: str, default=None):
         """Dict-compatible get() method for backward compatibility."""
@@ -99,7 +100,8 @@ def cl_function(lisp_name: str, **meta):
             arg_spec=arg_spec,
             documentation=documentation,
             side_effects=side_effects,
-            extra=extra
+            extra=extra,
+            func=func  # Store actual callable for direct lookup
         )
         function_registry[lisp_name] = entry
         return func
@@ -131,7 +133,8 @@ def cl_special(lisp_name: str, **meta):
             arg_spec=arg_spec,
             documentation=documentation,
             side_effects=side_effects,
-            extra=extra
+            extra=extra,
+            func=func  # Store actual callable for direct lookup
         )
         special_registry[lisp_name] = entry
         return func

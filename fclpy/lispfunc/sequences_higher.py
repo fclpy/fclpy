@@ -341,6 +341,11 @@ def pushnew(item, place, **kwargs):
 @_registry.cl_function('MAKE-ARRAY')
 def make_array(dimensions, **kwargs):
     """Create array."""
+    # Handle NIL dimensions (0-dimensional array) - returns a scalar container
+    if dimensions is None or dimensions == lisptype.NIL:
+        # 0-dimensional array: just return the initial-element or None
+        return kwargs.get('initial_element', kwargs.get('initial-element', None))
+    
     # Helper to convert dimensions to int
     def to_int(val):
         if hasattr(val, '__iter__') and not isinstance(val, (str, bytes)):
@@ -349,6 +354,15 @@ def make_array(dimensions, **kwargs):
     
     if isinstance(dimensions, int):
         return [None] * dimensions
+    
+    # Convert lispCons to list
+    if isinstance(dimensions, lisptype.lispCons):
+        dimensions = list(dimensions)
+    
+    # Handle empty dimensions list (also 0-dimensional)
+    if not dimensions:
+        return kwargs.get('initial_element', kwargs.get('initial-element', None))
+    
     # Multi-dimensional array - for now, nested lists
     def make_nested(dims):
         if len(dims) == 1:

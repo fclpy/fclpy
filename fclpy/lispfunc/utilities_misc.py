@@ -90,6 +90,7 @@ from .misc_packages import (
     list_all_packages,
     unintern,
     unexport,
+    delete_package,
     shadowing_import,
     shadow,
     use_package,
@@ -387,4 +388,5 @@ __all__ = [
     'documentation',
     'get_optimization_policy',
     'is_variable_special',
+    'delete_package'
 ]
