@@ -86,18 +86,29 @@ def fdefinition(symbol):
 
 
 @_registry.cl_function('SYMBOL-FUNCTION')
-def symbol_function(symbol):
+def symbol_function(*args):
     """Return the function bound to a symbol.
+
+    Accepts variable arguments to canonicalize error handling. If called
+    with the wrong number of arguments, signal a Lisp PROGRAM-ERROR.
 
     Resolution order:
     1. If the current environment has an fdefinition, return it.
     2. Otherwise fall back to a .function attribute if present.
     3. Else NIL (represented by Python None).
     """
+    if len(args) != 1:
+        raise lisptype.LispProgramError(
+            f"SYMBOL-FUNCTION: wrong number of arguments (got {len(args)}, expected 1)"
+        )
+    symbol = args[0]
     try:
         return fdefinition(symbol)
     except Exception:
-        return getattr(symbol, 'function', None)
+        try:
+            return getattr(symbol, 'function', None)
+        except Exception:
+            return None
 
 
 @_registry.cl_function('FUNCTIONP')

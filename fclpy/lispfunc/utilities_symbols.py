@@ -354,9 +354,89 @@ def export(symbols, package=None):
 
 
 @_registry.cl_function('GENTEMP')
-def gentemp(prefix='T', package=None):
-    """Generate temporary interned symbol."""
-    return intern(f"{prefix}{int(time.time()*1000)}", package)
+def gentemp(*args):
+    """Generate temporary interned symbol.
+
+    ANSI: (gentemp &optional (prefix "T") (package *package*))
+    Accepts 0-2 args. Prefix must be a string-designator; package may be
+    a package object, string-designator, symbol, or character.
+    This implementation uses an internal counter to guarantee uniqueness
+    and does not alter *GENSYM-COUNTER*.
+    """
+    from fclpy.lispfunc import registry as _reg  # local import for safety
+
+    # Validate arity
+    if len(args) > 2:
+        raise lisptype.LispProgramError(
+            f"GENTEMP: wrong number of arguments (got {len(args)}, expected 0-2)"
+        )
+
+    # Determine environment (for honoring dynamic *PACKAGE* if bound)
+    env = getattr(state, 'current_environment', None)
+
+    # Defaults
+    prefix = 'T'
+    package = None
+
+    # Helper to extract prefix string from possible Lisp types
+    if len(args) >= 1:
+        p = args[0]
+        if isinstance(p, (str, lisptype.LispString)):
+            prefix = str(p)
+        else:
+            raise lisptype.LispTypeError(
+                f"GENTEMP: prefix must be a string-designator, got {type(p).__name__}",
+                expected_type='STRING-DESIGNATOR',
+                actual_value=p
+            )
+
+    # Handle package arg
+    if len(args) == 2:
+        pkg_arg = args[1]
+        # Accept Package instances directly
+        if isinstance(pkg_arg, lisptype.Package):
+            package = pkg_arg
+        elif isinstance(pkg_arg, lisptype.Character):
+            package = str(pkg_arg.char)
+        elif isinstance(pkg_arg, lisptype.LispSymbol):
+            package = pkg_arg.name
+        elif isinstance(pkg_arg, (str, lisptype.LispString)):
+            package = str(pkg_arg)
+        else:
+            raise lisptype.LispTypeError(
+                f"GENTEMP: package must be a package or string-designator, got {type(pkg_arg).__name__}",
+                expected_type='PACKAGE OR STRING-DESIGNATOR',
+                actual_value=pkg_arg
+            )
+    else:
+        # No explicit package arg: try dynamic *PACKAGE* then fall back to state
+        try:
+            package_sym = lisptype.COMMON_LISP_PACKAGE.intern_symbol('*PACKAGE*')
+            if env is not None:
+                try:
+                    dyn = env.find_variable(package_sym)
+                    if dyn is not None:
+                        package = dyn
+                except Exception:
+                    pass
+            if package is None:
+                package = getattr(state, 'current_package', None)
+        except Exception:
+            package = getattr(state, 'current_package', None)
+
+    # Generate unique numeric suffix using process-local counter
+    try:
+        _gentemp_counter
+    except NameError:
+        # Initialize module-level counter if not present
+        globals()['_gentemp_counter'] = 0
+
+    number = globals()['_gentemp_counter']
+    globals()['_gentemp_counter'] = number + 1
+
+    name = f"{prefix}{number}"
+    # Delegate to intern() which will handle package/name conversion and binding
+    return intern(name, package)
 
 
 @_registry.cl_function('APROPOS')

@@ -144,8 +144,15 @@ def set_symbol_value(symbol, value):
     symbol.value = value
     return value
 
-def symbol_function(symbol):
-    """Get the function definition of a symbol."""
+def symbol_function(*args):
+    """Get the function definition of a symbol.
+
+    Accepts variable arguments so callers that omit the required symbol
+    will receive a LispProgramError rather than a Python TypeError.
+    """
+    if len(args) != 1:
+        raise LispProgramError(f"symbol-function: wrong number of arguments (got {len(args)}, expected 1)")
+    symbol = args[0]
     if not isinstance(symbol, LispSymbol):
         raise TypeError(f"symbol-function: {symbol} is not a symbol")
     return symbol.function
