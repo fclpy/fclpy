@@ -17,9 +17,9 @@ def test_predicates_return_lisp_booleans():
     # constantp should return Lisp T for literal constants
     assert constantp(1) == lisptype.T
 
-    # boundp currently returns T by default in evaluator
+    # boundp should return NIL for newly-created symbols (unbound)
     sym = lisptype.LispSymbol('X')
-    assert boundp(sym) == lisptype.T
+    assert boundp(sym) == lisptype.NIL
 
     # eq should return T for identical values and NIL otherwise
     assert eq(1, 1) == lisptype.T

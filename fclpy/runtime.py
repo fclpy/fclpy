@@ -204,26 +204,46 @@ class FclpyREPL:
     def read_input(self):
         """Read a line of input from the user."""
         try:
-            line = input("FCLPY> ").strip()
-            
-            # Handle REPL commands (only if they match a known command)
-            if line.startswith(':'):
+            line = input("FCLPY> ")
+
+            # Quick command handling (only if they match a known command)
+            if line and line.strip().startswith(':'):
                 cmd = line.lower().strip()
                 if cmd in [':quit', ':q', ':help', ':h', ':env', ':test', ':verbose']:
                     return self.handle_repl_command(line)
                 # otherwise fall through and treat as a Lisp keyword/expression (e.g. :FOO)
-            
+
             # Handle empty input
-            if not line.strip():
+            if not line or not line.strip():
                 return None
-            
-            # Try to read as Lisp expression using proper reader
-            if line.strip().startswith('(') and line.strip().endswith(')'):
-                # Use full S-expression reader for complex expressions
-                return self.parse_with_reader(line)
-            else:
-                # Use simple parser for literals and simple expressions
-                return self.parse_simple_expression(line)
+
+            # If the input begins an S-expression, attempt to parse it and
+            # continue reading lines when the reader reports an EOF during
+            # list read (i.e. an incomplete multi-line form).
+            if line.lstrip().startswith('('):
+                text = line
+                while True:
+                    try:
+                        return self.parse_with_reader(text)
+                    except Exception as e:
+                        # If parser indicates an EOF/unterminated list, read more
+                        msg = str(e).upper()
+                        if 'EOF' in msg or 'UNTERMINATED' in msg or 'EOF DURING' in msg:
+                            try:
+                                cont = input('......> ')
+                            except EOFError:
+                                print('\nInterrupted during multiline input.')
+                                return None
+                            except KeyboardInterrupt:
+                                print('\nInterrupted during multiline input.')
+                                return None
+                            # Append continuation and loop to try parsing again
+                            text += '\n' + cont
+                            continue
+                        # Other parse errors should bubble up as parse errors
+                        raise
+            # Not an S-expression start, use simple parser for literals or symbols
+            return self.parse_simple_expression(line.strip())
             
         except EOFError:
             print("\nGoodbye!")
