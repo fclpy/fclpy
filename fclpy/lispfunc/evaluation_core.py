@@ -805,6 +805,8 @@ def eval(form, env=None):
                 # Don't evaluate - pass the symbol/keyword directly
                 from .utilities_symbols import in_package
                 return in_package(name_arg)
+            
+
             elif operator.name == 'SYMBOL-MACROLET':
                 # (SYMBOL-MACROLET ((sym1 expansion1) (sym2 expansion2) ...) body-form...)
                 # Create symbol-macro bindings in a new environment and evaluate body

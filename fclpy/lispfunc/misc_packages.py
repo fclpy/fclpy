@@ -3,7 +3,9 @@
 import fclpy.lisptype as lisptype
 import fclpy.state as state
 from fclpy.lispfunc import registry as _registry
+import logging
 
+logger = logging.getLogger(__name__)
 
 def _parse_keyword_args(args):
     """Parse Lisp-style keyword arguments into Python dict.
@@ -353,13 +355,47 @@ def delete_package(package):
 @_registry.cl_function('MACROEXPAND')
 def macroexpand(form, environment=None):
     """Expand macros fully."""
-    return form, lisptype.NIL
+    # Fully expand by repeatedly applying MACROEXPAND-1 until stable.
+    try:
+        from .evaluation_core import eval as _eval
+        from .core import cons
+        op = lisptype.LispSymbol('MACROEXPAND-1')
+        prev = form
+        while True:
+            call = cons(op, cons(prev, lisptype.NIL))
+            expanded = _eval(call, environment)
+            # If expansion returned a pair of values (compat), accept first
+            if isinstance(expanded, tuple) and len(expanded) >= 1:
+                expanded_val = expanded[0]
+            else:
+                expanded_val = expanded
+            if expanded_val is prev:
+                return prev
+            prev = expanded_val
+    except Exception:
+        # On any error, defensively return the original form
+        logger.error(f"[macroexpand] error while expanding, returning original. env_id={id(environment)}\n", exc_info=True)
+
+        return form
 
 
 @_registry.cl_function('MACROEXPAND-1')
 def macroexpand_1(form, environment=None):
     """Expand macros once."""
-    return form, lisptype.NIL
+    try:
+        from .evaluation_core import eval as _eval
+        from .core import cons
+        op = lisptype.LispSymbol('MACROEXPAND-1')
+        call = cons(op, cons(form, lisptype.NIL))
+        expanded = _eval(call, environment)
+        # If evaluator returns multiple-values as a tuple, return first
+        if isinstance(expanded, tuple) and len(expanded) >= 1:
+            return expanded[0]
+        return expanded
+    except Exception:
+        logger.error(f"[macroexpand-1] error while expanding form env_id={id(environment)}\n", exc_info=True)
+
+        return form
 
 
 __all__ = [

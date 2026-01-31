@@ -6,14 +6,18 @@ control flow, loops/conditionals, or condition handling categories.
 
 import fclpy.lisptype as lisptype
 import fclpy.state as state
-from .core import car, cdr, _consp_internal, cons
+from fclpy.lispfunc.core import car, cdr, _consp_internal, cons
 from . import registry as _registry
+import logging
+import sys
 
+logger = logging.getLogger(__name__)
 
 def eval_if(form, env):
     """Evaluate IF special form."""
     # Import eval lazily to avoid circular imports
     from .evaluation_core import eval
+    import sys
     
     args = cdr(form)
     if not _consp_internal(args):
@@ -608,7 +612,12 @@ def eval_macroexpand_1(form, env):
         return form_to_expand
     
     # Try to find the operator function
-    macro_func = env.find_func(operator)
+    try:
+        macro_func = env.find_func(operator)
+    except Exception:
+        macro_func = None
+        logger.error(f"[DEBUG] Error looking up macro function for {operator}", exc_info=True)
+
     if not macro_func or not callable(macro_func):
         return form_to_expand
     
