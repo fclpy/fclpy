@@ -430,18 +430,24 @@ class Package(lispT):
         Args:
             name: Symbol name (string) or LispSymbol
         """
-        symbol_obj = name
+        # Normalize input to symbol object and name string
+        symbol_obj = None
         if isinstance(name, LispSymbol):
-            name = name.name
+            symbol_obj = name
+            name_str = name.name
         else:
-            # name is a string, look it up
-            symbol_obj = self.symbols.get(name)
-        
-        if name in self.symbols:
-            # Store both the name string and the symbol object for compatibility
-            self.external_symbols.add(name)
-            if symbol_obj:
-                self.external_symbols.add(symbol_obj)
+            name_str = str(name).upper()
+            # If the symbol exists in this package, prefer that object
+            symbol_obj = self.symbols.get(name_str)
+
+        # Ensure the package has the symbol object registered
+        if symbol_obj is None:
+            # Create a new LispSymbol for this package if needed
+            symbol_obj = LispSymbol(name_str, package=self)
+            self.symbols[name_str] = symbol_obj
+
+        # Store the symbol name (strings only) as the exported symbol
+        self.external_symbols.add(name_str)
     
     def import_symbol(self, symbol):
         """Import a symbol into this package.
@@ -460,7 +466,7 @@ class Package(lispT):
 
 # Global packages
 KEYWORD_PACKAGE = Package("KEYWORD")
-COMMON_LISP_PACKAGE = Package("COMMON-LISP")
+COMMON_LISP_PACKAGE = Package("COMMON-LISP", nick_names=['CL'])
 
 # CRITICAL: Inject the canonical T symbol into COMMON-LISP package
 # T is created without a package in lisptype_basic.py
@@ -469,7 +475,7 @@ COMMON_LISP_PACKAGE.symbols['T'] = T
 COMMON_LISP_PACKAGE.external_symbols.add('T')
 T.package = COMMON_LISP_PACKAGE
 
-COMMON_LISP_USER_PACKAGE = Package("COMMON-LISP-USER", use_packages=["COMMON-LISP"])
+COMMON_LISP_USER_PACKAGE = Package("COMMON-LISP-USER", use_packages=["COMMON-LISP"], nick_names=['CL-USER'])
 
 
 

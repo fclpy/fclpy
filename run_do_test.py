@@ -17,7 +17,9 @@ else:
 	print('init.lsp not found; continuing')
 
 # test_lisp = "(in-package :cl-test) (do-test 'char=.1)"
-test_lisp = "(in-package :cl-test) (do-test 'symbol-&allow-other-keys)"
+# test_lisp = "(in-package :cl-test) (do-test 'symbol-&allow-other-keys)"
+
+test_lisp = "(in-package :cl-test) (do-test 'boundp.error.4)"
 
 print("Running %s" % test_lisp)
 res = eval_string(test_lisp, env)

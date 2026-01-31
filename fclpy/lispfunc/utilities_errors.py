@@ -245,9 +245,16 @@ def type_error_datum(*args):
             f"TYPE-ERROR-DATUM: wrong number of arguments (got {len(args)}, expected 1)"
         )
     condition = args[0]
-    # If condition is a LispTypeError, get its actual_value attribute
+    # If condition is a Python-level LispTypeError, get its actual_value attribute
     if isinstance(condition, lisptype.LispTypeError):
         return getattr(condition, 'actual_value', lisptype.NIL)
+    # If condition is the Lisp Condition TypeError (from lisptype_extended),
+    # retrieve the 'datum' slot
+    try:
+        if isinstance(condition, lisptype.TypeError):
+            return condition._slots.get('datum', lisptype.NIL)
+    except Exception:
+        pass
     # If it's a string representation of an error, return NIL
     return lisptype.NIL
 
@@ -263,6 +270,12 @@ def type_error_expected_type(*args):
     # If condition is a LispTypeError, get its expected_type attribute
     if isinstance(condition, lisptype.LispTypeError):
         return getattr(condition, 'expected_type', lisptype.NIL)
+    # If condition is the Lisp Condition TypeError, retrieve the 'expected-type' slot
+    try:
+        if isinstance(condition, lisptype.TypeError):
+            return condition._slots.get('expected-type', lisptype.NIL)
+    except Exception:
+        pass
     # If it's a string representation of an error, return NIL
     return lisptype.NIL
 

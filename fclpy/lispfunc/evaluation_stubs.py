@@ -134,8 +134,22 @@ def boundp(*args):
         )
     symbol = args[0]
     # Type check
+    # Accept the special NIL (lispNull) as the symbol NIL per Common Lisp
+    if symbol is lisptype.NIL:
+        # Convert to the canonical NIL symbol in the COMMON-LISP package
+        try:
+            symbol = lisptype.intern_symbol('NIL', lisptype.COMMON_LISP_PACKAGE)
+        except Exception:
+            # Raise a Python-level LispTypeError which the evaluator will
+            # convert into a Lisp TYPE-ERROR condition.
+            raise lisptype.LispTypeError(f"BOUNDP: {symbol} is not a symbol", expected_type='symbol', actual_value=symbol)
+
     if not isinstance(symbol, lisptype.LispSymbol):
+        # For non-symbol arguments raise a Python-level LispTypeError; the
+        # evaluator will convert this into a Lisp TYPE-ERROR condition so
+        # it can be handled by Lisp-level handlers.
         raise lisptype.LispTypeError(f"BOUNDP: {symbol} is not a symbol", expected_type='symbol', actual_value=symbol)
+
     # A symbol is considered bound if its value cell is present (even if NIL)
     return lisptype.lisp_bool(getattr(symbol, 'value', None) is not None)
 

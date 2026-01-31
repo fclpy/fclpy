@@ -5,6 +5,7 @@ import fclpy.lisptype as lisptype
 from .core import car, cdr, _consp_internal
 from . import registry as _registry
 from .evaluation_core import ConditionException
+import re
 import fclpy.lispfunc as lispfunc
 
 
@@ -511,11 +512,23 @@ def eval_handler_case(form, env):
     def matches_condition_type(handler_type, error):
         """Check if error matches the handler condition type."""
         handler_type_name = handler_type.upper() if isinstance(handler_type, str) else handler_type.name.upper()
-        
+        # If error is a Lisp Condition object (from lisptype_extended), match by its class name
+        try:
+            # Handle lisptype.Condition subclasses first
+            if isinstance(error, lisptype.Condition):
+                # Convert CamelCase class name into hyphenated CL-style name,
+                # e.g. TypeError -> TYPE-ERROR, SimpleCondition -> SIMPLE-CONDITION
+                orig = error.__class__.__name__
+                hyphenated = re.sub(r'([a-z0-9])([A-Z])', r'\1-\2', orig).upper()
+                cond_name = hyphenated
+                return handler_type_name in condition_hierarchy.get(cond_name, [cond_name, 'ERROR', 'CONDITION', 'T'])
+        except Exception:
+            pass
+
         # PROGRAM-ERROR matches LispProgramError
         if isinstance(error, lisptype.LispProgramError):
             return handler_type_name in condition_hierarchy.get('PROGRAM-ERROR', ['PROGRAM-ERROR', 'ERROR', 'CONDITION', 'T'])
-        # TYPE-ERROR matches LispTypeError
+        # TYPE-ERROR matches LispTypeError (legacy basic type)
         elif isinstance(error, lisptype.LispTypeError):
             return handler_type_name in condition_hierarchy.get('TYPE-ERROR', ['TYPE-ERROR', 'ERROR', 'CONDITION', 'T'])
         elif isinstance(error, lisptype.LispError):
@@ -526,8 +539,38 @@ def eval_handler_case(form, env):
     try:
         # Try to evaluate the expression
         return eval(expression, env)
+    except ConditionException as ce:
+        # A Lisp condition was signaled; try to match clauses against the condition object
+        cond_obj = ce.condition
+        current = clauses
+        while _consp_internal(current):
+            clause = car(current)
+            if _consp_internal(clause):
+                condition_type = car(clause)
+                # Check if this clause matches the condition
+                if isinstance(condition_type, lisptype.LispSymbol):
+                    if matches_condition_type(condition_type.name, cond_obj):
+                        var_list = car(cdr(clause))
+                        clause_body = cdr(cdr(clause))
+
+                        # Create new environment with optional condition variable
+                        new_env = lisptype.Environment(parent=env)
+                        if _consp_internal(var_list):
+                            var = car(var_list)
+                            # Store the condition object in the variable
+                            new_env.add_variable(var, cond_obj)
+
+                        # Evaluate clause body
+                        result = lisptype.NIL
+                        while _consp_internal(clause_body):
+                            result = eval(car(clause_body), new_env)
+                            clause_body = cdr(clause_body)
+                        return result
+            current = cdr(current)
+        # No handler found for the condition; re-raise the original exception
+        raise
     except lisptype.LispError as e:
-        # Check if any clause handles this error
+        # Legacy behavior: handle LispError exceptions similarly
         current = clauses
         while _consp_internal(current):
             clause = car(current)
@@ -539,14 +582,14 @@ def eval_handler_case(form, env):
                         # This clause handles the error
                         var_list = car(cdr(clause))
                         clause_body = cdr(cdr(clause))
-                        
+
                         # Create new environment with optional error variable
                         new_env = lisptype.Environment(parent=env)
                         if _consp_internal(var_list):
                             var = car(var_list)
                             # Store the actual exception object, not just its string
                             new_env.add_variable(var, e)
-                        
+
                         # Evaluate clause body
                         result = lisptype.NIL
                         while _consp_internal(clause_body):

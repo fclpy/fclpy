@@ -1361,18 +1361,27 @@ def eval(form, env=None):
 @_registry.cl_function('APPLY')
 def apply(function, *args):
     """Apply function to arguments."""
-    if args and hasattr(args[-1], '__iter__'):
-        # Last argument is a list of arguments
-        all_args = list(args[:-1]) + list(args[-1])
-        return function(*all_args)
-    else:
-        return function(*args)
+    try:
+        if args and hasattr(args[-1], '__iter__'):
+            # Last argument is a list of arguments
+            all_args = list(args[:-1]) + list(args[-1])
+            return function(*all_args)
+        else:
+            return function(*args)
+    except lisptype.LispTypeError as e:
+        # Convert Python-level LispTypeError into Lisp TYPE-ERROR condition
+        condition = lisptype.TypeError(datum=getattr(e, 'actual_value', None), expected_type=getattr(e, 'expected_type', None), message=str(e))
+        raise ConditionException(condition, recoverable=False)
 
 
 @_registry.cl_function('FUNCALL')
 def funcall(function, *args):
     """Call function with arguments."""
-    return function(*args)
+    try:
+        return function(*args)
+    except lisptype.LispTypeError as e:
+        condition = lisptype.TypeError(datum=getattr(e, 'actual_value', None), expected_type=getattr(e, 'expected_type', None), message=str(e))
+        raise ConditionException(condition, recoverable=False)
 
 
 # Aliases for functions that may have different names in lispenv.py
