@@ -366,7 +366,10 @@ class Package(lispT):
             return T  # Return canonical T
         
         # Symbol not found anywhere - create new one in this package
-        symbol = LispSymbol(name, package=self)
+        if self.name.upper() == "KEYWORD":
+            symbol = lispKeyword(name, package=self)  # special self-evaluating symbol
+        else:
+            symbol = LispSymbol(name, package=self)
         self.symbols[name] = symbol
         
         if external:
@@ -615,6 +618,7 @@ def intern_keyword(name):
     keyword = lispKeyword(name, package=KEYWORD_PACKAGE)
     KEYWORD_PACKAGE.symbols[name] = keyword
     KEYWORD_PACKAGE.external_symbols.add(name)
+
     
     return keyword
 

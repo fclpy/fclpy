@@ -4,6 +4,8 @@ This module contains the main eval() function that dispatches to special forms
 and the apply() function for function application.
 """
 
+import logging
+
 import fclpy.state as state
 import fclpy.lisptype as lisptype
 import fclpy.lispreader as lispreader
@@ -18,6 +20,7 @@ import sys
 from . import registry as _registry
 import fclpy.lispfunc as lispfunc
 
+logger = logging.getLogger(__name__)
 
 # Cache for function signature information to avoid repeated inspect.signature calls
 @lru_cache(maxsize=1024)
@@ -289,7 +292,7 @@ def eval(form, env=None):
                 try:
                     lispenv.setup_standard_environment()
                 except Exception:
-                    pass
+                    logger.error("Error during standard environment setup for function registry lookup for symbol: %s", form.name, exc_info=True)
                 fn = getattr(lispfunc, py_name, None)
                 if fn is None:
                     # Try importing common lispfunc submodules to resolve circular imports
@@ -304,19 +307,20 @@ def eval(form, env=None):
                                     try:
                                         setattr(lispfunc, py_name, fn)
                                     except Exception:
-                                        pass
+                                        logger.error("Error setting attribute on lispfunc module for symbol: %s", form.name, exc_info=True)
                                     break
                             except Exception:
+                                logger.warning("Import error during function registry lookup for symbol: %s in submodule: %s", form.name, sub, exc_info=True)
                                 continue
                     except Exception:
-                        pass
+                        logger.error("Error during function registry lookup for symbol: %s", form.name, exc_info=True)
                 if fn:
                     # Bind into environment for faster future lookups
                     env.add_function(form, fn)
                     return fn
         except Exception:
             # Defensive: if registry lookup fails, ignore and raise below
-            pass
+            logger.error("Error during function registry lookup for symbol: %s", form.name, exc_info=True)
         # If not found in either, dump diagnostic info and raise error
         try:
             # Diagnostic: show where symbol might live
@@ -327,8 +331,8 @@ def eval(form, env=None):
             in_cl = (form.name in getattr(cl_pkg, 'symbols', {})) if cl_pkg else False
             sys.stderr.write(f"[DIAG] Unbound variable lookup: name={form.name} package={pkg_name} registry_py_name={reg_name} in_common_lisp={in_cl}\n")
         except Exception:
-            pass
-        raise lisptype.LispNotImplementedError(f"Unbound variable: {form.name}")
+            logger.error("Error during unbound variable diagnostic logging", exc_info=True)
+        raise lisptype.LispNotImplementedError(f"Unbound variable: {form.name} with value {form.value}")
     
     # Lists - function calls or special forms
     if _consp_internal(form):

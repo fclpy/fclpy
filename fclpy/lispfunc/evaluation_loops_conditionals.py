@@ -993,6 +993,27 @@ def eval_loop(form, env):
                     driver_list = forms[j+1]
                     driver_kind = 'for-on'
                     j += 2
+                elif fname == 'BEING' or fname == 'BEING-THE':
+                    # Handle forms like: FOR x BEING THE SYMBOLS OF "KEYWORD"
+                    saw_driver_keyword = True
+                    k = j + 1
+                    # optional THE
+                    if k < len(forms) and sym_name(forms[k]) == 'THE':
+                        k += 1
+                    # expect SYMBOLS
+                    if k < len(forms) and sym_name(forms[k]) == 'SYMBOLS':
+                        # optional OF <package>
+                        if k + 1 < len(forms) and sym_name(forms[k+1]) == 'OF':
+                            driver_kind = 'for-being-symbols'
+                            driver_list = forms[k+2] if (k + 2) < len(forms) else None
+                            j = k + 3
+                        else:
+                            driver_kind = 'for-being-symbols'
+                            driver_list = None
+                            j = k + 1
+                    else:
+                        # Not a supported BEING clause; stop parsing here
+                        break
                 elif fname == 'ACROSS':
                     saw_driver_keyword = True
                     driver_list = forms[j+1]
@@ -1359,6 +1380,46 @@ def eval_loop(form, env):
             driver['_cur'] = eval(start_form, loop_env)
             driver['_step_form'] = step_form
             return True
+        if kind == 'for-being-symbols':
+            # Evaluate package spec (could be string, symbol, or package object)
+            pkg_spec = driver.get('list')
+            pkg = None
+            if pkg_spec is None:
+                pkg = None
+            else:
+                # Evaluate the package spec in the loop environment if it's an expression
+                try:
+                    pkg_val = eval(pkg_spec, loop_env) if not isinstance(pkg_spec, (str,)) else pkg_spec
+                except Exception:
+                    pkg_val = pkg_spec
+
+                # pkg_val may be a LispPackage, LispSymbol, or string
+                import fclpy.lisptype as lisptype
+                if isinstance(pkg_val, lisptype.Package):
+                    pkg = pkg_val
+                else:
+                    name = None
+                    if isinstance(pkg_val, lisptype.LispSymbol):
+                        name = pkg_val.name
+                    elif isinstance(pkg_val, str):
+                        name = pkg_val
+                    else:
+                        # Try string conversion
+                        name = str(pkg_val)
+                    try:
+                        pkg = lisptype.find_package(name)
+                    except Exception:
+                        pkg = None
+
+            # Build a cons list of symbols from the package
+            cur_list = lisptype.NIL
+            if pkg is not None and hasattr(pkg, 'symbols'):
+                # iterate over symbol objects
+                vals = list(pkg.symbols.values())
+                for s in reversed(vals):
+                    cur_list = cons(s, cur_list)
+            driver['_cur'] = cur_list
+            return True
         raise lisptype.LispNotImplementedError(f'LOOP driver kind not implemented: {kind}')
 
     def _driver_has_value(driver):
@@ -1391,6 +1452,8 @@ def eval_loop(form, env):
             return True
         if kind == 'for-equals':
             return True
+        if kind == 'for-being-symbols':
+            return _consp_internal(driver.get('_cur'))
         return False
 
     def _bind_driver(loop_env, driver):
@@ -1418,6 +1481,9 @@ def eval_loop(form, env):
         if kind == 'for-equals':
             _bind_varspec(loop_env, var, driver['_cur'])
             return
+        if kind == 'for-being-symbols':
+            _bind_varspec(loop_env, var, car(driver['_cur']))
+            return
 
     def _step_driver(loop_env, driver):
         kind = driver['kind']
@@ -1439,6 +1505,9 @@ def eval_loop(form, env):
                 driver['_cur'] = eval(step_form, loop_env)
             else:
                 driver['_cur'] = eval(driver.get('start'), loop_env)
+            return
+        if kind == 'for-being-symbols':
+            driver['_cur'] = cdr(driver['_cur'])
             return
     
     # Parallel drivers: iterate while all drivers can produce values.
