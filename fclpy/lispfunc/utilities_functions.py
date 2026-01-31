@@ -238,8 +238,16 @@ def function_lambda_expression(function):
 
 # --- Special operators ---
 @_registry.cl_function('SPECIAL-OPERATOR-P')
-def special_operator_p(symbol):
-    """Test if symbol is a special operator."""
+def special_operator_p(*args):
+    """Test if symbol is a special operator.
+
+    Accepts varargs and signals a LispProgramError on wrong arity.
+    """
+    if len(args) != 1:
+        raise lisptype.LispProgramError(
+            f"SPECIAL-OPERATOR-P: wrong number of arguments (got {len(args)}, expected 1)"
+        )
+    symbol = args[0]
     if isinstance(symbol, lisptype.LispSymbol):
         special_ops = {'QUOTE', 'IF', 'LAMBDA', 'SETQ', 'LET', 'DEFUN', 'DEFVAR',
                       'PROGN', 'COND', 'AND', 'OR', 'WHEN', 'UNLESS', 'PROGV'}

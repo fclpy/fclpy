@@ -98,21 +98,48 @@ def define_modify_macro(name, lambda_list, function, **kwargs):
     raise lisptype.LispNotImplementedError("DEFINE-MODIFY-MACRO")
 
 
-def set(symbol, value):
-    """Set the value of a symbol (dynamic variable)."""
+def set(*args):
+    """Set the value of a symbol (dynamic variable).
+
+    Accept varargs for ANSI-like error handling; signal PROGRAM-ERROR if
+    wrong arity. Current simple implementation returns the provided value.
+    """
+    if len(args) != 2:
+        raise lisptype.LispProgramError(
+            f"SET: wrong number of arguments (got {len(args)}, expected 2)"
+        )
+    symbol, value = args
     # For now, just return the value - proper symbol table management later
     return value
 
 
-def boundp(symbol):
-    """Test if symbol has a value binding."""
+def boundp(*args):
+    """Test if symbol has a value binding.
+
+    Accept varargs for ANSI-like error handling; signal PROGRAM-ERROR if
+    wrong arity.  Current simple implementation returns T for bound.
+    """
+    if len(args) != 1:
+        raise lisptype.LispProgramError(
+            f"BOUNDP: wrong number of arguments (got {len(args)}, expected 1)"
+        )
     # For now, assume most symbols are bound - proper implementation later
     return lisptype.T
 
 
-def makunbound(symbol):
-    """Make symbol unbound."""
-    # For now, just return the symbol - proper implementation later
+def makunbound(*args):
+    """Make symbol unbound.
+
+    Accept varargs for ANSI-like error handling; signal PROGRAM-ERROR if
+    wrong arity. Current implementation is a placeholder that returns the
+    provided symbol.
+    """
+    if len(args) != 1:
+        raise lisptype.LispProgramError(
+            f"MAKUNBOUND: wrong number of arguments (got {len(args)}, expected 1)"
+        )
+    symbol = args[0]
+    # For now, return the symbol - proper unbind implementation later
     return symbol
 
 
