@@ -350,17 +350,109 @@ def get_properties(plist, indicator_list):
 
 
 @_registry.cl_function('PUTPROP')
-def putprop(symbol, value, indicator):
-    """Put property on symbol."""
-    # For now, just return the value - proper implementation later
-    return value
+def putprop(*args):
+    """Put property on symbol.
+
+    Behavior: (PUTPROP SYMBOL VALUE INDICATOR) stores INDICATOR/VALUE in
+    SYMBOL's plist and returns VALUE. Supports `plist` stored as Python
+    dict or as a Lisp cons-list (`lispCons`).
+    """
+    if len(args) != 3:
+        raise lisptype.LispProgramError(
+            f"PUTPROP: wrong number of arguments (got {len(args)}, expected 3)"
+        )
+    symbol, value, indicator = args
+    plist = getattr(symbol, 'plist', lisptype.NIL)
+    # Dict-style storage
+    if isinstance(plist, dict):
+        plist[indicator] = value
+        symbol.plist = plist
+        return value
+    # Lisp cons-list storage: remove first existing indicator, then cons new pair
+    if type(plist) is lisptype.lispCons or plist is lisptype.NIL:
+        # Remove existing first occurrence
+        prev = None
+        curr = plist
+        while curr is not lisptype.NIL and _consp_internal(curr):
+            key = car(curr)
+            if key == indicator:
+                # skip this key and its value
+                next_pair = cdr(cdr(curr))
+                if prev is None:
+                    plist = next_pair
+                else:
+                    prev.cdr = next_pair
+                break
+            prev = curr
+            curr = cdr(cdr(curr))
+        # Prepend new indicator/value pair
+        new_pair = lisptype.lispCons(indicator, lisptype.lispCons(value, plist))
+        symbol.plist = new_pair
+        return value
+    # Fallback: set as dict
+    try:
+        d = dict(plist)
+        d[indicator] = value
+        symbol.plist = d
+        return value
+    except Exception:
+        symbol.plist = {indicator: value}
+        return value
 
 
 @_registry.cl_function('REMPROP')
-def remprop(symbol, indicator):
-    """Remove property from symbol."""
-    # For now, just return None - proper implementation later
-    return None
+def remprop(*args):
+    """Remove property from symbol.
+
+    Returns T if an occurrence was removed, NIL otherwise. Supports dict
+    and lispCons plists.
+    """
+    if len(args) != 2:
+        raise lisptype.LispProgramError(
+            f"REMPROP: wrong number of arguments (got {len(args)}, expected 2)"
+        )
+    symbol, indicator = args
+    plist = getattr(symbol, 'plist', lisptype.NIL)
+    if plist is None or plist is lisptype.NIL:
+        return lisptype.NIL
+    # Dict-style
+    if isinstance(plist, dict):
+        if indicator in plist:
+            del plist[indicator]
+            symbol.plist = plist
+            return lisptype.T
+        return lisptype.NIL
+    # Lisp cons-list style: remove first occurrence of indicator and its value
+    if type(plist) is lisptype.lispCons:
+        prev = None
+        curr = plist
+        found = False
+        while curr is not lisptype.NIL and _consp_internal(curr):
+            key = car(curr)
+            rest = cdr(curr)
+            val = car(rest) if _consp_internal(rest) else None
+            next_pair = cdr(cdr(curr))
+            if key == indicator and not found:
+                found = True
+                if prev is None:
+                    plist = next_pair
+                else:
+                    prev.cdr = next_pair
+                break
+            prev = curr
+            curr = next_pair
+        symbol.plist = plist if plist is not None else lisptype.NIL
+        return lisptype.T if found else lisptype.NIL
+    # Fallback: try dict-like removal
+    try:
+        d = dict(plist)
+        if indicator in d:
+            del d[indicator]
+            symbol.plist = d
+            return lisptype.T
+        return lisptype.NIL
+    except Exception:
+        return lisptype.NIL
 
 
 @_registry.cl_function('SYMBOL-PLIST')
@@ -376,12 +468,27 @@ def symbol_plist(*args):
         )
     symbol = args[0]
     if hasattr(symbol, 'plist') and symbol.plist:
-        # Convert Python dict to Lisp plist
-        result = lisptype.NIL
-        for key, value in reversed(list(symbol.plist.items())):
-            result = lisptype.lispCons(value, result)
-            result = lisptype.lispCons(key, result)
-        return result
+        plist = symbol.plist
+        # If stored as a Python dict, convert to Lisp plist
+        if isinstance(plist, dict):
+            result = lisptype.NIL
+            for key, value in reversed(list(plist.items())):
+                result = lisptype.lispCons(value, result)
+                result = lisptype.lispCons(key, result)
+            return result
+        # If already a Lisp cons-list (lispCons), return it directly
+        if type(plist) is lisptype.lispCons or plist is lisptype.NIL:
+            return plist
+        # Fallback: try to treat as iterable of elements and build a Lisp list
+        try:
+            seq = list(plist)
+            result = lisptype.NIL
+            for item in reversed(seq):
+                result = lisptype.lispCons(item, result)
+            return result
+        except Exception:
+            # Unknown plist format - return NIL
+            return lisptype.NIL
     return lisptype.NIL
 
 

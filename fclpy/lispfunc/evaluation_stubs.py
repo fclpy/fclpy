@@ -109,7 +109,12 @@ def set(*args):
             f"SET: wrong number of arguments (got {len(args)}, expected 2)"
         )
     symbol, value = args
-    # For now, just return the value - proper symbol table management later
+    # If symbol-like object, set its value cell
+    if hasattr(symbol, 'value'):
+        try:
+            symbol.value = value
+        except Exception:
+            pass
     return value
 
 
@@ -123,8 +128,16 @@ def boundp(*args):
         raise lisptype.LispProgramError(
             f"BOUNDP: wrong number of arguments (got {len(args)}, expected 1)"
         )
-    # For now, assume most symbols are bound - proper implementation later
-    return lisptype.T
+    if len(args) != 1:
+        raise lisptype.LispProgramError(
+            f"BOUNDP: wrong number of arguments (got {len(args)}, expected 1)"
+        )
+    symbol = args[0]
+    # Type check
+    if not isinstance(symbol, lisptype.LispSymbol):
+        raise lisptype.LispTypeError(f"BOUNDP: {symbol} is not a symbol", expected_type='symbol', actual_value=symbol)
+    # A symbol is considered bound if its value cell is present (even if NIL)
+    return lisptype.lisp_bool(getattr(symbol, 'value', None) is not None)
 
 
 def makunbound(*args):
@@ -139,7 +152,13 @@ def makunbound(*args):
             f"MAKUNBOUND: wrong number of arguments (got {len(args)}, expected 1)"
         )
     symbol = args[0]
-    # For now, return the symbol - proper unbind implementation later
+    if not isinstance(symbol, lisptype.LispSymbol):
+        raise lisptype.LispTypeError(f"MAKUNBOUND: {symbol} is not a symbol", expected_type='symbol', actual_value=symbol)
+    # Remove binding by setting to Python None to indicate 'unbound'
+    try:
+        symbol.value = None
+    except Exception:
+        pass
     return symbol
 
 

@@ -393,9 +393,35 @@ def string_to_octets(string, **kwargs):
 
 
 @_registry.cl_function('GET')
-def get(symbol, indicator, default=None):
-    """Get property from property list."""
-    return default
+def get(*args):
+    """Get property from property list.
+
+    Signature: (GET SYMBOL INDICATOR &OPTIONAL DEFAULT)
+    Supports SYMBOL.plist stored as a Python dict or a Lisp cons-list.
+    """
+    if len(args) < 2 or len(args) > 3:
+        raise lisptype.LispProgramError(
+            f"GET: wrong number of arguments (got {len(args)}, expected 2-3)"
+        )
+    symbol = args[0]
+    indicator = args[1]
+    default = args[2] if len(args) == 3 else lisptype.NIL
+
+    # Retrieve plist from symbol (if available)
+    plist = getattr(symbol, 'plist', lisptype.NIL)
+
+    # If stored as a Python dict, use direct lookup
+    if isinstance(plist, dict):
+        return plist.get(indicator, default)
+
+    # For cons-list style plists, delegate to GETF implementation
+    try:
+        from .core import getf
+
+        return getf(plist, indicator, default)
+    except Exception:
+        # Fallback: return default when in doubt
+        return default
 
 
 @_registry.cl_function('RPLACA')

@@ -16,8 +16,16 @@ def symbol_name(*args):
         )
     symbol = args[0]
     if hasattr(symbol, 'name'):
-        return symbol.name
-    return str(symbol)
+        raw = symbol.name
+        # If it's a keyword, return lower-case name as a Lisp string
+        if isinstance(symbol, lisptype.lispKeyword):
+            return lisptype.LispString(str(raw).lower())
+        # If name is pipe-escaped like |ABC|, strip the pipes and return inner content
+        if isinstance(raw, str) and raw.startswith('|') and raw.endswith('|'):
+            return lisptype.LispString(raw[1:-1])
+        # Default: return as LispString preserving case
+        return lisptype.LispString(str(raw))
+    return lisptype.LispString(str(symbol))
 
 
 @_registry.cl_function('SYMBOL-PACKAGE')
