@@ -542,20 +542,11 @@ def eval_handler_case(form, env):
     except ConditionException as ce:
         # A Lisp condition was signaled; try to match clauses against the condition object
         cond_obj = ce.condition
-        import sys
-        try:
-            sys.stderr.write(f"[DEBUG HANDLER-CASE] signaled condition class={cond_obj.__class__.__name__} repr={repr(cond_obj)}\n")
-        except Exception:
-            pass
         current = clauses
         while _consp_internal(current):
             clause = car(current)
             if _consp_internal(clause):
                 condition_type = car(clause)
-                try:
-                    sys.stderr.write(f"[DEBUG HANDLER-CASE] checking clause condition_type={getattr(condition_type,'name',condition_type)}\n")
-                except Exception:
-                    pass
                 # Check if this clause matches the condition
                 if isinstance(condition_type, lisptype.LispSymbol):
                     if matches_condition_type(condition_type.name, cond_obj):

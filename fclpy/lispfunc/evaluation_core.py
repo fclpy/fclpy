@@ -219,23 +219,32 @@ def parse_lambda_list(lambda_list):
 
 
 @_registry.cl_function('EVAL')
-def eval(*args):
-    """Evaluate a Lisp form.
+def eval_function(*args):
+    """Common Lisp EVAL function - evaluates a form in the null lexical environment.
 
-    Accepts a variable number of arguments to match Common Lisp's EVAL signature:
-    (EVAL form &OPTIONAL environment).
+    EVAL takes exactly one argument: the form to evaluate.
+    Per ANSI Common Lisp spec, EVAL has signature: (eval form) => result*
 
-    Raises a LispError if the required `form` argument is missing or if too many
-    arguments are provided.
+    Signals a PROGRAM-ERROR condition if the wrong number of arguments is provided.
     """
-    # Validate argument count and normalize parameters
-    if len(args) == 0:
-        raise lisptype.LispProgramError("EVAL requires at least one argument: the form to evaluate")
-    if len(args) > 2:
-        raise lisptype.LispProgramError("EVAL takes at most two arguments: form and optional environment")
+    # Validate argument count - EVAL takes exactly one argument
+    if len(args) != 1:
+        if len(args) == 0:
+            cond = lisptype.ProgramError(message="EVAL requires exactly one argument: the form to evaluate")
+        else:
+            cond = lisptype.ProgramError(message=f"EVAL takes exactly one argument, got {len(args)}")
+        raise ConditionException(cond, recoverable=False)
 
     form = args[0]
-    env = args[1] if len(args) > 1 else None
+    # Call the internal eval with null lexical environment
+    return eval(form, None)
+
+
+def eval(form, env=None):
+    """Internal evaluation function - evaluates a Lisp form in the given environment.
+
+    This is the internal workhorse function. User code should call the EVAL function above.
+    """
     # Import special form handlers lazily to avoid circular imports
     from .evaluation_special_forms import (
         eval_if, eval_setq, eval_defun, eval_defmacro, eval_macroexpand_1,
@@ -331,17 +340,6 @@ def eval(*args):
         except Exception:
             # Defensive: if registry lookup fails, ignore and raise below
             logger.error("Error during function registry lookup for symbol: %s", form.name, exc_info=True)
-        # If not found in either, dump diagnostic info and signal unbound-variable
-        try:
-            # Diagnostic: show where symbol might live
-            pkg = getattr(form, 'package', None)
-            pkg_name = pkg.name if pkg is not None else None
-            reg_name = _registry.get_function_py_name(form.name)
-            cl_pkg = lisptype.find_package('COMMON-LISP')
-            in_cl = (form.name in getattr(cl_pkg, 'symbols', {})) if cl_pkg else False
-            sys.stderr.write(f"[DIAG] Unbound variable lookup: name={form.name} package={pkg_name} registry_py_name={reg_name} in_common_lisp={in_cl}\n")
-        except Exception:
-            logger.error("Error during unbound variable diagnostic logging", exc_info=True)
         # Create an UnboundVariable condition and raise as a ConditionException
         try:
             name_slot = form if isinstance(form, lisptype.LispSymbol) else getattr(form, 'name', str(form))
@@ -1307,29 +1305,9 @@ def eval(*args):
         if func is None or not callable(func):
             # When func is None, it means the symbol has no function binding
             if isinstance(operator, lisptype.LispSymbol):
-                try:
-                    pkg = getattr(operator, 'package', None)
-                    pkg_name = pkg.name if pkg is not None else None
-                    reg_name = _registry.get_function_py_name(operator.name)
-                    cl_pkg = lisptype.find_package('COMMON-LISP')
-                    in_cl = (operator.name in getattr(cl_pkg, 'symbols', {})) if cl_pkg else False
-                    sys.stderr.write(f"[DIAG] Undefined function lookup: name={operator.name} package={pkg_name} registry_py_name={reg_name} in_common_lisp={in_cl}\n")
-                    # Print the entire form being evaluated for context
-                    try:
-                        from fclpy.lispfunc.io_write import prin1_to_string
-                        form_str = prin1_to_string(form)
-                        sys.stderr.write(f"[DIAG] Full form: {form_str}\n")
-                    except Exception as diag_exc:
-                        sys.stderr.write(f"[DIAG] Full form (repr): {repr(form)}\n")
-                    # Print stack trace to see call chain
-                    import traceback
-                    sys.stderr.write("[DIAG] Python call stack:\n")
-                    traceback.print_stack(limit=15, file=sys.stderr)
-                except Exception:
-                    pass
                 # Signal an UNDEFINED-FUNCTION condition so Lisp handlers can match it
-                name = operator.name if hasattr(operator, 'name') else str(operator)
-                cond = lisptype.UndefinedFunction(name=name, message=f"Undefined function {name} in package {getattr(operator, 'package', None)}")
+                # Per ANSI spec, cell-error-name should return the actual symbol, not just its name string
+                cond = lisptype.UndefinedFunction(name=operator, message=f"Undefined function {operator.name if hasattr(operator, 'name') else str(operator)} in package {getattr(operator, 'package', None)}")
                 raise ConditionException(cond, recoverable=False)
             raise lisptype.LispError(f"Not a function: {operator}")
         
