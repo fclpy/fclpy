@@ -5,11 +5,10 @@ Provides the Environment class, package management, ANSI condition system,
 and restart support for advanced error handling.
 """
 
-from . import lisptype_basic
-from .lisptype_basic import (
+from fclpy.lisptype_basic import (
     LispSymbol, lispT, NIL, T, LispError, LispEnvironmentError,
     lispCons, Binding, FunctionBinding, SpecialForm,
-    is_truthy, lisp_bool, lispKeyword
+    is_truthy, lisp_bool, lispKeyword, lispCons, py_str_map
 )
 
 
@@ -173,7 +172,6 @@ class Environment(lispT):
         # (:KEYWORD var) where the variable is the second element.
         # This handles lambda-list key argument syntaxes that present
         # parameter names as a cons pairing a keyword and a symbol.
-        from .lisptype_basic import lispCons
 
         if isinstance(symbol, lispCons):
             # Attempt to extract the actual variable from the cdr
@@ -195,7 +193,7 @@ class Environment(lispT):
         self._variable_map[symbol.name] = value
 
     
-    def has_variable(self, sym):
+    def has_variable(self, sym: LispSymbol):
         """Check if a variable binding exists (distinguishes unbound from bound-to-None)."""
         b = self.variable_bindings
         while b is not None:
@@ -745,6 +743,28 @@ class EndOfFile(StreamError):
             self._slots['stream'] = stream
 
 
+class UndefinedFunction(Error):
+    """Condition for undefined-function errors."""
+    def __init__(self, name=None, message=None, **kwargs):
+        if message is None:
+            message = f"Undefined function: {name}" if name is not None else "Undefined function"
+        super().__init__(message, **kwargs)
+        if name is not None:
+            # store the function name in a slot for handlers
+            self._slots['name'] = name
+
+
+class UnboundVariable(Error):
+    """Condition for unbound-variable errors."""
+    def __init__(self, name=None, message=None, **kwargs):
+        if message is None:
+            message = f"Unbound variable: {name}" if name is not None else "Unbound variable"
+        super().__init__(message, **kwargs)
+        if name is not None:
+            # store the symbol (or name) in a slot for handlers to inspect
+            self._slots['name'] = name
+
+
 class ArithmeticError(Error):
     """Condition for arithmetic errors."""
     def __init__(self, operation=None, operands=None, message="", **kwargs):
@@ -828,7 +848,6 @@ def py_str_to_sym(s):
     Returns:
         LispSymbol in COMMON-LISP-USER package
     """
-    from .lisptype_basic import py_str_map
     
     s = s.upper()
     for pattern, replacement in py_str_map:
@@ -928,6 +947,7 @@ __all__ = [
     'Condition', 'SimpleCondition', 'Warning', 'Error',
     'TypeError', 'ProgramError', 'ControlError', 'FileError', 'StreamError',
     'EndOfFile', 'ArithmeticError', 'DivisionByZero',
+    'UndefinedFunction','UnboundVariable',
     'FloatingPointInvalidOperation', 'FloatingPointOverflow', 'FloatingPointUnderflow',
     # Restarts
     'Restart', 'RestartException',

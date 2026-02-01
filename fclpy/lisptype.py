@@ -9,8 +9,8 @@ All existing code importing from lisptype continues to work unchanged.
 """
 
 # Re-export all symbols from basic and extended modules
-from .lisptype_basic import *  # noqa: F401, F403
-from .lisptype_extended import *  # noqa: F401, F403
+from fclpy.lisptype_basic import *  # noqa: F401, F403
+from fclpy.lisptype_extended import *  # noqa: F401, F403
 
 # Explicit exports for clarity - all public symbols
 __all__ = [
@@ -32,6 +32,8 @@ __all__ = [
     'Condition', 'SimpleCondition', 'Warning', 'Error',
     'TypeError', 'ProgramError', 'ControlError', 'FileError', 'StreamError',
     'EndOfFile', 'ArithmeticError', 'DivisionByZero',
+    'UndefinedFunction',
+    'UnboundVariable',
     'FloatingPointInvalidOperation', 'FloatingPointOverflow', 'FloatingPointUnderflow',
     'Restart', 'RestartException',
     'resolve_environment',

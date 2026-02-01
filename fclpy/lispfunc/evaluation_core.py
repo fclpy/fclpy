@@ -219,13 +219,23 @@ def parse_lambda_list(lambda_list):
 
 
 @_registry.cl_function('EVAL')
-def eval(form, env=None):
+def eval(*args):
     """Evaluate a Lisp form.
 
-    An explicit env takes precedence; otherwise the global state.current_environment
-    is used. If neither is available a LispEnvironmentError is raised (surfacing a
-    clearer message instead of None dereference).
+    Accepts a variable number of arguments to match Common Lisp's EVAL signature:
+    (EVAL form &OPTIONAL environment).
+
+    Raises a LispError if the required `form` argument is missing or if too many
+    arguments are provided.
     """
+    # Validate argument count and normalize parameters
+    if len(args) == 0:
+        raise lisptype.LispProgramError("EVAL requires at least one argument: the form to evaluate")
+    if len(args) > 2:
+        raise lisptype.LispProgramError("EVAL takes at most two arguments: form and optional environment")
+
+    form = args[0]
+    env = args[1] if len(args) > 1 else None
     # Import special form handlers lazily to avoid circular imports
     from .evaluation_special_forms import (
         eval_if, eval_setq, eval_defun, eval_defmacro, eval_macroexpand_1,
@@ -321,7 +331,7 @@ def eval(form, env=None):
         except Exception:
             # Defensive: if registry lookup fails, ignore and raise below
             logger.error("Error during function registry lookup for symbol: %s", form.name, exc_info=True)
-        # If not found in either, dump diagnostic info and raise error
+        # If not found in either, dump diagnostic info and signal unbound-variable
         try:
             # Diagnostic: show where symbol might live
             pkg = getattr(form, 'package', None)
@@ -332,7 +342,13 @@ def eval(form, env=None):
             sys.stderr.write(f"[DIAG] Unbound variable lookup: name={form.name} package={pkg_name} registry_py_name={reg_name} in_common_lisp={in_cl}\n")
         except Exception:
             logger.error("Error during unbound variable diagnostic logging", exc_info=True)
-        raise lisptype.LispNotImplementedError(f"Unbound variable: {form.name} with value {form.value}")
+        # Create an UnboundVariable condition and raise as a ConditionException
+        try:
+            name_slot = form if isinstance(form, lisptype.LispSymbol) else getattr(form, 'name', str(form))
+        except Exception:
+            name_slot = getattr(form, 'name', str(form))
+        cond = lisptype.UnboundVariable(name=name_slot, message=f"Unbound variable: {getattr(form, 'name', str(form))} with value {getattr(form, 'value', None)}")
+        raise ConditionException(cond, recoverable=False)
     
     # Lists - function calls or special forms
     if _consp_internal(form):
@@ -387,7 +403,9 @@ def eval(form, env=None):
                                     continue
                         if func is not None:
                             return func
-                    raise lisptype.LispNotImplementedError(f"Undefined function: {name.name}")
+                        # Signal an UNDEFINED-FUNCTION condition
+                        cond = lisptype.UndefinedFunction(name=name.name if isinstance(name, lisptype.LispSymbol) else str(name))
+                        raise ConditionException(cond, recoverable=False)
                 return name
             elif operator.name == 'SETQ':
                 return eval_setq(form, env)
@@ -1309,7 +1327,10 @@ def eval(form, env=None):
                     traceback.print_stack(limit=15, file=sys.stderr)
                 except Exception:
                     pass
-                raise lisptype.LispNotImplementedError(operator.name, "Undefined function")
+                # Signal an UNDEFINED-FUNCTION condition so Lisp handlers can match it
+                name = operator.name if hasattr(operator, 'name') else str(operator)
+                cond = lisptype.UndefinedFunction(name=name, message=f"Undefined function {name} in package {getattr(operator, 'package', None)}")
+                raise ConditionException(cond, recoverable=False)
             raise lisptype.LispError(f"Not a function: {operator}")
         
         # Get cached signature info for keyword argument handling

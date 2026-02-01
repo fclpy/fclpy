@@ -280,6 +280,34 @@ def type_error_expected_type(*args):
     return lisptype.NIL
 
 
+@_registry.cl_function('CELL-ERROR-NAME')
+def cell_error_name(*args):
+    """Return the name associated with a CELL-ERROR condition.
+
+    Usage: (CELL-ERROR-NAME condition)
+    Returns the value of the 'name' slot if present, otherwise NIL.
+    """
+    if len(args) != 1:
+        raise lisptype.LispProgramError(
+            f"CELL-ERROR-NAME: wrong number of arguments (got {len(args)}, expected 1)"
+        )
+    condition = args[0]
+    # If it's a lisptype.Condition, use its get_slot method
+    try:
+        if isinstance(condition, lisptype.Condition):
+            name = condition.get_slot('name')
+            return name if name is not None else lisptype.NIL
+    except Exception:
+        pass
+    # If it's a legacy LispError with attributes, try common keys
+    try:
+        if isinstance(condition, lisptype.LispError):
+            return getattr(condition, 'name', lisptype.NIL)
+    except Exception:
+        pass
+    return lisptype.NIL
+
+
 __all__ = [
     'define_condition',
     'make_condition',
