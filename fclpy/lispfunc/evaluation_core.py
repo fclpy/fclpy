@@ -1229,6 +1229,9 @@ def eval(form, env=None):
         # Macro handling: if operator names a macro function, expand first
         if isinstance(operator, lisptype.LispSymbol):
             func_binding = env.find_func(operator)
+            # Unwrap MultipleValues in single-value context
+            if isinstance(func_binding, lisptype.MultipleValues):
+                func_binding = func_binding.get_primary()
             if callable(func_binding) and getattr(func_binding, '__is_macro__', False):
                 # Gather raw args (without evaluating)
                 raw_args = []
@@ -1308,6 +1311,11 @@ def eval(form, env=None):
             # For non-symbol operators (e.g., lambda forms), evaluate to get function
             func = eval(operator, env)
         
+        # If the function result is MultipleValues, extract the primary value
+        # In Common Lisp, multiple values in single-value context reduce to the primary value
+        if isinstance(func, lisptype.MultipleValues):
+            func = func.get_primary()
+        
         # Verify we have a callable function before proceeding
         if func is None or not callable(func):
             # When func is None, it means the symbol has no function binding
@@ -1356,11 +1364,67 @@ def eval(form, env=None):
             
             current = cdr(current)
         
-        # Call function
-        if kwargs:
-            result = func(*eval_args, **kwargs)
-        else:
-            result = func(*eval_args)
+        # Call function with exception handling
+        try:
+            if kwargs:
+                result = func(*eval_args, **kwargs)
+            else:
+                result = func(*eval_args)
+        except ConditionException:
+            # Re-raise Lisp conditions without wrapping them
+            raise
+        except lisptype.LispProgramError as e:
+            # Convert Lisp program errors to PROGRAM-ERROR condition
+            condition = lisptype.ProgramError(message=str(e))
+            raise ConditionException(condition, recoverable=False)
+        except lisptype.LispTypeError as e:
+            # Convert Lisp type errors to TYPE-ERROR condition
+            condition = lisptype.TypeError(
+                datum=getattr(e, 'actual_value', None), 
+                expected_type=getattr(e, 'expected_type', None), 
+                message=str(e)
+            )
+            raise ConditionException(condition, recoverable=False)
+        except lisptype.LispNotImplementedError as e:
+            # Convert not implemented errors to appropriate condition
+            condition = lisptype.Error(message=f"Not implemented: {str(e)}")
+            raise ConditionException(condition, recoverable=False)
+        except lisptype.LispError as e:
+            # Convert other Lisp errors to Error condition
+            condition = lisptype.Error(message=str(e))
+            raise ConditionException(condition, recoverable=False)
+        except TypeError as e:
+            # Check if this is an argument count error (function signature problem)
+            error_str = str(e)
+            if ('missing' in error_str.lower() and 'argument' in error_str.lower()) or \
+               ('takes' in error_str.lower() and 'argument' in error_str.lower()):
+                # Argument count mismatch - PROGRAM-ERROR per ANSI CL spec
+                condition = lisptype.ProgramError(message=error_str)
+                raise ConditionException(condition, recoverable=False)
+            else:
+                # Other TypeErrors (e.g., type mismatches in function calls)
+                condition = lisptype.TypeError(
+                    datum=None,
+                    expected_type='callable',
+                    message=error_str
+                )
+                raise ConditionException(condition, recoverable=False)
+        except AttributeError as e:
+            # Handle attribute errors
+            condition = lisptype.Error(message=f"Attribute error: {str(e)}")
+            raise ConditionException(condition, recoverable=False)
+        except ZeroDivisionError as e:
+            # Handle division by zero
+            condition = lisptype.DivisionByZero(message=str(e))
+            raise ConditionException(condition, recoverable=False)
+        except ArithmeticError as e:
+            # Handle other arithmetic errors
+            condition = lisptype.ArithmeticError(message=str(e))
+            raise ConditionException(condition, recoverable=False)
+        except Exception as e:
+            # Catch-all for any other Python exceptions
+            condition = lisptype.Error(message=f"Python error in function call: {type(e).__name__}: {str(e)}")
+            raise ConditionException(condition, recoverable=False)
 
         # Normalize common Python return values into Lisp objects.
         if result is None:
@@ -1375,6 +1439,10 @@ def eval(form, env=None):
 @_registry.cl_function('APPLY')
 def apply(function, *args):
     """Apply function to arguments."""
+    # If function is MultipleValues, extract the primary value (single-value context)
+    if isinstance(function, lisptype.MultipleValues):
+        function = function.get_primary()
+    
     try:
         if args and hasattr(args[-1], '__iter__'):
             # Last argument is a list of arguments
@@ -1382,19 +1450,85 @@ def apply(function, *args):
             return function(*all_args)
         else:
             return function(*args)
+    except ConditionException:
+        # Re-raise Lisp conditions without wrapping them
+        raise
+    except lisptype.LispProgramError as e:
+        # Convert Lisp program errors to PROGRAM-ERROR condition
+        condition = lisptype.ProgramError(message=str(e))
+        raise ConditionException(condition, recoverable=False)
     except lisptype.LispTypeError as e:
         # Convert Python-level LispTypeError into Lisp TYPE-ERROR condition
         condition = lisptype.TypeError(datum=getattr(e, 'actual_value', None), expected_type=getattr(e, 'expected_type', None), message=str(e))
+        raise ConditionException(condition, recoverable=False)
+    except lisptype.LispError as e:
+        # Convert other Lisp errors to Error condition
+        condition = lisptype.Error(message=str(e))
+        raise ConditionException(condition, recoverable=False)
+    except TypeError as e:
+        # Check if this is an argument count error (function signature problem)
+        error_str = str(e)
+        if ('missing' in error_str.lower() and 'argument' in error_str.lower()) or \
+           ('takes' in error_str.lower() and 'argument' in error_str.lower()):
+            # Argument count mismatch - PROGRAM-ERROR per ANSI CL spec
+            condition = lisptype.ProgramError(message=error_str)
+            raise ConditionException(condition, recoverable=False)
+        else:
+            # Other TypeErrors (e.g., type mismatches in function calls)
+            condition = lisptype.TypeError(
+                datum=None,
+                expected_type='callable',
+                message=error_str
+            )
+            raise ConditionException(condition, recoverable=False)
+    except Exception as e:
+        # Catch-all for any other Python exceptions
+        condition = lisptype.Error(message=f"Python error in APPLY: {type(e).__name__}: {str(e)}")
         raise ConditionException(condition, recoverable=False)
 
 
 @_registry.cl_function('FUNCALL')
 def funcall(function, *args):
     """Call function with arguments."""
+    # If function is MultipleValues, extract the primary value (single-value context)
+    if isinstance(function, lisptype.MultipleValues):
+        function = function.get_primary()
+    
     try:
         return function(*args)
+    except ConditionException:
+        # Re-raise Lisp conditions without wrapping them
+        raise
+    except lisptype.LispProgramError as e:
+        # Convert Lisp program errors to PROGRAM-ERROR condition
+        condition = lisptype.ProgramError(message=str(e))
+        raise ConditionException(condition, recoverable=False)
     except lisptype.LispTypeError as e:
         condition = lisptype.TypeError(datum=getattr(e, 'actual_value', None), expected_type=getattr(e, 'expected_type', None), message=str(e))
+        raise ConditionException(condition, recoverable=False)
+    except lisptype.LispError as e:
+        # Convert other Lisp errors to Error condition
+        condition = lisptype.Error(message=str(e))
+        raise ConditionException(condition, recoverable=False)
+    except TypeError as e:
+        # Check if this is an argument count error (function signature problem)
+        error_str = str(e)
+        if ('missing' in error_str.lower() and 'argument' in error_str.lower()) or \
+           ('takes' in error_str.lower() and 'argument' in error_str.lower()):
+            # Argument count mismatch - PROGRAM-ERROR per ANSI CL spec
+            condition = lisptype.ProgramError(message=error_str)
+            raise ConditionException(condition, recoverable=False)
+        else:
+            # Other TypeErrors (e.g., type mismatches in function calls)
+            condition = lisptype.TypeError(
+                datum=None,
+                expected_type='callable',
+                message=error_str
+            )
+            raise ConditionException(condition, recoverable=False)
+    except Exception as e:
+        # Catch-all for any other Python exceptions
+        condition = lisptype.Error(message=f"Python error in FUNCALL: {type(e).__name__}: {str(e)}")
         raise ConditionException(condition, recoverable=False)
 
 
