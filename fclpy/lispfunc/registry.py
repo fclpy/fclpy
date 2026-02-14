@@ -141,6 +141,45 @@ def cl_special(lisp_name: str, **meta):
     return decorator
 
 
+def cl_macro(lisp_name: str, **meta):
+    """Decorator to register a macro callable.
+
+    Macros are stored in the function registry (they are callable objects
+    that are invoked by the macroexpander). This mirrors `cl_function`
+    but marks the entry `kind='macro'` and sets `__is_macro__` on the
+    callable so the evaluator recognizes it.
+    """
+    def decorator(func: Callable):
+        arg_spec = meta.get('arg_spec', None)
+        documentation = meta.get('documentation', None)
+        side_effects = meta.get('side_effects', False)
+        standard_keys = {'arg_spec', 'documentation', 'side_effects'}
+        extra = {k: v for k, v in meta.items() if k not in standard_keys}
+
+        entry = RegistryEntry(
+            name=lisp_name,
+            py_name=func.__name__,
+            kind='macro',
+            arg_spec=arg_spec,
+            documentation=documentation,
+            side_effects=side_effects,
+            extra=extra,
+            func=func,
+        )
+        # Record in function registry so lispenv.setup_standard_environment
+        # will pick it up as a callable function/macro.
+        function_registry[lisp_name] = entry
+
+        # Mark the Python callable as a macro for evaluator checks
+        try:
+            setattr(func, '__is_macro__', True)
+        except Exception:
+            pass
+
+        return func
+    return decorator
+
+
 def register_module(module):
     """Inspect a module and register its public callables into the function registry.
 

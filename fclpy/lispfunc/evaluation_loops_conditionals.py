@@ -315,12 +315,18 @@ def eval_let(form, env):
     current = bindings_form
     while _consp_internal(current):
         binding = car(current)
+        # Support both binding forms of the shape (var init) and bare var symbols
         if _consp_internal(binding):
             var = car(binding)
             init_form = car(cdr(binding))
-            # Evaluate init in OUTER environment
-            value = eval(init_form, env)
-            bindings_list.append((var, value))
+        else:
+            var = binding
+            init_form = lisptype.NIL
+
+        # Evaluate init in OUTER environment
+        value = eval(init_form, env)
+
+        bindings_list.append((var, value))
         current = cdr(current)
     
     # Now bind all variables in new environment

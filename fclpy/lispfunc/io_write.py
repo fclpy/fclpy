@@ -2,6 +2,7 @@
 
 import fclpy.lisptype as lisptype
 from . import registry as _registry
+from .streams import open_file as open_fn, close_stream as close_fn
 
 
 # === Printer Control Variables ===
@@ -79,6 +80,16 @@ class PrinterSettings:
         new.print_miser_width = self.print_miser_width
         new.print_right_margin = self.print_right_margin
         return new
+
+
+def stream_element_type(stream):
+    """Get stream element type (simple fallback)."""
+    return 'CHARACTER'
+
+
+def stream_external_format(stream):
+    """Get stream external format (simple fallback)."""
+    return 'UTF-8'
 
 
 # Global printer settings (corresponds to *PRINT-...* variables)
@@ -391,22 +402,65 @@ def print_fn(object, stream=None):
 @_registry.cl_function('PRIN1')
 def prin1(object, stream=None):
     """Print object readably."""
-    print(lisptype.lisp_repr(object))
+    # If a stream object is provided, write to it; otherwise default to stdout
+    if stream is None:
+        print(lisptype.lisp_repr(object))
+        return object
+
+    # Lazy import to avoid cycles
+    from .streams import Stream
+    if isinstance(stream, Stream):
+        stream.write_sequence(lisptype.lisp_repr(object))
+        return object
+
+    # Fallback: attempt to write via Python file-like object
+    try:
+        stream.write(lisptype.lisp_repr(object))
+        return object
+    except Exception:
+        print(lisptype.lisp_repr(object))
+        return object
     return object
 
 
 @_registry.cl_function('PRINC')
 def princ(object, stream=None):
     """Print object for humans."""
-    print(lisptype.lisp_str(object), end='')
-    return object
+    if stream is None:
+        print(lisptype.lisp_str(object), end='')
+        return object
+
+    from .streams import Stream
+    if isinstance(stream, Stream):
+        stream.write_sequence(lisptype.lisp_str(object))
+        return object
+
+    try:
+        stream.write(lisptype.lisp_str(object))
+        return object
+    except Exception:
+        print(lisptype.lisp_str(object), end='')
+        return object
 
 
 @_registry.cl_function('TERPRI')
 def terpri(stream=None):
     """Output newline."""
-    print()
-    return None
+    if stream is None:
+        print()
+        return None
+
+    from .streams import Stream
+    if isinstance(stream, Stream):
+        stream.write_line('')
+        return None
+
+    try:
+        stream.write('\n')
+        return None
+    except Exception:
+        print()
+        return None
 
 
 @_registry.cl_function('FRESH-LINE')
@@ -1408,29 +1462,9 @@ def formatter(control_string):
 
 
 # Stream operations
-@_registry.cl_function('OPEN')
-def open_fn(filespec, **kwargs):
-    """Open file."""
-    # Simplified - return file name
-    return str(filespec)
-
-
-@_registry.cl_function('CLOSE')
-def close_fn(stream, **kwargs):
-    """Close stream."""
-    return lisptype.T
-
-
-@_registry.cl_function('STREAM-ELEMENT-TYPE')
-def stream_element_type(stream):
-    """Get stream element type."""
-    return 'CHARACTER'
-
-
-@_registry.cl_function('STREAM-EXTERNAL-FORMAT')
-def stream_external_format(stream):
-    """Get stream external format."""
-    return 'UTF-8'  # Simplified
+# NOTE: actual OPEN/CLOSE and stream operations are implemented in
+# lispfunc/streams.py. The simplified stubs were removed to avoid
+# clashing registrations that override the full implementations.
 
 
 # File operations
@@ -1441,8 +1475,56 @@ def stream_external_format(stream):
 def delete_file(filespec):
     """Delete file."""
     import os
-    os.remove(str(filespec))
-    return lisptype.T
+    # Resolve similar to LOAD/COMPILE-FILE so relative pathnames are found
+    from fclpy.lispfunc.pathnames import Pathname
+    import fclpy.state as state
+    env = state.current_environment
+
+    if isinstance(filespec, Pathname):
+        path_str = filespec.original
+    else:
+        path_str = str(filespec)
+
+    if not os.path.isabs(path_str):
+        resolved = False
+        lisp_cwd = os.environ.get('LISP_CWD')
+        if lisp_cwd:
+            candidate = os.path.normpath(os.path.join(lisp_cwd, path_str))
+            if os.path.exists(candidate):
+                path_str = candidate
+                resolved = True
+
+        if not resolved and env is not None:
+            load_truename_sym = lisptype.COMMON_LISP_PACKAGE.intern_symbol('*LOAD-TRUENAME*')
+            load_truename = env.find_variable(load_truename_sym)
+            if load_truename and load_truename is not lisptype.NIL and isinstance(load_truename, Pathname):
+                current_file_path = load_truename.original
+                current_dir = os.path.dirname(current_file_path)
+                if current_dir:
+                    candidate = os.path.normpath(os.path.join(current_dir, path_str))
+                    if os.path.exists(candidate):
+                        path_str = candidate
+                        resolved = True
+
+        if not resolved and env is not None:
+            default_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*DEFAULT-PATHNAME-DEFAULTS*')
+            default_pathname = env.find_variable(default_sym)
+            if default_pathname and default_pathname is not lisptype.NIL and isinstance(default_pathname, Pathname):
+                default_path = default_pathname.original
+                if os.path.isdir(default_path):
+                    default_dir = default_path
+                else:
+                    default_dir = os.path.dirname(default_path)
+                if default_dir:
+                    candidate = os.path.normpath(os.path.join(default_dir, path_str))
+                    if os.path.exists(candidate):
+                        path_str = candidate
+
+    try:
+        os.remove(path_str)
+        return lisptype.T
+    except FileNotFoundError:
+        return lisptype.NIL
 
 
 @_registry.cl_function('RENAME-FILE')
@@ -1508,11 +1590,58 @@ def compile_file(input_file, output_file=None, **kwargs):
     import shutil
     from fclpy.lispfunc.pathnames import Pathname
     
-    # Get the input path
+    # Get the input path (resolve relative names similarly to LOAD)
+    import fclpy.state as state
+    env = state.current_environment
+
     if isinstance(input_file, Pathname):
         input_path = input_file.original
     else:
         input_path = str(input_file)
+
+    # If input_path is not absolute, try to resolve it using LISP_CWD,
+    # *LOAD-TRUENAME* directory, or *DEFAULT-PATHNAME-DEFAULTS* (like LOAD)
+    import os
+    if not os.path.isabs(input_path):
+        resolved = False
+        lisp_cwd = os.environ.get('LISP_CWD')
+        if lisp_cwd:
+            candidate = os.path.normpath(os.path.join(lisp_cwd, input_path))
+            if os.path.exists(candidate):
+                input_path = candidate
+                resolved = True
+
+        if not resolved and env is not None:
+            # Try *LOAD-TRUENAME*
+            load_truename_sym = lisptype.COMMON_LISP_PACKAGE.intern_symbol('*LOAD-TRUENAME*')
+            load_truename = env.find_variable(load_truename_sym)
+            try:
+                from fclpy.lispfunc.pathnames import Pathname as PN
+            except Exception:
+                PN = None
+            if load_truename and load_truename is not lisptype.NIL and PN is not None and isinstance(load_truename, PN):
+                current_file_path = load_truename.original
+                current_dir = os.path.dirname(current_file_path)
+                if current_dir:
+                    candidate = os.path.normpath(os.path.join(current_dir, input_path))
+                    if os.path.exists(candidate):
+                        input_path = candidate
+                        resolved = True
+
+        if not resolved and env is not None:
+            default_sym = lisptype.COMMON_LISP_PACKAGE.intern_symbol('*DEFAULT-PATHNAME-DEFAULTS*')
+            default_pathname = env.find_variable(default_sym)
+            if default_pathname and default_pathname is not lisptype.NIL and PN is not None and isinstance(default_pathname, PN):
+                default_path = default_pathname.original
+                if os.path.isdir(default_path):
+                    default_dir = default_path
+                else:
+                    default_dir = os.path.dirname(default_path)
+                if default_dir:
+                    candidate = os.path.normpath(os.path.join(default_dir, input_path))
+                    if os.path.exists(candidate):
+                        input_path = candidate
+                        resolved = True
     
     # Determine output path
     if output_file is not None:
@@ -1551,12 +1680,57 @@ def compile_file_pathname(input_file, output_file=None, **kwargs):
     from fclpy.lispfunc.pathnames import Pathname
     import os
     
-    # Convert to string if needed
+    # Resolve input path similar to compile_file so pathname reflects real location
+    import fclpy.state as state
+    env = state.current_environment
+
     if isinstance(input_file, Pathname):
-        input_str = str(input_file)
+        input_str = input_file.original
     else:
         input_str = str(input_file)
-    
+
+    import os
+    if not os.path.isabs(input_str):
+        # Try LISP_CWD
+        lisp_cwd = os.environ.get('LISP_CWD')
+        if lisp_cwd:
+            candidate = os.path.normpath(os.path.join(lisp_cwd, input_str))
+            if os.path.exists(candidate):
+                input_str = candidate
+
+        if env is not None:
+            load_truename_sym = lisptype.COMMON_LISP_PACKAGE.intern_symbol('*LOAD-TRUENAME*')
+            load_truename = env.find_variable(load_truename_sym)
+            try:
+                from fclpy.lispfunc.pathnames import Pathname as PN
+            except Exception:
+                PN = None
+            if load_truename and load_truename is not lisptype.NIL and PN is not None and isinstance(load_truename, PN):
+                current_file_path = load_truename.original
+                current_dir = os.path.dirname(current_file_path)
+                if current_dir:
+                    candidate = os.path.normpath(os.path.join(current_dir, input_str))
+                    if os.path.exists(candidate):
+                        input_str = candidate
+
+        if env is not None:
+            try:
+                from fclpy.lispfunc.pathnames import Pathname as PN
+            except Exception:
+                PN = None
+            default_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*DEFAULT-PATHNAME-DEFAULTS*')
+            default_pathname = env.find_variable(default_sym)
+            if default_pathname and default_pathname is not lisptype.NIL and PN is not None and isinstance(default_pathname, PN):
+                default_path = default_pathname.original
+                if os.path.isdir(default_path):
+                    default_dir = default_path
+                else:
+                    default_dir = os.path.dirname(default_path)
+                if default_dir:
+                    candidate = os.path.normpath(os.path.join(default_dir, input_str))
+                    if os.path.exists(candidate):
+                        input_str = candidate
+
     base = os.path.splitext(input_str)[0]
     result = base + ".fasl"
     return Pathname(result)

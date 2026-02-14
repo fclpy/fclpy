@@ -190,6 +190,62 @@ def open_file(filename, direction='input', element_type='character',
         Stream object or NIL for probe mode
     """
     filename = str(filename)
+    import fclpy.lisptype as lisptype
+    # Normalize Lisp keyword or symbol arguments to Python strings
+
+    if isinstance(direction, (lisptype.lispKeyword, lisptype.LispSymbol)):
+        direction = direction.name.lower().replace('-', '_')
+    elif isinstance(direction, str):
+        direction = direction.lower()
+
+
+
+    try:
+        if isinstance(if_does_not_exist, (lisptype.lispKeyword, lisptype.LispSymbol)):
+            if_does_not_exist = if_does_not_exist.name.lower().replace('-', '_')
+        elif isinstance(if_does_not_exist, str):
+            if_does_not_exist = if_does_not_exist.lower()
+    except Exception:
+        pass
+    # Resolve relative filenames against Lisp runtime defaults so that files
+    # created by OPEN (from macro expansion of WITH-OPEN-FILE) end up where
+    # subsequent LOAD calls will search for them.
+    if not os.path.isabs(filename):
+        # 1) LISP_CWD environment variable
+        lisp_cwd = os.environ.get('LISP_CWD')
+        if lisp_cwd:
+            candidate = os.path.normpath(os.path.join(lisp_cwd, filename))
+            filename = candidate
+        else:
+            try:
+                from fclpy.lispfunc.pathnames import Pathname
+                import fclpy.lisptype as lisptype
+                # 2) *LOAD-TRUENAME* directory
+                load_truename_sym = lisptype.COMMON_LISP_PACKAGE.intern_symbol('*LOAD-TRUENAME*')
+                # current environment may not be set; use state if available
+                import fclpy.state as state
+                env = getattr(state, 'current_environment', None)
+                load_truename = env.find_variable(load_truename_sym) if env is not None else None
+                if load_truename and load_truename is not lisptype.NIL and isinstance(load_truename, Pathname):
+                    current_file_path = load_truename.original
+                    current_dir = os.path.dirname(current_file_path)
+                    if current_dir:
+                        filename = os.path.normpath(os.path.join(current_dir, filename))
+                else:
+                    # 3) *DEFAULT-PATHNAME-DEFAULTS*
+                    default_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*DEFAULT-PATHNAME-DEFAULTS*')
+                    default_pathname = env.find_variable(default_sym) if env is not None else None
+                    if default_pathname and default_pathname is not lisptype.NIL and isinstance(default_pathname, Pathname):
+                        default_path = default_pathname.original
+                        if os.path.isdir(default_path):
+                            default_dir = default_path
+                        else:
+                            default_dir = os.path.dirname(default_path)
+                        if default_dir:
+                            filename = os.path.normpath(os.path.join(default_dir, filename))
+            except Exception:
+                # If resolving fails for any reason, fall back to Python CWD
+                filename = os.path.normpath(os.path.join(os.getcwd(), filename))
     
     # Map Lisp direction to Python mode
     if direction == 'input':
@@ -215,10 +271,14 @@ def open_file(filename, direction='input', element_type='character',
         elif direction == 'output' and if_exists == 'supersede':
             mode = 'w'
     else:
+        # If opening for output/io, default to creating the file when it does not exist
+        if if_does_not_exist == 'error' and direction in ('output', 'io'):
+            if_does_not_exist = 'create'
+
         if if_does_not_exist == 'error':
             raise FileNotFoundError(f"File not found: {filename}")
         elif if_does_not_exist == 'create' and direction in ('output', 'io'):
-            # Create the file
+            # Create the file (opening in 'w' or 'r+' will handle creation)
             pass
     
     try:

@@ -134,6 +134,87 @@ def eval_decf(form, env):
         raise lisptype.LispNotImplementedError(f"DECF: complex places not yet supported: {place}")
 
 
+@_registry.cl_macro('WITH-OPEN-FILE', documentation='WITH-OPEN-FILE macro expander')
+def with_open_file_macro(bindings, *body):
+    """Macro expander for WITH-OPEN-FILE.
+
+    Transforms:
+      (WITH-OPEN-FILE (var filespec &key ...) body...)
+    into:
+      (LET ((var (OPEN filespec &key ...)))
+        (UNWIND-PROTECT
+            (PROGN body...)
+            (CLOSE var)))
+    """
+    # Helper to convert Python iterable to lispCons list
+    def to_cons(seq):
+        cur = lisptype.NIL
+        for e in reversed(seq):
+            cur = lisptype.lispCons(e, cur)
+        return cur
+
+    # Normalize binding forms (single binding or list of bindings)
+    binding_forms = []
+    if isinstance(bindings, lisptype.lispCons) and isinstance(bindings.car if hasattr(bindings, 'car') else None, lisptype.LispSymbol):
+        # Single binding: (var filespec ...)
+        binding_forms = [bindings]
+    else:
+        # Multiple bindings
+        cur = bindings
+        while isinstance(cur, lisptype.lispCons):
+            binding_forms.append(cur.car)
+            cur = cur.cdr
+
+    let_bindings = lisptype.NIL
+    close_forms = lisptype.NIL
+
+    for b in reversed(binding_forms):
+        stream_sym = b.car
+        filespec = b.cdr.car if isinstance(b.cdr, lisptype.lispCons) else lisptype.NIL
+
+        # Build OPEN call: (OPEN filespec &key ...)
+        elems = [lisptype.LispSymbol('OPEN'), filespec]
+        rest = b.cdr.cdr if isinstance(b.cdr, lisptype.lispCons) else lisptype.NIL
+        cur_kw = rest
+        while isinstance(cur_kw, lisptype.lispCons):
+            key = cur_kw.car
+            val = cur_kw.cdr.car if isinstance(cur_kw.cdr, lisptype.lispCons) else lisptype.NIL
+            elems.append(key)
+            elems.append(val)
+            if isinstance(cur_kw.cdr, lisptype.lispCons) and isinstance(cur_kw.cdr.cdr, lisptype.lispCons):
+                cur_kw = cur_kw.cdr.cdr
+            else:
+                break
+
+        open_call = to_cons(elems)
+
+        # Create binding pair: (var open-call)
+        binding_pair = lisptype.lispCons(stream_sym, lisptype.lispCons(open_call, lisptype.NIL))
+        let_bindings = lisptype.lispCons(binding_pair, let_bindings)
+
+        # Create close form: (CLOSE var)
+        close_form = lisptype.lispCons(lisptype.LispSymbol('CLOSE'), lisptype.lispCons(stream_sym, lisptype.NIL))
+        close_forms = lisptype.lispCons(close_form, close_forms)
+
+    # Build PROGN for body
+    if body:
+        progn_sym = lisptype.LispSymbol('PROGN')
+        body_list = lisptype.NIL
+        for f in reversed(body):
+            body_list = lisptype.lispCons(f, body_list)
+        progn_form = lisptype.lispCons(progn_sym, body_list)
+    else:
+        progn_form = lisptype.NIL
+
+    # Build UNWIND-PROTECT: (UNWIND-PROTECT progn (PROGN close-forms...))
+    close_progn = lisptype.lispCons(lisptype.LispSymbol('PROGN'), close_forms) if close_forms is not lisptype.NIL else lisptype.NIL
+    unwind = lisptype.lispCons(lisptype.LispSymbol('UNWIND-PROTECT'), lisptype.lispCons(progn_form, lisptype.lispCons(close_progn, lisptype.NIL)))
+
+    # Build LET: (LET bindings unwind)
+    let_form = lisptype.lispCons(lisptype.LispSymbol('LET'), lisptype.lispCons(let_bindings, lisptype.lispCons(unwind, lisptype.NIL)))
+    return let_form
+
+
 def eval_defun(form, env):
     """Evaluate DEFUN special form.
     

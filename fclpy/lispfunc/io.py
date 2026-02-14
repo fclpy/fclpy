@@ -7,6 +7,7 @@ This module re-exports I/O functions from specialized submodules:
 
 from .io_read import *
 from .io_write import *
+from .streams import open_file, close_stream
 
 # Add special symbol-safe name for PRINT (expected by __init__)
 _s_print_ = print_fn
@@ -57,3 +58,8 @@ __all__ = [
     # Symbol-safe names for operators
     '_s_print_',
 ]
+
+# Alias the concrete implementations to the legacy exported names expected
+# by other modules.
+open_fn = open_file
+close_fn = close_stream

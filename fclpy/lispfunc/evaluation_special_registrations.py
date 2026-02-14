@@ -159,10 +159,8 @@ def special_handler_case(*args):
     raise lisptype.LispNotImplementedError('HANDLER-CASE (evaluated in evaluator)')
 
 
-@_registry.cl_special('WITH-OPEN-FILE')
-def special_with_open_file(*args):
-    """WITH-OPEN-FILE special form (handled by evaluator)."""
-    raise lisptype.LispNotImplementedError('WITH-OPEN-FILE (evaluated in evaluator)')
+# WITH-OPEN-FILE is implemented as a macro (registered at import time
+# by `evaluation_special_forms`). Do not register it as a special.
 
 
 @_registry.cl_special('LOOP-FINISH')
