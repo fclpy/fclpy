@@ -214,17 +214,23 @@ def eval_defun(form, env):
             else:
                 func_env.add_variable(param, lisptype.NIL)
         
-        # Bind optional parameters
+        # Bind optional parameters (support supplied-p variable)
         for param_spec in optional_params:
             if _consp_internal(param_spec):
                 param = car(param_spec)
-                default_form = car(cdr(param_spec))
+                rest = cdr(param_spec)
+                default_form = car(rest) if _consp_internal(rest) else None
+                rest2 = cdr(rest) if _consp_internal(rest) else None
+                supplied_p = car(rest2) if _consp_internal(rest2) else None
             else:
                 param = param_spec
                 default_form = None
-            
+                supplied_p = None
+
             if arg_index < len(call_args):
                 func_env.add_variable(param, call_args[arg_index])
+                if supplied_p is not None:
+                    func_env.add_variable(supplied_p, lisptype.T)
                 arg_index += 1
             else:
                 # Use default value if provided, otherwise NIL
@@ -233,6 +239,8 @@ def eval_defun(form, env):
                     func_env.add_variable(param, default_value)
                 else:
                     func_env.add_variable(param, lisptype.NIL)
+                if supplied_p is not None:
+                    func_env.add_variable(supplied_p, lisptype.NIL)
         
         # Collect remaining positional arguments for &rest
         remaining_positional = []
@@ -430,20 +438,34 @@ def _create_macro_function(macro_name, lambda_list, body, env):
         
         # Bind optional parameters
         for param in optional_params:
+            # Support (name default supplied-p) optional syntax
             if isinstance(param, lisptype.LispSymbol):
-                if arg_idx < len(call_args):
-                    macro_env.add_variable(param, call_args[arg_idx])
-                    arg_idx += 1
-                else:
-                    macro_env.add_variable(param, lisptype.NIL)
+                opt_name = param
+                opt_default = None
+                supplied_p = None
             elif _consp_internal(param):
                 opt_name = car(param)
-                opt_default = car(cdr(param)) if _consp_internal(cdr(param)) else lisptype.NIL
-                if arg_idx < len(call_args):
-                    macro_env.add_variable(opt_name, call_args[arg_idx])
-                    arg_idx += 1
-                else:
+                rest = cdr(param)
+                opt_default = car(rest) if _consp_internal(rest) else None
+                rest2 = cdr(rest) if _consp_internal(rest) else None
+                supplied_p = car(rest2) if _consp_internal(rest2) else None
+            else:
+                opt_name = param
+                opt_default = None
+                supplied_p = None
+
+            if arg_idx < len(call_args):
+                macro_env.add_variable(opt_name, call_args[arg_idx])
+                if supplied_p is not None:
+                    macro_env.add_variable(supplied_p, lisptype.T)
+                arg_idx += 1
+            else:
+                if opt_default is not None:
                     macro_env.add_variable(opt_name, eval(opt_default, macro_env))
+                else:
+                    macro_env.add_variable(opt_name, lisptype.NIL)
+                if supplied_p is not None:
+                    macro_env.add_variable(supplied_p, lisptype.NIL)
         
         # Bind &rest parameter
         if rest_param:
@@ -753,38 +775,170 @@ def eval_destructuring_bind(form, env):
 
 def eval_lambda(form, env):
     """Evaluate LAMBDA special form."""
-    from .evaluation_core import eval
-    
+    from .evaluation_core import eval, parse_lambda_list
+
     args = cdr(form)
     if not _consp_internal(args):
         raise lisptype.LispNotImplementedError("LAMBDA requires at least 1 argument")
-    
+
     param_list = car(args)
     body = cdr(args)
-    
+
+    # Parse the lambda list to support &optional, &rest, &key, &aux, &environment
+    parsed = parse_lambda_list(param_list)
+    required_params = parsed.get('required', [])
+    optional_params = parsed.get('optional', [])
+    rest_param = parsed.get('rest', None)
+    keyword_params = parsed.get('keyword', [])
+    aux_params = parsed.get('aux', [])
+    environment_param = parsed.get('environment', None)
+
     # Create function closure
     def lambda_function(*call_args):
         # Create new environment for function execution
         func_env = lisptype.Environment(env)
-        
-        # Bind parameters
-        params = param_list
-        for i, arg in enumerate(call_args):
-            if _consp_internal(params):
-                param = car(params)
-                if isinstance(param, lisptype.LispSymbol):
-                    func_env.add_variable(param, arg)
-                params = cdr(params)
-        
+
+        # Normalize NIL symbol arguments to canonical NIL
+        new_args = []
+        for a in call_args:
+            if isinstance(a, lisptype.LispSymbol) and a.name.upper() == 'NIL':
+                new_args.append(lisptype.NIL)
+            else:
+                new_args.append(a)
+        call_args = tuple(new_args)
+
+        arg_index = 0
+
+        # Bind required parameters
+        for param in required_params:
+            if arg_index < len(call_args):
+                func_env.add_variable(param, call_args[arg_index])
+                arg_index += 1
+            else:
+                func_env.add_variable(param, lisptype.NIL)
+
+        # Bind optional parameters (support supplied-p variable)
+        for param_spec in optional_params:
+            if _consp_internal(param_spec):
+                param = car(param_spec)
+                rest = cdr(param_spec)
+                default_form = car(rest) if _consp_internal(rest) else None
+                rest2 = cdr(rest) if _consp_internal(rest) else None
+                supplied_p = car(rest2) if _consp_internal(rest2) else None
+            else:
+                param = param_spec
+                default_form = None
+                supplied_p = None
+
+            if arg_index < len(call_args):
+                func_env.add_variable(param, call_args[arg_index])
+                if supplied_p is not None:
+                    func_env.add_variable(supplied_p, lisptype.T)
+                arg_index += 1
+            else:
+                if default_form is not None:
+                    default_value = eval(default_form, func_env)
+                    func_env.add_variable(param, default_value)
+                else:
+                    func_env.add_variable(param, lisptype.NIL)
+                if supplied_p is not None:
+                    func_env.add_variable(supplied_p, lisptype.NIL)
+
+        # Collect remaining positional arguments for &rest
+        remaining_positional = []
+
+        # Find where keyword arguments start
+        keyword_start = arg_index
+        for i in range(arg_index, len(call_args)):
+            if isinstance(call_args[i], lisptype.lispKeyword):
+                keyword_start = i
+                break
+            remaining_positional.append(call_args[i])
+            arg_index = i + 1
+
+        # Bind &rest parameter if present
+        if rest_param:
+            if remaining_positional:
+                rest_list = lisptype.NIL
+                for item in reversed(remaining_positional):
+                    rest_list = lisptype.lispCons(item, rest_list)
+                func_env.add_variable(rest_param, rest_list)
+            else:
+                func_env.add_variable(rest_param, lisptype.NIL)
+
+        # Bind keyword parameters: initialize to defaults and supplied-p to NIL
+        for param_spec in keyword_params:
+            if _consp_internal(param_spec):
+                param = car(param_spec)
+                rest = cdr(param_spec)
+                default_form = car(rest) if _consp_internal(rest) else None
+                rest2 = cdr(rest) if _consp_internal(rest) else None
+                supplied_p = car(rest2) if _consp_internal(rest2) else None
+            else:
+                param = param_spec
+                default_form = None
+                supplied_p = None
+
+            if default_form is not None:
+                default_value = eval(default_form, func_env)
+                func_env.add_variable(param, default_value)
+            else:
+                func_env.add_variable(param, lisptype.NIL)
+
+            if supplied_p is not None:
+                func_env.add_variable(supplied_p, lisptype.NIL)
+
+        # Now process actual keyword arguments from the call
+        i = keyword_start
+        while i < len(call_args) - 1:
+            key = call_args[i]
+            value = call_args[i + 1]
+
+            if isinstance(key, lisptype.lispKeyword):
+                key_name = key.name.upper()
+                # Find matching parameter
+                for param_spec in keyword_params:
+                    if _consp_internal(param_spec):
+                        param = car(param_spec)
+                        rest = cdr(param_spec)
+                        rest2 = cdr(rest) if _consp_internal(rest) else None
+                        supplied_p = car(rest2) if _consp_internal(rest2) else None
+                    else:
+                        param = param_spec
+                        supplied_p = None
+
+                    if isinstance(param, lisptype.LispSymbol) and param.name.upper() == key_name:
+                        func_env.add_variable(param, value)
+                        if supplied_p is not None:
+                            func_env.add_variable(supplied_p, lisptype.T)
+                        break
+                i += 2
+            else:
+                i += 1
+
+        # Bind &aux parameters
+        for param_spec in aux_params:
+            if _consp_internal(param_spec):
+                param = car(param_spec)
+                init_form = car(cdr(param_spec))
+                init_value = eval(init_form, func_env)
+                func_env.add_variable(param, init_value)
+            else:
+                func_env.add_variable(param_spec, lisptype.NIL)
+
+        # Bind &environment if requested
+        if environment_param is not None:
+            func_env.add_variable(environment_param, env)
+
         # Execute body
         result = None
         current_body = body
         while _consp_internal(current_body):
             result = eval(car(current_body), func_env)
             current_body = cdr(current_body)
-        
+
         return result
-    
+
     return lambda_function
 
 

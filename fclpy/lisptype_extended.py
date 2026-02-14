@@ -195,14 +195,28 @@ class Environment(lispT):
     
     def has_variable(self, sym: LispSymbol):
         """Check if a variable binding exists (distinguishes unbound from bound-to-None)."""
-        b = self.variable_bindings
+        # Fast-path: name-based map populated by bind/add_variable
+        try:
+            if sym.name in self._variable_map:
+                return True
+        except Exception:
+            pass
+
+        # Check modern lexical bindings list (self.bindings)
+        b = self.bindings
         while b is not None:
-            if type(b.symbol) is lispCons or type(sym) is lispCons:
-                print(f"[DEBUG] has_variable: comparing cons types b.symbol({type(b.symbol)}) sym({type(sym)})")
             if b.symbol.name == sym.name:
                 return True
             b = b.next
-        # Check parent
+
+        # Legacy variable_bindings (kept for backward compatibility)
+        b = self.variable_bindings
+        while b is not None:
+            if b.symbol.name == sym.name:
+                return True
+            b = b.next
+
+        # Check parent environment
         if self.parent:
             return self.parent.has_variable(sym)
         return False
