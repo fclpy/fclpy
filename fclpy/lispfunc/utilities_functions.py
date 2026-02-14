@@ -125,8 +125,56 @@ def compiled_function_p(object):
 
 @_registry.cl_function('COMPILE')
 def compile_fn(name, definition=None):
-    """Compile function (stub)."""
-    return name
+    """Compile a function definition.
+    
+    Common Lisp COMPILE returns three values:
+    1. The compiled function (or NIL if unable to compile)
+    2. Warnings-p (T if warnings were generated)
+    3. Failure-p (T if compilation failed)
+    
+    Usage:
+    - (compile name) - compile the function named by symbol 'name'
+    - (compile nil definition) - compile the lambda form 'definition'
+    """
+    from fclpy.lispfunc.evaluation_core import eval as eval_lisp
+    import fclpy.lispenv as lispenv
+    
+    result_fn = None
+    warnings_p = lisptype.NIL
+    failure_p = lisptype.NIL
+    
+    try:
+        # Get current environment
+        env = lispenv.current_environment
+        if env is None:
+            env = lisptype.Environment()
+            lispenv.current_environment = env
+        
+        if definition is not None:
+            # Compile the provided definition (usually a lambda form)
+            # Evaluate it to get a function object
+            result_fn = eval_lisp(definition, env)
+        elif isinstance(name, lisptype.LispSymbol):
+            # Look up the function by name and compile it
+            func = env.find_func(name)
+            if func is None:
+                # Try to find it as a defined function
+                result_fn = eval_lisp(name, env)
+            else:
+                result_fn = func
+        else:
+            # name is NIL but no definition provided - error
+            failure_p = lisptype.T
+            return lisptype.MultipleValues(lisptype.NIL, warnings_p, failure_p)
+    except Exception as e:
+        # Compilation failed
+        failure_p = lisptype.T
+        import sys
+        print(f"Warning: COMPILE failed: {e}", file=sys.stderr)
+        warnings_p = lisptype.T
+    
+    # Return three values as MultipleValues
+    return lisptype.MultipleValues(result_fn if result_fn is not None else lisptype.NIL, warnings_p, failure_p)
 
 
 # --- Macro operations ---

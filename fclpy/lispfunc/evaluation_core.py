@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 def _get_func_signature_info(func_id: int, func):
     """Get cached signature information for a function.
     
-    Returns a tuple of (use_kwargs, kwarg_param_names_frozenset).
+    Returns a tuple of (use_kwargs, kwarg_param_names_frozenset, num_required_positionals).
     If kwarg_param_names contains '*', it means the function accepts **kwargs
     and will accept any keyword argument.
     """
@@ -41,6 +41,13 @@ def _get_func_signature_info(func_id: int, func):
         # Check if function accepts **kwargs
         has_var_keyword = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params)
         
+        # Count required positional parameters (no default, not *args, not **kwargs)
+        num_required_positionals = 0
+        for p in params:
+            if (p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+                and p.default is inspect.Parameter.empty):
+                num_required_positionals += 1
+        
         # Collect the actual keyword parameter names for this function
         kwarg_param_names = set()
         for p in params:
@@ -53,9 +60,9 @@ def _get_func_signature_info(func_id: int, func):
             kwarg_param_names.add('*')
         
         use_kwargs = bool(kwarg_param_names) and not has_var_positional
-        return (use_kwargs, frozenset(kwarg_param_names))
+        return (use_kwargs, frozenset(kwarg_param_names), num_required_positionals)
     except (ValueError, TypeError):
-        return (False, frozenset())
+        return (False, frozenset(), 0)
 
 
 def get_func_signature_info(func):
@@ -1312,7 +1319,7 @@ def eval(form, env=None):
             raise lisptype.LispError(f"Not a function: {operator}")
         
         # Get cached signature info for keyword argument handling
-        use_kwargs, kwarg_param_names = get_func_signature_info(func)
+        use_kwargs, kwarg_param_names, num_required_positionals = get_func_signature_info(func)
         
         # Evaluate arguments
         eval_args = []
@@ -1324,8 +1331,10 @@ def eval(form, env=None):
             
             # Only treat a keyword as a Python kwarg if:
             # 1. The function accepts kwargs
-            # 2. The keyword name matches an actual parameter name, OR function has **kwargs
-            if use_kwargs and isinstance(arg_val, lisptype.lispKeyword):
+            # 2. We've already filled all required positional parameters
+            # 3. The keyword name matches an actual parameter name, OR function has **kwargs
+            if (use_kwargs and isinstance(arg_val, lisptype.lispKeyword) 
+                and len(eval_args) >= num_required_positionals):
                 # Convert keyword name to Python kwarg name format
                 py_key = arg_val.name.lower().replace('-', '_')
                 
