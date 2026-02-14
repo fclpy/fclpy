@@ -1493,6 +1493,10 @@ def funcall(function, *args):
     # If function is MultipleValues, extract the primary value (single-value context)
     if isinstance(function, lisptype.MultipleValues):
         function = function.get_primary()
+    # If function is nil or otherwise not callable, signal a PROGRAM-ERROR
+    if function is None or function == lisptype.NIL or not callable(function):
+        condition = lisptype.ProgramError(message=f"FUNCALL requires a function designator, got: {function}")
+        raise ConditionException(condition, recoverable=False)
     
     try:
         return function(*args)
