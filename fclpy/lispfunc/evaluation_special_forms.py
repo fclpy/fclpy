@@ -613,14 +613,11 @@ def _create_macro_function(macro_name, lambda_list, body, env):
         if not _consp_internal(actual_body):
             return lisptype.NIL
 
-        # Evaluate body forms in macro environment, return last result
-        result = lisptype.NIL
-        cur_body = actual_body
-        while _consp_internal(cur_body):
-            result = eval(car(cur_body), macro_env)
-            cur_body = cdr(cur_body)
-
-        return result
+        # Evaluate the body inside an implicit BLOCK named for the macro.
+        # This mirrors DEFUN/DEFMACRO semantics where the function/macro
+        # body is implicitly a BLOCK so RETURN-FROM can target the name.
+        block_form = lisptype.lispCons(lisptype.LispSymbol('BLOCK'), lisptype.lispCons(macro_name, actual_body))
+        return eval(block_form, macro_env)
 
     # Mark as macro
     setattr(macro_callable, '__is_macro__', True)

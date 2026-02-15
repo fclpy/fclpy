@@ -1373,6 +1373,11 @@ def eval(form, env=None):
         except ConditionException:
             # Re-raise Lisp conditions without wrapping them
             raise
+        except (ReturnFromException, ThrowException, GoException):
+            # Control-flow exceptions used for non-local exits should
+            # propagate unchanged so enclosing forms like BLOCK, CATCH,
+            # and TAGBODY can handle them.
+            raise
         except lisptype.LispProgramError as e:
             # Convert Lisp program errors to PROGRAM-ERROR condition
             condition = lisptype.ProgramError(message=str(e))
@@ -1452,6 +1457,10 @@ def apply(function, *args):
             return function(*args)
     except ConditionException:
         # Re-raise Lisp conditions without wrapping them
+        raise
+    except (ReturnFromException, ThrowException, GoException):
+        # Allow non-local control-flow exceptions to propagate to enclosing
+        # Lisp control forms (BLOCK/CATCH/TAGBODY) instead of being wrapped.
         raise
     except lisptype.LispProgramError as e:
         # Convert Lisp program errors to PROGRAM-ERROR condition
