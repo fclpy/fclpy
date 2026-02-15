@@ -191,6 +191,7 @@ class Environment(lispT):
 
         self.variable_bindings = Binding(symbol, value, self.variable_bindings, self)
         self._variable_map[symbol.name] = value
+        
 
     
     def has_variable(self, sym: LispSymbol):
@@ -223,11 +224,10 @@ class Environment(lispT):
     
     def find_variable(self, sym):
         """Legacy: find a variable by symbol name."""
-        try:
-            if sym.name in self._variable_map:
-                return self._variable_map[sym.name]
-        except Exception:
-            pass
+        # Prefer walking the variable_bindings linked list to find the
+        # most-recent binding value. Only use the name-based cache as a
+        # fallback to avoid returning stale cached values from a different
+        # environment frame.
         b = self.variable_bindings
         while b is not None:
             if b.symbol.name == sym.name:
@@ -237,6 +237,13 @@ class Environment(lispT):
                     pass
                 return b.value
             b = b.next
+
+        try:
+            if sym.name in self._variable_map:
+                return self._variable_map[sym.name]
+        except Exception:
+            pass
+
         # Check parent
         if self.parent:
             return self.parent.find_variable(sym)
@@ -259,6 +266,7 @@ class Environment(lispT):
             return self.parent.set_variable(sym, value)
         # Create new binding if not found
         self.add_variable(sym, value)
+        
         return value
     
     def add_symbol_macro(self, symbol, expansion):
