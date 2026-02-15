@@ -186,8 +186,13 @@ def parse_lambda_list(lambda_list):
 
         # Add parameter to appropriate section
         if current_section == 'required':
-            if isinstance(param, lisptype.LispSymbol):
-                required.append(param)
+                if isinstance(param, lisptype.LispSymbol):
+                    required.append(param)
+                elif _consp_internal(param):
+                    # Allow destructuring parameter specs (lists) to be included
+                    # as required parameters so callers like (arg1 (&whole w arg2))
+                    # are preserved for later destructuring binding.
+                    required.append(param)
         elif current_section == 'optional':
             if isinstance(param, lisptype.LispSymbol):
                 optional.append(param)

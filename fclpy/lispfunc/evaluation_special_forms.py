@@ -511,6 +511,55 @@ def _create_macro_function(macro_name, lambda_list, body, env):
         
         # Bind required parameters
         for param in required_params:
+            # Support destructuring parameter specs (e.g., (arg1 (&whole w arg2)))
+            if isinstance(param, lisptype.lispCons):
+                # The actual argument value (may be a list)
+                val = call_args[arg_idx] if arg_idx < len(call_args) else lisptype.NIL
+                # Scan the destructuring spec for &WHOLE marker
+                cur = param
+                whole_sym = None
+                destruct_syms = []
+                while _consp_internal(cur):
+                    el = car(cur)
+                    if isinstance(el, lisptype.LispSymbol) and el.name.upper() == '&WHOLE':
+                        # next element is whole symbol
+                        nxt = car(cdr(cur)) if _consp_internal(cdr(cur)) else None
+                        if isinstance(nxt, lisptype.LispSymbol):
+                            whole_sym = nxt
+                            # following elements after whole are destructured names
+                            rest_after = cdr(cdr(cur)) if _consp_internal(cdr(cur)) else lisptype.NIL
+                            tmp = rest_after
+                            while _consp_internal(tmp):
+                                s = car(tmp)
+                                if isinstance(s, lisptype.LispSymbol):
+                                    destruct_syms.append(s)
+                                tmp = cdr(tmp)
+                            break
+                        else:
+                            break
+                    cur = cdr(cur)
+
+                # Bind whole symbol to the entire argument form
+                if whole_sym is not None:
+                    macro_env.add_variable(whole_sym, val)
+
+                # Bind destructured symbols from the argument's elements
+                # If val is a list, walk its elements; otherwise bind NIL
+                elems = []
+                if isinstance(val, lisptype.lispCons):
+                    tmpv = val
+                    while _consp_internal(tmpv):
+                        elems.append(car(tmpv))
+                        tmpv = cdr(tmpv)
+                # assign
+                for i, ds in enumerate(destruct_syms):
+                    if i < len(elems):
+                        macro_env.add_variable(ds, elems[i])
+                    else:
+                        macro_env.add_variable(ds, lisptype.NIL)
+                arg_idx += 1
+                continue
+
             if arg_idx < len(call_args):
                 macro_env.add_variable(param, call_args[arg_idx])
                 arg_idx += 1
