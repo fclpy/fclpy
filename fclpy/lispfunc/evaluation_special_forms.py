@@ -515,48 +515,83 @@ def _create_macro_function(macro_name, lambda_list, body, env):
             if isinstance(param, lisptype.lispCons):
                 # The actual argument value (may be a list)
                 val = call_args[arg_idx] if arg_idx < len(call_args) else lisptype.NIL
-                # Scan the destructuring spec for &WHOLE marker
-                cur = param
+                # Detect nested destructuring patterns
+                # Case 1: (&WHOLE w ...)
                 whole_sym = None
                 destruct_syms = []
-                while _consp_internal(cur):
-                    el = car(cur)
-                    if isinstance(el, lisptype.LispSymbol) and el.name.upper() == '&WHOLE':
-                        # next element is whole symbol
-                        nxt = car(cdr(cur)) if _consp_internal(cdr(cur)) else None
-                        if isinstance(nxt, lisptype.LispSymbol):
-                            whole_sym = nxt
-                            # following elements after whole are destructured names
-                            rest_after = cdr(cdr(cur)) if _consp_internal(cdr(cur)) else lisptype.NIL
-                            tmp = rest_after
-                            while _consp_internal(tmp):
-                                s = car(tmp)
-                                if isinstance(s, lisptype.LispSymbol):
-                                    destruct_syms.append(s)
-                                tmp = cdr(tmp)
-                            break
-                        else:
-                            break
-                    cur = cdr(cur)
+                inner = param if _consp_internal(param) else None
+                if _consp_internal(inner) and isinstance(car(inner), lisptype.LispSymbol) and car(inner).name.upper() == '&WHOLE':
+                    # (&WHOLE w a b ...)
+                    nxt = car(cdr(inner)) if _consp_internal(cdr(inner)) else None
+                    if isinstance(nxt, lisptype.LispSymbol):
+                        whole_sym = nxt
+                        tmp = cdr(cdr(inner)) if _consp_internal(cdr(inner)) else lisptype.NIL
+                        while _consp_internal(tmp):
+                            s = car(tmp)
+                            if isinstance(s, lisptype.LispSymbol):
+                                destruct_syms.append(s)
+                            tmp = cdr(tmp)
 
-                # Bind whole symbol to the entire argument form
+                # Case 2: ((&KEY foo bar)) or similar key-destructuring
+                key_syms = None
+                if _consp_internal(inner) and isinstance(car(inner), lisptype.LispSymbol) and car(inner).name.upper() == '&KEY':
+                    # inner is (&KEY foo bar ...)
+                    key_syms = []
+                    tmpk = cdr(inner)
+                    while _consp_internal(tmpk):
+                        s = car(tmpk)
+                        if isinstance(s, lisptype.LispSymbol):
+                            key_syms.append(s)
+                        elif _consp_internal(s):
+                            # (name default) or (name default supplied-p)
+                            ks = car(s)
+                            if isinstance(ks, lisptype.LispSymbol):
+                                key_syms.append(ks)
+                        tmpk = cdr(tmpk)
+
+                # Bind whole symbol if present
                 if whole_sym is not None:
                     macro_env.add_variable(whole_sym, val)
+                    # Also bind the remaining destructuring symbols
+                    curv = val
+                    for ds in destruct_syms:
+                        if _consp_internal(curv):
+                            macro_env.add_variable(ds, car(curv))
+                            curv = cdr(curv)
+                        else:
+                            macro_env.add_variable(ds, lisptype.NIL)
 
-                # Bind destructured symbols from the argument's elements
-                # If val is a list, walk its elements; otherwise bind NIL
-                elems = []
-                if isinstance(val, lisptype.lispCons):
-                    tmpv = val
-                    while _consp_internal(tmpv):
-                        elems.append(car(tmpv))
-                        tmpv = cdr(tmpv)
-                # assign
-                for i, ds in enumerate(destruct_syms):
-                    if i < len(elems):
-                        macro_env.add_variable(ds, elems[i])
-                    else:
-                        macro_env.add_variable(ds, lisptype.NIL)
+                # Handle key destructuring: look up keywords in val list
+                if key_syms is not None:
+                    # val expected to be a list of keyword pairs or NIL
+                    # initialize all keys to NIL
+                    for ks in key_syms:
+                        macro_env.add_variable(ks, lisptype.NIL)
+                    # Process keyword-value pairs if val is a cons
+                    # Track which keys have been seen (CL uses first occurrence for duplicates)
+                    seen_keys = set()
+                    if isinstance(val, lisptype.lispCons):
+                        curv = val
+                        while _consp_internal(curv):
+                            k = car(curv)
+                            v = car(cdr(curv)) if _consp_internal(cdr(curv)) else lisptype.NIL
+                            # Match keyword to parameter symbol
+                            if isinstance(k, lisptype.lispKeyword):
+                                name = k.name.upper()
+                                # Only bind if this key hasn't been seen before (first occurrence wins)
+                                if name not in seen_keys:
+                                    for ks in key_syms:
+                                        if ks.name.upper() == name:
+                                            macro_env.add_variable(ks, v)
+                                            seen_keys.add(name)
+                                            break
+                            # advance by two if well-formed, otherwise break
+                            if _consp_internal(cdr(curv)):
+                                curv = cdr(cdr(curv))
+                            else:
+                                break
+                    arg_idx += 1
+                    continue
                 arg_idx += 1
                 continue
 
