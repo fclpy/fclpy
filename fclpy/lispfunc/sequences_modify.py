@@ -69,7 +69,30 @@ def remove_if(test, sequence, **kwargs):
     # Filter and add elements in range
     for element in iterator:
         test_value = iterator.get_value(element)
-        if not test(test_value):
+        try:
+            keep = test(test_value)
+        except Exception as e:
+            import traceback
+            print("DEBUG remove_if: test_value=", test_value)
+            try:
+                print("DEBUG remove_if: test=", test, getattr(test, '__name__', None))
+            except Exception:
+                pass
+            # Try to print ConditionException details if available
+            try:
+                from fclpy.lispfunc.evaluation_core import ConditionException
+                if isinstance(e, ConditionException):
+                    try:
+                        print("DEBUG condition:", e.condition)
+                        print("DEBUG condition name:", getattr(e.condition, 'name', None))
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            traceback.print_exc()
+            raise
+        
+        if not keep:
             result.append(element)
     
     # Add elements after end

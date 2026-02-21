@@ -762,6 +762,9 @@ def eval(form, env=None):
                 return eval_lambda(form, env)
             elif operator.name == 'QUASIQUOTE':
                 return eval_quasiquote(form, env)
+            elif operator.name == 'THE':
+                from .evaluation_special_forms import eval_the
+                return eval_the(form, env)
             elif operator.name == 'DEFMACRO':
                 return eval_defmacro(form, env)
             elif operator.name == 'DECLARE':

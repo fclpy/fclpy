@@ -117,6 +117,28 @@ def eval_setq(form, env):
     return result
 
 
+def eval_the(form, env):
+    """Evaluate THE special operator.
+
+    THE is a type assertion form. Per ANSI CL tests used here we should
+    not evaluate the type-designator (first argument) as a variable; only
+    evaluate and return the second argument (the expression). This keeps
+    constructs like (THE SYMBOL 'T) from attempting to look up SYMBOL as
+    a variable.
+    """
+    from .evaluation_core import eval
+
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("THE requires at least two arguments")
+
+    type_spec = car(args)
+    expr = car(cdr(args)) if _consp_internal(cdr(args)) else lisptype.NIL
+
+    # Do not evaluate type_spec here; evaluate and return the expression value
+    return eval(expr, env)
+
+
 def eval_incf(form, env):
     """Evaluate INCF special form - increment a place.
     
