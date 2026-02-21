@@ -21,7 +21,7 @@ else:
 
 # Test all eval error tests
 # test_lisp = "(in-package :cl-test) (progn (do-test 'eval.error.1) (do-test 'eval.error.2) (do-test 'eval.error.3) (do-test 'eval.error.4))"
-test_lisp = "(in-package :cl-test) (do-test 'defmacro.15)"
+test_lisp = "(in-package :cl-test) (do-test 'defmacro.19)"
 
 print("Running %s" % test_lisp)
 res = eval_string(test_lisp, env)

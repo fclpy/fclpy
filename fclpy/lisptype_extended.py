@@ -176,8 +176,17 @@ class Environment(lispT):
         if isinstance(symbol, lispCons):
             # Attempt to extract the actual variable from the cdr
             try:
+                # Handle common forms:
+                # - (:keyword var)  -> symbol.cdr is a cons whose car is the var
+                # - (head . tail)   -> dotted pair where cdr is the tail symbol
                 cdr = symbol.cdr
-                actual = cdr.car if isinstance(cdr, lispCons) else None
+                actual = None
+                if isinstance(cdr, LispSymbol):
+                    # Dotted-pair style: (head . tail) -> tail is the variable
+                    actual = cdr
+                elif isinstance(cdr, lispCons):
+                    # Normal list: (:keyword var) -> cdr.car is the var
+                    actual = cdr.car if isinstance(cdr.car, LispSymbol) else None
             except Exception:
                 actual = None
 

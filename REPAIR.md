@@ -13,6 +13,8 @@ Eliminate crashes so **all ANSI tests complete execution** (pass or fail, but do
 pipenv run python run_all_tests.py > run_all_tests.log
 ```
 
+NOTE: Python must be run with pipenv
+
 - Check stderr for exception traceback
 - Open `run_all_tests.log` and find the last test name
 
@@ -79,11 +81,6 @@ Review the diff. Remove:
 - Debug variable assignments
 - Test files created for this repair
 
-Commit the fix:
-```bash
-git add -A
-git commit -m "Fix TESTNAME.N crash: [brief description]"
-```
 
 ### 6. Re-run Full Suite
 
@@ -106,7 +103,7 @@ Loop back to Step 1 until the entire test suite completes without crashes.
 1. **One test at a time** — Fix crashes sequentially.
 2. **No refactoring** — Only modify code to fix the crash; do not optimize unrelated code.
 3. **Prioritize ANSI compliance** — Fixes should align with Common Lisp standards.
-4. **Clean git history** — Remove debug code immediately; each commit should be a minimal fix.
+4. **Clean working tree** — Remove debug code immediately; do not commit changes automatically. Leave commits to the repository maintainer or perform them only after a careful manual review.
 5. **Trust the traceback** — If unsure which test crashed, the stderr exception message shows exactly which test failed.
 
 ---

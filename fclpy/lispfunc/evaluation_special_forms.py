@@ -720,18 +720,64 @@ def _create_macro_function(macro_name, lambda_list, body, env):
             else:
                 # Unknown shape - skip defensively
                 continue
+            # If the optional parameter name is a destructuring pattern (a cons),
+            # bind its elements rather than attempting to add the cons as a variable.
+            def _bind_pattern(pat, val):
+                # Bind a symbol directly
+                if isinstance(pat, lisptype.LispSymbol):
+                    macro_env.add_variable(pat, val if val is not None else lisptype.NIL)
+                    return
+
+                if not _consp_internal(pat):
+                    return
+
+                # Collect pattern elements and detect dotted-tail
+                pats = []
+                cur = pat
+                while _consp_internal(cur):
+                    pats.append(car(cur))
+                    cur = cdr(cur)
+
+                dotted_tail = None
+                if isinstance(cur, lisptype.LispSymbol):
+                    dotted_tail = cur
+
+                # Walk value as list and bind elements
+                cur_val = val
+                for p in pats:
+                    if _consp_internal(cur_val):
+                        v = car(cur_val)
+                        if isinstance(p, lisptype.LispSymbol):
+                            macro_env.add_variable(p, v)
+                        cur_val = cdr(cur_val)
+                    else:
+                        if isinstance(p, lisptype.LispSymbol):
+                            macro_env.add_variable(p, lisptype.NIL)
+
+                # Bind dotted tail to remaining list
+                if dotted_tail is not None:
+                    macro_env.add_variable(dotted_tail, cur_val if cur_val is not None else lisptype.NIL)
 
             if arg_idx < len(call_args):
-                macro_env.add_variable(opt_name, call_args[arg_idx])
+                val = call_args[arg_idx]
+                if isinstance(opt_name, lisptype.LispSymbol):
+                    macro_env.add_variable(opt_name, val)
+                else:
+                    _bind_pattern(opt_name, val)
                 if supplied_p is not None:
                     macro_env.add_variable(supplied_p, lisptype.T)
                 arg_idx += 1
             else:
                 if opt_default is not None:
                     default_value = eval(opt_default, macro_env)
+                else:
+                    default_value = lisptype.NIL
+
+                if isinstance(opt_name, lisptype.LispSymbol):
                     macro_env.add_variable(opt_name, default_value)
                 else:
-                    macro_env.add_variable(opt_name, lisptype.NIL)
+                    _bind_pattern(opt_name, default_value)
+
                 if supplied_p is not None:
                     macro_env.add_variable(supplied_p, lisptype.NIL)
         
