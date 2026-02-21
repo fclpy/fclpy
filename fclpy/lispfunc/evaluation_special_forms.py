@@ -535,18 +535,16 @@ def _create_macro_function(macro_name, lambda_list, body, env):
                 # Case 2: ((&KEY foo bar)) or similar key-destructuring
                 key_syms = None
                 if _consp_internal(inner) and isinstance(car(inner), lisptype.LispSymbol) and car(inner).name.upper() == '&KEY':
-                    # inner is (&KEY foo bar ...)
+                    # inner is (&KEY foo (bar default) (baz default supplied-p) ...)
+                    # Preserve the full spec element (symbol or list) so defaults
+                    # and supplied-p parameter names are available for binding.
                     key_syms = []
                     tmpk = cdr(inner)
                     while _consp_internal(tmpk):
                         s = car(tmpk)
-                        if isinstance(s, lisptype.LispSymbol):
+                        # Keep either the symbol or the full spec list
+                        if isinstance(s, lisptype.LispSymbol) or _consp_internal(s):
                             key_syms.append(s)
-                        elif _consp_internal(s):
-                            # (name default) or (name default supplied-p)
-                            ks = car(s)
-                            if isinstance(ks, lisptype.LispSymbol):
-                                key_syms.append(ks)
                         tmpk = cdr(tmpk)
 
                 # Bind whole symbol if present
@@ -564,9 +562,23 @@ def _create_macro_function(macro_name, lambda_list, body, env):
                 # Handle key destructuring: look up keywords in val list
                 if key_syms is not None:
                     # val expected to be a list of keyword pairs or NIL
-                    # initialize all keys to NIL
+                    # initialize all keys to their defaults (if provided) and
+                    # initialize any supplied-p variables to NIL.
                     for ks in key_syms:
-                        macro_env.add_variable(ks, lisptype.NIL)
+                        if isinstance(ks, lisptype.LispSymbol):
+                            macro_env.add_variable(ks, lisptype.NIL)
+                        elif _consp_internal(ks):
+                            key_name = car(ks)
+                            default_form = car(cdr(ks)) if _consp_internal(cdr(ks)) else None
+                            rest2 = cdr(cdr(ks)) if _consp_internal(cdr(ks)) else None
+                            supplied_p = car(rest2) if _consp_internal(rest2) else None
+                            if default_form is not None:
+                                default_value = eval(default_form, macro_env)
+                                macro_env.add_variable(key_name, default_value)
+                            else:
+                                macro_env.add_variable(key_name, lisptype.NIL)
+                            if supplied_p is not None:
+                                macro_env.add_variable(supplied_p, lisptype.NIL)
                     # Process keyword-value pairs if val is a cons
                     # Track which keys have been seen (CL uses first occurrence for duplicates)
                     seen_keys = set()
@@ -581,10 +593,24 @@ def _create_macro_function(macro_name, lambda_list, body, env):
                                 # Only bind if this key hasn't been seen before (first occurrence wins)
                                 if name not in seen_keys:
                                     for ks in key_syms:
-                                        if ks.name.upper() == name:
-                                            macro_env.add_variable(ks, v)
-                                            seen_keys.add(name)
-                                            break
+                                        # ks may be a bare symbol or a spec list
+                                        if isinstance(ks, lisptype.LispSymbol):
+                                            if ks.name.upper() == name:
+                                                macro_env.add_variable(ks, v)
+                                                seen_keys.add(name)
+                                                break
+                                        elif _consp_internal(ks):
+                                            key_name_sym = car(ks)
+                                            if isinstance(key_name_sym, lisptype.LispSymbol) and key_name_sym.name.upper() == name:
+                                                # bind the provided value
+                                                macro_env.add_variable(key_name_sym, v)
+                                                # set supplied-p to T if requested
+                                                rest2 = cdr(cdr(ks)) if _consp_internal(cdr(ks)) else None
+                                                supplied_p = car(rest2) if _consp_internal(rest2) else None
+                                                if supplied_p is not None:
+                                                    macro_env.add_variable(supplied_p, lisptype.T)
+                                                seen_keys.add(name)
+                                                break
                             # advance by two if well-formed, otherwise break
                             if _consp_internal(cdr(curv)):
                                 curv = cdr(cdr(curv))
