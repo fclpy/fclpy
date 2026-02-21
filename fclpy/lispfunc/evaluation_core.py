@@ -200,7 +200,10 @@ def parse_lambda_list(lambda_list):
                 # Optional with default: (name default)
                 optional.append(param)
         elif current_section == 'rest':
-            if isinstance(param, lisptype.LispSymbol):
+            # &REST may be followed by a simple symbol or a destructuring
+            # specification like (name . tail). Preserve the spec as-is
+            # so callers can handle destructuring.
+            if isinstance(param, lisptype.LispSymbol) or _consp_internal(param):
                 rest = param
                 current_section = 'after_rest'  # After &REST, expect &KEY or &AUX
         elif current_section == 'keyword':

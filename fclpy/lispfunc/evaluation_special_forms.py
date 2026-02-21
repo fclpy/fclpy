@@ -15,6 +15,63 @@ import sys
 
 logger = logging.getLogger(__name__)
 
+
+def _extract_tail_symbol_from_rest(rest_param):
+    """Return the tail symbol from a rest destructuring spec or None.
+
+    Handles cases like (HEAD . TAIL) where rest_param.cdr may be a symbol
+    or wrapped as a tiny cons. This makes binding robust against different
+    parser representations.
+    """
+    if not _consp_internal(rest_param):
+        return None
+
+    tail = getattr(rest_param, 'cdr', None)
+
+    # Common direct symbol case
+    if isinstance(tail, lisptype.LispSymbol):
+        return tail
+
+    # Defensive: tail might be a tiny cons whose cdr/car holds the symbol
+    try:
+        if isinstance(tail, lisptype.lispCons):
+            # If the car is a symbol and cdr is NIL, treat car as the tail symbol
+            if isinstance(tail.car, lisptype.LispSymbol):
+                return tail.car
+            # If the cdr is a symbol (rare representation), use it
+            if isinstance(tail.cdr, lisptype.LispSymbol):
+                return tail.cdr
+    except Exception:
+        pass
+
+    # If object has a 'name' attribute that looks like a symbol name, intern it
+    if hasattr(tail, 'name') and isinstance(getattr(tail, 'name'), str):
+        try:
+            return lisptype.intern_symbol(tail.name)
+        except Exception:
+            pass
+
+    # If tail is a plain string, convert to a symbol via py_str_to_sym if available
+    if isinstance(tail, str):
+        try:
+            return lisptype.py_str_to_sym(tail)
+        except Exception:
+            return lisptype.LispSymbol(tail)
+
+    # Last-resort attempt: try to parse repr() as a symbol name
+    try:
+        rep = repr(tail)
+        rep_clean = rep.strip("() ")
+        if rep_clean.isidentifier() or rep_clean.isupper():
+            try:
+                return lisptype.intern_symbol(rep_clean)
+            except Exception:
+                return lisptype.LispSymbol(rep_clean)
+    except Exception:
+        pass
+
+    return None
+
 def eval_if(form, env):
     """Evaluate IF special form."""
     # Import eval lazily to avoid circular imports
@@ -342,9 +399,31 @@ def eval_defun(form, env):
                 rest_list = lisptype.NIL
                 for item in reversed(remaining_positional):
                     rest_list = lisptype.lispCons(item, rest_list)
-                func_env.add_variable(rest_param, rest_list)
             else:
-                func_env.add_variable(rest_param, lisptype.NIL)
+                rest_list = lisptype.NIL
+
+            # Support destructuring rest spec: either a symbol or a cons
+            if isinstance(rest_param, lisptype.LispSymbol):
+                func_env.add_variable(rest_param, rest_list)
+            elif _consp_internal(rest_param):
+                # Dotted pair like (head . tail): bind head to first element,
+                # tail to the cdr (list) of the rest_list.
+                head = car(rest_param)
+                tail = rest_param.cdr
+                if _consp_internal(rest_list):
+                    first = car(rest_list)
+                    rest_tail = cdr(rest_list)
+                else:
+                    first = lisptype.NIL
+                    rest_tail = lisptype.NIL
+
+                if isinstance(head, lisptype.LispSymbol):
+                    func_env.add_variable(head, first)
+                if isinstance(tail, lisptype.LispSymbol):
+                    func_env.add_variable(tail, rest_tail)
+                else:
+                    # If tail isn't a symbol, bind the whole rest_list
+                    func_env.add_variable(rest_param, rest_list)
         
         # Bind keyword parameters
         # First, initialize all keyword params to their defaults and supplied-p to NIL
@@ -441,8 +520,6 @@ def eval_defun(form, env):
         func_name.plist['DOCUMENTATION'] = docstring
     
     return func_name
-
-
 def _create_macro_function(macro_name, lambda_list, body, env):
     """Create a macro function callable from lambda-list and body.
     
@@ -628,22 +705,21 @@ def _create_macro_function(macro_name, lambda_list, body, env):
                 macro_env.add_variable(param, lisptype.NIL)
         
         # Bind optional parameters
-        for param in optional_params:
+        for param_spec in optional_params:
             # Support (name default supplied-p) optional syntax
-            if isinstance(param, lisptype.LispSymbol):
-                opt_name = param
+            if isinstance(param_spec, lisptype.LispSymbol):
+                opt_name = param_spec
                 opt_default = None
                 supplied_p = None
-            elif _consp_internal(param):
-                opt_name = car(param)
-                rest = cdr(param)
+            elif _consp_internal(param_spec):
+                opt_name = car(param_spec)
+                rest = cdr(param_spec)
                 opt_default = car(rest) if _consp_internal(rest) else None
                 rest2 = cdr(rest) if _consp_internal(rest) else None
                 supplied_p = car(rest2) if _consp_internal(rest2) else None
             else:
-                opt_name = param
-                opt_default = None
-                supplied_p = None
+                # Unknown shape - skip defensively
+                continue
 
             if arg_idx < len(call_args):
                 macro_env.add_variable(opt_name, call_args[arg_idx])
@@ -652,7 +728,8 @@ def _create_macro_function(macro_name, lambda_list, body, env):
                 arg_idx += 1
             else:
                 if opt_default is not None:
-                    macro_env.add_variable(opt_name, eval(opt_default, macro_env))
+                    default_value = eval(opt_default, macro_env)
+                    macro_env.add_variable(opt_name, default_value)
                 else:
                     macro_env.add_variable(opt_name, lisptype.NIL)
                 if supplied_p is not None:
@@ -665,9 +742,23 @@ def _create_macro_function(macro_name, lambda_list, body, env):
                 rest_list = lisptype.NIL
                 for arg in reversed(remaining_args):
                     rest_list = cons(arg, rest_list)
-                macro_env.add_variable(rest_param, rest_list)
             else:
-                macro_env.add_variable(rest_param, lisptype.NIL)
+                rest_list = lisptype.NIL
+            if isinstance(rest_param, lisptype.LispSymbol):
+                macro_env.add_variable(rest_param, rest_list)
+            elif _consp_internal(rest_param):
+                head = car(rest_param)
+                tail_sym = _extract_tail_symbol_from_rest(rest_param)
+                if _consp_internal(rest_list):
+                    first = car(rest_list)
+                    rest_tail = cdr(rest_list)
+                else:
+                    first = lisptype.NIL
+                    rest_tail = lisptype.NIL
+                if isinstance(head, lisptype.LispSymbol):
+                    macro_env.add_variable(head, first)
+                if tail_sym is not None:
+                    macro_env.add_variable(tail_sym, rest_tail)
         
         # Bind keyword parameters with defaults and supplied-p
         for param_spec in keyword_params:
@@ -1050,9 +1141,24 @@ def eval_lambda(form, env):
                 rest_list = lisptype.NIL
                 for item in reversed(remaining_positional):
                     rest_list = lisptype.lispCons(item, rest_list)
-                func_env.add_variable(rest_param, rest_list)
             else:
-                func_env.add_variable(rest_param, lisptype.NIL)
+                rest_list = lisptype.NIL
+
+            if isinstance(rest_param, lisptype.LispSymbol):
+                func_env.add_variable(rest_param, rest_list)
+            elif _consp_internal(rest_param):
+                head = car(rest_param)
+                tail_sym = _extract_tail_symbol_from_rest(rest_param)
+                if _consp_internal(rest_list):
+                    first = car(rest_list)
+                    rest_tail = cdr(rest_list)
+                else:
+                    first = lisptype.NIL
+                    rest_tail = lisptype.NIL
+                if isinstance(head, lisptype.LispSymbol):
+                    func_env.add_variable(head, first)
+                if tail_sym is not None:
+                    func_env.add_variable(tail_sym, rest_tail)
 
         # Bind keyword parameters: initialize to defaults and supplied-p to NIL
         for param_spec in keyword_params:

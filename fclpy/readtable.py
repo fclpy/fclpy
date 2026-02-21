@@ -100,6 +100,7 @@ class Readtable:
     def _left_paren_reader(self, char, stream):
         """Read a list starting with ("""
         result = []
+        dotted_tail = None
         
         while True:
             # Skip whitespace
@@ -115,13 +116,41 @@ class Readtable:
                 stream.unread_char(c)
                 item = self._read_item(stream)
                 if item is not None:
-                    result.append(item)
+                    # Check if this is the dot notation for a dotted pair
+                    # The dot is a LispSymbol with name '.'
+                    from . import lisptype
+                    if isinstance(item, lisptype.LispSymbol) and item.name == '.':
+                        # Next item becomes the cdr (tail) of the list
+                        # Skip whitespace after the dot
+                        c = stream.read_char()
+                        while c and c.isspace():
+                            c = stream.read_char()
+                        if c:
+                            stream.unread_char(c)
+                        # Read the tail
+                        dotted_tail = self._read_item(stream)
+                        # After the tail, we expect either whitespace and ) or just )
+                        c = stream.read_char()
+                        while c and c.isspace():
+                            c = stream.read_char()
+                        if c != ')':
+                            raise ValueError(f"Expected ) after dotted tail, got {c}")
+                        break
+                    else:
+                        result.append(item)
         
         # Convert to Lisp cons structure
         from . import lisptype
-        lisp_list = lisptype.NIL
-        for item in reversed(result):
-            lisp_list = lisptype.lispCons(item, lisp_list)
+        if dotted_tail is not None:
+            # Build list with dotted tail
+            lisp_list = dotted_tail
+            for item in reversed(result):
+                lisp_list = lisptype.lispCons(item, lisp_list)
+        else:
+            # Regular proper list
+            lisp_list = lisptype.NIL
+            for item in reversed(result):
+                lisp_list = lisptype.lispCons(item, lisp_list)
         return lisp_list
     
     def _read_item(self, stream):
