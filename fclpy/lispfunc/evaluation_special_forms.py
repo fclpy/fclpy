@@ -980,7 +980,8 @@ def eval_macroexpand_1(form, env):
     
     args = cdr(form)
     if not _consp_internal(args):
-        raise lisptype.LispNotImplementedError("MACROEXPAND-1 requires 1 argument")
+        # Signal a PROGRAM-ERROR for wrong argument count per ANSI CL
+        raise lisptype.LispProgramError("MACROEXPAND-1 requires 1 argument")
     
     form_to_expand_raw = car(args)
     
