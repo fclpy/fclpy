@@ -352,30 +352,75 @@ def delete_package(package):
 
 
 # --- Macro expansion ---
+def _direct_macroexpand_1(form, environment):
+    """Direct, eval-free macro expansion of form in environment.
+
+    Returns (expanded_form, did_expand).  Unlike eval_macroexpand_1 this
+    function never wraps the form in a cons cell, so it is safe to call
+    with forms that are themselves quoted lists such as (QUOTE FOO).
+    """
+    from .evaluation_core import _consp_internal
+    from .core import car as _car, cdr as _cdr
+
+    # Only cons cells can be macro call forms
+    if not _consp_internal(form):
+        return form, False
+
+    operator = _car(form)
+    if not isinstance(operator, lisptype.LispSymbol):
+        return form, False
+
+    # Need an environment to look up macros
+    if environment is None:
+        return form, False
+
+    try:
+        macro_func = environment.find_func(operator)
+    except Exception:
+        return form, False
+
+    if not macro_func or not callable(macro_func):
+        return form, False
+    if not getattr(macro_func, '__is_macro__', False):
+        return form, False
+
+    # Collect raw (unevaluated) arguments
+    args_list = []
+    current = _cdr(form)
+    while _consp_internal(current):
+        args_list.append(_car(current))
+        current = _cdr(current)
+
+    try:
+        expects_whole = getattr(macro_func, '__expects_whole__', False)
+        expects_env = getattr(macro_func, '__expects_environment__', False)
+
+        call_args = []
+        if expects_whole:
+            call_args.append(form)
+        call_args.extend(args_list)
+        if expects_env:
+            call_args.append(environment)
+
+        expanded = macro_func(*call_args)
+        return expanded, True
+    except Exception:
+        logger.error(f"[_direct_macroexpand_1] error expanding {operator}", exc_info=True)
+        return form, False
+
+
 @_registry.cl_function('MACROEXPAND')
 def macroexpand(form, environment=None):
-    """Expand macros fully."""
-    # Fully expand by repeatedly applying MACROEXPAND-1 until stable.
+    """Expand macros fully (multiple passes until stable)."""
     try:
-        from .evaluation_core import eval as _eval
-        from .core import cons
-        op = lisptype.LispSymbol('MACROEXPAND-1')
         prev = form
         while True:
-            call = cons(op, cons(prev, lisptype.NIL))
-            expanded = _eval(call, environment)
-            # If expansion returned a pair of values (compat), accept first
-            if isinstance(expanded, tuple) and len(expanded) >= 1:
-                expanded_val = expanded[0]
-            else:
-                expanded_val = expanded
-            if expanded_val is prev:
+            expanded, did_expand = _direct_macroexpand_1(prev, environment)
+            if not did_expand:
                 return prev
-            prev = expanded_val
+            prev = expanded
     except Exception:
-        # On any error, defensively return the original form
         logger.error(f"[macroexpand] error while expanding, returning original. env_id={id(environment)}\n", exc_info=True)
-
         return form
 
 
@@ -383,18 +428,10 @@ def macroexpand(form, environment=None):
 def macroexpand_1(form, environment=None):
     """Expand macros once."""
     try:
-        from .evaluation_core import eval as _eval
-        from .core import cons
-        op = lisptype.LispSymbol('MACROEXPAND-1')
-        call = cons(op, cons(form, lisptype.NIL))
-        expanded = _eval(call, environment)
-        # If evaluator returns multiple-values as a tuple, return first
-        if isinstance(expanded, tuple) and len(expanded) >= 1:
-            return expanded[0]
+        expanded, _did = _direct_macroexpand_1(form, environment)
         return expanded
     except Exception:
         logger.error(f"[macroexpand-1] error while expanding form env_id={id(environment)}\n", exc_info=True)
-
         return form
 
 

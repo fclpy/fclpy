@@ -583,6 +583,16 @@ def _create_macro_function(macro_name, lambda_list, body, env):
         # Create a new environment extending the definition environment
         macro_env = lisptype.Environment(parent=env)
 
+        # Detect optional trailing expansion-time Environment argument.
+        # The macroexpander may invoke the macro callable with the
+        # expansion environment as the last positional argument. If so,
+        # use it for &ENVIRONMENT bindings; otherwise use the captured
+        # definition environment.
+        expansion_env = env
+        if len(call_args) > 0 and isinstance(call_args[-1], lisptype.Environment):
+            expansion_env = call_args[-1]
+            call_args = tuple(call_args[:-1])
+
         # Normalize NIL symbol arguments to the canonical NIL object
         new_args = []
         for a in call_args:
@@ -604,9 +614,12 @@ def _create_macro_function(macro_name, lambda_list, body, env):
                 macro_env.add_variable(whole_param, lisptype.NIL)
                 arg_idx = 1
         
-        # Handle &ENVIRONMENT parameter - bind it to the current environment
+        # Bind &ENVIRONMENT to the expansion-time environment if provided
+        # The macro callable may be invoked with an extra trailing Environment
+        # argument by the macroexpander. If so, prefer that; otherwise fall
+        # back to the environment captured at definition time.
         if environment_param is not None:
-            macro_env.add_variable(environment_param, env)
+            macro_env.add_variable(environment_param, expansion_env)
         
         # Bind required parameters
         for param in required_params:
@@ -892,6 +905,10 @@ def _create_macro_function(macro_name, lambda_list, body, env):
     setattr(macro_callable, '__is_macro__', True)
     if isinstance(parsed_params, dict) and parsed_params.get('whole') is not None:
         setattr(macro_callable, '__expects_whole__', True)
+    # Indicate that this macro function expects an expansion-time environment
+    # if the lambda-list contained &ENVIRONMENT
+    if environment_param is not None:
+        setattr(macro_callable, '__expects_environment__', True)
     
     # Store docstring if present
     if docstring and isinstance(macro_name, lisptype.LispSymbol):
@@ -1005,10 +1022,20 @@ def eval_macroexpand_1(form, env):
     
     # If there's a non-nil tail, that's an error, but for now just ignore it
     try:
-        # If macro callable expects the whole form (via &WHOLE), pass it
-        if getattr(macro_func, '__expects_whole__', False):
-            return macro_func(form_to_expand, *args_list)
-        return macro_func(*args_list)
+        expects_whole = getattr(macro_func, '__expects_whole__', False)
+        expects_env = getattr(macro_func, '__expects_environment__', False)
+
+        # Build call arguments based on macro function expectations
+        call_args = []
+        if expects_whole:
+            call_args.append(form_to_expand)
+        call_args.extend(args_list)
+
+        # If macro expects expansion-time environment, append it as trailing arg
+        if expects_env:
+            call_args.append(env)
+
+        return macro_func(*call_args)
     except Exception:
         # If macro expansion fails, return form unchanged
         return form_to_expand
@@ -1396,6 +1423,10 @@ def eval_proclaim(form, env):
 
     args = cdr(form)
 
+    # PROCLAIM must have at least one specifier
+    if args is None or args is lisptype.NIL:
+        raise lisptype.LispProgramError("PROCLAIM requires at least one declaration specifier")
+
     # Get the global/root environment to store effects
     global_env = env
     while global_env.parent is not None:
@@ -1404,11 +1435,7 @@ def eval_proclaim(form, env):
     while _consp_internal(args):
         spec_expr = car(args)
         # Evaluate the spec expression so backquote/unquote is handled
-        try:
-            spec = lisp_eval(spec_expr, env)
-        except Exception:
-            # If evaluation fails, skip this spec (maintain robustness)
-            spec = None
+        spec = lisp_eval(spec_expr, env)
 
         if _consp_internal(spec):
             spec_type = car(spec)

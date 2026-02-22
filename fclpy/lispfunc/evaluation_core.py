@@ -1254,14 +1254,26 @@ def eval(form, env=None):
                     raw_args.append(car(current))
                     current = cdr(current)
                 try:
-                    # If the macro expects the whole form (via &WHOLE), pass it
+                    expects_whole = getattr(func_binding, '__expects_whole__', False)
+                    expects_env = getattr(func_binding, '__expects_environment__', False)
+                    
+                    # Build call arguments based on macro function expectations
+                    call_args = []
+                    if expects_whole:
+                        call_args.append(form)
+                    call_args.extend(raw_args)
+                    
+                    # If macro expects expansion-time environment, append it as trailing arg
+                    if expects_env:
+                        call_args.append(env)
+                    
+                    expanded = func_binding(*call_args)
+                except TypeError:
+                    # Defensive fallback: call without whole/env if signature mismatch
                     if getattr(func_binding, '__expects_whole__', False):
                         expanded = func_binding(form, *raw_args)
                     else:
                         expanded = func_binding(*raw_args)
-                except TypeError:
-                    # Defensive fallback: call without whole if signature mismatch
-                    expanded = func_binding(*raw_args)
 
                 # Evaluate the expansion in the current environment
                 return eval(expanded, env)
