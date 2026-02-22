@@ -1384,6 +1384,52 @@ def eval_declaim(form, env):
     return lisptype.NIL
 
 
+def eval_proclaim(form, env):
+    """Evaluate PROCLAIM special form.
+
+    PROCLAIM takes declaration specifiers which may need evaluation
+    (for example a backquoted form with unquote). Evaluate each spec
+    in the current environment and apply it globally (similar to
+    DECLAIM but evaluating the spec forms first).
+    """
+    from .evaluation_core import eval as lisp_eval
+
+    args = cdr(form)
+
+    # Get the global/root environment to store effects
+    global_env = env
+    while global_env.parent is not None:
+        global_env = global_env.parent
+
+    while _consp_internal(args):
+        spec_expr = car(args)
+        # Evaluate the spec expression so backquote/unquote is handled
+        try:
+            spec = lisp_eval(spec_expr, env)
+        except Exception:
+            # If evaluation fails, skip this spec (maintain robustness)
+            spec = None
+
+        if _consp_internal(spec):
+            spec_type = car(spec)
+            if isinstance(spec_type, lisptype.LispSymbol):
+                spec_name = spec_type.name.upper()
+                if spec_name == 'OPTIMIZE':
+                    _store_optimization_declaration(global_env, spec)
+                elif spec_name == 'SPECIAL':
+                    _store_special_declaration(global_env, spec)
+                else:
+                    if not hasattr(global_env, '_global_declarations'):
+                        global_env._global_declarations = {}
+                    if spec_name not in global_env._global_declarations:
+                        global_env._global_declarations[spec_name] = []
+                    global_env._global_declarations[spec_name].append(spec)
+
+        args = cdr(args)
+
+    return lisptype.NIL
+
+
 def _store_optimization_declaration(env, spec):
     """Helper to store OPTIMIZE declaration on environment."""
     # OPTIMIZE spec format: (OPTIMIZE (quality level) ...)

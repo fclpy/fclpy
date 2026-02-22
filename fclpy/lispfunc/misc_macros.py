@@ -293,10 +293,11 @@ def get_setf_expansion(place, environment=None):
     return [], [], [], place, place
 
 
-@_registry.cl_function('PROCLAIM')
-def proclaim(declaration_specifier):
-    """Global proclamation."""
-    return None
+@_registry.cl_special('PROCLAIM')
+def proclaim(form):
+    """Handle PROCLAIM as a special form so declaration specifiers
+    are not evaluated. Treat as a no-op and return NIL."""
+    return lisptype.NIL
 
 
 def describe(object, stream=None):

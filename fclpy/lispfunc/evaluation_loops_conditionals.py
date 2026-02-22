@@ -334,10 +334,45 @@ def eval_let(form, env):
     import fclpy.state as state
     old_package = None
     has_package_binding = False
-    
+    # Determine the global/root environment for special-variable checks
+    global_env = env
+    while global_env.parent is not None:
+        global_env = global_env.parent
+
+    # Collect any local DECLARE (SPECIAL ...) entries at start of body
+    local_specials = set()
+    decl_cursor = body
+    while _consp_internal(decl_cursor):
+        first = car(decl_cursor)
+        if (_consp_internal(first) and isinstance(car(first), lisptype.LispSymbol) and car(first).name == 'DECLARE'):
+            # iterate over declaration specs inside this DECLARE
+            specs = cdr(first)
+            while _consp_internal(specs):
+                spec = car(specs)
+                if (_consp_internal(spec) and isinstance(car(spec), lisptype.LispSymbol) and car(spec).name == 'SPECIAL'):
+                    # add all symbols in (SPECIAL ...)
+                    s = cdr(spec)
+                    while _consp_internal(s):
+                        sym = car(s)
+                        if isinstance(sym, lisptype.LispSymbol):
+                            local_specials.add(sym.name)
+                        s = cdr(s)
+                specs = cdr(specs)
+            # move to next top-level form (in case multiple DECLAREs present)
+            decl_cursor = cdr(decl_cursor)
+        else:
+            break
+
     for var, value in bindings_list:
         if isinstance(var, lisptype.LispSymbol):
-            let_env.add_variable(var, value)
+            # If this symbol has been declared SPECIAL locally or globally,
+            # bind it in the global environment (dynamic binding). Otherwise
+            # bind lexically in let_env.
+            if var.name in local_specials or (hasattr(global_env, '_special_variables') and var.name in global_env._special_variables):
+                global_env.add_variable(var, value)
+            else:
+                let_env.add_variable(var, value)
+
             # Handle *PACKAGE* special variable - update state.current_package
             if var.name == '*PACKAGE*' and isinstance(value, lisptype.Package):
                 old_package = getattr(state, 'current_package', None)
@@ -390,6 +425,27 @@ def eval_letstar(form, env):
     old_package = getattr(state, 'current_package', None)
     has_package_binding = False
     
+    # Collect any local DECLARE (SPECIAL ...) entries at start of body
+    local_specials = set()
+    decl_cursor = body
+    while _consp_internal(decl_cursor):
+        first = car(decl_cursor)
+        if (_consp_internal(first) and isinstance(car(first), lisptype.LispSymbol) and car(first).name == 'DECLARE'):
+            specs = cdr(first)
+            while _consp_internal(specs):
+                spec = car(specs)
+                if (_consp_internal(spec) and isinstance(car(spec), lisptype.LispSymbol) and car(spec).name == 'SPECIAL'):
+                    s = cdr(spec)
+                    while _consp_internal(s):
+                        sym = car(s)
+                        if isinstance(sym, lisptype.LispSymbol):
+                            local_specials.add(sym.name)
+                        s = cdr(s)
+                specs = cdr(specs)
+            decl_cursor = cdr(decl_cursor)
+        else:
+            break
+
     # Process bindings sequentially - each can see previous ones
     current = bindings_form
     while _consp_internal(current):
@@ -400,7 +456,15 @@ def eval_letstar(form, env):
             # Evaluate init in CURRENT environment (with previous bindings)
             value = eval(init_form, letstar_env)
             if isinstance(var, lisptype.LispSymbol):
-                letstar_env.add_variable(var, value)
+                # If declared SPECIAL globally, bind into the global environment
+                # to provide dynamic semantics; otherwise bind lexically.
+                global_env = env
+                while global_env.parent is not None:
+                    global_env = global_env.parent
+                if var.name in local_specials or (hasattr(global_env, '_special_variables') and var.name in global_env._special_variables):
+                    global_env.add_variable(var, value)
+                else:
+                    letstar_env.add_variable(var, value)
                 # Handle *PACKAGE* special variable - update state.current_package
                 if var.name == '*PACKAGE*' and isinstance(value, lisptype.Package):
                     if not has_package_binding:

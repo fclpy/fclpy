@@ -26,6 +26,11 @@ Example: If log ends with `DEFMACRO.10 failed`, the crashing test is `DEFMACRO.1
 
 **If unsure:** Read the stderr traceback to see which test raised the exception.
 
+If the crashed test cannot be identified from the because the last completed test is also the final test listed in the .lsp file, then determine the test order using doit.log.
+
+The file doit.log contains the execution output from a Lisp process that ran all tests sequentially and can be used to identify the test that was running when the crash occurred.
+
+
 ### 3. Isolate & Reproduce
 
 Modify `run_do_test.py` to run only the suspected test:

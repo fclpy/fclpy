@@ -771,6 +771,9 @@ def eval(form, env=None):
                 return eval_declare(form, env)
             elif operator.name == 'DECLAIM':
                 return eval_declaim(form, env)
+            elif operator.name == 'PROCLAIM':
+                from .evaluation_special_forms import eval_proclaim
+                return eval_proclaim(form, env)
             elif operator.name == 'MACROEXPAND-1':
                 return eval_macroexpand_1(form, env)
             elif operator.name == 'MACRO-FUNCTION':
