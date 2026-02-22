@@ -16,12 +16,19 @@ if os.path.exists(init_lsp):
 else:
 	print('init.lsp not found; continuing')
 
-# test_lisp = "(in-package :cl-test) (do-test 'char=.1)"
-# test_lisp = "(in-package :cl-test) (do-test 'symbol-&allow-other-keys)"
-
-# Test all eval error tests
-# test_lisp = "(in-package :cl-test) (progn (do-test 'eval.error.1) (do-test 'eval.error.2) (do-test 'eval.error.3) (do-test 'eval.error.4))"
-test_lisp = "(in-package :cl-test) (do-test 'macroexpand-1.error.1)"
+# Allow specifying a test on the command line. If the first argument
+# starts with '(' we treat it as a full Lisp form to evaluate. Otherwise
+# we treat it as a test name and wrap it in the usual (in-package ...
+# (do-test 'NAME)) form to run tests from the cl-test package.
+if len(sys.argv) > 1:
+	arg = sys.argv[1]
+	if arg.strip().startswith('('):
+		test_lisp = arg
+	else:
+		test_lisp = "(in-package :cl-test) (do-test '%s)" % arg
+else:
+	# Default test when no arg provided
+	test_lisp = "(in-package :cl-test) (do-test 'macroexpand-1.error.1)"
 
 print("Running %s" % test_lisp)
 res = eval_string(test_lisp, env)

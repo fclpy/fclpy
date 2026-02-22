@@ -1065,16 +1065,68 @@ def eval_macro_function(form, env):
     
     if not isinstance(symbol, lisptype.LispSymbol):
         return lisptype.NIL
-    
-    # Try to find the function
+
+    # Try to find the function in the environment first
     func = env.find_func(symbol)
-    if not func or not callable(func):
-        return lisptype.NIL
-    
-    # Check if it's a macro
-    if getattr(func, '__is_macro__', False):
+
+    # If environment binding is a macro callable, return it immediately
+    if callable(func) and getattr(func, '__is_macro__', False):
         return func
-    
+
+    # Otherwise fall back to the function registry
+    entry = None
+    try:
+        from . import registry as _registry
+        entry = _registry.function_registry.get(symbol.name)
+    except Exception:
+        entry = None
+
+    if entry:
+        # If the registry entry stores the actual Python callable, prefer it
+        if getattr(entry, 'func', None) is not None:
+            candidate = entry.func
+            if callable(candidate) and getattr(candidate, '__is_macro__', False):
+                return candidate
+        # Otherwise try to resolve by py_name (modules may register py_name)
+        py_name = entry.get('py_name') if hasattr(entry, 'get') else getattr(entry, 'py_name', None)
+        if py_name:
+            try:
+                import importlib
+                import fclpy.lispfunc as lispfunc_mod
+                candidate = getattr(lispfunc_mod, py_name, None)
+                if candidate is None:
+                    # Try loading known submodules to find implementation
+                    for sub in ('core', 'math', 'sequences', 'vectors', 'streams', 'pathnames', 'hashtables', 'evaluation', 'comparison', 'characters', 'io', 'io_read', 'io_write', 'utilities', 'classes', 'misc_macros'):
+                        try:
+                            mod = importlib.import_module(f'fclpy.lispfunc.{sub}')
+                            candidate = getattr(mod, py_name, None)
+                            if candidate:
+                                try:
+                                    setattr(lispfunc_mod, py_name, candidate)
+                                except Exception:
+                                    pass
+                                break
+                        except Exception:
+                            continue
+                if callable(candidate) and getattr(candidate, '__is_macro__', False):
+                    return candidate
+            except Exception:
+                pass
+
+    # As a last resort, look for a pure expansion function named
+    # `_<lowercase-symbol>_expander` (returns a Lisp form, not a value).
+    # We must NOT wrap the `eval_<name>` handler because those handlers
+    # evaluate the expansion and return a value; the macroexpander would
+    # then evaluate the value a second time causing double-evaluation.
+    try:
+        import fclpy.lispfunc.evaluation_special_forms as _self_mod
+        expander_name = f"_{symbol.name.lower()}_expander"
+        expander_fn = getattr(_self_mod, expander_name, None)
+        if callable(expander_fn) and getattr(expander_fn, '__is_macro__', False):
+            return expander_fn
+    except Exception:
+        pass
+
     return lisptype.NIL
 
 
@@ -1934,51 +1986,68 @@ def eval_defstruct(form, env):
     return struct_name
 
 
+def _pop_expander(place, *_rest):
+    """POP macro expander: return an expansion form for (POP place).
+
+    This is the callable returned by (MACRO-FUNCTION 'POP).  It is flagged
+    with __is_macro__ so the macro-expander recognises it.
+
+    For a simple symbol place we expand into:
+        (LET ((#:tmp (CAR place)))
+          (SETQ place (CDR place))
+          #:tmp)
+    """
+    from . import utilities_symbols as _utils
+
+    if isinstance(place, lisptype.LispSymbol):
+        tmp = _utils.gensym()
+        car_call  = lisptype.lispCons(lisptype.LispSymbol('CAR'),
+                        lisptype.lispCons(place, lisptype.NIL))
+        binding   = lisptype.lispCons(tmp,
+                        lisptype.lispCons(car_call, lisptype.NIL))
+        bindings  = lisptype.lispCons(binding, lisptype.NIL)
+        cdr_call  = lisptype.lispCons(lisptype.LispSymbol('CDR'),
+                        lisptype.lispCons(place, lisptype.NIL))
+        setq_call = lisptype.lispCons(lisptype.LispSymbol('SETQ'),
+                        lisptype.lispCons(place,
+                            lisptype.lispCons(cdr_call, lisptype.NIL)))
+        body      = lisptype.lispCons(setq_call,
+                        lisptype.lispCons(tmp, lisptype.NIL))
+        return lisptype.lispCons(lisptype.LispSymbol('LET'),
+                   lisptype.lispCons(bindings, body))
+
+    raise lisptype.LispNotImplementedError(f"POP: unsupported place form: {place}")
+
+# Mark as a proper macro callable and register it so (MACRO-FUNCTION 'POP) returns it.
+_pop_expander.__is_macro__ = True
+_registry.function_registry['POP'] = _registry.RegistryEntry(
+    name='POP',
+    py_name='_pop_expander',
+    kind='macro',
+    func=_pop_expander,
+)
+
+
 def eval_pop(form, env):
     """Evaluate POP special form (macro).
-    
-    (POP place) - Remove and return the first element from the list stored in place.
-    
-    POP is a macro that:
-    1. Gets the value of place (which must be a list)
-    2. Returns CAR of that list  
-    3. Sets place to CDR of that list
-    
-    For simple variable places, this is:
-        (let ((result (car place)))
-          (setq place (cdr place))
-          result)
+
+    (POP place) — Remove and return the first element from the list stored
+    in place.  This handler is called directly by the evaluator fast-path;
+    it builds the macro expansion and immediately evaluates it so that it
+    returns a *value*, not a form.
     """
     from .evaluation_core import eval
-    from .core import car, cdr
-    
+
     args = cdr(form)
     if not _consp_internal(args):
         raise lisptype.LispNotImplementedError("POP requires a place argument")
-    
+
     place = car(args)
-    
-    # For simple variable places
+
     if isinstance(place, lisptype.LispSymbol):
-        # Get the current value
-        current_value = env.find_variable(place)
-        
-        if current_value is None:
-            return lisptype.NIL
-        
-        # Get CAR (first element)
-        if _consp_internal(current_value):
-            result = car(current_value)
-            # Set the variable to CDR
-            rest = cdr(current_value)
-            env.set_variable(place, rest)
-            return result
-        else:
-            # Not a cons, nothing to pop
-            return lisptype.NIL
-    
-    # For other place forms (like (car x), (gethash key table)), 
-    # we would need more complex handling
+        let_form = _pop_expander(place)
+        return eval(let_form, env)
+
     raise lisptype.LispNotImplementedError(f"POP not implemented for place: {place}")
 
 

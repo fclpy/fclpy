@@ -545,6 +545,21 @@ def eval(form, env=None):
                                     env.add_function(sym, result)
                                 else:
                                     raise lisptype.LispError("SETF SYMBOL-FUNCTION: requires a symbol")
+                            elif op_name == 'MACRO-FUNCTION':
+                                # (SETF (MACRO-FUNCTION sym) val) should install a macro
+                                # Install into the global (root) environment so later
+                                # EVAL/MACROEXPAND can find the macro when expanding.
+                                sym = eval(car(place_args), env)
+                                if isinstance(sym, lisptype.LispSymbol):
+                                    global_env = env
+                                    while global_env.parent is not None:
+                                        global_env = global_env.parent
+                                    global_env.add_function(sym, result)
+                                    # Also add to current env for immediate visibility
+                                    if env is not global_env:
+                                        env.add_function(sym, result)
+                                else:
+                                    raise lisptype.LispError("SETF MACRO-FUNCTION: requires a symbol")
                             elif op_name == 'SYMBOL-PLIST':
                                 sym = eval(car(place_args), env)
                                 if isinstance(sym, lisptype.LispSymbol):
