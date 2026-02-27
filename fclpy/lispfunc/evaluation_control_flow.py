@@ -21,7 +21,8 @@ def eval_block(form, env):
     block_name = car(args)
     body_forms = cdr(args)
     
-    if not isinstance(block_name, lisptype.LispSymbol):
+    # Block names must be symbols (including NIL, which is a symbol in Common Lisp)
+    if not (isinstance(block_name, lisptype.LispSymbol) or block_name is None or block_name == lisptype.NIL):
         raise lisptype.LispNotImplementedError(f"BLOCK name must be a symbol, got {block_name}")
     
     try:
@@ -34,9 +35,16 @@ def eval_block(form, env):
         return result
     except ReturnFromException as e:
         # Check if this exception is for our block
-        if e.tag == block_name or (isinstance(e.tag, lisptype.LispSymbol) and 
-                                    isinstance(block_name, lisptype.LispSymbol) and
-                                    e.tag.name == block_name.name):
+        # Need to handle both symbol names and NIL
+        block_match = False
+        if e.tag == block_name:
+            block_match = True
+        elif isinstance(e.tag, lisptype.LispSymbol) and isinstance(block_name, lisptype.LispSymbol):
+            block_match = (e.tag.name == block_name.name)
+        elif (e.tag is None or e.tag == lisptype.NIL) and (block_name is None or block_name == lisptype.NIL):
+            block_match = True
+        
+        if block_match:
             return e.value
         else:
             # Not for us, re-raise for outer block
@@ -57,7 +65,8 @@ def eval_return_from(form, env):
     block_name = car(args)
     value_forms = cdr(args)
     
-    if not isinstance(block_name, lisptype.LispSymbol):
+    # Block names must be symbols (including NIL, which is a symbol in Common Lisp)
+    if not (isinstance(block_name, lisptype.LispSymbol) or block_name is None or block_name == lisptype.NIL):
         raise lisptype.LispNotImplementedError(f"RETURN-FROM name must be a symbol, got {block_name}")
     
     # Evaluate the value form (default to NIL)
@@ -68,6 +77,38 @@ def eval_return_from(form, env):
     
     # Raise exception to exit the block
     raise ReturnFromException(block_name, value)
+
+
+@_registry.cl_macro('RETURN', documentation='RETURN macro: exits innermost NIL block')
+def return_macro_expander(*args):
+    """RETURN macro expander: converts (RETURN [value]) to (RETURN-FROM NIL [value])
+    
+    RETURN is equivalent to RETURN-FROM with NIL as the block name.
+    Macro arguments: optional value form)
+    """
+    # Validate argument count (0 or 1 argument)
+    if len(args) > 1:
+        raise lisptype.LispProgramError(
+            message=f"RETURN macro takes 0 or 1 argument, got {len(args)}"
+        )
+    
+    # Build expansion: (RETURN-FROM NIL [value])
+    if args:
+        # (RETURN value) -> (RETURN-FROM NIL value)
+        value_form = args[0]
+        return lisptype.lispCons(
+            lisptype.LispSymbol('RETURN-FROM'),
+            lisptype.lispCons(
+                lisptype.NIL,
+                lisptype.lispCons(value_form, lisptype.NIL)
+            )
+        )
+    else:
+        # (RETURN) -> (RETURN-FROM NIL)
+        return lisptype.lispCons(
+            lisptype.LispSymbol('RETURN-FROM'),
+            lisptype.lispCons(lisptype.NIL, lisptype.NIL)
+        )
 
 
 def eval_catch(form, env):
