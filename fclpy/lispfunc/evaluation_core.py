@@ -1655,6 +1655,29 @@ def apply(function, *args):
     if isinstance(function, lisptype.MultipleValues):
         function = function.get_primary()
     
+    # If function is a symbol, look up its function binding
+    if isinstance(function, lisptype.LispSymbol):
+        env = state.current_environment
+        if env is not None:
+            func = env.find_func(function)
+            if func is not None:
+                function = func
+            else:
+                raise ConditionException(
+                    lisptype.UndefinedFunction(name=function.name),
+                    recoverable=False
+                )
+        else:
+            raise ConditionException(
+                lisptype.UndefinedFunction(name=function.name),
+                recoverable=False
+            )
+    
+    # If function is nil or otherwise not callable, signal a PROGRAM-ERROR
+    if function is None or function == lisptype.NIL or not callable(function):
+        condition = lisptype.ProgramError(message=f"APPLY requires a function designator, got: {function}")
+        raise ConditionException(condition, recoverable=False)
+    
     try:
         if args and hasattr(args[-1], '__iter__'):
             # Last argument is a list of arguments
