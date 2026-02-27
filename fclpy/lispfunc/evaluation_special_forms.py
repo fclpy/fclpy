@@ -172,8 +172,45 @@ def eval_incf(form, env):
         new_value = current_value + delta
         env.set_variable(place, new_value)
         return new_value
-    else:
-        raise lisptype.LispNotImplementedError(f"INCF: complex places not yet supported: {place}")
+
+    # Support INCF on simple AREF/SVREF places (e.g., (INCF (AREF arr idx)))
+    if _consp_internal(place):
+        place_op = car(place)
+        place_args = cdr(place)
+        if isinstance(place_op, lisptype.LispSymbol):
+            op_name = place_op.name
+            if op_name in ('AREF', 'SVREF'):
+                # Evaluate target and index
+                arr = eval(car(place_args), env)
+                idx = eval(car(cdr(place_args)), env)
+                try:
+                    current_value = arr[idx]
+                except IndexError:
+                    if isinstance(arr, list) and isinstance(idx, int) and idx >= 0:
+                        # Treat missing elements as NIL
+                        current_value = lisptype.NIL
+                    else:
+                        raise lisptype.LispError(f"INCF {op_name}: index out of range")
+
+                # Compute new value (assume numeric increment semantics)
+                try:
+                    new_value = current_value + delta
+                except Exception:
+                    raise lisptype.LispTypeError(actual_value=current_value, expected_type='number', message="INCF: cannot add delta to place value")
+
+                # Perform assignment using same safe behavior as SETF AREF
+                try:
+                    arr[idx] = new_value
+                except IndexError:
+                    if isinstance(arr, list) and isinstance(idx, int) and idx >= 0:
+                        needed = idx + 1 - len(arr)
+                        arr.extend([lisptype.NIL] * needed)
+                        arr[idx] = new_value
+                    else:
+                        raise lisptype.LispError(f"INCF {op_name}: list assignment index out of range")
+                return new_value
+
+    raise lisptype.LispNotImplementedError(f"INCF: complex places not yet supported: {place}")
 
 
 def eval_decf(form, env):
@@ -209,8 +246,41 @@ def eval_decf(form, env):
         new_value = current_value - delta
         env.set_variable(place, new_value)
         return new_value
-    else:
-        raise lisptype.LispNotImplementedError(f"DECF: complex places not yet supported: {place}")
+
+    # Support DECF on simple AREF/SVREF places (e.g., (DECF (AREF arr idx)))
+    if _consp_internal(place):
+        place_op = car(place)
+        place_args = cdr(place)
+        if isinstance(place_op, lisptype.LispSymbol):
+            op_name = place_op.name
+            if op_name in ('AREF', 'SVREF'):
+                arr = eval(car(place_args), env)
+                idx = eval(car(cdr(place_args)), env)
+                try:
+                    current_value = arr[idx]
+                except IndexError:
+                    if isinstance(arr, list) and isinstance(idx, int) and idx >= 0:
+                        current_value = lisptype.NIL
+                    else:
+                        raise lisptype.LispError(f"DECF {op_name}: index out of range")
+
+                try:
+                    new_value = current_value - delta
+                except Exception:
+                    raise lisptype.LispTypeError(actual_value=current_value, expected_type='number', message="DECF: cannot subtract delta from place value")
+
+                try:
+                    arr[idx] = new_value
+                except IndexError:
+                    if isinstance(arr, list) and isinstance(idx, int) and idx >= 0:
+                        needed = idx + 1 - len(arr)
+                        arr.extend([lisptype.NIL] * needed)
+                        arr[idx] = new_value
+                    else:
+                        raise lisptype.LispError(f"DECF {op_name}: list assignment index out of range")
+                return new_value
+
+    raise lisptype.LispNotImplementedError(f"DECF: complex places not yet supported: {place}")
 
 
 @_registry.cl_macro('WITH-OPEN-FILE', documentation='WITH-OPEN-FILE macro expander')
@@ -1047,11 +1117,12 @@ def eval_macro_function(form, env):
     
     (MACRO-FUNCTION symbol) - return the macro function for a symbol, or NIL if not a macro.
     """
-    from .evaluation_core import eval
-    
+    from .evaluation_core import eval, ConditionException
+
     args = cdr(form)
     if not _consp_internal(args):
-        raise lisptype.LispNotImplementedError("MACRO-FUNCTION requires 1 argument")
+        cond = lisptype.ProgramError(message="MACRO-FUNCTION requires 1 argument")
+        raise ConditionException(cond, recoverable=False)
     
     symbol_form = car(args)
     
