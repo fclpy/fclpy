@@ -15,6 +15,7 @@ from fclpy.lisptype import resolve_environment, LispEnvironmentError
 import inspect
 from functools import lru_cache
 import sys
+from fclpy import classes
 
 # Register special operator handlers into the builtin registry
 from . import registry as _registry
@@ -566,6 +567,27 @@ def eval(form, env=None):
                                     env.add_function(sym, result)
                                 else:
                                     raise lisptype.LispError("SETF FDEFINITION: requires a symbol")
+                            elif op_name == 'FIND-CLASS':
+                                # (SETF (FIND-CLASS name) class) registers a class with a new name
+                                place_name = eval(car(place_args), env)  # e.g., n3
+                                if isinstance(place_name, lisptype.LispSymbol):
+                                    # result is the class object to assign
+                                    # We need to register it under the new name
+                                    if isinstance(result, classes.LispClass):
+                                        # Update the class's name to the target name
+                                        original_name = result.name
+                                        result.name = place_name
+                                        # Register under the new name
+                                        classes.register_class(result)
+                                        # Also register under original name if different (aliases)
+                                        if original_name != place_name:
+                                            result.name = original_name
+                                            classes.register_class(result)
+                                            result.name = place_name  # Restore target name
+                                    else:
+                                        raise lisptype.LispError("SETF FIND-CLASS: value must be a class")
+                                else:
+                                    raise lisptype.LispError("SETF FIND-CLASS: place name must be a symbol")
                             elif op_name == 'MACRO-FUNCTION':
                                 # (SETF (MACRO-FUNCTION sym) val) should install a macro
                                 # Install into the global (root) environment so later
@@ -802,6 +824,27 @@ def eval(form, env=None):
                                     env.add_function(sym, value_result)
                                 else:
                                     raise lisptype.LispError("PSETF FDEFINITION: requires a symbol")
+                            elif op_name == 'FIND-CLASS':
+                                # (PSETF (FIND-CLASS name) class) registers a class with a new name
+                                place_name = eval(car(place_args), env)  # e.g., n3
+                                if isinstance(place_name, lisptype.LispSymbol):
+                                    # value_result is the class object to assign
+                                    # We need to register it under the new name
+                                    if isinstance(value_result, classes.LispClass):
+                                        # Update the class's name to the target name
+                                        original_name = value_result.name
+                                        value_result.name = place_name
+                                        # Register under the new name
+                                        classes.register_class(value_result)
+                                        # Also register under original name if different (aliases)
+                                        if original_name != place_name:
+                                            value_result.name = original_name
+                                            classes.register_class(value_result)
+                                            value_result.name = place_name  # Restore target name
+                                    else:
+                                        raise lisptype.LispError("PSETF FIND-CLASS: value must be a class")
+                                else:
+                                    raise lisptype.LispError("PSETF FIND-CLASS: place name must be a symbol")
                             elif op_name == 'NTH':
                                 n = eval(car(place_args), env)
                                 lst = eval(car(cdr(place_args)), env)
@@ -818,6 +861,19 @@ def eval(form, env=None):
                                 vec = eval(car(place_args), env)
                                 if hasattr(vec, 'fill_pointer'):
                                     vec.fill_pointer = value_result
+                            elif op_name == 'MACRO-FUNCTION':
+                                # (PSETF (MACRO-FUNCTION sym) val) should install a macro
+                                sym = eval(car(place_args), env)
+                                if isinstance(sym, lisptype.LispSymbol):
+                                    global_env = env
+                                    while global_env.parent is not None:
+                                        global_env = global_env.parent
+                                    global_env.add_function(sym, value_result)
+                                    # Also add to current env for immediate visibility
+                                    if env is not global_env:
+                                        env.add_function(sym, value_result)
+                                else:
+                                    raise lisptype.LispError("PSETF MACRO-FUNCTION: requires a symbol")
                             else:
                                 # For other complex places, try generic handling
                                 pass
