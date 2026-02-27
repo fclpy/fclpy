@@ -248,14 +248,19 @@ def make_array(dimensions, element_type=None, initial_element=None, initial_cont
     if isinstance(dimensions, int):
         if initial_contents is not None:
             contents = lisp_list_to_python_list(initial_contents)
-            if adjustable:
-                adj_vec = AdjustableVector(capacity=dimensions, fill_pointer=fill_pointer)
+            if adjustable or fill_pointer is not None:
+                adj_vec = AdjustableVector(capacity=dimensions, fill_pointer=None)
+                # Set fill_pointer to capacity temporarily to allow initialization
+                old_fp = adj_vec.fill_pointer
+                adj_vec.fill_pointer = dimensions
                 for i, val in enumerate(contents[:dimensions]):
                     adj_vec[i] = val
+                # Now set the actual fill_pointer
+                adj_vec.fill_pointer = fill_pointer if fill_pointer is not None else dimensions
                 return adj_vec
             else:
                 return contents[:dimensions] if len(contents) >= dimensions else contents + [initial_element] * (dimensions - len(contents))
-        elif adjustable:
+        elif adjustable or fill_pointer is not None:
             adj_vec = AdjustableVector(capacity=dimensions, 
                                       initial_element=initial_element,
                                       fill_pointer=fill_pointer)
@@ -272,14 +277,18 @@ def make_array(dimensions, element_type=None, initial_element=None, initial_cont
             dim = dimensions[0]
             if initial_contents is not None:
                 contents = lisp_list_to_python_list(initial_contents)
-                if adjustable:
-                    adj_vec = AdjustableVector(capacity=dim, fill_pointer=fill_pointer)
+                if adjustable or fill_pointer is not None:
+                    adj_vec = AdjustableVector(capacity=dim, fill_pointer=None)
+                    # Temporarily allow full initialization
+                    adj_vec.fill_pointer = dim
                     for i, val in enumerate(contents[:dim]):
                         adj_vec[i] = val
+                    # Set actual fill_pointer
+                    adj_vec.fill_pointer = fill_pointer if fill_pointer is not None else dim
                     return adj_vec
                 else:
                     return contents[:dim] if len(contents) >= dim else contents + [initial_element] * (dim - len(contents))
-            elif adjustable:
+            elif adjustable or fill_pointer is not None:
                 return AdjustableVector(capacity=dim, 
                                        initial_element=initial_element,
                                        fill_pointer=fill_pointer)

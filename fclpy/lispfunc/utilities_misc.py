@@ -101,6 +101,8 @@ from .misc_packages import (
 
 from .classes import defclass
 
+from .vectors import fill_pointer
+
 from .misc_macros import (
     with_accessors,
     with_compilation_unit,
@@ -198,7 +200,6 @@ from .misc_macros import (
     require,
     make_load_form,
     make_load_form_saving_slots,
-    fill_pointer,
     documentation,
     get_optimization_policy,
     is_variable_special,

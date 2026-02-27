@@ -11,6 +11,8 @@ from .sequences_search import *
 from .sequences_modify import *
 from .sequences_compose import *
 from .sequences_higher import *
+# Import make_array from vectors since sequences_higher no longer has it
+from .vectors import make_array
 
 # Comprehensive exports for backward compatibility
 __all__ = [

@@ -4,6 +4,8 @@ import functools
 from .core import cons, car, cdr, atom
 from . import registry as _registry
 import fclpy.lisptype as lisptype
+# Import make_array from vectors to avoid circular dependency
+from .vectors import make_array
 
 
 def _cons_to_list(seq):
@@ -338,38 +340,7 @@ def pushnew(item, place, **kwargs):
 
 
 # Array operations
-@_registry.cl_function('MAKE-ARRAY')
-def make_array(dimensions, **kwargs):
-    """Create array."""
-    # Handle NIL dimensions (0-dimensional array) - returns a scalar container
-    if dimensions is None or dimensions == lisptype.NIL:
-        # 0-dimensional array: just return the initial-element or None
-        return kwargs.get('initial_element', kwargs.get('initial-element', None))
-    
-    # Helper to convert dimensions to int
-    def to_int(val):
-        if hasattr(val, '__iter__') and not isinstance(val, (str, bytes)):
-            return int(val[0]) if val else 0
-        return int(val) if val else 0
-    
-    if isinstance(dimensions, int):
-        return [None] * dimensions
-    
-    # Convert lispCons to list
-    if isinstance(dimensions, lisptype.lispCons):
-        dimensions = list(dimensions)
-    
-    # Handle empty dimensions list (also 0-dimensional)
-    if not dimensions:
-        return kwargs.get('initial_element', kwargs.get('initial-element', None))
-    
-    # Multi-dimensional array - for now, nested lists
-    def make_nested(dims):
-        if len(dims) == 1:
-            return [None] * to_int(dims[0])
-        return [make_nested(dims[1:]) for _ in range(to_int(dims[0]))]
-    return make_nested(dimensions)
-
+    # make_array is now properly implemented in vectors.py
 
 @_registry.cl_function('ARRAY-DIMENSIONS')
 def array_dimensions(array):
@@ -533,8 +504,8 @@ __all__ = [
     'set_exclusive_or', 'nset_exclusive_or', 'subsetp', 'nintersection',
     # Stack operations
     'pop_fn', 'push_fn', 'pushnew',
-    # Array operations
-    'make_array', 'array_dimensions', 'arrayp', 'array_in_bounds_p',
+    # Array operations (make_array is in vectors.py)
+    'array_dimensions', 'arrayp', 'array_in_bounds_p',
     'array_displacement', 'array_dimension', 'adjust_array',
     'vectorp', 'simple_vector_p', 'bit_vector_p', 'simple_bit_vector_p',
     'aref', 'svref', 'vector_fn', 'vector_pop', 'vector_push', 'vector_push_extend',

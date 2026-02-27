@@ -560,6 +560,12 @@ def eval(form, env=None):
                                     env.add_function(sym, result)
                                 else:
                                     raise lisptype.LispError("SETF SYMBOL-FUNCTION: requires a symbol")
+                            elif op_name == 'FDEFINITION':
+                                sym = eval(car(place_args), env)
+                                if isinstance(sym, lisptype.LispSymbol):
+                                    env.add_function(sym, result)
+                                else:
+                                    raise lisptype.LispError("SETF FDEFINITION: requires a symbol")
                             elif op_name == 'MACRO-FUNCTION':
                                 # (SETF (MACRO-FUNCTION sym) val) should install a macro
                                 # Install into the global (root) environment so later
@@ -730,6 +736,95 @@ def eval(form, env=None):
                         raise lisptype.LispNotImplementedError(f"SETF: place must be a symbol or form, got {place}")
                     
                     args = cdr(cdr(args))
+                
+                return result
+            elif operator.name == 'PSETF':
+                # PSETF is like SETF but evaluates ALL values FIRST before any assignment
+                # (PSETF place1 value1 place2 value2 ...) - all values are computed first
+                args = cdr(form)
+                assignments = []  # List of (place, evaluated_value) pairs
+                
+                # First pass: collect all places and evaluate values
+                while _consp_internal(args) and _consp_internal(cdr(args)):
+                    place = car(args)
+                    value_form = car(cdr(args))
+                    value_result = eval(value_form, env)  # Evaluate all values first
+                    assignments.append((place, value_result))
+                    args = cdr(cdr(args))
+                
+                # Second pass: perform all assignments with pre-evaluated values
+                result = lisptype.NIL
+                for place, value_result in assignments:
+                    result = value_result  # Track last assigned value
+                    if isinstance(place, lisptype.LispSymbol):
+                        # Simple variable assignment
+                        env.set_variable(place, value_result)
+                    elif _consp_internal(place):
+                        # Complex place like (CAR x), (FDEFINITION sym), etc.
+                        place_op = car(place)
+                        if isinstance(place_op, lisptype.LispSymbol):
+                            op_name = place_op.name
+                            place_args = cdr(place)
+                            
+                            if op_name == 'CAR':
+                                target = eval(car(place_args), env)
+                                if _consp_internal(target):
+                                    target.car = value_result
+                                else:
+                                    raise lisptype.LispError("PSETF CAR: target is not a cons")
+                            elif op_name == 'CDR':
+                                target = eval(car(place_args), env)
+                                if _consp_internal(target):
+                                    target.cdr = value_result
+                                else:
+                                    raise lisptype.LispError("PSETF CDR: target is not a cons")
+                            elif op_name == 'AREF' or op_name == 'SVREF':
+                                arr = eval(car(place_args), env)
+                                idx = eval(car(cdr(place_args)), env)
+                                try:
+                                    arr[idx] = value_result
+                                except (TypeError, IndexError):
+                                    if isinstance(arr, list) and isinstance(idx, int) and idx >= 0:
+                                        needed = idx + 1 - len(arr)
+                                        arr.extend([lisptype.NIL] * needed)
+                                        arr[idx] = value_result
+                                    else:
+                                        raise lisptype.LispError(f"PSETF {op_name}: index out of range")
+                            elif op_name == 'SYMBOL-FUNCTION':
+                                sym = eval(car(place_args), env)
+                                if isinstance(sym, lisptype.LispSymbol):
+                                    env.add_function(sym, value_result)
+                                else:
+                                    raise lisptype.LispError("PSETF SYMBOL-FUNCTION: requires a symbol")
+                            elif op_name == 'FDEFINITION':
+                                sym = eval(car(place_args), env)
+                                if isinstance(sym, lisptype.LispSymbol):
+                                    env.add_function(sym, value_result)
+                                else:
+                                    raise lisptype.LispError("PSETF FDEFINITION: requires a symbol")
+                            elif op_name == 'NTH':
+                                n = eval(car(place_args), env)
+                                lst = eval(car(cdr(place_args)), env)
+                                current = lst
+                                for _ in range(n):
+                                    if not _consp_internal(current):
+                                        raise lisptype.LispError("PSETF NTH: index out of bounds")
+                                    current = cdr(current)
+                                if _consp_internal(current):
+                                    current.car = value_result
+                                else:
+                                    raise lisptype.LispError("PSETF NTH: index out of bounds")
+                            elif op_name == 'FILL-POINTER':
+                                vec = eval(car(place_args), env)
+                                if hasattr(vec, 'fill_pointer'):
+                                    vec.fill_pointer = value_result
+                            else:
+                                # For other complex places, try generic handling
+                                pass
+                        else:
+                            raise lisptype.LispNotImplementedError(f"PSETF: place operator must be a symbol")
+                    else:
+                        raise lisptype.LispNotImplementedError(f"PSETF: place must be a symbol or form")
                 
                 return result
             elif operator.name == 'PROGN':
@@ -1558,6 +1653,25 @@ def funcall(function, *args):
     # If function is MultipleValues, extract the primary value (single-value context)
     if isinstance(function, lisptype.MultipleValues):
         function = function.get_primary()
+    
+    # If function is a symbol, look up its function binding
+    if isinstance(function, lisptype.LispSymbol):
+        env = state.current_environment
+        if env is not None:
+            func = env.find_func(function)
+            if func is not None:
+                function = func
+            else:
+                raise ConditionException(
+                    lisptype.UndefinedFunction(name=function.name),
+                    recoverable=False
+                )
+        else:
+            raise ConditionException(
+                lisptype.UndefinedFunction(name=function.name),
+                recoverable=False
+            )
+    
     # If function is nil or otherwise not callable, signal a PROGRAM-ERROR
     if function is None or function == lisptype.NIL or not callable(function):
         condition = lisptype.ProgramError(message=f"FUNCALL requires a function designator, got: {function}")

@@ -1140,10 +1140,6 @@ def make_load_form_saving_slots(object, slot_names=None):
     return object
 
 
-@_registry.cl_function('FILL-POINTER')
-def fill_pointer(vector):
-    """Get/set fill pointer of vector."""
-    return None
 
 
 # --- Documentation ---
@@ -1330,7 +1326,6 @@ __all__ = [
     'require',
     'make_load_form',
     'make_load_form_saving_slots',
-    'fill_pointer',
     'documentation',
     'get_optimization_policy',
     'is_variable_special',
