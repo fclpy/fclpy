@@ -28,7 +28,7 @@ if len(sys.argv) > 1:
 		test_lisp = "(in-package :cl-test) (do-test '%s)" % arg
 else:
 	# Default test when no arg provided
-	test_lisp = "(in-package :cl-test) (do-test 'macroexpand-1.error.1)"
+	test_lisp = "(in-package :cl-test) (do-test 'ccase.1)"
 
 print("Running %s" % test_lisp)
 res = eval_string(test_lisp, env)

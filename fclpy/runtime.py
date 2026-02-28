@@ -19,6 +19,7 @@ import fclpy.lispfunc as lispfunc
 import fclpy.lispreader as lispreader
 from fclpy import lispenv
 from fclpy.readtable import get_current_readtable
+from fclpy.lispfunc.evaluation_core import ThrowException, ConditionException
 
 def setup_reader_macros():
     """Set up basic reader macros for parsing."""
@@ -131,6 +132,13 @@ def load_and_evaluate_file(filename, environment=None, verbose=False, timing=Fal
                     
             except EOFError:
                 break
+            except ThrowException as e:
+                # Uncaught THROW - signal a CONTROL-ERROR condition
+                control_error = lisptype.ControlError(message=f"Uncaught THROW {e.tag}")
+                raise ConditionException(control_error, recoverable=False)
+            except ConditionException:
+                # Re-raise Lisp conditions so they can be handled by Lisp code
+                raise
             except Exception as e:
                 if "reader-error" in str(e) or not content.strip():
                     break  # End of file or empty content

@@ -202,12 +202,27 @@ def eval_unwind_protect(form, env):
             current = cdr(current)
 
 
+def _make_tag_key(tag):
+    """Create a consistent key for a TAGBODY tag (symbol, number, or other atom).
+    
+    In Common Lisp, tags are atoms that can be symbols or numbers.
+    This function creates a hashable key that can be used in dictionaries.
+    """
+    if isinstance(tag, lisptype.LispSymbol):
+        return ('symbol', tag.name)
+    elif isinstance(tag, (int, float)):
+        return ('number', tag)
+    else:
+        # For other atoms, use string representation
+        return ('other', str(tag))
+
+
 def eval_tagbody(form, env):
     """Evaluate TAGBODY special form: (TAGBODY {tag | statement}*)
     
-    Establishes tags for GO to jump to. Tags are symbols; other forms are statements.
-    Executes statements in order. GO can jump to a tag, continuing from there.
-    Returns NIL.
+    Establishes tags for GO to jump to. Tags are atoms (symbols or numbers);
+    other forms are statements. Executes statements in order. GO can jump to a tag,
+    continuing from there. Returns NIL.
     """
     from .evaluation_core import eval
     
@@ -215,14 +230,15 @@ def eval_tagbody(form, env):
     
     # Collect all forms and identify tags
     forms = []
-    tag_indices = {}  # Map tag name -> index in forms list
+    tag_indices = {}  # Map tag key -> index in forms list
     
     current = args
     while _consp_internal(current):
         form_item = car(current)
-        # Tags are symbols that appear at the top level of TAGBODY
-        if isinstance(form_item, lisptype.LispSymbol):
-            tag_indices[form_item.name] = len(forms)
+        # Tags are atoms (non-lists) that appear at the top level of TAGBODY
+        if not _consp_internal(form_item):
+            tag_key = _make_tag_key(form_item)
+            tag_indices[tag_key] = len(forms)
         forms.append(form_item)
         current = cdr(current)
     
@@ -231,9 +247,11 @@ def eval_tagbody(form, env):
     while index < len(forms):
         form_item = forms[index]
         # Skip tags (they're just labels)
-        if isinstance(form_item, lisptype.LispSymbol) and form_item.name in tag_indices:
-            index += 1
-            continue
+        if not _consp_internal(form_item):
+            tag_key = _make_tag_key(form_item)
+            if tag_key in tag_indices:
+                index += 1
+                continue
         
         try:
             # Evaluate the form
@@ -241,10 +259,10 @@ def eval_tagbody(form, env):
             index += 1
         except GoException as e:
             # GO was called - find the tag and jump to it
-            tag_name = e.tag.name if hasattr(e.tag, 'name') else str(e.tag)
-            if tag_name in tag_indices:
+            tag_key = _make_tag_key(e.tag)
+            if tag_key in tag_indices:
                 # Jump to after the tag
-                index = tag_indices[tag_name] + 1
+                index = tag_indices[tag_key] + 1
             else:
                 # Tag not in this TAGBODY - re-raise for outer TAGBODY
                 raise
@@ -256,6 +274,7 @@ def eval_go(form, env):
     """Evaluate GO special form: (GO tag)
     
     Jumps to the specified tag in the lexically enclosing TAGBODY.
+    Tags are atoms (symbols, numbers, or other atoms) that must match a tag in the TAGBODY.
     """
     args = cdr(form)
     if not _consp_internal(args):
@@ -263,8 +282,10 @@ def eval_go(form, env):
     
     tag = car(args)
     
-    if not isinstance(tag, lisptype.LispSymbol):
-        raise lisptype.LispNotImplementedError(f"GO tag must be a symbol, got {tag}")
+    # Tags can be any atom (symbol, number, etc.)
+    # They are not evaluated - the tag itself is used as the target
+    if _consp_internal(tag):
+        raise lisptype.LispNotImplementedError(f"GO tag must be an atom, got {tag}")
     
     # Raise exception to be caught by enclosing TAGBODY
     raise GoException(tag)

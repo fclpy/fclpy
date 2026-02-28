@@ -4,7 +4,7 @@ import fclpy.state as state
 import fclpy.lisptype as lisptype
 from .core import car, cdr, _consp_internal
 from . import registry as _registry
-from .evaluation_core import ConditionException
+from .evaluation_core import ConditionException, ThrowException
 import re
 import fclpy.lispfunc as lispfunc
 
@@ -539,6 +539,38 @@ def eval_handler_case(form, env):
     try:
         # Try to evaluate the expression
         return eval(expression, env)
+    except ThrowException as e:
+        # Uncaught THROW - convert to a CONTROL-ERROR condition
+        control_error = lisptype.ControlError(message=f"Uncaught THROW {e.tag}")
+        ce = ConditionException(control_error, recoverable=False)
+        cond_obj = ce.condition
+        current = clauses
+        while _consp_internal(current):
+            clause = car(current)
+            if _consp_internal(clause):
+                condition_type = car(clause)
+                # Check if this clause matches the condition
+                if isinstance(condition_type, lisptype.LispSymbol):
+                    if matches_condition_type(condition_type.name, cond_obj):
+                        var_list = car(cdr(clause))
+                        clause_body = cdr(cdr(clause))
+
+                        # Create new environment with optional condition variable
+                        new_env = lisptype.Environment(parent=env)
+                        if _consp_internal(var_list):
+                            var = car(var_list)
+                            # Store the condition object in the variable
+                            new_env.add_variable(var, cond_obj)
+
+                        # Evaluate clause body
+                        result = lisptype.NIL
+                        while _consp_internal(clause_body):
+                            result = eval(car(clause_body), new_env)
+                            clause_body = cdr(clause_body)
+                        return result
+            current = cdr(current)
+        # No handler found for the condition; re-raise as ConditionException
+        raise ce
     except ConditionException as ce:
         # A Lisp condition was signaled; try to match clauses against the condition object
         cond_obj = ce.condition

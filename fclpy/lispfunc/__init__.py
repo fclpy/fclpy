@@ -204,11 +204,16 @@ def eval_string(code, env=None):
         
     Returns:
         The result of evaluating the last expression
+    
+    Raises:
+        ConditionException: For unhandled THROW with no matching CATCH
     """
     import io
     import fclpy.lispreader as lispreader
     from fclpy.readtable import get_current_readtable
     from fclpy.lispfunc.evaluation import eval as lisp_eval
+    from fclpy.lispfunc.evaluation_core import ThrowException, ConditionException
+    import fclpy.lisptype as lisptype
     
     if env is None:
         env = get_environment()
@@ -224,7 +229,13 @@ def eval_string(code, env=None):
             expr = reader.read_1()
             if expr is None:  # EOF
                 break
-            result = lisp_eval(expr, env)
+            try:
+                result = lisp_eval(expr, env)
+            except ThrowException as e:
+                # Uncaught THROW - signal a CONTROL-ERROR condition
+                # This allows Lisp handler-case to catch the error
+                control_error = lisptype.ControlError(message=f"Uncaught THROW {e.tag}")
+                raise ConditionException(control_error, recoverable=False)
         except EOFError:
             break
     
