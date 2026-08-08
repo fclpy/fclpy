@@ -230,6 +230,18 @@ def special_prog2(*args):
     raise lisptype.LispNotImplementedError('PROG2 (evaluated in evaluator)')
 
 
+@_registry.cl_special('PROG')
+def special_prog(*args):
+    """PROG special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('PROG (evaluated in evaluator)')
+
+
+@_registry.cl_special('PROG*')
+def special_prog_star(*args):
+    """PROG* special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('PROG* (evaluated in evaluator)')
+
+
 @_registry.cl_special('DEFPARAMETER')
 def special_defparameter(*args):
     """DEFPARAMETER special form (handled by evaluator)."""

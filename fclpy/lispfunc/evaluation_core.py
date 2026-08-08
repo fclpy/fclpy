@@ -275,7 +275,7 @@ def eval(form, env=None):
     )
     from .evaluation_loops_conditionals import (
         eval_when, eval_unless, eval_cond, eval_case, eval_ccase, eval_and, eval_or,
-        eval_progn, eval_locally, eval_prog1, eval_prog2, eval_time, eval_let, eval_letstar, eval_quasiquote,
+        eval_progn, eval_locally, eval_prog1, eval_prog2, eval_prog, eval_prog_star, eval_time, eval_let, eval_letstar, eval_quasiquote,
         eval_loop, eval_eval_when, eval_do, eval_do_star, eval_dolist, eval_dotimes,
         eval_do_symbols, eval_do_external_symbols, eval_do_all_symbols,
         eval_flet, eval_labels
@@ -915,6 +915,10 @@ def eval(form, env=None):
                 return eval_prog1(form, env)
             elif operator.name == 'PROG2':
                 return eval_prog2(form, env)
+            elif operator.name == 'PROG':
+                return eval_prog(form, env)
+            elif operator.name == 'PROG*':
+                return eval_prog_star(form, env)
             elif operator.name == 'TIME':
                 return eval_time(form, env)
             elif operator.name == 'DEFVAR':

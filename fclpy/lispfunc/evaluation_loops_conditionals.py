@@ -965,6 +965,58 @@ def eval_prog2(form, env):
     return result
 
 
+def _eval_prog_impl(form, env, let_symbol_name):
+    """Shared PROG/PROG* implementation.
+
+    Per ANSI, (PROG (var*) body...) is equivalent to
+    (BLOCK NIL (LET (var*) (TAGBODY . body))), and PROG* is the same with
+    LET* instead of LET. Building that expansion and delegating to the
+    existing BLOCK/LET/LET*/TAGBODY handlers keeps binding, GO-tag, and
+    implicit-NIL-block semantics consistent with those special forms.
+    """
+    from .evaluation_core import eval
+
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError(f"{let_symbol_name} requires a variable list")
+
+    varlist = car(args)
+    body = cdr(args)
+
+    # Leading (DECLARE ...) forms belong to the LET's own bindings (e.g. to
+    # mark a variable SPECIAL), not to the TAGBODY, so hoist them out of the
+    # tagbody body and place them directly in the LET body ahead of it.
+    declare_forms = []
+    while _consp_internal(body):
+        candidate = car(body)
+        if _consp_internal(candidate) and isinstance(car(candidate), lisptype.LispSymbol) and car(candidate).name == 'DECLARE':
+            declare_forms.append(candidate)
+            body = cdr(body)
+        else:
+            break
+
+    tagbody_form = cons(lisptype.LispSymbol('TAGBODY'), body)
+
+    # let_body = (declare1 declare2 ... tagbody_form)
+    let_body = cons(tagbody_form, lisptype.NIL)
+    for declare_form in reversed(declare_forms):
+        let_body = cons(declare_form, let_body)
+
+    let_form = cons(lisptype.LispSymbol(let_symbol_name), cons(varlist, let_body))
+    block_form = cons(lisptype.LispSymbol('BLOCK'), cons(lisptype.NIL, cons(let_form, lisptype.NIL)))
+    return eval(block_form, env)
+
+
+def eval_prog(form, env):
+    """Evaluate PROG special form: (BLOCK NIL (LET (var*) (TAGBODY . body)))."""
+    return _eval_prog_impl(form, env, 'LET')
+
+
+def eval_prog_star(form, env):
+    """Evaluate PROG* special form: (BLOCK NIL (LET* (var*) (TAGBODY . body)))."""
+    return _eval_prog_impl(form, env, 'LET*')
+
+
 def eval_time(form, env):
     """Evaluate TIME special form.
     
@@ -1953,6 +2005,30 @@ def eval_loop(form, env):
     return result
 
 
+def _run_with_nil_block(thunk):
+    """Run thunk(), catching a RETURN/RETURN-FROM NIL aimed at the implicit
+    NIL block that DO/DO*/DOLIST/DOTIMES establish around their loop.
+    """
+    from .evaluation_core import ReturnFromException
+    try:
+        return thunk()
+    except ReturnFromException as e:
+        tag = e.tag
+        if tag is None or tag == lisptype.NIL or (isinstance(tag, lisptype.LispSymbol) and tag.name == 'NIL'):
+            return e.value
+        raise
+
+
+def _exec_iteration_body(body, env):
+    """Execute a DO/DO*/DOLIST/DOTIMES body of {tag | statement}* forms as a
+    TAGBODY, so GO can jump between tags in the body (per ANSI, these forms
+    all accept the same tagbody-style body as TAGBODY itself).
+    """
+    from .evaluation_control_flow import eval_tagbody
+    tagbody_form = cons(lisptype.LispSymbol('TAGBODY'), body)
+    eval_tagbody(tagbody_form, env)
+
+
 def eval_do(form, env):
     """Evaluate DO special form.
     
@@ -2014,43 +2090,44 @@ def eval_do(form, env):
     loop_start_time = time.time()
     loop_iterations = 0
     warning_printed = False
-    
-    while True:
-        # Check timeout
-        loop_iterations += 1
-        if LOOP_TIMEOUT_WARNING > 0 and not warning_printed:
-            elapsed = time.time() - loop_start_time
-            if elapsed > LOOP_TIMEOUT_WARNING:
-                warning_printed = True
-                print(f"\n*** DO LOOP WARNING: Loop has been running for {elapsed:.1f}s ({loop_iterations} iterations) ***", file=sys.stderr)
-                print(f"*** DO end_test: {end_test} ***", file=sys.stderr)
-                print(f"*** DO var_specs: {var_specs} ***", file=sys.stderr)
-                sys.stderr.flush()
-        
-        # Check end-test
-        if lisptype.is_truthy(eval(end_test, loop_env)):
-            # Evaluate result forms and return last value
-            result = lisptype.NIL
-            current = result_forms
-            while _consp_internal(current):
-                result = eval(car(current), loop_env)
-                current = cdr(current)
-            return result
-        
-        # Execute body
-        current = body
-        while _consp_internal(current):
-            eval(car(current), loop_env)
-            current = cdr(current)
-        
-        # Update variables (evaluate all step forms first, then update)
-        new_values = []
-        for var, _, step_form in var_specs:
-            if step_form is not None:
-                new_values.append((var, eval(step_form, loop_env)))
-        
-        for var, value in new_values:
-            loop_env.set_variable(var, value)
+
+    def _loop():
+        nonlocal loop_iterations, warning_printed
+        while True:
+            # Check timeout
+            loop_iterations += 1
+            if LOOP_TIMEOUT_WARNING > 0 and not warning_printed:
+                elapsed = time.time() - loop_start_time
+                if elapsed > LOOP_TIMEOUT_WARNING:
+                    warning_printed = True
+                    print(f"\n*** DO LOOP WARNING: Loop has been running for {elapsed:.1f}s ({loop_iterations} iterations) ***", file=sys.stderr)
+                    print(f"*** DO end_test: {end_test} ***", file=sys.stderr)
+                    print(f"*** DO var_specs: {var_specs} ***", file=sys.stderr)
+                    sys.stderr.flush()
+
+            # Check end-test
+            if lisptype.is_truthy(eval(end_test, loop_env)):
+                # Evaluate result forms and return last value
+                result = lisptype.NIL
+                current = result_forms
+                while _consp_internal(current):
+                    result = eval(car(current), loop_env)
+                    current = cdr(current)
+                return result
+
+            # Execute body
+            _exec_iteration_body(body, loop_env)
+
+            # Update variables (evaluate all step forms first, then update)
+            new_values = []
+            for var, _, step_form in var_specs:
+                if step_form is not None:
+                    new_values.append((var, eval(step_form, loop_env)))
+
+            for var, value in new_values:
+                loop_env.set_variable(var, value)
+
+    return _run_with_nil_block(_loop)
 
 
 def eval_do_star(form, env):
@@ -2111,40 +2188,41 @@ def eval_do_star(form, env):
     loop_start_time = time.time()
     loop_iterations = 0
     warning_printed = False
-    
-    while True:
-        # Check timeout
-        loop_iterations += 1
-        if LOOP_TIMEOUT_WARNING > 0 and not warning_printed:
-            elapsed = time.time() - loop_start_time
-            if elapsed > LOOP_TIMEOUT_WARNING:
-                warning_printed = True
-                print(f"\n*** DO* LOOP WARNING: Loop has been running for {elapsed:.1f}s ({loop_iterations} iterations) ***", file=sys.stderr)
-                print(f"*** DO* end_test: {end_test} ***", file=sys.stderr)
-                print(f"*** DO* var_specs: {var_specs} ***", file=sys.stderr)
-                sys.stderr.flush()
-        
-        # Check end-test
-        if lisptype.is_truthy(eval(end_test, loop_env)):
-            # Evaluate result forms and return last value
-            result = lisptype.NIL
-            current = result_forms
-            while _consp_internal(current):
-                result = eval(car(current), loop_env)
-                current = cdr(current)
-            return result
-        
-        # Execute body
-        current = body
-        while _consp_internal(current):
-            eval(car(current), loop_env)
-            current = cdr(current)
-        
-        # Update variables sequentially
-        for var, step_form in var_specs:
-            if step_form is not None:
-                new_value = eval(step_form, loop_env)
-                loop_env.set_variable(var, new_value)
+
+    def _loop():
+        nonlocal loop_iterations, warning_printed
+        while True:
+            # Check timeout
+            loop_iterations += 1
+            if LOOP_TIMEOUT_WARNING > 0 and not warning_printed:
+                elapsed = time.time() - loop_start_time
+                if elapsed > LOOP_TIMEOUT_WARNING:
+                    warning_printed = True
+                    print(f"\n*** DO* LOOP WARNING: Loop has been running for {elapsed:.1f}s ({loop_iterations} iterations) ***", file=sys.stderr)
+                    print(f"*** DO* end_test: {end_test} ***", file=sys.stderr)
+                    print(f"*** DO* var_specs: {var_specs} ***", file=sys.stderr)
+                    sys.stderr.flush()
+
+            # Check end-test
+            if lisptype.is_truthy(eval(end_test, loop_env)):
+                # Evaluate result forms and return last value
+                result = lisptype.NIL
+                current = result_forms
+                while _consp_internal(current):
+                    result = eval(car(current), loop_env)
+                    current = cdr(current)
+                return result
+
+            # Execute body
+            _exec_iteration_body(body, loop_env)
+
+            # Update variables sequentially
+            for var, step_form in var_specs:
+                if step_form is not None:
+                    new_value = eval(step_form, loop_env)
+                    loop_env.set_variable(var, new_value)
+
+    return _run_with_nil_block(_loop)
 
 
 def eval_dolist(form, env):
@@ -2175,25 +2253,25 @@ def eval_dolist(form, env):
     # Create loop environment
     loop_env = lisptype.Environment(env)
     loop_env.set_variable(var, lisptype.NIL)
-    
-    # Iterate over list
-    current_list = lst
-    while _consp_internal(current_list):
-        loop_env.set_variable(var, car(current_list))
-        
-        # Execute body
-        current = body
-        while _consp_internal(current):
-            eval(car(current), loop_env)
-            current = cdr(current)
-        
-        current_list = cdr(current_list)
-    
-    # Set var to NIL for result form
-    loop_env.set_variable(var, lisptype.NIL)
-    
-    # Evaluate and return result form
-    return eval(result_form, loop_env)
+
+    def _loop():
+        # Iterate over list
+        current_list = lst
+        while _consp_internal(current_list):
+            loop_env.set_variable(var, car(current_list))
+
+            # Execute body
+            _exec_iteration_body(body, loop_env)
+
+            current_list = cdr(current_list)
+
+        # Set var to NIL for result form
+        loop_env.set_variable(var, lisptype.NIL)
+
+        # Evaluate and return result form
+        return eval(result_form, loop_env)
+
+    return _run_with_nil_block(_loop)
 
 
 def eval_dotimes(form, env):
@@ -2226,22 +2304,22 @@ def eval_dotimes(form, env):
     
     # Create loop environment
     loop_env = lisptype.Environment(env)
-    
-    # Iterate count times
-    for i in range(count):
-        loop_env.set_variable(var, i)
-        
-        # Execute body
-        current = body
-        while _consp_internal(current):
-            eval(car(current), loop_env)
-            current = cdr(current)
-    
-    # Set var to count for result form
-    loop_env.set_variable(var, count)
-    
-    # Evaluate and return result form
-    return eval(result_form, loop_env)
+
+    def _loop():
+        # Iterate count times
+        for i in range(count):
+            loop_env.set_variable(var, i)
+
+            # Execute body
+            _exec_iteration_body(body, loop_env)
+
+        # Set var to count for result form
+        loop_env.set_variable(var, count)
+
+        # Evaluate and return result form
+        return eval(result_form, loop_env)
+
+    return _run_with_nil_block(_loop)
 
 
 def eval_do_symbols(form, env):

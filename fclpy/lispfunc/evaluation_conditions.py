@@ -23,6 +23,38 @@ _CONDITION_HIERARCHY = {
 }
 
 
+def _condition_class_for_name(name):
+    """Map a CL condition type name (e.g. "TYPE-ERROR") to its Python class
+    in lisptype (e.g. lisptype.TypeError), or None if there isn't one.
+    """
+    camel = ''.join(part.capitalize() for part in name.replace('_', '-').split('-') if part)
+    return getattr(lisptype, camel, None)
+
+
+def _make_condition_from_designator(type_name_symbol, args_forms, env):
+    """Build a condition instance from a (DATUM &rest ARGUMENTS) designator
+    where DATUM names a condition type, per CLHS condition designators (used
+    by ERROR, SIGNAL, CERROR, WARN): the type is instantiated via its
+    keyword init-args, evaluating ARGS_FORMS as alternating keyword/value
+    pairs. Returns None if the type name isn't a known condition class.
+    """
+    from .evaluation_core import eval
+
+    condition_class = _condition_class_for_name(type_name_symbol.name)
+    if condition_class is None:
+        return None
+
+    kwargs = {}
+    cur = args_forms
+    while _consp_internal(cur) and _consp_internal(cdr(cur)):
+        key = eval(car(cur), env)
+        value = eval(car(cdr(cur)), env)
+        if isinstance(key, (lisptype.LispSymbol, lisptype.lispKeyword)):
+            kwargs[key.name.lower().replace('-', '_')] = value
+        cur = cdr(cdr(cur))
+    return condition_class(**kwargs)
+
+
 def _condition_matches(handler_type, error):
     """Check whether `error` (a signaled condition/exception object) matches
     the handler/handler-case clause type name `handler_type` (str or symbol).
@@ -107,8 +139,16 @@ def eval_error(form, env):
     else:
         # Evaluate as condition object
         first_arg = eval(first_arg, env)
-        condition = first_arg
-    
+        # Per ANSI condition designators, if the (evaluated) datum is a
+        # symbol naming a condition type, build an instance of that type
+        # from the remaining keyword init-args rather than signaling the
+        # bare type-name symbol itself.
+        if isinstance(first_arg, (lisptype.LispSymbol, lisptype.lispKeyword)):
+            built = _make_condition_from_designator(first_arg, cdr(args), env)
+            condition = built if built is not None else first_arg
+        else:
+            condition = first_arg
+
     raise ConditionException(condition, recoverable=False)
 
 
