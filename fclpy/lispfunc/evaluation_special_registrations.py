@@ -266,6 +266,12 @@ def special_pop(*args):
     raise lisptype.LispNotImplementedError('POP (evaluated in evaluator)')
 
 
+@_registry.cl_special('PUSH')
+def special_push(*args):
+    """PUSH special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('PUSH (evaluated in evaluator)')
+
+
 @_registry.cl_special('LAMBDA')
 def special_lambda(*args):
     """LAMBDA special form (handled by evaluator)."""

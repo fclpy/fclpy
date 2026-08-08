@@ -265,7 +265,7 @@ def eval(form, env=None):
     from .evaluation_special_forms import (
         eval_if, eval_setq, eval_defun, eval_defmacro, eval_macroexpand_1,
         eval_macro_function, eval_lambda, eval_declare, eval_declaim,
-        eval_defvar, eval_defparameter, eval_defconstant, eval_defstruct, eval_pop,
+        eval_defvar, eval_defparameter, eval_defconstant, eval_defstruct, eval_pop, eval_push,
         eval_incf, eval_decf, eval_defclass, eval_defgeneric, eval_defmethod, eval_define_method_combination,
         eval_destructuring_bind
     )
@@ -943,6 +943,8 @@ def eval(form, env=None):
                 return eval_loop(form, env)
             elif operator.name == 'POP':
                 return eval_pop(form, env)
+            elif operator.name == 'PUSH':
+                return eval_push(form, env)
             elif operator.name == 'DEFUN':
                 return eval_defun(form, env)
             elif operator.name == 'LAMBDA':

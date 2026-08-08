@@ -8,11 +8,16 @@ fclpy is a Python implementation of Common Lisp. The goal is to achieve ANSI Com
 crash-repair development loop. This file is a status snapshot and a pointer to the
 other docs, not a changelog.
 
-**Last recorded status** (2026-01-10 snapshot, may be stale — recheck with
+**Last recorded status** (2026-08-09 snapshot, may be stale — recheck with
 `pipenv run pytest -q` and `pipenv run python scripts/coverage.py`): 100% coverage
-of target ANSI symbols (347/347), 1159 unit tests passing. Since then, work has
-shifted from unit-test coverage to running the real ANSI test suite
-(`../ansi-test/doit.lsp`) end to end and fixing crashes — see below.
+of target ANSI symbols (347/347), 1158/1159 unit tests passing (one pre-existing
+failure: `STREAM-ELEMENT-TYPE` missing a function binding). The ANSI test suite
+(`../ansi-test/doit.lsp`) now runs to completion end to end with **zero crashes**
+(21980/21980 tests processed; 817 unexpected failures remain — see
+`run_all_tests.log`). The last fixed crash was `PUSH` being registered as a plain
+function (mutating a Python list) instead of a place-mutating macro, which made it
+silently no-op on real Lisp cons-cell lists — see `git log` for the fix. Since crashes
+are now eliminated, work should shift to reducing the 817 unexpected test failures.
 
 ---
 

@@ -16,6 +16,11 @@ the next crash, fix its root cause, verify, repeat. See "The development loop" b
 - The real ANSI test suite lives at `../ansi-test/` (sibling of this repo, e.g.
   `C:\Users\Windows\git\fclpy\ansi-test`), not inside `fclpy/`. `run_all_tests.py`
   and `run_do_test.py` resolve it via `../ansi-test` relative to this file.
+- **Timing**: loading `init.lsp`/`rt.lsp` (the test harness bootstrap) takes about
+  90 seconds by itself, so even a single isolated test via `run_do_test.py` takes
+  ~90s+ before it prints a result — don't assume a run has hung just because
+  nothing has printed yet; give it at least 2 minutes. The full ANSI suite via
+  `run_all_tests.py` takes about 20 minutes end to end.
 
 ## Architecture map
 

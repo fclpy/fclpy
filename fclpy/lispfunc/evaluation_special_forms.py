@@ -2161,6 +2161,59 @@ def eval_pop(form, env):
     raise lisptype.LispNotImplementedError(f"POP not implemented for place: {place}")
 
 
+def _push_expander(item, place, *_rest):
+    """PUSH macro expander: return an expansion form for (PUSH item place).
+
+    This is the callable returned by (MACRO-FUNCTION 'PUSH). It is flagged
+    with __is_macro__ so the macro-expander recognises it.
+
+    For a simple symbol place we expand into:
+        (SETQ place (CONS item place))
+    """
+    if isinstance(place, lisptype.LispSymbol):
+        cons_call = lisptype.lispCons(lisptype.LispSymbol('CONS'),
+                        lisptype.lispCons(item,
+                            lisptype.lispCons(place, lisptype.NIL)))
+        return lisptype.lispCons(lisptype.LispSymbol('SETQ'),
+                   lisptype.lispCons(place,
+                       lisptype.lispCons(cons_call, lisptype.NIL)))
+
+    raise lisptype.LispNotImplementedError(f"PUSH: unsupported place form: {place}")
+
+# Mark as a proper macro callable and register it so (MACRO-FUNCTION 'PUSH) returns it.
+_push_expander.__is_macro__ = True
+_registry.function_registry['PUSH'] = _registry.RegistryEntry(
+    name='PUSH',
+    py_name='_push_expander',
+    kind='macro',
+    func=_push_expander,
+)
+
+
+def eval_push(form, env):
+    """Evaluate PUSH special form (macro).
+
+    (PUSH item place) — Prepend item to the list stored in place, and store
+    the result back in place. This handler is called directly by the
+    evaluator fast-path; it builds the macro expansion and immediately
+    evaluates it so that it returns a *value*, not a form.
+    """
+    from .evaluation_core import eval
+
+    args = cdr(form)
+    if not _consp_internal(args) or not _consp_internal(cdr(args)):
+        raise lisptype.LispNotImplementedError("PUSH requires an item and a place argument")
+
+    item = car(args)
+    place = car(cdr(args))
+
+    if isinstance(place, lisptype.LispSymbol):
+        setq_form = _push_expander(item, place)
+        return eval(setq_form, env)
+
+    raise lisptype.LispNotImplementedError(f"PUSH not implemented for place: {place}")
+
+
 def eval_defclass(form, env):
     """Evaluate DEFCLASS special form.
     
