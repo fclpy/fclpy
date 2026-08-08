@@ -1,5 +1,9 @@
 # Test Suite Crash Repair Guide
 
+> See [CLAUDE.md](CLAUDE.md) for the architecture map (where the reader, evaluator,
+> and registry live) referenced by "Diagnose & Fix" below. This file is the
+> step-by-step procedure; CLAUDE.md is where to look up *what to change*.
+
 ## Objective
 Eliminate crashes so **all ANSI tests complete execution** (pass or fail, but don't crash).
 

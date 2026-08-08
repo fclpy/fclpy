@@ -205,8 +205,87 @@ def eval_case(form, env):
                     return result
         
         clauses = cdr(clauses)
-    
+
     return lisptype.NIL
+
+
+def eval_ccase(form, env):
+    """Evaluate CCASE special form.
+
+    Syntax: (CCASE place {normal-clause}*)
+    normal-clause ::= (keys form*)
+    keys ::= key | (key*) | ()
+
+    Like CASE, but T and OTHERWISE are ordinary keys here (no catch-all
+    clause), and a bare NIL in the keys position designates an empty list of
+    keys (never matches) rather than a singleton key of NIL -- to match on a
+    literal NIL key, write it as a one-element list: ((nil) form*).
+
+    `place` is evaluated exactly once. If no clause matches, CCASE signals a
+    correctable TYPE-ERROR (datum = place's value, expected-type = a MEMBER
+    type over every key across all clauses).
+
+    Note: full ANSI CCASE also lets a STORE-VALUE restart supply a new value,
+    store it back into `place`, and retry the match. That restart-based retry
+    protocol is not implemented here -- a non-matching key simply signals the
+    TYPE-ERROR once.
+    """
+    from .evaluation_core import eval, ConditionException
+    from .comparison import eql
+
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispProgramError("CCASE requires a place and at least one clause")
+
+    place_form = car(args)
+    key_value = eval(place_form, env)
+
+    clauses = cdr(args)
+
+    def clause_keys(keys):
+        """Return the list of literal keys designated by a clause's keys form."""
+        if _consp_internal(keys):
+            items = []
+            current_key = keys
+            while _consp_internal(current_key):
+                items.append(car(current_key))
+                current_key = cdr(current_key)
+            return items
+        elif keys is lisptype.NIL or keys == lisptype.NIL:
+            # Bare NIL means an empty list of keys, not a singleton NIL key.
+            return []
+        else:
+            return [keys]
+
+    all_keys = []
+    parsed_clauses = []
+    current = clauses
+    while _consp_internal(current):
+        clause = car(current)
+        if _consp_internal(clause):
+            keys = clause_keys(car(clause))
+            all_keys.extend(keys)
+            parsed_clauses.append((keys, cdr(clause)))
+        current = cdr(current)
+
+    for keys, forms in parsed_clauses:
+        for key in keys:
+            if eql(key_value, key):
+                result = lisptype.NIL
+                current_form = forms
+                while _consp_internal(current_form):
+                    result = eval(car(current_form), env)
+                    current_form = cdr(current_form)
+                return result
+
+    # No clause matched: signal a correctable type-error over the union of keys.
+    member_type = lisptype.NIL
+    for key in reversed(all_keys):
+        member_type = cons(key, member_type)
+    member_type = cons(lisptype.LispSymbol('MEMBER'), member_type)
+
+    condition = lisptype.TypeError(datum=key_value, expected_type=member_type)
+    raise ConditionException(condition, recoverable=True)
 
 
 def eval_and(form, env):

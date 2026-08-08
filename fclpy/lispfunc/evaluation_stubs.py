@@ -315,9 +315,10 @@ def ctypecase(keyform, *clauses):
     return None  # Simplified
 
 
-@_registry.cl_function('CCASE')
 def ccase(keyform, *clauses):
-    """Correctable case."""
+    """Correctable case (dead stub: CCASE is dispatched directly by eval() in
+    evaluation_core.py via eval_ccase; this exists only so the symbol shows up
+    as fbound for introspection, matching the pattern used by e.g. case_fn)."""
     return None  # Simplified
 
 

@@ -9,6 +9,45 @@ import re
 import fclpy.lispfunc as lispfunc
 
 
+# Condition type hierarchy for matching handler/handler-case clause types
+# against signaled condition objects. In CL, ARITHMETIC-ERROR, TYPE-ERROR,
+# and PROGRAM-ERROR are all subtypes of ERROR, which is a subtype of
+# SERIOUS-CONDITION, which is a subtype of CONDITION.
+_CONDITION_HIERARCHY = {
+    'ARITHMETIC-ERROR': ['ARITHMETIC-ERROR', 'ERROR', 'SERIOUS-CONDITION', 'CONDITION', 'T'],
+    'TYPE-ERROR': ['TYPE-ERROR', 'ERROR', 'SERIOUS-CONDITION', 'CONDITION', 'T'],
+    'PROGRAM-ERROR': ['PROGRAM-ERROR', 'ERROR', 'SERIOUS-CONDITION', 'CONDITION', 'T'],
+    'ERROR': ['ERROR', 'SERIOUS-CONDITION', 'CONDITION', 'T'],
+    'SERIOUS-CONDITION': ['SERIOUS-CONDITION', 'CONDITION', 'T'],
+    'CONDITION': ['CONDITION', 'T'],
+}
+
+
+def _condition_matches(handler_type, error):
+    """Check whether `error` (a signaled condition/exception object) matches
+    the handler/handler-case clause type name `handler_type` (str or symbol).
+    """
+    handler_type_name = handler_type.upper() if isinstance(handler_type, str) else handler_type.name.upper()
+    try:
+        if isinstance(error, lisptype.Condition):
+            # Convert CamelCase class name into hyphenated CL-style name,
+            # e.g. TypeError -> TYPE-ERROR, SimpleCondition -> SIMPLE-CONDITION
+            orig = error.__class__.__name__
+            hyphenated = re.sub(r'([a-z0-9])([A-Z])', r'\1-\2', orig).upper()
+            cond_name = hyphenated
+            return handler_type_name in _CONDITION_HIERARCHY.get(cond_name, [cond_name, 'ERROR', 'CONDITION', 'T'])
+    except Exception:
+        pass
+
+    if isinstance(error, lisptype.LispProgramError):
+        return handler_type_name in _CONDITION_HIERARCHY.get('PROGRAM-ERROR', ['PROGRAM-ERROR', 'ERROR', 'CONDITION', 'T'])
+    elif isinstance(error, lisptype.LispTypeError):
+        return handler_type_name in _CONDITION_HIERARCHY.get('TYPE-ERROR', ['TYPE-ERROR', 'ERROR', 'CONDITION', 'T'])
+    elif isinstance(error, lisptype.LispError):
+        return handler_type_name in _CONDITION_HIERARCHY.get('ERROR', ['ERROR', 'CONDITION', 'T'])
+    return False
+
+
 def eval_signal(form, env):
     """Implement SIGNAL special form.
     
@@ -431,47 +470,66 @@ def eval_multiple_value_bind(form, env):
 
 def eval_handler_bind(form, env):
     """Implement HANDLER-BIND special form.
-    
+
     Syntax: (HANDLER-BIND (binding*) form*)
-    
+
     Where each binding is: (condition-type handler-function)
-    
+
     Establishes condition handlers for the dynamic extent of the body forms.
     If a condition matching one of the types is signaled, the corresponding
-    handler function is called.
-    
-    For now, this is a minimal implementation that just evaluates the body,
-    without actually setting up handlers (since full condition system isn't complete).
+    handler function is called with the condition object. Unlike HANDLER-CASE,
+    HANDLER-BIND does not itself transfer control: if the handler returns
+    normally (rather than performing a non-local exit via RETURN-FROM, THROW,
+    a restart, etc.), signaling continues outward past this HANDLER-BIND.
+
+    Note: bindings may be NIL (empty), which is common for #+/-sbcl conditional
+    code that excludes certain bindings for non-SBCL implementations; an empty
+    binding list simply means nothing here can handle the condition.
     """
     from .evaluation_core import eval
-    
+
     args = cdr(form)
-    
-    # First arg is the bindings list
     if not _consp_internal(args):
-        # No bindings and no body - return NIL
         return lisptype.NIL
-    
+
     bindings = car(args)
     body = cdr(args)
-    
-    # For now, we just evaluate the body without setting up handlers
-    # A full implementation would:
-    # 1. Parse the binding clauses to extract condition types and handler functions
-    # 2. Push the handlers onto a handler stack
-    # 3. Evaluate the body
-    # 4. Pop the handlers
-    
-    # Note: bindings might be NIL (empty) which is common for #+/-sbcl conditional code
-    # that excludes certain bindings for non-SBCL implementations
-    
-    # Evaluate body forms and return last result
-    result = lisptype.NIL
-    while _consp_internal(body):
-        result = eval(car(body), env)
-        body = cdr(body)
-    
-    return result
+
+    parsed_bindings = []
+    current = bindings
+    while _consp_internal(current):
+        binding = car(current)
+        if _consp_internal(binding) and _consp_internal(cdr(binding)):
+            condition_type = car(binding)
+            handler_form = car(cdr(binding))
+            handler_fn = eval(handler_form, env)
+            parsed_bindings.append((condition_type, handler_fn))
+        current = cdr(current)
+
+    def run_body():
+        result = lisptype.NIL
+        cur = body
+        while _consp_internal(cur):
+            result = eval(car(cur), env)
+            cur = cdr(cur)
+        return result
+
+    try:
+        return run_body()
+    except (ConditionException, lisptype.LispError) as exc:
+        # ConditionException wraps its condition in `.condition`; plain
+        # LispError-style exceptions (an older raising convention still used
+        # in parts of the codebase) are themselves the condition object.
+        cond_obj = exc.condition if isinstance(exc, ConditionException) else exc
+        for condition_type, handler_fn in parsed_bindings:
+            if isinstance(condition_type, lisptype.LispSymbol) and _condition_matches(condition_type.name, cond_obj):
+                if callable(handler_fn):
+                    # If the handler performs a non-local exit (RETURN-FROM,
+                    # THROW, invoking a restart, ...) that exception simply
+                    # propagates out of this call and out of eval_handler_bind.
+                    handler_fn(cond_obj)
+        # No matching handler transferred control: continue signaling outward.
+        raise
 
 
 def eval_handler_case(form, env):
@@ -494,48 +552,9 @@ def eval_handler_case(form, env):
     
     expression = car(args)
     clauses = cdr(args)
-    
-    # Condition type hierarchy for matching
-    # In CL, arithmetic-error is a subtype of error
-    # type-error is a subtype of error
-    # program-error is a subtype of error
-    # All errors are subtypes of condition
-    condition_hierarchy = {
-        'ARITHMETIC-ERROR': ['ARITHMETIC-ERROR', 'ERROR', 'SERIOUS-CONDITION', 'CONDITION', 'T'],
-        'TYPE-ERROR': ['TYPE-ERROR', 'ERROR', 'SERIOUS-CONDITION', 'CONDITION', 'T'],
-        'PROGRAM-ERROR': ['PROGRAM-ERROR', 'ERROR', 'SERIOUS-CONDITION', 'CONDITION', 'T'],
-        'ERROR': ['ERROR', 'SERIOUS-CONDITION', 'CONDITION', 'T'],
-        'SERIOUS-CONDITION': ['SERIOUS-CONDITION', 'CONDITION', 'T'],
-        'CONDITION': ['CONDITION', 'T'],
-    }
-    
-    def matches_condition_type(handler_type, error):
-        """Check if error matches the handler condition type."""
-        handler_type_name = handler_type.upper() if isinstance(handler_type, str) else handler_type.name.upper()
-        # If error is a Lisp Condition object (from lisptype_extended), match by its class name
-        try:
-            # Handle lisptype.Condition subclasses first
-            if isinstance(error, lisptype.Condition):
-                # Convert CamelCase class name into hyphenated CL-style name,
-                # e.g. TypeError -> TYPE-ERROR, SimpleCondition -> SIMPLE-CONDITION
-                orig = error.__class__.__name__
-                hyphenated = re.sub(r'([a-z0-9])([A-Z])', r'\1-\2', orig).upper()
-                cond_name = hyphenated
-                return handler_type_name in condition_hierarchy.get(cond_name, [cond_name, 'ERROR', 'CONDITION', 'T'])
-        except Exception:
-            pass
 
-        # PROGRAM-ERROR matches LispProgramError
-        if isinstance(error, lisptype.LispProgramError):
-            return handler_type_name in condition_hierarchy.get('PROGRAM-ERROR', ['PROGRAM-ERROR', 'ERROR', 'CONDITION', 'T'])
-        # TYPE-ERROR matches LispTypeError (legacy basic type)
-        elif isinstance(error, lisptype.LispTypeError):
-            return handler_type_name in condition_hierarchy.get('TYPE-ERROR', ['TYPE-ERROR', 'ERROR', 'CONDITION', 'T'])
-        elif isinstance(error, lisptype.LispError):
-            # Generic error
-            return handler_type_name in condition_hierarchy.get('ERROR', ['ERROR', 'CONDITION', 'T'])
-        return False
-    
+    matches_condition_type = _condition_matches
+
     try:
         # Try to evaluate the expression
         return eval(expression, env)
