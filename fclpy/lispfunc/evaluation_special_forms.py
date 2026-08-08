@@ -377,22 +377,24 @@ def eval_defun(form, env):
     - &key parameters for keyword arguments
     - Function names as symbols or (SETF symbol) for setf functions
     """
-    from .evaluation_core import eval, parse_lambda_list
+    from .evaluation_core import eval, parse_lambda_list, ReturnFromException
     import fclpy.state as state
-    
+
     args = cdr(form)
     if not _consp_internal(args) or not _consp_internal(cdr(args)):
         raise lisptype.LispNotImplementedError("DEFUN requires at least 2 arguments")
-    
+
     func_name_spec = car(args)
     param_list = car(cdr(args))
     body = cdr(cdr(args))
-    
+
     # func_name_spec can be a symbol or (SETF symbol) for setf functions
     if isinstance(func_name_spec, lisptype.LispSymbol):
         # Simple function name
         func_name = func_name_spec
         is_setf = False
+        # DEFUN establishes an implicit block named after the function
+        block_name_symbol = func_name
     elif _consp_internal(func_name_spec):
         # (SETF symbol) form for setf functions
         setf_sym = car(func_name_spec)
@@ -408,6 +410,8 @@ def eval_defun(form, env):
         # For storage, we create a LispSymbol with a compound name
         func_name = lisptype.LispSymbol(f"(SETF {actual_func_name.name})")
         is_setf = True
+        # The implicit block for a (SETF symbol) function is named by symbol
+        block_name_symbol = actual_func_name
     else:
         raise lisptype.LispNotImplementedError("DEFUN: function name must be a symbol or (SETF symbol)")
     
@@ -582,13 +586,26 @@ def eval_defun(form, env):
             else:
                 func_env.add_variable(param_spec, lisptype.NIL)
         
-        # Execute body
+        # Execute body, enclosed in the implicit block DEFUN establishes
+        # around the function body (named after the function).
         result = None
-        current_body = actual_body
-        while _consp_internal(current_body):
-            result = eval(car(current_body), func_env)
-            current_body = cdr(current_body)
-        
+        try:
+            current_body = actual_body
+            while _consp_internal(current_body):
+                result = eval(car(current_body), func_env)
+                current_body = cdr(current_body)
+        except ReturnFromException as e:
+            tag = e.tag
+            block_match = False
+            if tag == block_name_symbol:
+                block_match = True
+            elif isinstance(tag, lisptype.LispSymbol) and isinstance(block_name_symbol, lisptype.LispSymbol):
+                block_match = (tag.name == block_name_symbol.name)
+            if block_match:
+                result = e.value
+            else:
+                raise
+
         return result
     
     # Find the global/root environment for defining the function
@@ -808,7 +825,63 @@ def _create_macro_function(macro_name, lambda_list, body, env):
                 arg_idx += 1
             else:
                 macro_env.add_variable(param, lisptype.NIL)
-        
+
+        # If a parameter name is a destructuring pattern (a cons) rather than
+        # a plain symbol, bind its elements against the value instead of
+        # attempting to add the cons itself as a variable.
+        def _bind_pattern(pat, val):
+            # Bind a symbol directly
+            if isinstance(pat, lisptype.LispSymbol):
+                macro_env.add_variable(pat, val if val is not None else lisptype.NIL)
+                return
+
+            if not _consp_internal(pat):
+                return
+
+            # Collect pattern elements and detect dotted-tail
+            pats = []
+            cur = pat
+            while _consp_internal(cur):
+                pats.append(car(cur))
+                cur = cdr(cur)
+
+            dotted_tail = None
+            if isinstance(cur, lisptype.LispSymbol):
+                dotted_tail = cur
+
+            # Walk value as list and bind elements
+            cur_val = val
+            for p in pats:
+                if _consp_internal(cur_val):
+                    v = car(cur_val)
+                    if isinstance(p, lisptype.LispSymbol):
+                        macro_env.add_variable(p, v)
+                    cur_val = cdr(cur_val)
+                else:
+                    if isinstance(p, lisptype.LispSymbol):
+                        macro_env.add_variable(p, lisptype.NIL)
+
+            # Bind dotted tail to remaining list
+            if dotted_tail is not None:
+                macro_env.add_variable(dotted_tail, cur_val if cur_val is not None else lisptype.NIL)
+
+        def _kw_parts(param):
+            """Split a &key parameter name into (keyword-name, var-pattern).
+
+            `param` is either a plain symbol (keyword name implied by the
+            symbol) or a compound ((:keyword var-pattern)) spec, where
+            var-pattern may itself be a destructuring pattern rather than a
+            plain symbol.
+            """
+            if isinstance(param, lisptype.LispSymbol):
+                return param.name.upper(), param
+            if _consp_internal(param):
+                kw = car(param)
+                var_pattern = car(cdr(param)) if _consp_internal(cdr(param)) else None
+                kw_name = kw.name.upper() if isinstance(kw, (lisptype.LispSymbol, lisptype.lispKeyword)) else None
+                return kw_name, var_pattern
+            return None, None
+
         # Bind optional parameters
         for param_spec in optional_params:
             # Support (name default supplied-p) optional syntax
@@ -825,43 +898,6 @@ def _create_macro_function(macro_name, lambda_list, body, env):
             else:
                 # Unknown shape - skip defensively
                 continue
-            # If the optional parameter name is a destructuring pattern (a cons),
-            # bind its elements rather than attempting to add the cons as a variable.
-            def _bind_pattern(pat, val):
-                # Bind a symbol directly
-                if isinstance(pat, lisptype.LispSymbol):
-                    macro_env.add_variable(pat, val if val is not None else lisptype.NIL)
-                    return
-
-                if not _consp_internal(pat):
-                    return
-
-                # Collect pattern elements and detect dotted-tail
-                pats = []
-                cur = pat
-                while _consp_internal(cur):
-                    pats.append(car(cur))
-                    cur = cdr(cur)
-
-                dotted_tail = None
-                if isinstance(cur, lisptype.LispSymbol):
-                    dotted_tail = cur
-
-                # Walk value as list and bind elements
-                cur_val = val
-                for p in pats:
-                    if _consp_internal(cur_val):
-                        v = car(cur_val)
-                        if isinstance(p, lisptype.LispSymbol):
-                            macro_env.add_variable(p, v)
-                        cur_val = cdr(cur_val)
-                    else:
-                        if isinstance(p, lisptype.LispSymbol):
-                            macro_env.add_variable(p, lisptype.NIL)
-
-                # Bind dotted tail to remaining list
-                if dotted_tail is not None:
-                    macro_env.add_variable(dotted_tail, cur_val if cur_val is not None else lisptype.NIL)
 
             if arg_idx < len(call_args):
                 val = call_args[arg_idx]
@@ -885,7 +921,7 @@ def _create_macro_function(macro_name, lambda_list, body, env):
 
                 if supplied_p is not None:
                     macro_env.add_variable(supplied_p, lisptype.NIL)
-        
+
         # Bind &rest parameter
         if rest_param:
             remaining_args = call_args[arg_idx:]
@@ -923,13 +959,15 @@ def _create_macro_function(macro_name, lambda_list, body, env):
                 param = param_spec
                 default_form = None
                 supplied_p = None
-            
+
+            _, var_pattern = _kw_parts(param)
+
             if default_form is not None:
                 default_value = eval(default_form, macro_env)
-                macro_env.add_variable(param, default_value)
             else:
-                macro_env.add_variable(param, lisptype.NIL)
-            
+                default_value = lisptype.NIL
+            _bind_pattern(var_pattern, default_value)
+
             if supplied_p is not None:
                 macro_env.add_variable(supplied_p, lisptype.NIL)
         
@@ -951,9 +989,10 @@ def _create_macro_function(macro_name, lambda_list, body, env):
                     else:
                         param = param_spec
                         supplied_p = None
-                    
-                    if isinstance(param, lisptype.LispSymbol) and param.name.upper() == key_name:
-                        macro_env.add_variable(param, value)
+
+                    kw_name, var_pattern = _kw_parts(param)
+                    if kw_name == key_name:
+                        _bind_pattern(var_pattern, value)
                         if supplied_p is not None:
                             macro_env.add_variable(supplied_p, lisptype.T)
                         break

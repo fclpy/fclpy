@@ -93,9 +93,17 @@ def eval_error(form, env):
     first_arg = car(args)
     
     # Check if it's a condition object or format string
-    if isinstance(first_arg, str):
-        # String case: (ERROR "format ~a" arg1 arg2 ...)
-        condition = lisptype.SimpleCondition(format_string=first_arg)
+    if isinstance(first_arg, (str, lisptype.LispString)):
+        # String case: (ERROR "format ~a" arg1 arg2 ...). Per ANSI, a string
+        # datum signals a condition of type SIMPLE-ERROR (a subtype of ERROR),
+        # not bare SIMPLE-CONDITION (which handler-case/handler-bind ERROR
+        # clauses would not match).
+        format_arguments = []
+        cur = cdr(args)
+        while _consp_internal(cur):
+            format_arguments.append(eval(car(cur), env))
+            cur = cdr(cur)
+        condition = lisptype.SimpleError(format_control=str(first_arg), format_arguments=format_arguments)
     else:
         # Evaluate as condition object
         first_arg = eval(first_arg, env)

@@ -605,8 +605,9 @@ def eval_flet(form, env):
             
             # Create a lambda-like closure
             if isinstance(func_name, lisptype.LispSymbol):
-                # Build the function closure
-                closure = make_lambda_closure(func_lambda_list, func_body, env)
+                # Build the function closure. FLET establishes an implicit
+                # block named after the function, same as DEFUN.
+                closure = make_lambda_closure(func_lambda_list, func_body, env, block_name=func_name)
                 # Bind the function in the new environment
                 flet_env.add_function(func_name, closure)
         current = cdr(current)
@@ -654,8 +655,9 @@ def eval_labels(form, env):
             
             # Create a lambda-like closure in the labels environment
             if isinstance(func_name, lisptype.LispSymbol):
-                # Build the function closure - uses labels_env so functions can call each other
-                closure = make_lambda_closure(func_lambda_list, func_body, labels_env)
+                # Build the function closure - uses labels_env so functions can call each other.
+                # LABELS establishes an implicit block named after the function, same as DEFUN.
+                closure = make_lambda_closure(func_lambda_list, func_body, labels_env, block_name=func_name)
                 # Bind the function in the new environment
                 labels_env.add_function(func_name, closure)
         current = cdr(current)
@@ -670,12 +672,16 @@ def eval_labels(form, env):
     return result
 
 
-def make_lambda_closure(lambda_list, body, env):
+def make_lambda_closure(lambda_list, body, env, block_name=None):
     """Create a closure function from a lambda list and body.
-    
+
     This handles parsing the lambda list with &optional, &rest, &key, etc.
+
+    If block_name is given (FLET/LABELS pass the function's own name), the
+    body is enclosed in an implicit block of that name, so RETURN-FROM on it
+    works, matching the DEFUN implicit block.
     """
-    from .evaluation_core import eval
+    from .evaluation_core import eval, ReturnFromException
     
     # Parse the lambda list
     required_params = []
@@ -788,13 +794,26 @@ def make_lambda_closure(lambda_list, body, env):
                 rest_list = cons(arg, rest_list)
             call_env.add_variable(rest_param, rest_list)
         
-        # Evaluate body
+        # Evaluate body, enclosed in the implicit block FLET/LABELS
+        # establishes around the function body (named after the function).
         result = lisptype.NIL
-        current_form = body
-        while _consp_internal(current_form):
-            result = eval(car(current_form), call_env)
-            current_form = cdr(current_form)
-        
+        try:
+            current_form = body
+            while _consp_internal(current_form):
+                result = eval(car(current_form), call_env)
+                current_form = cdr(current_form)
+        except ReturnFromException as e:
+            tag = e.tag
+            block_match = False
+            if tag == block_name:
+                block_match = True
+            elif isinstance(tag, lisptype.LispSymbol) and isinstance(block_name, lisptype.LispSymbol):
+                block_match = (tag.name == block_name.name)
+            if block_match:
+                result = e.value
+            else:
+                raise
+
         return result
     
     return closure_function
@@ -1111,6 +1130,7 @@ def eval_loop(form, env):
             driver_list = None
             aux_init = None
             aux_then = None
+            driver_downward = False
 
             while j < len(forms):
                 fname = sym_name(forms[j])
@@ -1118,7 +1138,7 @@ def eval_loop(form, env):
                     saw_driver_keyword = True
                     driver_start = forms[j+1]
                     j += 2
-                elif fname == 'TO':
+                elif fname in ('TO', 'UPTO'):
                     saw_driver_keyword = True
                     driver_end = forms[j+1]
                     driver_kind = 'for-range'
@@ -1127,6 +1147,18 @@ def eval_loop(form, env):
                     saw_driver_keyword = True
                     driver_end = forms[j+1]
                     driver_kind = 'for-below'
+                    j += 2
+                elif fname == 'DOWNTO':
+                    saw_driver_keyword = True
+                    driver_end = forms[j+1]
+                    driver_kind = 'for-range'
+                    driver_downward = True
+                    j += 2
+                elif fname == 'ABOVE':
+                    saw_driver_keyword = True
+                    driver_end = forms[j+1]
+                    driver_kind = 'for-below'
+                    driver_downward = True
                     j += 2
                 elif fname == 'BY':
                     saw_driver_keyword = True
@@ -1205,6 +1237,16 @@ def eval_loop(form, env):
             if driver_kind is None:
                 # e.g., "FOR X" without IN/FROM/=
                 raise lisptype.LispNotImplementedError('LOOP FOR clause missing iteration spec')
+
+            # DOWNTO/ABOVE count downward: BY gives a magnitude, so negate it
+            # (an explicit BY form is wrapped as "(- form)" and negated at eval time).
+            if driver_downward:
+                if driver_step is None:
+                    driver_step = -1
+                elif isinstance(driver_step, int):
+                    driver_step = -abs(driver_step)
+                else:
+                    driver_step = cons(lisptype.LispSymbol('-'), cons(driver_step, lisptype.NIL))
 
             driver = {
                 'var': candidate_var,

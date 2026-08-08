@@ -975,7 +975,7 @@ __all__ = [
     'Package', 'KEYWORD_PACKAGE', 'COMMON_LISP_PACKAGE', 'COMMON_LISP_USER_PACKAGE',
     'make_package', 'find_package', 'intern_symbol', 'intern_keyword',
     # Conditions (ANSI condition system)
-    'Condition', 'SimpleCondition', 'Warning', 'Error',
+    'Condition', 'SimpleCondition', 'SimpleError', 'Warning', 'Error',
     'TypeError', 'ProgramError', 'ControlError', 'FileError', 'StreamError',
     'EndOfFile', 'ArithmeticError', 'DivisionByZero',
     'UndefinedFunction','UnboundVariable',
