@@ -96,17 +96,29 @@ class GoException(Exception):
 
 class ConditionException(Exception):
     """Exception raised when a Lisp condition is signaled.
-    
+
     This exception wraps a condition object and is used to communicate
     error/warning conditions through the Python exception system.
     """
     def __init__(self, condition, recoverable=False):
         """Initialize a condition exception.
-        
+
         Args:
             condition: A Condition object from lisptype
             recoverable: If True, the condition has a continue restart
         """
+        if not isinstance(condition, lisptype.Condition):
+            # Every ERROR/SIGNAL/CERROR/WARN call site is supposed to build a
+            # real condition object before raising, but a caller that fails
+            # to do so (e.g. a datum whose type wasn't recognized) would
+            # otherwise smuggle an arbitrary Python object through as "the
+            # condition" -- _condition_matches can never match it against
+            # any handler type, not even (ERROR (C) ...) or T, so it escapes
+            # every enclosing HANDLER-CASE/HANDLER-BIND uncaught (see plan.md
+            # Finding E: "a Python object surfacing as a Lisp value is
+            # always a bug"). Wrap it in a generic ERROR condition instead,
+            # so it is always at least catchable as an ERROR.
+            condition = lisptype.Error(message=str(condition))
         self.condition = condition
         self.recoverable = recoverable
         super().__init__(str(condition))

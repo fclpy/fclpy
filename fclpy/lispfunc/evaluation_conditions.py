@@ -5,22 +5,7 @@ import fclpy.lisptype as lisptype
 from .core import car, cdr, cons, _consp_internal
 from . import registry as _registry
 from .evaluation_core import ConditionException, ThrowException
-import re
 import fclpy.lispfunc as lispfunc
-
-
-# Condition type hierarchy for matching handler/handler-case clause types
-# against signaled condition objects. In CL, ARITHMETIC-ERROR, TYPE-ERROR,
-# and PROGRAM-ERROR are all subtypes of ERROR, which is a subtype of
-# SERIOUS-CONDITION, which is a subtype of CONDITION.
-_CONDITION_HIERARCHY = {
-    'ARITHMETIC-ERROR': ['ARITHMETIC-ERROR', 'ERROR', 'SERIOUS-CONDITION', 'CONDITION', 'T'],
-    'TYPE-ERROR': ['TYPE-ERROR', 'ERROR', 'SERIOUS-CONDITION', 'CONDITION', 'T'],
-    'PROGRAM-ERROR': ['PROGRAM-ERROR', 'ERROR', 'SERIOUS-CONDITION', 'CONDITION', 'T'],
-    'ERROR': ['ERROR', 'SERIOUS-CONDITION', 'CONDITION', 'T'],
-    'SERIOUS-CONDITION': ['SERIOUS-CONDITION', 'CONDITION', 'T'],
-    'CONDITION': ['CONDITION', 'T'],
-}
 
 
 def _condition_class_for_name(name):
@@ -58,25 +43,36 @@ def _make_condition_from_designator(type_name_symbol, args_forms, env):
 def _condition_matches(handler_type, error):
     """Check whether `error` (a signaled condition/exception object) matches
     the handler/handler-case clause type name `handler_type` (str or symbol).
+
+    Uses isinstance() against the Python class the handler type name maps to
+    (via _condition_class_for_name), so subtyping falls out of the real
+    class graph (SimpleError -> Error -> Condition, but SimpleCondition and
+    SimpleWarning -> Condition only, not Error) instead of a hand-maintained
+    hierarchy table. The previous table only listed six ERROR subtypes and
+    fell back to "assume it's an ERROR" for every other condition name --
+    which meant a bare SIMPLE-CONDITION or SIMPLE-WARNING (both real ANSI
+    types that are *not* ERROR subtypes) incorrectly matched an (ERROR (C)
+    ...)  clause ahead of their own, more specific clause (plan.md
+    Finding E).
     """
     handler_type_name = handler_type.upper() if isinstance(handler_type, str) else handler_type.name.upper()
-    try:
-        if isinstance(error, lisptype.Condition):
-            # Convert CamelCase class name into hyphenated CL-style name,
-            # e.g. TypeError -> TYPE-ERROR, SimpleCondition -> SIMPLE-CONDITION
-            orig = error.__class__.__name__
-            hyphenated = re.sub(r'([a-z0-9])([A-Z])', r'\1-\2', orig).upper()
-            cond_name = hyphenated
-            return handler_type_name in _CONDITION_HIERARCHY.get(cond_name, [cond_name, 'ERROR', 'CONDITION', 'T'])
-    except Exception:
-        pass
 
+    if isinstance(error, lisptype.Condition):
+        if handler_type_name in ('T', 'CONDITION'):
+            return True
+        handler_class = _condition_class_for_name(handler_type_name)
+        return isinstance(handler_class, type) and isinstance(error, handler_class)
+
+    # Legacy LispError-style exceptions predate real condition objects at
+    # some raise sites (e.g. argument-validation code that raises
+    # lisptype.LispTypeError directly rather than going through SIGNAL/
+    # ERROR); keep matching those against the same three names as before.
     if isinstance(error, lisptype.LispProgramError):
-        return handler_type_name in _CONDITION_HIERARCHY.get('PROGRAM-ERROR', ['PROGRAM-ERROR', 'ERROR', 'CONDITION', 'T'])
+        return handler_type_name in ('PROGRAM-ERROR', 'ERROR', 'CONDITION', 'T')
     elif isinstance(error, lisptype.LispTypeError):
-        return handler_type_name in _CONDITION_HIERARCHY.get('TYPE-ERROR', ['TYPE-ERROR', 'ERROR', 'CONDITION', 'T'])
+        return handler_type_name in ('TYPE-ERROR', 'ERROR', 'CONDITION', 'T')
     elif isinstance(error, lisptype.LispError):
-        return handler_type_name in _CONDITION_HIERARCHY.get('ERROR', ['ERROR', 'CONDITION', 'T'])
+        return handler_type_name in ('ERROR', 'CONDITION', 'T')
     return False
 
 
@@ -122,16 +118,31 @@ def _build_condition_from_datum(datum_form, remaining_args_form, env):
     from .evaluation_core import eval
     datum = eval(datum_form, env)
 
-    if isinstance(datum, (str, lisptype.LispString)):
-        # String datum: signals a condition of type SIMPLE-ERROR (a subtype
-        # of ERROR), not bare SIMPLE-CONDITION (which handler-case/
-        # handler-bind ERROR clauses would not match).
+    if isinstance(datum, lisptype.Condition):
+        # Already a condition object (e.g. built earlier by MAKE-CONDITION);
+        # signal it as-is.
+        return datum
+    elif isinstance(datum, (str, lisptype.LispString)) or callable(datum):
+        # CLHS glossary "format control": a format-control datum is either a
+        # string or a function of (stream &rest args) -- e.g. the closure
+        # FORMATTER returns. Both signal a condition of type SIMPLE-ERROR (a
+        # subtype of ERROR, not bare SIMPLE-CONDITION, which handler-case/
+        # handler-bind ERROR clauses would not match). A function datum must
+        # be kept as the function object, not stringified -- FORMAT
+        # dispatches on it directly (CLHS 22.3.1); stringifying it here used
+        # to hand FORMAT the string "<function ... at 0x...>" to interpret as
+        # literal format text, and worse, a non-condition datum with no
+        # matching branch used to be signaled as-is, leaking a raw Python
+        # function through as "the condition object" -- unmatchable by any
+        # handler, escaping every enclosing HANDLER-CASE/HANDLER-BIND and
+        # aborting the whole run (see plan.md Finding E).
+        format_control = str(datum) if isinstance(datum, (str, lisptype.LispString)) else datum
         format_arguments = []
         cur = remaining_args_form
         while _consp_internal(cur):
             format_arguments.append(eval(car(cur), env))
             cur = cdr(cur)
-        return lisptype.SimpleError(format_control=str(datum), format_arguments=format_arguments)
+        return lisptype.SimpleError(format_control=format_control, format_arguments=format_arguments)
     elif isinstance(datum, (lisptype.LispSymbol, lisptype.lispKeyword)):
         # Per ANSI condition designators, if the (evaluated) datum is a
         # symbol naming a condition type, build an instance of that type

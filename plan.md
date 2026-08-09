@@ -168,6 +168,174 @@ item over continuing to fix individual call sites one at a time.
 
 ---
 
+## Update (2026-08-09, follow-on session): the "unidentified next blocker" past
+## `ERROR.4` was a Python function leaking through as a "condition object" —
+## fixed, plus four defects it exposed underneath
+
+**Root cause, precisely identified.** `ERROR.5` (`conditions/error.lsp`) is
+`(let ((fmt (formatter "Error"))) (handler-case (error fmt) (simple-error (c)
+(frob-simple-error c fmt))))`. `_build_condition_from_datum`
+(`evaluation_conditions.py`) evaluated `fmt` to a Python closure (`FORMATTER`'s
+result — CLHS glossary "format control" is string-*or-function*, a case this
+dispatch had no branch for) and fell through to `else: return datum` — signaling
+the **bare Python function** as "the condition object". `_condition_matches`
+can never `isinstance()` a raw function against anything, not even `T`, so it
+matched no clause anywhere, including RT's own top-level `(error (c) ...)`
+handler-bind in `rt.lsp`'s `do-entry` — the exception propagated all the way out
+of `do-tests`, past `run_all_tests.py`'s file-load call, printing `Error loading
+file '...doit.lsp': <function formatter.<locals>.format_func at 0x...>` and
+silently abandoning **17 413 of 22 036 tests** (confirmed via isolated
+reproduction with `run_do_test.py error.5`, traceback bottoms out at
+`eval_error`, `evaluation_conditions.py:162`). This is the exact bug class the
+session above (M0's structural observation) predicted and asked to fix at a
+shared boundary rather than one call site at a time — this fix takes that
+architectural approach rather than patching `ERROR` in isolation.
+
+**Fix, at the invariant, not the call site.** Every `SIGNAL`/`ERROR`/`CERROR`/
+`WARN`/restart path funnels through one constructor, `ConditionException.__init__`
+(`evaluation_core.py`). It now enforces "the condition is always a real
+`lisptype.Condition` instance" there — wrapping any non-Condition value into a
+generic `Error` — so *no* call site, present or future, can smuggle a raw Python
+object through as a signaled condition (plan.md's own standing rule 2). On top
+of that invariant, `_build_condition_from_datum` was given the CLHS-correct
+dispatch: a callable datum is a format-control function and signals a real
+`SIMPLE-ERROR` (matching the existing string-datum branch), not the fallback.
+
+**Four more defects surfaced immediately once the crash stopped hiding them** —
+`ERROR.1`–`ERROR.12` all still returned `NIL` (wrong answer, not a crash) until
+each of these was fixed in turn; every one is a real, general mechanism gap, not
+specific to `error.lsp`:
+
+1. **`MAKE-CONDITION` was a complete stub** (`utilities_errors.py`): `return
+   type_designator` — it echoed back the bare type-name symbol instead of
+   building an instance. Fixed to reuse the same evaluated-designator builder
+   `WARN`'s function-designator path already uses
+   (`_make_condition_from_evaluated_designator`), rather than inventing a third
+   condition-construction path.
+2. **`TYPEP` had no branch at all for `Condition` instances.** Every condition
+   type name (`SIMPLE-ERROR`, `ERROR`, `CONDITION`, ...) fell through to the
+   CLOS-class lookup at the bottom, which conditions were never registered in
+   (they're plain Python classes, not CLOS classes), so it silently returned
+   `NIL` for e.g. `(typep <a-real-simple-error> 'simple-error)`. Fixed by mapping
+   the type name to its Python class (the same `_condition_class_for_name` the
+   handler-matching code already had) and using `isinstance` — a real lattice,
+   for free, from the actual Python class graph.
+3. **`_condition_matches`'s hierarchy table defaulted every unlisted condition
+   type to "assume it's an `ERROR`".** `_CONDITION_HIERARCHY` only listed six
+   `ERROR` subtypes; its `.get(cond_name, [cond_name, 'ERROR', 'CONDITION',
+   'T'])` fallback meant `SIMPLE-CONDITION` and `SIMPLE-WARNING` — real ANSI
+   types that are **not** `ERROR` subtypes — incorrectly matched an `(ERROR (C)
+   ...)` clause ahead of their own more specific clause (`ERROR.6`/`ERROR.7`).
+   This is Finding E's own diagnosis ("Python `isinstance` — which would give a
+   real lattice for free — is never used") made concrete. Deleted the table
+   entirely; replaced with `isinstance` against the same class mapping used for
+   (2), consolidating both call sites onto one mechanism instead of two.
+4. **`SIMPLE-CONDITION-FORMAT-CONTROL`/`-FORMAT-ARGUMENTS` were stubs**
+   (`io_write.py`): the former returned `str(condition)` (the *report message*,
+   not the `format-control` slot); the latter unconditionally returned `()`,
+   discarding whatever arguments were actually signaled. Both now read the
+   condition's real `format-control`/`format-arguments` slots.
+5. **`SimpleError`/`SimpleWarning` were missing a superclass.** CLHS Figure 9-1
+   defines `simple-error` as `(error simple-condition)` and `simple-warning` as
+   `(warning simple-condition)` — true multiple inheritance. The Python classes
+   only extended `Error`/`Warning`, so `(typep <a-simple-error> 'simple-condition)`
+   — which is exactly what the ANSI suite's own `FROB-SIMPLE-CONDITION` test
+   helper checks first, before even looking at format-control — was `NIL`, and
+   every `error.lsp` test using it failed for that reason alone even after (1)–(4)
+   were fixed. Added `SimpleCondition` as a second base to both; MRO resolves
+   cleanly (`SimpleError`, `Error`, `SimpleCondition`, `Condition`, `lispT`,
+   `BaseException`, `object`).
+
+**One correction to this document's own prior claim.** The "Reality check" /
+Finding I text says "the live reader returns a Python `str`
+(`lispreader.py:129`)". Empirically false as of this session:
+`(let ((fmt "Error")) fmt)` evaluates to a `fclpy.lisptype_basic.LispString`
+instance, not a Python `str` — confirmed via direct `eval_string` inspection.
+`lispreader.py:129`'s `read_9` does return a plain `str`, so the coercion to
+`LispString` is happening somewhere between the reader and variable binding
+that this session did not chase further; treat any future claim about "the
+live reader" with the same skepticism this document already applies to its own
+"20-minute run" claim. Practical consequence patched here: `SimpleError`/
+`SimpleWarning.__init__` now coerce a `LispString` `format_control` to `str`
+before storing it as `message`, because `Condition.__str__` returns `self.message`
+directly and Python's `str()` protocol requires that to already be a `str` —
+storing the `LispString` object itself made `str(condition)` raise `TypeError:
+__str__ returned non-string (type LispString)`, itself an uncaught-crash variant
+of the same "Python object leaking as a Lisp value" bug class as the main fix
+above, one level down.
+
+**Unrelated fix taken in the same session, out of sequence, because it was
+blocking measurement of the fix above.** `LOOP` did not recognize `AS` as a
+synonym for `FOR` (CLHS 6.1.2.1: "either the keyword `FOR` or the keyword `AS`
+may be used to begin a for-as-clause") — `(loop as x in '(1 2 3) ...)` fell into
+the zero-iteration-clause "simple LOOP" branch (CLHS 6.1.1) and looped forever
+evaluating `AS`/`X`/`IN` as inert body forms until the 10-minute
+`LOOP_TIMEOUT_ERROR` hard cap fired. `iteration/loop2.lsp` through `loop7.lsp`
+use `AS` in ~15 tests; each one cost a full 10 minutes before this fix, which
+made a complete-suite run impractical to even attempt. Fixed by treating `AS`
+identically to `FOR` at both sites that dispatch on it (`evaluation_loops_conditionals.py`).
+
+**Verification.** `error.1` through `error.12` all pass in isolation
+(`run_do_test.py`, confirmed individually and as a batch) with zero remaining
+`NIL`/crash results. `pytest -q`: 1194 passed (1172 pre-existing + 22 new,
+`tests/test_condition_designator_fixes.py`), one pre-existing unrelated failure
+(`STREAM-ELEMENT-TYPE`, M10, unchanged). A full `run_all_tests.py` run after all
+six fixes above ran to a **new** truncation point, `accounted=4687` (was 4623),
+`passed=2920` (was 2877), `failed=1767` (was 1746) — and the raw log shows far
+more territory covered than the small `accounted` delta implies: it passed
+through `eval-and-compile/defun.lsp`, `cons/etypecase.lsp`, `sequences/every.lsp`,
+`debug/invoke-debugger.lsp`, and deep into `conditions/handler-bind.lsp` — all
+areas that had **never executed before this session** — before hitting the next
+crash. `ERROR.5`'s fix did exactly what M0 asked of it: it stopped hiding the
+*next* bug behind itself, rather than being the last bug.
+
+**The new blocker, precisely identified (not "unidentified" this time).**
+`HANDLER-BIND.13` (`conditions/handler-bind.lsp:92`):
+```lisp
+(handler-bind ((error #'(lambda (c) (declare (ignore c)) (throw 'done 'good))))
+  (catch 'done (error "an error")))
+```
+Crashes with `Uncaught THROW DONE`, aborting the rest of the 22036-test run
+exactly like `ERROR.5` did — a different symptom, but **the same root cause
+Finding E already named**: `eval_handler_bind` invokes its handler function from
+inside a Python `except` clause, which only runs *after* `(error ...)`'s
+exception has already propagated out of (and past) `eval_catch`'s `try` block —
+i.e., after the `CATCH 'DONE` frame has already unwound. By the time the handler
+calls `(throw 'done 'good)`, the Python call frame that could have caught a
+`ThrowException` tagged `DONE` no longer exists, so the new throw has nothing to
+catch it. This is not a `HANDLER-BIND`-specific bug to patch in isolation — it is
+the concrete reproduction of M8's own charter ("Rewrite signaling as a handler
+stack walked at the signal point... before unwinding"), and the CLOS-method/
+`ERROR`-datum/LOOP-block fixes earlier this document already predicted more
+instances of "runs after unwinding" would surface. Stopped here deliberately
+(same "Definition of done" judgment call as the `ERROR.1`/`CERROR.1` stop above)
+rather than attempting a signal-before-unwind rewrite as a tail-end patch — M8
+needs its own session with M2's dynamic environment and M9's class lattice in
+place first, per the dependency graph.
+
+**Discovered but not addressed — recorded per the task's own discipline.**
+- `HANDLER-BIND.13`'s crash above is the highest-value next M8 evidence: a live,
+  minimal, reproducible case that the handler-runs-after-unwind defect is real
+  and blocks measurement, not just a theoretical Finding-E concern.
+- The M0 "structural observation" (catch unmatched escapes once, at the `EVAL`
+  boundary, as `CONTROL-ERROR`) remains recommended, and is *not* subsumed by
+  `HANDLER-BIND.13`'s fix (whenever M8 lands) — plain Python exceptions that
+  never become a `ConditionException` at all still need a backstop (one
+  surfaced live during this run: `<ERROR: Attribute error: 'LispSymbol' object
+  has no attribute 'upper'>` inside an `ETYPECASE` test, caught and reported as
+  an ordinary failure only because it happened to occur *inside* a test form
+  RT itself wraps in `handler-bind` — the same class of bug one level higher,
+  e.g. inside RT's own bookkeeping, would still crash the run).
+- `SIMPLE-TYPE-ERROR`, `SERIOUS-CONDITION`, `STORAGE-CONDITION`, `CELL-ERROR`,
+  and the rest of Finding E's "missing condition types" list still don't exist
+  as Python classes; `_condition_class_for_name`/the new `TYPEP` branch degrade
+  to `NIL` for them (sound, not silently wrong, but incomplete) — M8 scope.
+- The stray `LispString`-vs-reader discrepancy noted above is worth a real
+  investigation (grep the call path from `lispreader.read_9`'s return to
+  wherever a `LispString` wrapper gets applied) before M9 touches strings again.
+
+---
+
 ## Two dimensions of compliance — read this before the milestones
 
 "100% ANSI" is **not** primarily an evaluator problem. It has two independent
@@ -1232,11 +1400,16 @@ both is the worst option.
    - `WARN` routing through `format_fn` and actually signaling — five lines. Fixed (see
      M0 item 4 above); ended up broader than five lines once the duplicate-implementation
      consolidation (Finding L) was accounted for.
-1. **M0** — implicit `NIL` block for `LOOP` **[done, predates this update]**; run-completeness
-   assertion **[not done]**; FORMAT argument cursor **[DONE 2026-08-09]**; RT-list-based
-   scoreboard **[not done]**. The suite now runs to completion (22036/22036, verified) —
-   remaining M0 work is the completeness *assertion*, the REPAIR.md heuristic deletion,
-   the structured reporter, and `expected-failures` wiring (steps 2, 3, 6, 7 above).
+1. **M0** — implicit `NIL` block for `LOOP` **[done]**; run-completeness assertion
+   **[DONE]** (`run_all_tests.py`'s `COMPLETENESS:` line, live in every run since);
+   REPAIR.md heuristic deletion **[DONE]**; FORMAT argument cursor **[DONE
+   2026-08-09]**; RT-list-based scoreboard (`ansi_results/*.txt` + `scripts/
+   ansi_score.py`) **[DONE]**. **Correction to this line's own prior claim**: it
+   previously said "the suite now runs to completion (22036/22036, verified)" —
+   false; every run to date, including after this session's fixes, still ends in
+   `COMPLETENESS: MISMATCH` (currently `accounted=4687` of `22036`, next blocker
+   `HANDLER-BIND.13`, see the Update above). Only `expected-failures` wiring (step
+   7) remains genuinely undone.
 2. **M1 step 1** — canonical CL symbol table. Highest yield per unit effort; also
    delete the blanket `except`.
 3. **M2** — environment model (RC-1 through RC-4). The prerequisite for M3 and M4, and

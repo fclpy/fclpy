@@ -1389,12 +1389,19 @@ def eval_loop(form, env):
             i += 2
             continue
 
-        if name == 'FOR':
+        if name in ('FOR', 'AS'):
+            # CLHS 6.1.2.1: "either the keyword FOR or the keyword AS may be
+            # used to begin a for-as-clause" -- AS is a full synonym, not a
+            # distinct clause. Previously unrecognized, so e.g. (loop as x in
+            # '(a b c) collect x) fell through to the "no iteration clause"
+            # branch below and looped forever evaluating AS/X/IN as inert
+            # body forms until the 10-minute LOOP_TIMEOUT_ERROR hard cap
+            # fired -- exercised by ~15 tests across iteration/loop2-7.lsp.
             candidate_var = forms[i+1]
             if not (isinstance(candidate_var, lisptype.LispSymbol) or _consp_internal(candidate_var)):
                 raise lisptype.LispNotImplementedError('LOOP FOR requires a symbol')
 
-            clause_stop = ('FOR', 'WHILE', 'UNTIL', 'REPEAT', 'DO', 'DOING',
+            clause_stop = ('FOR', 'AS', 'WHILE', 'UNTIL', 'REPEAT', 'DO', 'DOING',
                            'COLLECT', 'COLLECTING', 'APPEND', 'APPENDING',
                            'NCONC', 'NCONCING', 'SUM', 'SUMMING', 'COUNT', 'COUNTING',
                            'ALWAYS', 'THEREIS',
@@ -1593,7 +1600,7 @@ def eval_loop(form, env):
             while i < len(forms):
                 f = forms[i]
                 fname = sym_name(f)
-                if fname in ('FOR', 'WHILE', 'UNTIL', 'REPEAT', 'DO', 'DOING',
+                if fname in ('FOR', 'AS', 'WHILE', 'UNTIL', 'REPEAT', 'DO', 'DOING',
                              'COLLECT', 'COLLECTING', 'APPEND', 'APPENDING',
                              'NCONC', 'NCONCING', 'SUM', 'SUMMING', 'COUNT', 'COUNTING',
                              'ALWAYS', 'THEREIS',

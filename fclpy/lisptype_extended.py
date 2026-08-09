@@ -8,7 +8,7 @@ and restart support for advanced error handling.
 from fclpy.lisptype_basic import (
     LispSymbol, lispT, NIL, T, LispError, LispEnvironmentError,
     lispCons, Binding, FunctionBinding, SpecialForm,
-    is_truthy, lisp_bool, lispKeyword, lispCons, py_str_map
+    is_truthy, lisp_bool, lispKeyword, lispCons, py_str_map, LispString
 )
 
 
@@ -731,15 +731,30 @@ class Warning(Condition):
     pass
 
 
-class SimpleWarning(Warning):
+class SimpleWarning(Warning, SimpleCondition):
     """Simple warning condition with format control and arguments.
 
     This is used for warnings created with the SIMPLE-WARNING type specifier,
     and by WARN when its datum is a format-control string.
+
+    CLHS Figure 9-1 defines simple-warning's superclass list as (WARNING
+    SIMPLE-CONDITION) -- true multiple inheritance, not just WARNING. Every
+    accessor and TYPEP/HANDLER-CASE clause keyed on SIMPLE-CONDITION (the ANSI
+    suite's own FROB-SIMPLE-CONDITION helper, for one) depends on that second
+    parent; without it (typep <simple-warning> 'simple-condition) is NIL.
     """
     def __init__(self, format_control="", format_arguments=None, message="", **kwargs):
-        if not message and format_control:
-            message = format_control
+        # format_control may be a function (CLHS format-control designator,
+        # e.g. FORMATTER's result) rather than a string; __str__ must always
+        # return a plain str, so only borrow it as the message when it is
+        # string-like, and coerce a LispString (a distinct class with no str
+        # base -- see plan.md Finding I) to str -- storing the LispString
+        # object itself as `message` would make str(condition) raise
+        # "__str__ returned non-string (type LispString)" the moment
+        # anything printed or matched the condition. A callable format
+        # control leaves message empty rather than crashing the same way.
+        if not message and format_control and isinstance(format_control, (str, LispString)):
+            message = str(format_control)
         super().__init__(message, **kwargs)
         self._slots['format-control'] = format_control
         self._slots['format-arguments'] = format_arguments or []
@@ -843,14 +858,29 @@ class FloatingPointUnderflow(ArithmeticError):
     pass
 
 
-class SimpleError(Error):
+class SimpleError(Error, SimpleCondition):
     """Simple error condition with format control and arguments.
-    
+
     This is used for errors created with SIMPLE-ERROR type specifier.
+
+    CLHS Figure 9-1 defines simple-error's superclass list as (ERROR
+    SIMPLE-CONDITION) -- true multiple inheritance, not just ERROR. Every
+    accessor and TYPEP/HANDLER-CASE clause keyed on SIMPLE-CONDITION (the ANSI
+    suite's own FROB-SIMPLE-CONDITION helper, for one) depends on that second
+    parent; without it (typep <simple-error> 'simple-condition) is NIL.
     """
     def __init__(self, format_control="", format_arguments=None, message="", **kwargs):
-        if not message and format_control:
-            message = format_control
+        # format_control may be a function (CLHS format-control designator,
+        # e.g. FORMATTER's result) rather than a string; __str__ must always
+        # return a plain str, so only borrow it as the message when it is
+        # string-like, and coerce a LispString (a distinct class with no str
+        # base -- see plan.md Finding I) to str -- storing the LispString
+        # object itself as `message` would make str(condition) raise
+        # "__str__ returned non-string (type LispString)" the moment
+        # anything printed or matched the condition. A callable format
+        # control leaves message empty rather than crashing the same way.
+        if not message and format_control and isinstance(format_control, (str, LispString)):
+            message = str(format_control)
         super().__init__(message, **kwargs)
         self._slots['format-control'] = format_control
         self._slots['format-arguments'] = format_arguments or []

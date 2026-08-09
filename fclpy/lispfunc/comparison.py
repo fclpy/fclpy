@@ -353,7 +353,28 @@ def typep(object, type_specifier):
         type_name = type_specifier.name.upper()
     else:
         type_name = str(type_specifier).upper()
-    
+
+    # Conditions (ERROR, SIMPLE-ERROR, WARNING, CONDITION, ...) are plain
+    # Python classes in lisptype_extended.py, mirroring the ANSI condition
+    # hierarchy via ordinary Python inheritance (SimpleError -> Error ->
+    # Condition) -- not CLOS classes, so the LispClass/find_class branches
+    # above and below never see them. Previously TYPEP had no branch for
+    # them at all, so e.g. (typep c 'simple-error) on a real SimpleError
+    # instance fell through to the "no such class" NIL at the bottom: every
+    # condition-type-dispatching test (HANDLER-CASE clauses tested via
+    # TYPEP, FROB-SIMPLE-ERROR in the ANSI suite's own test helpers, ...)
+    # silently took the wrong branch. isinstance() against the mapped class
+    # gives correct subtype behavior for free, the same lattice-for-free
+    # Finding E calls for in the handler-matching code.
+    if isinstance(object, lisptype.Condition):
+        if type_name in ('T', 'CONDITION'):
+            return lisptype.T
+        from fclpy.lispfunc.evaluation_conditions import _condition_class_for_name
+        condition_class = _condition_class_for_name(type_name)
+        if isinstance(condition_class, type):
+            return lisptype.lisp_bool(isinstance(object, condition_class))
+        return lisptype.NIL
+
     # Check for built-in types
     if type_name == 'T':
         return lisptype.T

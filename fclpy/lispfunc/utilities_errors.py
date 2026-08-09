@@ -14,8 +14,25 @@ def define_condition(name, parent_types, slot_specs, *options):
 
 @_registry.cl_function('MAKE-CONDITION')
 def make_condition(type_designator, *args):
-    """Create condition object."""
-    return type_designator
+    """Create and return a condition object (CLHS 9.2 MAKE-CONDITION).
+
+    type_designator names a condition type; the remaining args are
+    alternating initarg keyword/value pairs, exactly like MAKE-INSTANCE.
+    Previously a stub that returned type_designator itself -- the bare type
+    symbol, not a condition -- so (error (make-condition 'simple-error ...))
+    signaled an unmatchable non-condition object (plan.md Finding E) instead
+    of a real one.
+    """
+    from fclpy.lispfunc.evaluation_conditions import _make_condition_from_evaluated_designator
+
+    if isinstance(type_designator, (lisptype.LispSymbol, lisptype.lispKeyword)):
+        built = _make_condition_from_evaluated_designator(type_designator, list(args))
+        if built is not None:
+            return built
+
+    raise lisptype.LispTypeError(
+        f"MAKE-CONDITION: {type_designator!r} does not designate a known condition type",
+        expected_type='condition-type-designator', actual_value=type_designator)
 
 
 @_registry.cl_function('SIGNAL')

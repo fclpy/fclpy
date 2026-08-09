@@ -1494,38 +1494,80 @@ def format_fn(destination, control_string, *args):
         ~^    Escape from iteration
         ~P    Plural
     """
+    if callable(control_string) and not isinstance(control_string, (str, lisptype.LispString)):
+        # CLHS 22.3.1 / the "format control" glossary entry: control-string
+        # is a designator for either a string or a function of (stream
+        # &rest args) -- the latter is what FORMATTER returns. Call it
+        # directly instead of falling into str(control_string) below, which
+        # would hand FORMAT the function's Python repr ("<function ... at
+        # 0x...>") to interpret as literal directive text.
+        if destination is None or destination is lisptype.NIL:
+            from .streams import make_string_output_stream as _make_sos, get_output_stream_string as _get_oss
+            capture = _make_sos()
+            control_string(capture, *args)
+            return _get_oss(capture)
+        elif destination is True or destination is lisptype.T:
+            control_string(lisptype.T, *args)
+            return lisptype.NIL
+        else:
+            control_string(destination, *args)
+            return lisptype.NIL
+
     if control_string is None:
         control_string = ""
     elif not isinstance(control_string, str):
         control_string = str(control_string)
-    
+
     formatted = _format_process(control_string, args)
-    
+
     if destination is True or destination is lisptype.T:
         print(formatted, end='')
         return lisptype.NIL
     elif destination is None or destination is lisptype.NIL:
         return formatted
     else:
-        # Assume destination is a stream
-        if hasattr(destination, 'write'):
-            destination.write(formatted)
-        else:
-            print(formatted, end='')
+        _write_stream_output(destination, formatted)
         return lisptype.NIL
+
+
+def _write_stream_output(destination, text):
+    """Write `text` to a FORMAT/FORMATTER stream destination.
+
+    Mirrors the isinstance(stream, Stream) -> write_sequence(...) convention
+    PRIN1/PRINC/TERPRI already use (see above) -- fclpy's Stream classes
+    expose write_sequence/write_char, not Python's file-like .write(), so
+    checking hasattr(destination, 'write') is never true for them and used
+    to silently fall through to printing at stdout regardless of which
+    stream was actually requested.
+    """
+    if destination is True or destination is lisptype.T:
+        print(text, end='')
+        return
+    from .streams import Stream
+    if isinstance(destination, Stream):
+        destination.write_sequence(text)
+        return
+    try:
+        destination.write(text)
+    except Exception:
+        print(text, end='')
 
 
 @_registry.cl_function('FORMATTER')
 def formatter(control_string):
-    """Create formatter function."""
+    """Create formatter function (CLHS 22.3.1: (FORMATTER control-string)).
+
+    Returns a function of (stream &rest args) -- the function-valued half of
+    the "format control" designator FORMAT and ERROR/WARN/CERROR datums also
+    accept -- that formats args per control-string and writes the result to
+    stream, returning the list of arguments it did not consume.
+    """
+    control_string_str = str(control_string)
+
     def format_func(stream, *args):
         # Use internal processor to obtain remaining-args index (tail)
-        formatted, consumed = _format_process_with_tail(control_string, args)
-        # Write formatted output to provided stream
-        if hasattr(stream, 'write'):
-            stream.write(formatted)
-        else:
-            print(formatted, end='')
+        formatted, consumed = _format_process_with_tail(control_string_str, args)
+        _write_stream_output(stream, formatted)
         # Return the tail (remaining args) as a list
         return list(args[consumed:])
 
@@ -1814,14 +1856,33 @@ def compile_file_pathname(input_file, output_file=None, **kwargs):
 # Condition operations
 @_registry.cl_function('SIMPLE-CONDITION-FORMAT-ARGUMENTS')
 def simple_condition_format_arguments(condition):
-    """Get format arguments from condition."""
-    return []  # Simplified
+    """Get the format-arguments slot of a simple-condition (CLHS 9.2).
+
+    Previously a stub that always returned () regardless of what the
+    condition actually stored, so any simple-condition/simple-error/
+    simple-warning signaled with format arguments (e.g. (error "~A" 10))
+    lost them the moment a handler tried to read them back via this
+    accessor -- FORMAT would then be called with no arguments at all.
+    """
+    if isinstance(condition, lisptype.Condition):
+        return list(condition.get_slot('format-arguments') or [])
+    return []
 
 
 @_registry.cl_function('SIMPLE-CONDITION-FORMAT-CONTROL')
 def simple_condition_format_control(condition):
-    """Get format control from condition."""
-    return str(condition)  # Simplified
+    """Get the format-control slot of a simple-condition (CLHS 9.2).
+
+    Previously a stub that returned str(condition) -- the condition's
+    *report message*, not its format-control slot -- so this only
+    happened to work when format-control was a plain string with no
+    arguments and the message hadn't diverged from it; a function-valued
+    format-control (FORMATTER's result) or one with format arguments was
+    silently discarded.
+    """
+    if isinstance(condition, lisptype.Condition):
+        return condition.get_slot('format-control')
+    return str(condition)
 
 
 def end_of_file():
