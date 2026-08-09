@@ -163,3 +163,5 @@ gpt5review.txt
 
 
 *.err
+
+ansi_results/

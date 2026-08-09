@@ -1,14 +1,16 @@
 # Test Suite Crash Repair Guide
 
-> **⚠ HISTORICAL — and Step 2's heuristic is actively dangerous.**
+> **⚠ HISTORICAL.**
 >
-> **Do not use the rule at line 33** ("if the last completed test is also the final
-> test listed in the .lsp file, determine order from doit.log"). That heuristic
-> misread a silent abort as a clean finish: the run stops at `DOTIMES.ERROR.1`, which
-> *is* the last test in `dotimes.lsp`, but the suite had only executed 2 990 of 22 036
-> tests. A run is complete **only** when `(length *passed-tests*) + (length
-> *failed-tests*) = (length (cdr *entries*))` — assert it programmatically, never
-> eyeball the log tail.
+> This document's original Step 2 told you to fall back to `doit.log` execution order
+> "if the last completed test is also the final test listed in the .lsp file." That
+> heuristic is deleted — it is what let a silent abort look like a clean finish: the
+> run used to stop at `DOTIMES.ERROR.1`, which *is* the last test in `dotimes.lsp`, but
+> the suite had only executed 2 990 of 22 036 tests. A run's completeness is never
+> determined by eyeballing the log tail. `run_all_tests.py` now asserts it
+> programmatically — `(length *passed-tests*) + (length *failed-tests*)` must equal
+> `(length (cdr *entries*))` — and prints `COMPLETENESS: OK` or `COMPLETENESS: MISMATCH`
+> plus the exact missing test names. Trust that line, not the log tail.
 >
 > Crashes are no longer the binding constraint; silent wrong answers are. Current work
 > mode is milestone-driven semantic repair — see [plan.md](plan.md).
@@ -41,11 +43,14 @@ The crashing test is **the next test after the last one in the log**.
 
 Example: If log ends with `DEFMACRO.10 failed`, the crashing test is `DEFMACRO.11`.
 
-**If unsure:** Read the stderr traceback to see which test raised the exception.
+**If unsure:** Read the stderr traceback to see which test raised the exception, and
+check `run_all_tests.py`'s `COMPLETENESS:` line — it names every entry that is in
+`*entries*` but missing from both `*passed-tests*` and `*failed-tests*`, which is
+exactly the crashing test when there is only one.
 
-If the crashed test cannot be identified from the because the last completed test is also the final test listed in the .lsp file, then determine the test order using doit.log.
-
-The file doit.log contains the execution output from a Lisp process that ran all tests sequentially and can be used to identify the test that was running when the crash occurred.
+`doit.log` contains the execution output from a real conforming Lisp that ran every
+test sequentially; use it only to recover **execution order** between the completeness
+check's candidate names, never to decide *whether* the run completed.
 
 
 ### 3. Isolate & Reproduce

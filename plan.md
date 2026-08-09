@@ -50,6 +50,54 @@ triage (step 8), and the 113-entry registered-vs-reference-suite surplus investi
 
 ---
 
+## Update (2026-08-09, later same session): the LOOP implicit-NIL-block fix this document
+## and CLAUDE.md claimed was already done was never actually in the code
+
+**This update corrects a false claim in the section above and in CLAUDE.md's status
+banner.** Both said the truncation-causing bug ("`eval_loop` establishes no implicit
+`NIL` block") was "fixed (predates the 2026-08-09 session)". It was not. Implementing
+M0 steps 2 and 6 (run-completeness assertion, structured reporter) surfaced this
+immediately: the new assertion — pulled live from RT's own `*entries*`/`*passed-tests*`/
+`*failed-tests*`, not parsed from any FORMAT-rendered text — reported `COMPLETENESS:
+MISMATCH` with `accounted=2990` out of `total=22036` on the very first run, and the log
+tail was, byte-for-byte, the same truncation point (`DOTIMES.ERROR.1`, immediately
+before `iteration/loop.lsp:9`'s `sloop.1`) documented in this file's now-historical
+"Reality check" section. Source inspection confirmed it: `eval_loop`
+(`evaluation_loops_conditionals.py`) never called `_run_with_nil_block`, unlike
+`eval_do`/`eval_dotimes`/`eval_dolist`. The "829 failures... verified with an isolated
+before/after run" claim in the first Update above was evidently a real observation of
+*something*, but not of a complete 22036-test run — RT's own summary line prints
+`out of 22036` unconditionally (it's the *initial pending count*, not a count of tests
+actually executed), so eyeballing that line the way the original "Reality check"
+section explicitly warned against is exactly how this went unnoticed.
+
+**Fix applied.** `eval_loop`'s entire iteration/FINALLY/result-computation section is
+now a nested closure (`_run_loop_and_finalize`) whose call is wrapped in
+`_run_with_nil_block`, the same helper `DO`/`DO*`/`DOLIST`/`DOTIMES` already used —
+consolidating LOOP onto the existing mechanism rather than inventing a second one.
+Caught along the way: the "no iteration clause" branch of `eval_loop` (CLHS 6.1.1
+simple LOOP) only ever executed its body **once** instead of repeating until a
+non-local exit — invisible before because `sloop.1`-style single-shot tests never
+exercised the repeat path, and the suite never got far enough to reach `sloop.5`/`.6`/
+`.7` (which do: `(loop (when (>= i 4) (return x)) (incf i) (push 'a x))`). Fixed
+alongside the block fix since it's the same branch and the same class of defect
+(LOOP not actually implementing the ANSI iteration semantics it's supposed to).
+Verified in isolation: `sloop.1`–`.7` all now evaluate to their documented expected
+values; `pytest -q` — 1172 passed, 1 pre-existing unrelated failure
+(`STREAM-ELEMENT-TYPE` missing from the function registry, a `streams/` gap, M10).
+
+**Lesson for future sessions**: a plan/status document's claim that something is
+"fixed" is only as trustworthy as the measurement that produced it. Re-verify status
+claims against a live signal (here: the completeness assertion this same milestone
+step called for) before building on top of them — this is the concrete case M0's own
+rationale ("you cannot even measure A without B") was warning about.
+
+*(Full-suite before/after numbers with this fix pending a fresh `run_all_tests.py`
+run at the time of writing; see the ANSI impact section of this session's completion
+report for the verified count.)*
+
+---
+
 ## Two dimensions of compliance — read this before the milestones
 
 "100% ANSI" is **not** primarily an evaluator problem. It has two independent

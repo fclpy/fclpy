@@ -1366,12 +1366,18 @@ def eval_loop(form, env):
     finally_forms = []
     return_form = None  # RETURN clause form to evaluate during loop
     finally_return_form = None  # RETURN clause in FINALLY section (evaluated at end)
-    
+    loop_block_name = None  # NIL unless a NAMED clause gives the loop its own block name
+
     # Parse clauses
     while i < len(forms):
         token = forms[i]
         name = sym_name(token)
-        
+
+        if name == 'NAMED':
+            loop_block_name = forms[i+1]
+            i += 2
+            continue
+
         if name == 'FOR':
             candidate_var = forms[i+1]
             if not (isinstance(candidate_var, lisptype.LispSymbol) or _consp_internal(candidate_var)):
@@ -1762,471 +1768,502 @@ def eval_loop(form, env):
                     return_triggered = True  # Exit loop immediately
 
     
-    # Main loop execution with timeout warning
-    loop_start_time = time.time()
-    loop_iterations = 0
-    warning_printed = False
+    def _run_loop_and_finalize():
+        """Run the loop's iteration/FINALLY/result logic under the loop's own
+        implicit NIL block, so a plain (RETURN x) / (RETURN-FROM NIL x) inside
+        the body exits *this* LOOP form instead of leaking out to whatever
+        enclosing DO/DOLIST/DOTIMES/LOOP happens to be running the dynamic
+        extent (see plan.md Finding under M0 step 1).
+        """
+        nonlocal result
+        # Main loop execution with timeout warning
+        loop_start_time = time.time()
+        loop_iterations = 0
+        warning_printed = False
     
-    def check_loop_timeout():
-        """Check if loop has been running too long and print warning."""
-        nonlocal warning_printed, loop_iterations
-        loop_iterations += 1
-        if LOOP_TIMEOUT_WARNING > 0 and not warning_printed:
-            elapsed = time.time() - loop_start_time
-            if elapsed > LOOP_TIMEOUT_WARNING:
-                warning_printed = True
-                print(f"\n*** LOOP WARNING: Loop has been running for {elapsed:.1f}s ({loop_iterations} iterations) ***", file=sys.stderr)
-                print(f"*** LOOP body_forms: {body_forms} ***", file=sys.stderr)
-                print(f"*** LOOP iteration_type: {iteration_type}, iteration_test: {iteration_test} ***", file=sys.stderr)
-                if iteration_var:
-                    print(f"*** LOOP var: {iteration_var} ***", file=sys.stderr)
-                sys.stderr.flush()
+        def check_loop_timeout():
+            """Check if loop has been running too long and print warning."""
+            nonlocal warning_printed, loop_iterations
+            loop_iterations += 1
+            if LOOP_TIMEOUT_WARNING > 0 and not warning_printed:
+                elapsed = time.time() - loop_start_time
+                if elapsed > LOOP_TIMEOUT_WARNING:
+                    warning_printed = True
+                    print(f"\n*** LOOP WARNING: Loop has been running for {elapsed:.1f}s ({loop_iterations} iterations) ***", file=sys.stderr)
+                    print(f"*** LOOP body_forms: {body_forms} ***", file=sys.stderr)
+                    print(f"*** LOOP iteration_type: {iteration_type}, iteration_test: {iteration_test} ***", file=sys.stderr)
+                    if iteration_var:
+                        print(f"*** LOOP var: {iteration_var} ***", file=sys.stderr)
+                    sys.stderr.flush()
 
-    def _termination_break(loop_env):
-        """Check termination_type/iteration_test if present."""
-        if iteration_test is None or termination_type is None:
+        def _termination_break(loop_env):
+            """Check termination_type/iteration_test if present."""
+            if iteration_test is None or termination_type is None:
+                return False
+            test_result = eval(iteration_test, loop_env)
+            if termination_type == 'until' and lisptype.is_truthy(test_result):
+                return True
+            if termination_type == 'while' and not lisptype.is_truthy(test_result):
+                return True
             return False
-        test_result = eval(iteration_test, loop_env)
-        if termination_type == 'until' and lisptype.is_truthy(test_result):
-            return True
-        if termination_type == 'while' and not lisptype.is_truthy(test_result):
-            return True
-        return False
 
-    def _init_driver(loop_env, driver):
-        kind = driver['kind']
-        if kind in ('for-in', 'for-on'):
-            driver['_cur'] = eval(driver['list'], loop_env)
-            return True
-        if kind == 'for-across':
-            driver['_seq'] = eval(driver['list'], loop_env)
-            driver['_idx'] = 0
-            return True
-        if kind in ('for-range', 'for-below'):
-            start_form = driver.get('start', 0)
-            end_form = driver.get('end')
-            step_form = driver.get('step')
-            if step_form is None:
-                step_form = 1
-            start = eval(start_form, loop_env) if not isinstance(start_form, int) else start_form
-            end = eval(end_form, loop_env)
-            step = eval(step_form, loop_env) if not isinstance(step_form, int) else step_form
-            if step == 0:
-                raise lisptype.LispNotImplementedError('LOOP BY step cannot be 0')
-            driver['_cur'] = start
-            driver['_end'] = end
-            driver['_step'] = step
-            return True
-        if kind == 'for-from':
-            start_form = driver.get('start', 0)
-            step_form = driver.get('step')
-            if step_form is None:
-                step_form = 1
-            start = eval(start_form, loop_env) if not isinstance(start_form, int) else start_form
-            step = eval(step_form, loop_env) if not isinstance(step_form, int) else step_form
-            if step == 0:
-                raise lisptype.LispNotImplementedError('LOOP BY step cannot be 0')
-            driver['_cur'] = start
-            driver['_step'] = step
-            return True
-        if kind == 'for-equals':
-            start_form = driver.get('start')
-            step_form = driver.get('step')
-            driver['_cur'] = eval(start_form, loop_env)
-            driver['_step_form'] = step_form
-            return True
-        if kind == 'for-being-symbols':
-            # Evaluate package spec (could be string, symbol, or package object)
-            pkg_spec = driver.get('list')
-            pkg = None
-            if pkg_spec is None:
+        def _init_driver(loop_env, driver):
+            kind = driver['kind']
+            if kind in ('for-in', 'for-on'):
+                driver['_cur'] = eval(driver['list'], loop_env)
+                return True
+            if kind == 'for-across':
+                driver['_seq'] = eval(driver['list'], loop_env)
+                driver['_idx'] = 0
+                return True
+            if kind in ('for-range', 'for-below'):
+                start_form = driver.get('start', 0)
+                end_form = driver.get('end')
+                step_form = driver.get('step')
+                if step_form is None:
+                    step_form = 1
+                start = eval(start_form, loop_env) if not isinstance(start_form, int) else start_form
+                end = eval(end_form, loop_env)
+                step = eval(step_form, loop_env) if not isinstance(step_form, int) else step_form
+                if step == 0:
+                    raise lisptype.LispNotImplementedError('LOOP BY step cannot be 0')
+                driver['_cur'] = start
+                driver['_end'] = end
+                driver['_step'] = step
+                return True
+            if kind == 'for-from':
+                start_form = driver.get('start', 0)
+                step_form = driver.get('step')
+                if step_form is None:
+                    step_form = 1
+                start = eval(start_form, loop_env) if not isinstance(start_form, int) else start_form
+                step = eval(step_form, loop_env) if not isinstance(step_form, int) else step_form
+                if step == 0:
+                    raise lisptype.LispNotImplementedError('LOOP BY step cannot be 0')
+                driver['_cur'] = start
+                driver['_step'] = step
+                return True
+            if kind == 'for-equals':
+                start_form = driver.get('start')
+                step_form = driver.get('step')
+                driver['_cur'] = eval(start_form, loop_env)
+                driver['_step_form'] = step_form
+                return True
+            if kind == 'for-being-symbols':
+                # Evaluate package spec (could be string, symbol, or package object)
+                pkg_spec = driver.get('list')
                 pkg = None
-            else:
-                # Evaluate the package spec in the loop environment if it's an expression
-                try:
-                    pkg_val = eval(pkg_spec, loop_env) if not isinstance(pkg_spec, (str,)) else pkg_spec
-                except Exception:
-                    pkg_val = pkg_spec
-
-                # pkg_val may be a LispPackage, LispSymbol, or string
-                import fclpy.lisptype as lisptype
-                if isinstance(pkg_val, lisptype.Package):
-                    pkg = pkg_val
+                if pkg_spec is None:
+                    pkg = None
                 else:
-                    name = None
-                    if isinstance(pkg_val, lisptype.LispSymbol):
-                        name = pkg_val.name
-                    elif isinstance(pkg_val, str):
-                        name = pkg_val
-                    else:
-                        # Try string conversion
-                        name = str(pkg_val)
+                    # Evaluate the package spec in the loop environment if it's an expression
                     try:
-                        pkg = lisptype.find_package(name)
+                        pkg_val = eval(pkg_spec, loop_env) if not isinstance(pkg_spec, (str,)) else pkg_spec
                     except Exception:
-                        pkg = None
+                        pkg_val = pkg_spec
 
-            # Build a cons list of symbols from the package
-            cur_list = lisptype.NIL
-            if pkg is not None and hasattr(pkg, 'symbols'):
-                # iterate over symbol objects
-                vals = list(pkg.symbols.values())
-                for s in reversed(vals):
-                    cur_list = cons(s, cur_list)
-            driver['_cur'] = cur_list
-            return True
-        raise lisptype.LispNotImplementedError(f'LOOP driver kind not implemented: {kind}')
+                    # pkg_val may be a LispPackage, LispSymbol, or string
+                    import fclpy.lisptype as lisptype
+                    if isinstance(pkg_val, lisptype.Package):
+                        pkg = pkg_val
+                    else:
+                        name = None
+                        if isinstance(pkg_val, lisptype.LispSymbol):
+                            name = pkg_val.name
+                        elif isinstance(pkg_val, str):
+                            name = pkg_val
+                        else:
+                            # Try string conversion
+                            name = str(pkg_val)
+                        try:
+                            pkg = lisptype.find_package(name)
+                        except Exception:
+                            pkg = None
 
-    def _driver_has_value(driver):
-        kind = driver['kind']
-        if kind in ('for-in', 'for-on'):
-            return _consp_internal(driver.get('_cur'))
-        if kind == 'for-across':
-            seq = driver.get('_seq')
-            idx = driver.get('_idx', 0)
-            if isinstance(seq, str):
-                return idx < len(seq)
-            if hasattr(seq, '__len__'):
-                return idx < len(seq)
+                # Build a cons list of symbols from the package
+                cur_list = lisptype.NIL
+                if pkg is not None and hasattr(pkg, 'symbols'):
+                    # iterate over symbol objects
+                    vals = list(pkg.symbols.values())
+                    for s in reversed(vals):
+                        cur_list = cons(s, cur_list)
+                driver['_cur'] = cur_list
+                return True
+            raise lisptype.LispNotImplementedError(f'LOOP driver kind not implemented: {kind}')
+
+        def _driver_has_value(driver):
+            kind = driver['kind']
+            if kind in ('for-in', 'for-on'):
+                return _consp_internal(driver.get('_cur'))
+            if kind == 'for-across':
+                seq = driver.get('_seq')
+                idx = driver.get('_idx', 0)
+                if isinstance(seq, str):
+                    return idx < len(seq)
+                if hasattr(seq, '__len__'):
+                    return idx < len(seq)
+                return False
+            if kind == 'for-range':
+                cur = driver.get('_cur')
+                end = driver.get('_end')
+                step = driver.get('_step')
+                if step is None:
+                    return False
+                return (cur <= end) if step > 0 else (cur >= end)
+            if kind == 'for-below':
+                cur = driver.get('_cur')
+                end = driver.get('_end')
+                step = driver.get('_step')
+                if step is None:
+                    return False
+                return (cur < end) if step > 0 else (cur > end)
+            if kind == 'for-from':
+                return True
+            if kind == 'for-equals':
+                return True
+            if kind == 'for-being-symbols':
+                return _consp_internal(driver.get('_cur'))
             return False
-        if kind == 'for-range':
-            cur = driver.get('_cur')
-            end = driver.get('_end')
-            step = driver.get('_step')
-            if step is None:
-                return False
-            return (cur <= end) if step > 0 else (cur >= end)
-        if kind == 'for-below':
-            cur = driver.get('_cur')
-            end = driver.get('_end')
-            step = driver.get('_step')
-            if step is None:
-                return False
-            return (cur < end) if step > 0 else (cur > end)
-        if kind == 'for-from':
-            return True
-        if kind == 'for-equals':
-            return True
-        if kind == 'for-being-symbols':
-            return _consp_internal(driver.get('_cur'))
-        return False
 
-    def _bind_driver(loop_env, driver):
-        kind = driver['kind']
-        var = driver['var']
-        if kind == 'for-in':
-            _bind_varspec(loop_env, var, car(driver['_cur']))
-            return
-        if kind == 'for-on':
-            _bind_varspec(loop_env, var, driver['_cur'])
-            return
-        if kind == 'for-across':
-            seq = driver['_seq']
-            idx = driver['_idx']
-            # Return plain characters (strings) for string sequences.
-            # The rest of the system treats characters as single-char strings.
-            _bind_varspec(loop_env, var, seq[idx])
-            return
-        if kind in ('for-range', 'for-below'):
-            _bind_varspec(loop_env, var, driver['_cur'])
-            return
-        if kind == 'for-from':
-            _bind_varspec(loop_env, var, driver['_cur'])
-            return
-        if kind == 'for-equals':
-            _bind_varspec(loop_env, var, driver['_cur'])
-            return
-        if kind == 'for-being-symbols':
-            _bind_varspec(loop_env, var, car(driver['_cur']))
-            return
+        def _bind_driver(loop_env, driver):
+            kind = driver['kind']
+            var = driver['var']
+            if kind == 'for-in':
+                _bind_varspec(loop_env, var, car(driver['_cur']))
+                return
+            if kind == 'for-on':
+                _bind_varspec(loop_env, var, driver['_cur'])
+                return
+            if kind == 'for-across':
+                seq = driver['_seq']
+                idx = driver['_idx']
+                # Return plain characters (strings) for string sequences.
+                # The rest of the system treats characters as single-char strings.
+                _bind_varspec(loop_env, var, seq[idx])
+                return
+            if kind in ('for-range', 'for-below'):
+                _bind_varspec(loop_env, var, driver['_cur'])
+                return
+            if kind == 'for-from':
+                _bind_varspec(loop_env, var, driver['_cur'])
+                return
+            if kind == 'for-equals':
+                _bind_varspec(loop_env, var, driver['_cur'])
+                return
+            if kind == 'for-being-symbols':
+                _bind_varspec(loop_env, var, car(driver['_cur']))
+                return
 
-    def _step_driver(loop_env, driver):
-        kind = driver['kind']
-        if kind in ('for-in', 'for-on'):
-            driver['_cur'] = cdr(driver['_cur'])
-            return
-        if kind == 'for-across':
-            driver['_idx'] = driver.get('_idx', 0) + 1
-            return
-        if kind in ('for-range', 'for-below'):
-            driver['_cur'] = driver['_cur'] + driver['_step']
-            return
-        if kind == 'for-from':
-            driver['_cur'] = driver['_cur'] + driver['_step']
-            return
-        if kind == 'for-equals':
-            step_form = driver.get('_step_form')
-            if step_form is not None:
-                driver['_cur'] = eval(step_form, loop_env)
-            else:
-                driver['_cur'] = eval(driver.get('start'), loop_env)
-            return
-        if kind == 'for-being-symbols':
-            driver['_cur'] = cdr(driver['_cur'])
-            return
+        def _step_driver(loop_env, driver):
+            kind = driver['kind']
+            if kind in ('for-in', 'for-on'):
+                driver['_cur'] = cdr(driver['_cur'])
+                return
+            if kind == 'for-across':
+                driver['_idx'] = driver.get('_idx', 0) + 1
+                return
+            if kind in ('for-range', 'for-below'):
+                driver['_cur'] = driver['_cur'] + driver['_step']
+                return
+            if kind == 'for-from':
+                driver['_cur'] = driver['_cur'] + driver['_step']
+                return
+            if kind == 'for-equals':
+                step_form = driver.get('_step_form')
+                if step_form is not None:
+                    driver['_cur'] = eval(step_form, loop_env)
+                else:
+                    driver['_cur'] = eval(driver.get('start'), loop_env)
+                return
+            if kind == 'for-being-symbols':
+                driver['_cur'] = cdr(driver['_cur'])
+                return
     
-    # Parallel drivers: iterate while all drivers can produce values.
-    if len(iteration_drivers) > 1:
-        loop_env = lisptype.Environment(env)
-        for d in iteration_drivers:
-            _init_driver(loop_env, d)
-
-        while all(_driver_has_value(d) for d in iteration_drivers):
-            check_loop_timeout()
-            if _termination_break(loop_env):
-                break
-
+        # Parallel drivers: iterate while all drivers can produce values.
+        if len(iteration_drivers) > 1:
+            loop_env = lisptype.Environment(env)
             for d in iteration_drivers:
-                _bind_driver(loop_env, d)
-            bind_aux(loop_env)
-            execute_iteration_body(loop_env)
-            
-            if return_triggered:
-                break
+                _init_driver(loop_env, d)
 
-            for d in iteration_drivers:
-                _step_driver(loop_env, d)
-
-    elif iteration_type == 'while':
-        while lisptype.is_truthy(eval(iteration_test, env)):
-            check_loop_timeout()
-            bind_aux(env)
-            execute_iteration_body(env)
-            if return_triggered:
-                break
-            
-    elif iteration_type == 'until':
-        while True:
-            check_loop_timeout()
-            bind_aux(env)
-            execute_iteration_body(env)
-            if return_triggered:
-                break
-            if lisptype.is_truthy(eval(iteration_test, env)):
-                break
-                
-    elif iteration_type == 'repeat':
-        count = eval(repeat_count, env)
-        for _ in range(count):
-            check_loop_timeout()
-            bind_aux(env)
-            execute_iteration_body(env)
-            if return_triggered:
-                break
-            
-    elif iteration_type == 'for-range':
-        start = eval(iteration_start, env) if not isinstance(iteration_start, int) else iteration_start
-        end = eval(iteration_end, env)
-        step = eval(iteration_step, env) if not isinstance(iteration_step, int) else iteration_step
-        if step == 0:
-            raise lisptype.LispNotImplementedError('LOOP BY step cannot be 0')
-        
-        loop_env = lisptype.Environment(env)
-        cur = start
-        compare = (lambda a, b: a <= b) if step > 0 else (lambda a, b: a >= b)
-        while compare(cur, end):
-            check_loop_timeout()
-            if _termination_break(loop_env):
-                break
-            _bind_varspec(loop_env, iteration_var, cur)
-            bind_aux(loop_env)
-            execute_iteration_body(loop_env)
-            if return_triggered:
-                break
-            cur = cur + step
-            
-    elif iteration_type == 'for-below':
-        start = eval(iteration_start, env) if not isinstance(iteration_start, int) else iteration_start
-        end = eval(iteration_end, env)
-        step = eval(iteration_step, env) if not isinstance(iteration_step, int) else iteration_step
-        if step == 0:
-            raise lisptype.LispNotImplementedError('LOOP BY step cannot be 0')
-        
-        loop_env = lisptype.Environment(env)
-        cur = start
-        compare = (lambda a, b: a < b) if step > 0 else (lambda a, b: a > b)
-        while compare(cur, end):
-            check_loop_timeout()
-            if _termination_break(loop_env):
-                break
-            _bind_varspec(loop_env, iteration_var, cur)
-            bind_aux(loop_env)
-            execute_iteration_body(loop_env)
-            if return_triggered:
-                break
-            cur = cur + step
-            
-    elif iteration_type == 'for-in':
-        lst = eval(iteration_list, env)
-        loop_env = lisptype.Environment(env)
-        cur = lst
-        while _consp_internal(cur):
-            check_loop_timeout()
-            if _termination_break(loop_env):
-                break
-            _bind_varspec(loop_env, iteration_var, car(cur))
-            bind_aux(loop_env)
-            execute_iteration_body(loop_env)
-            if return_triggered:
-                break
-            cur = cdr(cur)
-            
-    elif iteration_type == 'for-on':
-        lst = eval(iteration_list, env)
-        loop_env = lisptype.Environment(env)
-        cur = lst
-        while _consp_internal(cur):
-            check_loop_timeout()
-            if _termination_break(loop_env):
-                break
-            _bind_varspec(loop_env, iteration_var, cur)
-            bind_aux(loop_env)
-            execute_iteration_body(loop_env)
-            if return_triggered:
-                break
-            cur = cdr(cur)
-            
-    elif iteration_type == 'for-across':
-        # FOR x ACROSS vector/string - iterate over array elements
-        seq = eval(iteration_list, env)
-        loop_env = lisptype.Environment(env)
-        
-        # Handle different sequence types
-        if isinstance(seq, str):
-            # String - iterate over characters as plain strings (not Character objects).
-            # The rest of the system treats characters as single-char strings.
-            for char in seq:
+            while all(_driver_has_value(d) for d in iteration_drivers):
                 check_loop_timeout()
-                _bind_varspec(loop_env, iteration_var, char)
+                if _termination_break(loop_env):
+                    break
+
+                for d in iteration_drivers:
+                    _bind_driver(loop_env, d)
+                bind_aux(loop_env)
+                execute_iteration_body(loop_env)
+            
+                if return_triggered:
+                    break
+
+                for d in iteration_drivers:
+                    _step_driver(loop_env, d)
+
+        elif iteration_type == 'while':
+            while lisptype.is_truthy(eval(iteration_test, env)):
+                check_loop_timeout()
+                bind_aux(env)
+                execute_iteration_body(env)
+                if return_triggered:
+                    break
+            
+        elif iteration_type == 'until':
+            while True:
+                check_loop_timeout()
+                bind_aux(env)
+                execute_iteration_body(env)
+                if return_triggered:
+                    break
+                if lisptype.is_truthy(eval(iteration_test, env)):
+                    break
+                
+        elif iteration_type == 'repeat':
+            count = eval(repeat_count, env)
+            for _ in range(count):
+                check_loop_timeout()
+                bind_aux(env)
+                execute_iteration_body(env)
+                if return_triggered:
+                    break
+            
+        elif iteration_type == 'for-range':
+            start = eval(iteration_start, env) if not isinstance(iteration_start, int) else iteration_start
+            end = eval(iteration_end, env)
+            step = eval(iteration_step, env) if not isinstance(iteration_step, int) else iteration_step
+            if step == 0:
+                raise lisptype.LispNotImplementedError('LOOP BY step cannot be 0')
+        
+            loop_env = lisptype.Environment(env)
+            cur = start
+            compare = (lambda a, b: a <= b) if step > 0 else (lambda a, b: a >= b)
+            while compare(cur, end):
+                check_loop_timeout()
+                if _termination_break(loop_env):
+                    break
+                _bind_varspec(loop_env, iteration_var, cur)
                 bind_aux(loop_env)
                 execute_iteration_body(loop_env)
                 if return_triggered:
                     break
-        elif hasattr(seq, '__iter__') and hasattr(seq, '__len__') and not _consp_internal(seq):
-            # Array/vector with __iter__ (AdjustableVector, list, tuple, etc.)
-            for elem in seq:
+                cur = cur + step
+            
+        elif iteration_type == 'for-below':
+            start = eval(iteration_start, env) if not isinstance(iteration_start, int) else iteration_start
+            end = eval(iteration_end, env)
+            step = eval(iteration_step, env) if not isinstance(iteration_step, int) else iteration_step
+            if step == 0:
+                raise lisptype.LispNotImplementedError('LOOP BY step cannot be 0')
+        
+            loop_env = lisptype.Environment(env)
+            cur = start
+            compare = (lambda a, b: a < b) if step > 0 else (lambda a, b: a > b)
+            while compare(cur, end):
                 check_loop_timeout()
-                _bind_varspec(loop_env, iteration_var, elem)
+                if _termination_break(loop_env):
+                    break
+                _bind_varspec(loop_env, iteration_var, cur)
                 bind_aux(loop_env)
                 execute_iteration_body(loop_env)
                 if return_triggered:
                     break
-        else:
-            raise lisptype.LispNotImplementedError(f'LOOP FOR ACROSS requires a vector or string, got {type(seq).__name__}')
+                cur = cur + step
             
-    elif iteration_type == 'for-equals':
-        # FOR var = init-form [THEN step-form]
-        # iteration_start = init-form, iteration_step = step-form or None
-        loop_env = lisptype.Environment(env)
-        # Initial value
-        cur_value = eval(iteration_start, loop_env)
-        _bind_varspec(loop_env, iteration_var, cur_value)
+        elif iteration_type == 'for-in':
+            lst = eval(iteration_list, env)
+            loop_env = lisptype.Environment(env)
+            cur = lst
+            while _consp_internal(cur):
+                check_loop_timeout()
+                if _termination_break(loop_env):
+                    break
+                _bind_varspec(loop_env, iteration_var, car(cur))
+                bind_aux(loop_env)
+                execute_iteration_body(loop_env)
+                if return_triggered:
+                    break
+                cur = cdr(cur)
+            
+        elif iteration_type == 'for-on':
+            lst = eval(iteration_list, env)
+            loop_env = lisptype.Environment(env)
+            cur = lst
+            while _consp_internal(cur):
+                check_loop_timeout()
+                if _termination_break(loop_env):
+                    break
+                _bind_varspec(loop_env, iteration_var, cur)
+                bind_aux(loop_env)
+                execute_iteration_body(loop_env)
+                if return_triggered:
+                    break
+                cur = cdr(cur)
+            
+        elif iteration_type == 'for-across':
+            # FOR x ACROSS vector/string - iterate over array elements
+            seq = eval(iteration_list, env)
+            loop_env = lisptype.Environment(env)
         
-        first_iteration = True
-        while True:
-            check_loop_timeout()
-            bind_aux(loop_env)
-            
-            # Check termination condition
-            if iteration_test is not None:
-                test_result = eval(iteration_test, loop_env)
-                if termination_type == 'until' and lisptype.is_truthy(test_result):
-                    break
-                if termination_type == 'while' and not lisptype.is_truthy(test_result):
-                    break
-            
-            execute_iteration_body(loop_env)
-            if return_triggered:
-                break
-            first_iteration = False
-            
-            # Step to next value
-            if iteration_step is not None:
-                cur_value = eval(iteration_step, loop_env)
-                _bind_varspec(loop_env, iteration_var, cur_value)
+            # Handle different sequence types
+            if isinstance(seq, str):
+                # String - iterate over characters as plain strings (not Character objects).
+                # The rest of the system treats characters as single-char strings.
+                for char in seq:
+                    check_loop_timeout()
+                    _bind_varspec(loop_env, iteration_var, char)
+                    bind_aux(loop_env)
+                    execute_iteration_body(loop_env)
+                    if return_triggered:
+                        break
+            elif hasattr(seq, '__iter__') and hasattr(seq, '__len__') and not _consp_internal(seq):
+                # Array/vector with __iter__ (AdjustableVector, list, tuple, etc.)
+                for elem in seq:
+                    check_loop_timeout()
+                    _bind_varspec(loop_env, iteration_var, elem)
+                    bind_aux(loop_env)
+                    execute_iteration_body(loop_env)
+                    if return_triggered:
+                        break
             else:
-                # Without THEN, just re-evaluate init-form
-                cur_value = eval(iteration_start, loop_env)
-                _bind_varspec(loop_env, iteration_var, cur_value)
-                
-    elif len(iteration_drivers) == 1:
-        # Single driver that wasn't set as iteration_type (e.g., single FOR clause)
-        loop_env = lisptype.Environment(env)
-        driver = iteration_drivers[0]
-        _init_driver(loop_env, driver)
+                raise lisptype.LispNotImplementedError(f'LOOP FOR ACROSS requires a vector or string, got {type(seq).__name__}')
+            
+        elif iteration_type == 'for-equals':
+            # FOR var = init-form [THEN step-form]
+            # iteration_start = init-form, iteration_step = step-form or None
+            loop_env = lisptype.Environment(env)
+            # Initial value
+            cur_value = eval(iteration_start, loop_env)
+            _bind_varspec(loop_env, iteration_var, cur_value)
         
-        while _driver_has_value(driver):
-            check_loop_timeout()
-            if _termination_break(loop_env):
-                break
+            first_iteration = True
+            while True:
+                check_loop_timeout()
+                bind_aux(loop_env)
             
-            _bind_driver(loop_env, driver)
-            bind_aux(loop_env)
-            execute_iteration_body(loop_env)
+                # Check termination condition
+                if iteration_test is not None:
+                    test_result = eval(iteration_test, loop_env)
+                    if termination_type == 'until' and lisptype.is_truthy(test_result):
+                        break
+                    if termination_type == 'while' and not lisptype.is_truthy(test_result):
+                        break
             
-            if return_triggered:
-                break
+                execute_iteration_body(loop_env)
+                if return_triggered:
+                    break
+                first_iteration = False
             
-            _step_driver(loop_env, driver)
+                # Step to next value
+                if iteration_step is not None:
+                    cur_value = eval(iteration_step, loop_env)
+                    _bind_varspec(loop_env, iteration_var, cur_value)
+                else:
+                    # Without THEN, just re-evaluate init-form
+                    cur_value = eval(iteration_start, loop_env)
+                    _bind_varspec(loop_env, iteration_var, cur_value)
+                
+        elif len(iteration_drivers) == 1:
+            # Single driver that wasn't set as iteration_type (e.g., single FOR clause)
+            loop_env = lisptype.Environment(env)
+            driver = iteration_drivers[0]
+            _init_driver(loop_env, driver)
+        
+            while _driver_has_value(driver):
+                check_loop_timeout()
+                if _termination_break(loop_env):
+                    break
+            
+                _bind_driver(loop_env, driver)
+                bind_aux(loop_env)
+                execute_iteration_body(loop_env)
+            
+                if return_triggered:
+                    break
+            
+                _step_driver(loop_env, driver)
     
-    elif iteration_type is None:
-        # No iteration - simple loop body, execute once
-        # Or infinite loop if there are body forms
-        # If there are body forms, an accumulation, or a RETURN clause
-        # then execute the iteration body once. This covers cases like
-        # (LOOP RETURN 42) which should immediately return 42.
-        if body_forms or accumulation or (return_form is not None):
-            execute_iteration_body(env)
+        elif iteration_type is None:
+            # Simple LOOP form (CLHS 6.1.1): with no iteration (FOR/REPEAT/...)
+            # clause, the body compound-forms are evaluated repeatedly forever
+            # until a non-local exit (RETURN/RETURN-FROM/GO/THROW) transfers
+            # control out -- there is no driver to terminate it otherwise.
+            # The RETURN loop-keyword-clause (return_form) is the one case
+            # that terminates without an exception, via return_triggered, e.g.
+            # (LOOP RETURN 42) which must return 42 after a single execution.
+            if body_forms or accumulation or (return_form is not None):
+                while True:
+                    check_loop_timeout()
+                    execute_iteration_body(env)
+                    if return_triggered:
+                        break
     
-    # Execute FINALLY forms
-    for f in finally_forms:
-        result = eval(f, env)
+        # Execute FINALLY forms
+        for f in finally_forms:
+            result = eval(f, env)
     
-    # Execute FINALLY RETURN if present (overrides early RETURN)
-    if finally_return_form is not None:
-        result = eval(finally_return_form, env)
+        # Execute FINALLY RETURN if present (overrides early RETURN)
+        if finally_return_form is not None:
+            result = eval(finally_return_form, env)
     
-    # Return accumulated result or last result
-    if accumulation:
-        acc_type = accumulation[0]
-        if acc_type in ('collect', 'append', 'nconc'):
-            # Convert accumulated list to Lisp list
-            if not accumulated:
-                return lisptype.NIL
-            result_list = lisptype.NIL
-            for item in reversed(accumulated):
-                result_list = cons(item, result_list)
-            return result_list
-        elif acc_type == 'sum':
-            return sum_result
-        elif acc_type == 'count':
-            return count_result
-        elif acc_type == 'always':
-            # ALWAYS returns T if test was true for all iterations (including vacuous truth)
-            # Returns NIL if test failed for any iteration
-            return lisptype.NIL if always_failed else lisptype.T
-        elif acc_type == 'thereis':
-            # THEREIS returns the value if true for any iteration, otherwise NIL
-            return thereis_result if thereis_result is not None else lisptype.NIL
+        # Return accumulated result or last result
+        if accumulation:
+            acc_type = accumulation[0]
+            if acc_type in ('collect', 'append', 'nconc'):
+                # Convert accumulated list to Lisp list
+                if not accumulated:
+                    return lisptype.NIL
+                result_list = lisptype.NIL
+                for item in reversed(accumulated):
+                    result_list = cons(item, result_list)
+                return result_list
+            elif acc_type == 'sum':
+                return sum_result
+            elif acc_type == 'count':
+                return count_result
+            elif acc_type == 'always':
+                # ALWAYS returns T if test was true for all iterations (including vacuous truth)
+                # Returns NIL if test failed for any iteration
+                return lisptype.NIL if always_failed else lisptype.T
+            elif acc_type == 'thereis':
+                # THEREIS returns the value if true for any iteration, otherwise NIL
+                return thereis_result if thereis_result is not None else lisptype.NIL
     
-    # Ensure we always return a Lisp value, never None
-    # If result is still None (no body executed, no return form), return NIL
-    if result is None:
-        return lisptype.NIL
+        # Ensure we always return a Lisp value, never None
+        # If result is still None (no body executed, no return form), return NIL
+        if result is None:
+            return lisptype.NIL
     
-    return result
+        return result
+
+    return _run_with_nil_block(_run_loop_and_finalize, loop_block_name)
 
 
-def _run_with_nil_block(thunk):
-    """Run thunk(), catching a RETURN/RETURN-FROM NIL aimed at the implicit
-    NIL block that DO/DO*/DOLIST/DOTIMES establish around their loop.
+def _run_with_nil_block(thunk, block_name=None):
+    """Run thunk(), catching a RETURN/RETURN-FROM aimed at the implicit block
+    DO/DO*/DOLIST/DOTIMES/LOOP establish around their loop.
+
+    block_name is the target block's name: None/NIL for the ordinary implicit
+    NIL block every one of these forms gets by default, or a symbol for a
+    LOOP that used a NAMED clause (CLHS 6.1: NAMED gives the loop its own
+    block instead of NIL, so a bare (RETURN x) -- which is (RETURN-FROM NIL
+    x) -- must NOT be caught here; it has to keep propagating to find an
+    actual enclosing NIL block).
     """
     from .evaluation_core import ReturnFromException
+
+    def _tag_name(tag):
+        if tag is None or tag == lisptype.NIL:
+            return 'NIL'
+        if isinstance(tag, lisptype.LispSymbol):
+            return tag.name
+        return None
+
+    target_name = _tag_name(block_name)
     try:
         return thunk()
     except ReturnFromException as e:
-        tag = e.tag
-        if tag is None or tag == lisptype.NIL or (isinstance(tag, lisptype.LispSymbol) and tag.name == 'NIL'):
+        if _tag_name(e.tag) == target_name:
             return e.value
         raise
 
