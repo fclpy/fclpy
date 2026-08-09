@@ -5,15 +5,15 @@ Lisp compliance**, measured by running the real ANSI test suite (`ansi-test/`, a
 sibling directory one level above this repo) to completion without crashing, and
 passing as many of its tests as possible.
 
-> **⚠ Status correction (supersedes anything below that conflicts).** The suite does
-> **not** run to completion. It silently aborts after ~2 990 of 22 036 tests —
-> **13.6% coverage, 20 of 24 areas never executed**. `(loop (return 'a))` in
-> `SLOOP.1` escapes as a `ReturnFromException` (LOOP establishes no implicit `NIL`
-> block) and is swallowed by `eval_dolist`'s `_run_with_nil_block`, which returns
-> RT's driver loop cleanly. No traceback, no crash — which is exactly why
-> **REPAIR.md's "last test in the file means it completed" heuristic read a silent
-> abort as a clean finish.** All previously quoted compliance numbers ("817 failures",
-> "21980/21980 processed") are FORMAT-misalignment artifacts, not measurements.
+> **⚠ Status correction, superseded 2026-08-09 (see plan.md's "Update" section for
+> details) — kept here for history.** The suite used to silently abort after ~2 990 of
+> 22 036 tests (13.6% coverage) because `LOOP` established no implicit `NIL` block; that
+> is fixed (predates the 2026-08-09 session). FORMAT's argument-cursor bugs (the
+> "817 failures"/"21980/21980 processed"/self-contradictory "629 629 629 629" summary
+> line artifacts) are also fixed as of 2026-08-09. **The suite now runs to completion:
+> 22036/22036 tests execute, 629 real failures (~2.9%).** `scripts/ansi_score.py` still
+> doesn't exist and `expected-failures` is still unwired, so treat 629 as "current
+> failure count," not yet a regression-tracked baseline.
 >
 > **Current work mode is milestone-driven semantic repair, not crash repair.**
 > Read [plan.md](plan.md) — it is now the roadmap, not a status snapshot.

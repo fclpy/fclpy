@@ -1857,6 +1857,10 @@ def funcall(function, *args):
     except ConditionException:
         # Re-raise Lisp conditions without wrapping them
         raise
+    except (ReturnFromException, ThrowException, GoException):
+        # Allow non-local control-flow exceptions to propagate to enclosing
+        # Lisp control forms (BLOCK/CATCH/TAGBODY) instead of being wrapped.
+        raise
     except lisptype.LispProgramError as e:
         # Convert Lisp program errors to PROGRAM-ERROR condition
         condition = lisptype.ProgramError(message=str(e))

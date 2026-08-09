@@ -335,13 +335,93 @@ class TestFormatDestination:
 
 class TestFormatComplex:
     """Complex format string tests."""
-    
+
     def test_format_mixed(self):
         """Mixed directives."""
         result = format_fn(None, "~A is ~D years old~%", "Alice", 30)
         assert result == "Alice is 30 years old\n"
-        
+
     def test_format_padding(self):
         """Formatted table-like output."""
         result = format_fn(None, "~10A~5D", "Name", 42)
         assert "Name" in result and "42" in result
+
+
+class TestFormatArgCursorPropagation:
+    """Regression tests for the shared argument cursor (M0): consumption
+    inside a nested directive (~[...~], ~<...~>, ~(...~), ~@?) must be
+    visible to directives that follow it, not silently discarded by a
+    fresh, restarted argument index."""
+
+    def test_conditional_then_aesthetic_advances_shared_cursor(self):
+        """~[...~] consumes its selector; ~A after it must see the *next*
+        argument, not re-read one already consumed by the selector."""
+        result = format_fn(None, "~[zero~;one~]-~A", 1, "tail")
+        assert result == "one-tail"
+
+    def test_goto_back_inside_conditional_clause_affects_outer_index(self):
+        """~:* inside a ~[...~] clause backs up the *outer* cursor so the
+        clause can re-read the argument the selector just consumed."""
+        result = format_fn(None, "~[~:*~A~;other~]", 0)
+        assert result == "0"
+
+    def test_justification_block_advances_shared_cursor(self):
+        """~<...~> consumes from the outer stream; a directive following it
+        must see the next argument, not restart at the beginning."""
+        result = format_fn(None, "~<~A~> ~A", "first", "second")
+        assert result == "first second"
+
+    def test_case_conversion_advances_shared_cursor_exactly(self):
+        """~(...~) must consume exactly what its inner directives consume
+        (not the old inner.count('~') approximation), leaving the right
+        argument for what follows."""
+        result = format_fn(None, "~(~A~) ~A", "HELLO", "world")
+        assert result == "hello world"
+
+    def test_recursive_at_format_shares_outer_argument_stream(self):
+        """~@? processes its format string against the same outer argument
+        stream; only what it actually consumes should be unavailable to
+        directives that follow it."""
+        result = format_fn(None, "~@?~A", "~A ", "x", "y")
+        assert result == "x y"
+
+
+class TestFormatPluralColon:
+    """~:P must be net-zero on the argument cursor: it re-examines the
+    previously consumed argument rather than consuming (or over-consuming)
+    a new one."""
+
+    def test_colon_p_does_not_double_consume(self):
+        result = format_fn(None, "~D cat~:P and ~D cat~:P", 1, 2)
+        assert result == "1 cat and 2 cats"
+
+    def test_colon_at_p_uses_y_ies_without_consuming(self):
+        result = format_fn(None, "~D bab~:@P", 1)
+        assert result == "1 baby"
+
+        result = format_fn(None, "~D bab~:@P", 3)
+        assert result == "3 babies"
+
+
+class TestFormatIterationDoesNotTruncateOnNil:
+    """~{~} must iterate through every element regardless of what any one
+    element prints as - it must not stop just because an element's printed
+    form happens to contain the substring 'NIL'."""
+
+    def test_nil_element_does_not_truncate_iteration(self):
+        result = format_fn(None, "~{~A ~}", [1, NIL, 3])
+        assert result == "1 NIL 3 "
+
+
+class TestFormatCaseConversionSemantics:
+    """~:( and ~@( are distinct per CLHS 22.3.9 and must not be swapped:
+    ~:( capitalizes every word; ~@( capitalizes only the first word and
+    forces the rest of the output to lower case."""
+
+    def test_colon_capitalizes_every_word(self):
+        result = format_fn(None, "~:(~A~)", "hello world")
+        assert result == "Hello World"
+
+    def test_at_capitalizes_only_first_word(self):
+        result = format_fn(None, "~@(~A~)", "HELLO WORLD")
+        assert result == "Hello world"

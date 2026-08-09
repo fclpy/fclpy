@@ -17,6 +17,39 @@ Specialized/AI-sandbox features come **after** ANSI compliance, not alongside it
 
 ---
 
+## Update (2026-08-09): M0's measurement-corruption bugs are fixed — the "Reality check" section below is now historical
+
+The FORMAT argument-cursor rewrite, the WARN consolidation, and the Finding K
+(`funcall`) fix described in the Reality Check and Finding H/J sections below have been
+implemented. Verified with an isolated before/after (`git stash`) run of the identical
+22036-test suite:
+
+| | Before (this session's baseline) | After |
+|---|---|---|
+| `Doing N pending test(s) of N test(s) total` | `pending test of ... test total` (bad grammar — `~:P`/pluralization corrupted) | `pending tests of ... tests total` (correct) |
+| Summary line | `629 failures with 629 unexpected failures and 629 unexpected successes out of 629 tests.` — the exact self-contradictory line this document warned about | `629 failures with 629 unexpected failures and 0 unexpected successes out of 22036 tests.` — self-consistent |
+| `Failures:` / `Unexpected failures:` / `Unexpected successes:` labels | Misaligned exactly as documented: `Failures:` → `0`, `Unexpected failures:` → `22036`, `Unexpected successes:` → the actual failing-test names | Correctly labeled |
+| Printed failure-name list | Truncated at 528 of 629 names (stops at `MULTIPLE-VALUE-LIST.7`, silently drops `NIL.1` onward) | All 629 (631 raw tokens, ~2 duplicate registrations) printed |
+| `WARN` diagnostics | Literal unprocessed control string: `Warning: Redefining test ~:@(~S~)` | Correctly formatted: `Warning: Redefining test SET-SYNTAX-FROM-CHAR-TRAIT-X-A` |
+
+**The failure count itself did not change (629 both times)** — confirmed by diffing the
+two runs: the first 528 failure names are byte-identical and in the same order between
+baseline and fixed; the 101 names newly visible after the fix are exactly the tail that
+was being silently dropped by the `~{~}` `'NIL' in part` heuristic (includes `NIL.1`,
+`NIL.2`, `NIL.7`, confirming the plan's own diagnosis). This was a pure measurement fix,
+not a semantic one — 629/22036 (~2.9%) is the real current failure rate, not the "817
+failures" or "21980/21980 processed" numbers this document previously flagged as
+artifacts, and not the ~21%-of-13.6%-coverage figure below either.
+
+**Still not done from M0's list**: the run-completeness assertion (step 2), deleting
+REPAIR.md's stop-condition heuristic (step 3), the RT-list-based structured reporter
+that bypasses FORMAT entirely (step 6), wiring `ansi-test/expected-failures/fclpy.sexp`
+so "unexpected failure" is a real regression signal (step 7), Python-object-leakage
+triage (step 8), and the 113-entry registered-vs-reference-suite surplus investigation
+(step 9). `scripts/ansi_score.py` per-subsystem scoreboard still does not exist.
+
+---
+
 ## Two dimensions of compliance — read this before the milestones
 
 "100% ANSI" is **not** primarily an evaluator problem. It has two independent
@@ -443,14 +476,26 @@ consumption, `~:@(...)` case conversion, `~{...~}` iteration, `~<...~>` justific
    so step 1's iterations are self-verifying.
 3. **Delete REPAIR.md's "last test in the file means it completed" heuristic** — it is
    what made a silent abort look like a clean finish.
-4. **Fix `WARN`** (`utilities_errors.py:46-50`) to route through `format_fn` the way
-   `ERROR` already does, and to actually signal a `WARNING`. Until this is done, every
-   diagnostic the suite emits is unreadable.
-5. **Fix FORMAT's argument-cursor model.** The structural fix is to make
-   `_format_process` share **one mutable argument cursor** across nested directives
-   instead of slicing `args[arg_idx:]` and restarting at 0. That single change fixes
-   `~[`, `~:[`, `~{`, `~<`, `~(`, and `~:*` together. Then: make `~:P` net-zero, and
-   **delete the `'NIL' in part` heuristic at `io_write.py:1288`**.
+4. **[DONE 2026-08-09]** ~~Fix `WARN`~~ (`utilities_errors.py:46-50`) to route through
+   `format_fn` the way `ERROR` already does, and to actually signal a `WARNING`. Until
+   this is done, every diagnostic the suite emits is unreadable. Resolved: both the
+   special-form (`eval_warn`) and function-designator (`warn_fn`) entry points now
+   delegate to one `signal_warning()` helper in `evaluation_conditions.py` that formats
+   through `FORMAT` and builds a real condition object. Not done: real handler-stack
+   dispatch (so `HANDLER-BIND`/`MUFFLE-WARNING` can intercept before printing) — that
+   needs M8's signal-before-unwind rewrite; faking it here would be exactly the kind of
+   operator-specific workaround this plan warns against.
+5. **[DONE 2026-08-09]** ~~Fix FORMAT's argument-cursor model.~~ The structural fix is
+   to make `_format_process` share **one mutable argument cursor** across nested
+   directives instead of slicing `args[arg_idx:]` and restarting at 0. That single
+   change fixes `~[`, `~:[`, `~{`, `~<`, `~(`, and `~:*` together. Then: make `~:P`
+   net-zero, and **delete the `'NIL' in part` heuristic at `io_write.py:1288`**.
+   Resolved via a `_FormatCursor` class shared by `~<...~>`, `~(...~)`, `~[...~]`, and
+   `~@?`; `~{...~}` and plain `~?` correctly keep their own independent per-scope cursor
+   instead (CLHS 22.3.7 gives them their own argument scope, that was never the bug).
+   Also fixed while rewriting the same code path: `~:(`/`~@(` case-conversion semantics
+   were swapped (`~:(` must capitalize every word, `~@(` only the first) — see the
+   "Update" note near the top of this document for verified before/after numbers.
 6. **Add a structured reporter — do not parse the log.** RT already maintains
    `*passed-tests*`/`*failed-tests*`/`*unexpected-failures*` (`rt.lsp:503-506`). A
    ~30-line Lisp epilogue after `do-tests` can dump those lists one name per line,
@@ -1062,13 +1107,18 @@ both is the worst option.
 
 ## Priority order (start here)
 
-0. **Two fixes to make right now, out of sequence**, because both corrupt the
-   diagnostics every later milestone depends on:
-   - `funcall`'s missing non-local-exit re-raise (Finding K) — one line.
-   - `WARN` routing through `format_fn` and actually signaling — five lines.
-1. **M0** — implicit `NIL` block for `LOOP` (unblocks ~19 000 tests); completeness
-   assertion; FORMAT argument cursor; RT-list-based scoreboard.
-   ***Without this, every other priority is a guess — 86% of the suite has never run.***
+0. **[DONE 2026-08-09]** ~~Two fixes to make right now, out of sequence~~, because both
+   corrupt the diagnostics every later milestone depends on:
+   - `funcall`'s missing non-local-exit re-raise (Finding K) — one line. Fixed;
+     regression-tested in `tests/test_phase3_nonlocal_exits.py::TestNonLocalExitThroughFuncall`.
+   - `WARN` routing through `format_fn` and actually signaling — five lines. Fixed (see
+     M0 item 4 above); ended up broader than five lines once the duplicate-implementation
+     consolidation (Finding L) was accounted for.
+1. **M0** — implicit `NIL` block for `LOOP` **[done, predates this update]**; run-completeness
+   assertion **[not done]**; FORMAT argument cursor **[DONE 2026-08-09]**; RT-list-based
+   scoreboard **[not done]**. The suite now runs to completion (22036/22036, verified) —
+   remaining M0 work is the completeness *assertion*, the REPAIR.md heuristic deletion,
+   the structured reporter, and `expected-failures` wiring (steps 2, 3, 6, 7 above).
 2. **M1 step 1** — canonical CL symbol table. Highest yield per unit effort; also
    delete the blanket `except`.
 3. **M2** — environment model (RC-1 through RC-4). The prerequisite for M3 and M4, and

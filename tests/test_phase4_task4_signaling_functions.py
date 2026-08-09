@@ -147,8 +147,35 @@ class TestWarnFunction:
         result = eval(form, env)
         assert result is NIL
     
-    def test_warn_with_error_object(self, env):
-        """WARN accepts an error/condition object and returns NIL."""
+    def test_warn_with_condition_type_designator(self, env):
+        """WARN accepts a condition-type designator (a symbol naming a
+        condition type) and returns NIL, per the ANSI condition-designator
+        rules shared with ERROR/SIGNAL/CERROR.
+
+        Note: (WARN (ERROR)) is *not* a way to pass "an error object" to
+        WARN - evaluating the (ERROR) argument form signals unconditionally
+        before WARN is ever entered, per ANSI argument evaluation order.
+        Swallowing that signal (the previous version of this test) was the
+        silent-failure pattern flagged in plan.md's standing rules, not
+        correct WARN behavior.
+        """
+        # Create form: (WARN 'SIMPLE-WARNING)
+        form = cons(
+            ls('WARN'),
+            cons(
+                cons(ls('QUOTE'), cons(ls('SIMPLE-WARNING'), NIL)),
+                NIL
+            )
+        )
+
+        result = eval(form, env)
+        assert result is NIL
+
+    def test_warn_argument_evaluation_signals_normally(self, env):
+        """Evaluating WARN's datum argument is ordinary argument evaluation:
+        if the argument form itself signals (e.g. it calls ERROR), that
+        signal propagates before WARN ever runs - it must not be swallowed.
+        """
         # Create form: (WARN (ERROR))
         form = cons(
             ls('WARN'),
@@ -157,9 +184,9 @@ class TestWarnFunction:
                 NIL
             )
         )
-        
-        result = eval(form, env)
-        assert result is NIL
+
+        with pytest.raises(ConditionException):
+            eval(form, env)
     
     def test_warn_does_not_raise_exception(self, env):
         """WARN does not raise an exception (it's non-fatal)."""

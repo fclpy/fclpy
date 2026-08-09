@@ -731,6 +731,20 @@ class Warning(Condition):
     pass
 
 
+class SimpleWarning(Warning):
+    """Simple warning condition with format control and arguments.
+
+    This is used for warnings created with the SIMPLE-WARNING type specifier,
+    and by WARN when its datum is a format-control string.
+    """
+    def __init__(self, format_control="", format_arguments=None, message="", **kwargs):
+        if not message and format_control:
+            message = format_control
+        super().__init__(message, **kwargs)
+        self._slots['format-control'] = format_control
+        self._slots['format-arguments'] = format_arguments or []
+
+
 class Error(Condition, BaseException):
     """Base class for error conditions."""
     pass
@@ -975,7 +989,7 @@ __all__ = [
     'Package', 'KEYWORD_PACKAGE', 'COMMON_LISP_PACKAGE', 'COMMON_LISP_USER_PACKAGE',
     'make_package', 'find_package', 'intern_symbol', 'intern_keyword',
     # Conditions (ANSI condition system)
-    'Condition', 'SimpleCondition', 'SimpleError', 'Warning', 'Error',
+    'Condition', 'SimpleCondition', 'SimpleError', 'Warning', 'SimpleWarning', 'Error',
     'TypeError', 'ProgramError', 'ControlError', 'FileError', 'StreamError',
     'EndOfFile', 'ArithmeticError', 'DivisionByZero',
     'UndefinedFunction','UnboundVariable',

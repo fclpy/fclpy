@@ -9,6 +9,7 @@ from fclpy.lisptype import (
     LispSymbol, lispCons, NIL, T
 )
 from fclpy.lispfunc.evaluation import eval
+from fclpy.lispfunc import eval_string
 from fclpy.lispenv import setup_standard_environment
 from fclpy.lispfunc.core import car, cdr
 import fclpy.state as state
@@ -367,6 +368,49 @@ class TestNonLocalExitCombinations:
         catch_form = lispCons(catch_sym, lispCons(quoted_tag, lispCons(block_form, NIL)))
         
         result = eval(catch_form, env)
-        
+
         # Should return 10
         assert result == 10
+
+
+class TestNonLocalExitThroughFuncall:
+    """Regression tests for Finding K: FUNCALL must re-raise
+    ReturnFromException/ThrowException/GoException like APPLY already does,
+    instead of letting its bare `except Exception` convert a non-local exit
+    crossing a FUNCALL boundary into an ERROR condition."""
+
+    def test_return_from_crosses_funcall(self, env):
+        """RETURN-FROM inside a closure invoked via FUNCALL must exit the
+        establishing BLOCK, not be wrapped into an ERROR condition."""
+        result = eval_string(
+            "(block done (funcall (lambda () (return-from done 42))) 99)",
+            env,
+        )
+        assert result == 42
+
+    def test_throw_crosses_funcall(self, env):
+        """THROW inside a closure invoked via FUNCALL must be caught by the
+        enclosing CATCH, not be wrapped into an ERROR condition."""
+        result = eval_string(
+            "(catch 'tag (funcall (lambda () (throw 'tag 7))) 99)",
+            env,
+        )
+        assert result == 7
+
+    def test_go_crosses_funcall(self, env):
+        """GO inside a closure invoked via FUNCALL must transfer control
+        within the enclosing TAGBODY, not be wrapped into an ERROR
+        condition."""
+        result = eval_string(
+            """
+            (let ((result nil))
+              (tagbody
+                (funcall (lambda () (go end)))
+                (setq result 'skipped)
+                end
+                (setq result 'reached))
+              result)
+            """,
+            env,
+        )
+        assert result.name == 'REACHED'

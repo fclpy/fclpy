@@ -45,9 +45,13 @@ def error_fn(datum, *arguments):
 
 @_registry.cl_function('WARN')
 def warn_fn(datum, *arguments):
-    """Warn about condition."""
-    print(f"Warning: {datum}")
-    return None
+    """Warn about condition (function-designator entry point, used by
+    FUNCALL/APPLY/#'WARN). Delegates to the same warning-signaling logic as
+    the WARN special form (evaluation_conditions.eval_warn) so there is one
+    implementation, not two that can silently drift apart.
+    """
+    from fclpy.lispfunc.evaluation_conditions import signal_warning
+    return signal_warning(datum, list(arguments))
 
 
 @_registry.cl_function('MUFFLE-WARNING')

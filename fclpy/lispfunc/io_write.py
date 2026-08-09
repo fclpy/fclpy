@@ -614,13 +614,91 @@ def set_pprint_dispatch(type_specifier, function, priority=0, table=None):
 
 # Format operations
 
-def _format_directive(control_string, args, pos, arg_idx):
+class _FormatCursor:
+    """Mutable argument cursor for FORMAT.
+
+    This is the structural fix for FORMAT's argument-consumption model:
+    directives that give a nested control string access to the *same*
+    argument stream (~<...~>, ~(...~), ~[...~]) share one cursor instance,
+    so that arguments consumed inside the nested directive (including via
+    ~:*, ~*, ~:P) are visible to whatever follows the directive in the
+    outer control string. Previously each nested call sliced `args` and
+    started a fresh index at 0, which silently discarded consumption.
+
+    Directives that give a nested control string its *own* independent
+    argument scope per CLHS (~{...~} iterating over a list argument's
+    elements; ~? with a separate format-args list) construct a fresh
+    cursor instead of sharing this one - that is correct, not a bug.
+    """
+    __slots__ = ('args', 'idx')
+
+    def __init__(self, args, idx=0):
+        self.args = list(args) if args else []
+        self.idx = idx
+
+    def next(self):
+        if self.idx < len(self.args):
+            val = self.args[self.idx]
+            self.idx += 1
+            return val
+        return None
+
+    def prev(self):
+        """The argument last consumed, without consuming another (~:P)."""
+        if 0 < self.idx <= len(self.args):
+            return self.args[self.idx - 1]
+        return None
+
+    def remaining(self):
+        return self.args[self.idx:]
+
+    def remaining_count(self):
+        return len(self.args) - self.idx
+
+
+def _capitalize_words(s):
+    """~:( ... ~) - capitalize the first letter of each word, force the
+    rest of each word to lower case."""
+    result = []
+    at_word_start = True
+    for ch in s:
+        if ch.isalpha():
+            result.append(ch.upper() if at_word_start else ch.lower())
+            at_word_start = False
+        else:
+            result.append(ch)
+            at_word_start = True
+    return ''.join(result)
+
+
+def _capitalize_first_word(s):
+    """~@( ... ~) - capitalize the first letter of the first word, force
+    the rest of the output to lower case."""
+    result = []
+    capitalized_any = False
+    at_word_start = True
+    for ch in s:
+        if ch.isalpha():
+            if not capitalized_any and at_word_start:
+                result.append(ch.upper())
+                capitalized_any = True
+            else:
+                result.append(ch.lower())
+            at_word_start = False
+        else:
+            result.append(ch)
+            at_word_start = True
+    return ''.join(result)
+
+
+def _format_directive(control_string, cursor, pos):
     """Process a single format directive starting at pos (after ~).
-    
-    Returns (output_string, new_pos, new_arg_idx, consumed_arg).
+
+    Consumes arguments from `cursor` (a _FormatCursor), mutating it in
+    place. Returns (output_string, new_pos).
     """
     if pos >= len(control_string):
-        return ('~', pos, arg_idx, False)
+        return ('~', pos)
     
     # Parse optional parameters: [prefix_params][:][@][directive]
     # Prefix params can be: number, 'char, V (next arg), #, or comma-separated
@@ -648,13 +726,11 @@ def _format_directive(control_string, args, pos, arg_idx):
                 pos += 1
         elif c == 'V' or c == 'v':
             # Use next argument as parameter
-            if arg_idx < len(args):
-                params.append(args[arg_idx])
-                arg_idx += 1
+            params.append(cursor.next())
             pos += 1
         elif c == '#':
             # Number of remaining arguments
-            params.append(len(args) - arg_idx)
+            params.append(cursor.remaining_count())
             pos += 1
         elif c == ',':
             pos += 1
@@ -669,22 +745,17 @@ def _format_directive(control_string, args, pos, arg_idx):
             pos += 1
         else:
             break
-    
+
     if pos >= len(control_string):
-        return ('~', pos, arg_idx, False)
-    
+        return ('~', pos)
+
     directive = control_string[pos].upper()
     pos += 1
-    
+
     # Helper to get next arg
     def get_arg():
-        nonlocal arg_idx
-        if arg_idx < len(args):
-            val = args[arg_idx]
-            arg_idx += 1
-            return val
-        return None
-    
+        return cursor.next()
+
     # Process directives
     if directive == 'A':
         # ~A - Aesthetic (princ-style, no escapes)
@@ -703,7 +774,7 @@ def _format_directive(control_string, args, pos, arg_idx):
             if len(result) < mincol:
                 padding = ' ' * (mincol - len(result))
                 result = result + padding if not at_flag else padding + result
-        return (result, pos, arg_idx, True)
+        return (result, pos)
     
     elif directive == 'S':
         # ~S - Standard (prin1-style, with escapes)
@@ -720,7 +791,7 @@ def _format_directive(control_string, args, pos, arg_idx):
             if len(result) < mincol:
                 padding = ' ' * (mincol - len(result))
                 result = result + padding if not at_flag else padding + result
-        return (result, pos, arg_idx, True)
+        return (result, pos)
     
     elif directive == 'D':
         # ~D - Decimal integer
@@ -753,7 +824,7 @@ def _format_directive(control_string, args, pos, arg_idx):
                 result = sign + ','.join(reversed(parts))
         except (TypeError, ValueError):
             result = str(val)
-        return (result, pos, arg_idx, True)
+        return (result, pos)
     
     elif directive == 'X':
         # ~X - Hexadecimal
@@ -768,7 +839,7 @@ def _format_directive(control_string, args, pos, arg_idx):
                 result = '+' + result
         except (TypeError, ValueError):
             result = str(val)
-        return (result, pos, arg_idx, True)
+        return (result, pos)
     
     elif directive == 'O':
         # ~O - Octal
@@ -783,7 +854,7 @@ def _format_directive(control_string, args, pos, arg_idx):
                 result = '+' + result
         except (TypeError, ValueError):
             result = str(val)
-        return (result, pos, arg_idx, True)
+        return (result, pos)
     
     elif directive == 'B':
         # ~B - Binary
@@ -798,7 +869,7 @@ def _format_directive(control_string, args, pos, arg_idx):
                 result = '+' + result
         except (TypeError, ValueError):
             result = str(val)
-        return (result, pos, arg_idx, True)
+        return (result, pos)
     
     elif directive == 'R':
         # ~R - Radix (with param) or English (without)
@@ -853,7 +924,7 @@ def _format_directive(control_string, args, pos, arg_idx):
                     result = cardinals.get(num, str(num))
             except (TypeError, ValueError):
                 result = str(val)
-        return (result, pos, arg_idx, True)
+        return (result, pos)
     
     elif directive == 'C':
         # ~C - Character
@@ -873,7 +944,7 @@ def _format_directive(control_string, args, pos, arg_idx):
             result = val
         else:
             result = str(val) if val else ''
-        return (result, pos, arg_idx, True)
+        return (result, pos)
     
     elif directive == 'F':
         # ~F - Fixed-format floating point
@@ -893,7 +964,7 @@ def _format_directive(control_string, args, pos, arg_idx):
                 result = ' ' * (width - len(result)) + result
         except (TypeError, ValueError):
             result = str(val)
-        return (result, pos, arg_idx, True)
+        return (result, pos)
     
     elif directive == 'E':
         # ~E - Exponential floating point
@@ -906,7 +977,7 @@ def _format_directive(control_string, args, pos, arg_idx):
                 result = '+' + result
         except (TypeError, ValueError):
             result = str(val)
-        return (result, pos, arg_idx, True)
+        return (result, pos)
     
     elif directive == 'G':
         # ~G - General floating point (choose F or E)
@@ -918,67 +989,71 @@ def _format_directive(control_string, args, pos, arg_idx):
                 result = '+' + result
         except (TypeError, ValueError):
             result = str(val)
-        return (result, pos, arg_idx, True)
+        return (result, pos)
     
     elif directive == '%':
         # ~% - Newline
         count = params[0] if params and params[0] else 1
-        return ('\n' * count, pos, arg_idx, False)
-    
+        return ('\n' * count, pos)
+
     elif directive == '&':
         # ~& - Fresh line (newline only if not at start of line)
         count = params[0] if params and params[0] else 1
         # We don't track column, so just emit newline
-        return ('\n' * count, pos, arg_idx, False)
-    
+        return ('\n' * count, pos)
+
     elif directive == '~':
         # ~~ - Literal tilde
         count = params[0] if params and params[0] else 1
-        return ('~' * count, pos, arg_idx, False)
-    
+        return ('~' * count, pos)
+
     elif directive == '|':
         # ~| - Page separator (form feed)
         count = params[0] if params and params[0] else 1
-        return ('\f' * count, pos, arg_idx, False)
-    
+        return ('\f' * count, pos)
+
     elif directive == 'T':
         # ~T - Tabulation
         colnum = params[0] if params else 1
         colinc = params[1] if len(params) > 1 else 1
         # We don't track column, so just emit spaces
-        return (' ' * (colnum if colnum else 1), pos, arg_idx, False)
-    
+        return (' ' * (colnum if colnum else 1), pos)
+
     elif directive == '*':
         # ~* - Go to argument
         if at_flag:
             # Go to absolute argument position
-            new_idx = params[0] if params and params[0] is not None else 0
-            arg_idx = new_idx
+            cursor.idx = params[0] if params and params[0] is not None else 0
         elif colon_flag:
             # Go backwards
             count = params[0] if params and params[0] is not None else 1
-            arg_idx = max(0, arg_idx - count)
+            cursor.idx = max(0, cursor.idx - count)
         else:
             # Go forwards
             count = params[0] if params and params[0] is not None else 1
-            arg_idx = min(len(args), arg_idx + count)
-        return ('', pos, arg_idx, False)
-    
+            cursor.idx = min(len(cursor.args), cursor.idx + count)
+        return ('', pos)
+
     elif directive == '?':
         # ~? - Recursive processing
         # The next arg is a format string, and the one after is args for it
         fmt_str = get_arg()
         if at_flag:
-            # Use remaining args
-            result = _format_process(str(fmt_str) if fmt_str else '', args[arg_idx:])
-            arg_idx = len(args)  # All remaining args consumed
+            # ~@? shares the outer argument stream: the recursive format
+            # consumes from the same cursor, and only what it actually uses
+            # is unavailable to directives that follow the ~? in the outer
+            # control string.
+            result = _format_process_cursor(str(fmt_str) if fmt_str else '', cursor)
         else:
+            # ~? without @ takes its own separate argument list - not the
+            # outer cursor - so it gets a fresh, independent cursor.
             fmt_args = get_arg()
             if isinstance(fmt_args, (list, tuple)):
-                result = _format_process(str(fmt_str) if fmt_str else '', fmt_args)
+                sub_cursor = _FormatCursor(fmt_args)
             else:
-                result = _format_process(str(fmt_str) if fmt_str else '', [fmt_args] if fmt_args else [])
-        return (result, pos, arg_idx, True)
+                sub_cursor = _FormatCursor([fmt_args] if fmt_args is not None else [])
+            result = _format_process_cursor(str(fmt_str) if fmt_str else '', sub_cursor)
+        return (result, pos)
     
     elif directive == '<':
         # ~< ... ~> - Justification/Logical block
@@ -1030,7 +1105,7 @@ def _format_directive(control_string, args, pos, arg_idx):
             segments.append(control_string[segment_start:])
             end_pos = len(control_string)
         
-        # For simplified implementation: 
+        # For simplified implementation:
         # - If there are multiple segments separated by ~:;, use the last non-empty one
         # - Process it with remaining args
         result = ''
@@ -1038,14 +1113,16 @@ def _format_directive(control_string, args, pos, arg_idx):
             # Look for the last segment (after the final ~:; separator)
             # This handles the pattern ~<prefix~:;main content~> where we want the main content
             segment_to_use = segments[-1] if segments else ''
-            result = _format_process(segment_to_use, args[arg_idx:])
-        
-        return (result, end_pos, arg_idx, False)
-    
+            # Shares the outer cursor: arguments the segment consumes must
+            # not be re-offered to directives that follow the ~<...~>.
+            result = _format_process_cursor(segment_to_use, cursor)
+
+        return (result, end_pos)
+
     elif directive == '>':
         # End of justification - should not be reached directly
-        return ('', pos, arg_idx, False)
-    
+        return ('', pos)
+
     elif directive == '(':
         # ~( ... ~) - Case conversion
         # Find matching ~)
@@ -1083,28 +1160,28 @@ def _format_directive(control_string, args, pos, arg_idx):
             # If we exited the loop without finding closing ~)
             inner = control_string[pos:]
         
-        inner_result = _format_process(inner, args[arg_idx:])
-        
-        # Count args consumed in inner
-        # Simple approximation: count ~A, ~S, ~D etc.
-        consumed = inner.count('~')  # rough
-        arg_idx = min(len(args), arg_idx + consumed)
-        
+        # Shares the outer cursor: consumption is now exact (the cursor
+        # tracks it directly), replacing the old inner.count('~') estimate.
+        inner_result = _format_process_cursor(inner, cursor)
+
         if colon_flag and at_flag:
+            # ~:@( ... ~) - force everything to upper case
             result = inner_result.upper()
         elif colon_flag:
-            result = inner_result.capitalize()
+            # ~:( ... ~) - capitalize each word
+            result = _capitalize_words(inner_result)
         elif at_flag:
-            # Capitalize each word
-            result = ' '.join(w.capitalize() for w in inner_result.split())
+            # ~@( ... ~) - capitalize just the first word, lower case the rest
+            result = _capitalize_first_word(inner_result)
         else:
+            # ~( ... ~) - force everything to lower case
             result = inner_result.lower()
-        
-        return (result, end_pos, arg_idx, False)
+
+        return (result, end_pos)
     
     elif directive == ')':
         # End of case conversion - should not be reached directly
-        return ('', pos, arg_idx, False)
+        return ('', pos)
     
     elif directive == '[':
         # ~[ ... ~] - Conditional
@@ -1175,6 +1252,8 @@ def _format_directive(control_string, args, pos, arg_idx):
         if end_pos == pos:
             end_pos = i  # Fallback if we didn't find proper closing
         
+        # All branches below share the outer cursor: whatever a clause
+        # consumes must be visible to directives that follow the ~[...~].
         if colon_flag:
             # ~:[ test ~; else ~]
             val = get_arg()
@@ -1184,16 +1263,16 @@ def _format_directive(control_string, args, pos, arg_idx):
             if val is lisptype.T:
                 is_true = True
             if is_true:
-                result = _format_process(clauses[1] if len(clauses) > 1 else '', args[arg_idx:])
+                result = _format_process_cursor(clauses[1] if len(clauses) > 1 else '', cursor)
             else:
-                result = _format_process(clauses[0] if clauses else '', args[arg_idx:])
+                result = _format_process_cursor(clauses[0] if clauses else '', cursor)
         elif at_flag:
             # ~@[ test ~] - if arg is non-nil, process with arg, else skip
             val = get_arg()
             if val is not None and val is not lisptype.NIL and val is not False:
-                # Process clause with this arg (don't consume it)
-                arg_idx -= 1
-                result = _format_process(clauses[0] if clauses else '', args[arg_idx:])
+                # Put the value back; the clause consumes it itself.
+                cursor.idx -= 1
+                result = _format_process_cursor(clauses[0] if clauses else '', cursor)
             else:
                 result = ''
         else:
@@ -1202,18 +1281,18 @@ def _format_directive(control_string, args, pos, arg_idx):
             try:
                 idx = int(val) if val is not None else 0
                 if 0 <= idx < len(clauses):
-                    result = _format_process(clauses[idx], args[arg_idx:])
+                    result = _format_process_cursor(clauses[idx], cursor)
                 elif default_clause is not None and default_clause < len(clauses):
-                    result = _format_process(clauses[default_clause], args[arg_idx:])
+                    result = _format_process_cursor(clauses[default_clause], cursor)
                 else:
                     result = ''
             except (TypeError, ValueError):
                 result = ''
-        
-        return (result, end_pos, arg_idx, True)
+
+        return (result, end_pos)
     
     elif directive == ']':
-        return ('', pos, arg_idx, False)
+        return ('', pos)
     
     elif directive == '{':
         # ~{ ... ~} - Iteration
@@ -1247,11 +1326,17 @@ def _format_directive(control_string, args, pos, arg_idx):
             end_pos = i
 
         if at_flag:
-            # Use remaining args as list
-            items = list(args[arg_idx:])
-            arg_idx = len(args)
+            # ~@{...~} - use the rest of the outer arguments as the items,
+            # directly from the outer cursor: they belong to the same
+            # argument stream, not a separate list argument.
+            items = cursor.remaining()
+            cursor.idx = len(cursor.args)
         else:
-            # Next arg is a list
+            # ~{...~} / ~:{...~} - the next argument is the list of items,
+            # a scope of its own (per CLHS 22.3.7): only the single "list"
+            # argument itself (already taken by get_arg()) is removed from
+            # the outer cursor; what the iteration body does with its
+            # elements never touches the outer cursor further.
             items = get_arg()
             if items is None or items is lisptype.NIL:
                 items = []
@@ -1263,29 +1348,26 @@ def _format_directive(control_string, args, pos, arg_idx):
         ESCAPE_MARKER = '\u0000'
 
         if colon_flag:
-            # Each item is a sublist; do not consume outer arg list
+            # Each item is a sublist, processed with its own fresh cursor.
             for item in items:
-                if isinstance(item, (list, tuple)):
-                    part, _ = _format_process_with_tail(inner, list(item))
-                    # remove any escape marker
-                    part = part.replace(ESCAPE_MARKER, '')
-                    result_parts.append(part)
-                else:
-                    part, _ = _format_process_with_tail(inner, [item])
-                    part = part.replace(ESCAPE_MARKER, '')
-                    result_parts.append(part)
+                item_list = list(item) if isinstance(item, (list, tuple)) else [item]
+                sub_cursor = _FormatCursor(item_list)
+                part = _format_process_cursor(inner, sub_cursor)
+                part = part.replace(ESCAPE_MARKER, '')
+                result_parts.append(part)
         else:
-            # Items are consumed one at a time from the provided items
+            # Items are consumed one at a time from the provided items,
+            # each pass over `inner` getting its own fresh cursor scoped to
+            # the remaining items.
             item_list = list(items)
             while item_list:
-                part, consumed = _format_process_with_tail(inner, item_list)
+                sub_cursor = _FormatCursor(item_list)
+                part = _format_process_cursor(inner, sub_cursor)
+                consumed = sub_cursor.idx
                 # If inner indicates escape, stop iteration
                 if '\u0000' in part:
                     part = part.replace('\u0000', '')
                     result_parts.append(part)
-                    break
-                # If part indicates missing args (NIL printed), skip appending to avoid noisy output
-                if 'NIL' in part:
                     break
                 result_parts.append(part)
                 if consumed <= 0:
@@ -1293,35 +1375,36 @@ def _format_directive(control_string, args, pos, arg_idx):
                     consumed = 1
                 item_list = item_list[consumed:]
 
-        return (''.join(result_parts), end_pos, arg_idx, True)
+        return (''.join(result_parts), end_pos)
     
     elif directive == '}':
-        return ('', pos, arg_idx, False)
+        return ('', pos)
     
     elif directive == '^':
         # ~^ - Escape from iteration (only in ~{ ~})
-        # ~^ - Escape from iteration (only in ~{ ~})
         # Emit a special marker that iteration handling will detect
         ESCAPE_MARKER = '\u0000'
-        return (ESCAPE_MARKER, pos, arg_idx, False)
-    
+        return (ESCAPE_MARKER, pos)
+
     elif directive == '\n':
         # ~<newline> - Ignored newline
         if at_flag:
             # Keep the newline
-            return ('\n', pos, arg_idx, False)
+            return ('\n', pos)
         else:
             # Ignore newline and following whitespace
             while pos < len(control_string) and control_string[pos] in ' \t':
                 pos += 1
-            return ('', pos, arg_idx, False)
-    
+            return ('', pos)
+
     elif directive == 'P':
-        # ~P - Plural
+        # ~P - Plural. ~:P re-examines the previously consumed argument
+        # without consuming a new one, so the cursor must not move at all
+        # (net-zero) - unlike the old code, which shifted it by one extra.
         if colon_flag:
-            # Back up one arg
-            arg_idx = max(0, arg_idx - 1)
-        val = get_arg() if not colon_flag else (args[arg_idx - 1] if arg_idx > 0 else 1)
+            val = cursor.prev()
+        else:
+            val = get_arg()
         try:
             num = int(val) if val is not None else 1
             if at_flag:
@@ -1330,56 +1413,48 @@ def _format_directive(control_string, args, pos, arg_idx):
                 result = '' if num == 1 else 's'
         except (TypeError, ValueError):
             result = 's'
-        return (result, pos, arg_idx, False)
-    
+        return (result, pos)
+
     else:
         # Unknown directive - just output the tilde and char
-        return ('~' + directive, pos, arg_idx, False)
+        return ('~' + directive, pos)
 
 
-def _format_process(control_string, args):
-    """Process a format control string with arguments."""
-    result = []
-    pos = 0
-    arg_idx = 0
-    args = list(args) if args else []
-    
-    while pos < len(control_string):
-        c = control_string[pos]
-        if c == '~':
-            pos += 1
-            output, pos, arg_idx, _ = _format_directive(control_string, args, pos, arg_idx)
-            result.append(output)
-        else:
-            result.append(c)
-            pos += 1
-    
-    return ''.join(result)
+def _format_process_cursor(control_string, cursor):
+    """Process a format control string, consuming arguments from `cursor`.
 
-
-def _format_process_with_tail(control_string, args):
-    """Like _format_process but also return the index of remaining args.
-
-    Returns a tuple (formatted_string, arg_idx) where arg_idx is the
-    number of arguments consumed (i.e. the index of the first remaining
-    argument).
+    This is the shared core: passing the *same* cursor into a nested call
+    (used by ~<...~>, ~(...~), ~[...~], ~@?) makes consumption inside the
+    nested directive visible to whatever follows it in the outer control
+    string - the structural fix for FORMAT's argument-cursor model. Passing
+    a *fresh* cursor (used per-item by ~{...~}, and by plain ~?) gives a
+    nested control string its own independent argument scope, per CLHS.
     """
     result = []
     pos = 0
-    arg_idx = 0
-    args = list(args) if args else []
-
     while pos < len(control_string):
         c = control_string[pos]
         if c == '~':
             pos += 1
-            output, pos, arg_idx, _ = _format_directive(control_string, args, pos, arg_idx)
+            output, pos = _format_directive(control_string, cursor, pos)
             result.append(output)
         else:
             result.append(c)
             pos += 1
+    return ''.join(result)
 
-    return ''.join(result), arg_idx
+
+def _format_process(control_string, args):
+    """Process a format control string with arguments (fresh cursor)."""
+    return _format_process_cursor(control_string, _FormatCursor(args))
+
+
+def _format_process_with_tail(control_string, args):
+    """Like _format_process but also return the number of arguments consumed
+    (i.e. the index of the first remaining argument)."""
+    cursor = _FormatCursor(args)
+    result = _format_process_cursor(control_string, cursor)
+    return result, cursor.idx
 
 
 @_registry.cl_function('FORMAT')

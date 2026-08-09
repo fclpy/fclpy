@@ -184,39 +184,79 @@ def eval_cerror(form, env):
     raise exception
 
 
+def _make_condition_from_evaluated_designator(type_name_symbol, arguments):
+    """Like `_make_condition_from_designator`, but for a condition-type
+    designator whose init-args have already been evaluated (the case for
+    ordinary function calls, e.g. `(funcall #'warn 'my-warning :foo 1)`,
+    where the registry evaluates all arguments before the call).
+    """
+    condition_class = _condition_class_for_name(type_name_symbol.name)
+    if condition_class is None:
+        return None
+
+    kwargs = {}
+    it = iter(arguments)
+    for key in it:
+        value = next(it, lisptype.NIL)
+        if isinstance(key, (lisptype.LispSymbol, lisptype.lispKeyword)):
+            kwargs[key.name.lower().replace('-', '_')] = value
+    return condition_class(**kwargs)
+
+
+def signal_warning(datum, arguments):
+    """Build the warning condition for WARN's (DATUM &rest ARGUMENTS) designator,
+    print it, and return NIL. Shared by both the WARN special form (eval_warn,
+    for unevaluated call sites) and the WARN function designator (warn_fn in
+    utilities_errors.py, used by FUNCALL/APPLY/#'WARN) so there is exactly one
+    place that knows how a warning is built and reported.
+
+    Real handler-stack dispatch (so HANDLER-BIND/MUFFLE-WARNING can intercept
+    this before it prints) requires the signal-before-unwind rewrite planned
+    for M8; until then this always prints, matching WARN's unhandled behavior.
+    """
+    from fclpy.lispfunc.io_write import format_fn
+
+    if isinstance(datum, (str, lisptype.LispString)):
+        control_str = str(datum)
+        message = format_fn(lisptype.NIL, control_str, *arguments)
+        condition = lisptype.SimpleWarning(format_control=control_str, format_arguments=list(arguments))
+    elif isinstance(datum, lisptype.Condition):
+        condition = datum
+        message = str(datum)
+    elif isinstance(datum, (lisptype.LispSymbol, lisptype.lispKeyword)):
+        built = _make_condition_from_evaluated_designator(datum, arguments)
+        condition = built if built is not None else lisptype.Warning(message=str(datum))
+        message = str(condition)
+    else:
+        condition = lisptype.Warning(message=str(datum))
+        message = str(condition)
+
+    print(f"Warning: {message}")
+    return lisptype.NIL
+
+
 def eval_warn(form, env):
     """Implement WARN special form.
-    
-    Syntax: (WARN condition-object) or (WARN format-control &rest format-arguments)
-    
+
+    Syntax: (WARN format-control &rest format-arguments) or (WARN condition-designator ...)
+
     Signal a warning condition. Unlike ERROR, warnings don't require handling
     and execution normally continues.
     """
     from .evaluation_core import eval
-    
+
     args = cdr(form)
     if not _consp_internal(args):
         raise lisptype.LispNotImplementedError("WARN requires at least one argument")
-    
-    try:
-        first_arg = eval(car(args), env)
-    except ConditionException as e:
-        # If evaluating the argument raises a condition, convert it to a warning
-        # Warnings don't interrupt execution, so we just return NIL
-        return lisptype.NIL
-    
-    # Check if it's already a condition object
-    if isinstance(first_arg, lisptype.Condition):
-        condition = first_arg
-    elif isinstance(first_arg, lisptype.Warning):
-        condition = first_arg
-    else:
-        # Create a warning condition with the given message
-        condition = lisptype.Warning(message=str(first_arg))
-    
-    # For warnings, we might want to print/log them but not raise
-    # For now, return NIL (warnings don't interrupt execution)
-    return lisptype.NIL
+
+    datum = eval(car(args), env)
+    arguments = []
+    cur = cdr(args)
+    while _consp_internal(cur):
+        arguments.append(eval(car(cur), env))
+        cur = cdr(cur)
+
+    return signal_warning(datum, arguments)
 
 
 def eval_restart_case(form, env):
