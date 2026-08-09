@@ -9,6 +9,17 @@ import sys
 # Timeout for loop warning (in seconds) - set to 0 to disable
 LOOP_TIMEOUT_WARNING = 120  # 2 minutes
 
+# Hard cap for LOOP's own simple-loop (no iteration clause) repeat-until-non-local-exit
+# path (CLHS 6.1.1). That path has no driver of its own to bound iteration -- an
+# unrecognized/misparsed clause silently falling through to an inert body form (e.g.
+# a loop-keyword synonym the clause parser doesn't know, so its tokens land in
+# body_forms instead of being consumed) has no other way to ever terminate. Every
+# other iteration construct here (DO/DOTIMES/DOLIST, and LOOP's own FOR/REPEAT/WHILE
+# drivers) is naturally bounded by its own driver, so only this path needs a hard
+# stop. Set well above LOOP_TIMEOUT_WARNING so it never fires on a legitimately slow
+# ANSI test, only on a genuine runaway.
+LOOP_TIMEOUT_ERROR = 600  # 10 minutes
+
 
 def eval_when(form, env):
     """Evaluate WHEN special form."""
@@ -1782,19 +1793,29 @@ def eval_loop(form, env):
         warning_printed = False
     
         def check_loop_timeout():
-            """Check if loop has been running too long and print warning."""
+            """Warn once if the loop is running long; hard-abort if it never stops.
+
+            The warning alone used to be the entire mechanism: it fires once (via
+            warning_printed) and then never checks again, so a loop that never
+            terminates ran forever with no way for the process -- or an ANSI-suite
+            run driving it -- to ever get control back. LOOP_TIMEOUT_ERROR turns
+            that into a loud, catchable LispError instead of a silent hang.
+            """
             nonlocal warning_printed, loop_iterations
             loop_iterations += 1
-            if LOOP_TIMEOUT_WARNING > 0 and not warning_printed:
-                elapsed = time.time() - loop_start_time
-                if elapsed > LOOP_TIMEOUT_WARNING:
-                    warning_printed = True
-                    print(f"\n*** LOOP WARNING: Loop has been running for {elapsed:.1f}s ({loop_iterations} iterations) ***", file=sys.stderr)
-                    print(f"*** LOOP body_forms: {body_forms} ***", file=sys.stderr)
-                    print(f"*** LOOP iteration_type: {iteration_type}, iteration_test: {iteration_test} ***", file=sys.stderr)
-                    if iteration_var:
-                        print(f"*** LOOP var: {iteration_var} ***", file=sys.stderr)
-                    sys.stderr.flush()
+            elapsed = time.time() - loop_start_time
+            if LOOP_TIMEOUT_WARNING > 0 and not warning_printed and elapsed > LOOP_TIMEOUT_WARNING:
+                warning_printed = True
+                print(f"\n*** LOOP WARNING: Loop has been running for {elapsed:.1f}s ({loop_iterations} iterations) ***", file=sys.stderr)
+                print(f"*** LOOP body_forms: {body_forms} ***", file=sys.stderr)
+                print(f"*** LOOP iteration_type: {iteration_type}, iteration_test: {iteration_test} ***", file=sys.stderr)
+                if iteration_var:
+                    print(f"*** LOOP var: {iteration_var} ***", file=sys.stderr)
+                sys.stderr.flush()
+            if LOOP_TIMEOUT_ERROR > 0 and elapsed > LOOP_TIMEOUT_ERROR:
+                raise lisptype.LispError(
+                    f"LOOP exceeded {LOOP_TIMEOUT_ERROR}s ({loop_iterations} iterations) "
+                    f"without terminating -- aborting instead of hanging. body_forms={body_forms!r}")
 
         def _termination_break(loop_env):
             """Check termination_type/iteration_test if present."""

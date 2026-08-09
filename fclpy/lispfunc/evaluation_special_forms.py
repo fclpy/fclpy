@@ -2434,6 +2434,38 @@ def eval_defclass(form, env):
     return class_name
 
 
+def _make_method_function(params, body, captured_env, block_name):
+    """Build the callable behind one CLOS method (shared by DEFGENERIC's inline
+    :method options and standalone DEFMETHOD -- these used to be two copies of
+    identical logic).
+
+    CLHS 7.6.5: each method has an implicit block named after its generic
+    function, so a bare (RETURN-FROM gf-name ...) inside the method body
+    returns from the method rather than escaping further out.
+    """
+    from .evaluation_loops_conditionals import _run_with_nil_block
+    from .evaluation_core import eval
+
+    def method_func(*call_args):
+        method_env = lisptype.Environment(captured_env)
+        for i, param in enumerate(params):
+            if i < len(call_args):
+                method_env.add_variable(param, call_args[i])
+            else:
+                method_env.add_variable(param, lisptype.NIL)
+
+        def _run_body():
+            result = lisptype.NIL
+            body_current = body
+            while _consp_internal(body_current):
+                result = eval(car(body_current), method_env)
+                body_current = cdr(body_current)
+            return result
+
+        return _run_with_nil_block(_run_body, block_name)
+    return method_func
+
+
 def eval_defgeneric(form, env):
     """Evaluate DEFGENERIC special form.
     
@@ -2563,24 +2595,7 @@ def eval_defgeneric(form, env):
                         spec_current = cdr(spec_current)
                     
                     # Create method function
-                    def make_method_function(params, body, captured_env):
-                        def method_func(*call_args):
-                            method_env = lisptype.Environment(captured_env)
-                            for i, param in enumerate(params):
-                                if i < len(call_args):
-                                    method_env.add_variable(param, call_args[i])
-                                else:
-                                    method_env.add_variable(param, lisptype.NIL)
-                            
-                            result = lisptype.NIL
-                            body_current = body
-                            while _consp_internal(body_current):
-                                result = eval(car(body_current), method_env)
-                                body_current = cdr(body_current)
-                            return result
-                        return method_func
-                    
-                    method_fn = make_method_function(params_for_method, method_body, env)
+                    method_fn = _make_method_function(params_for_method, method_body, env, func_name)
                     methods.append((specializers, method_fn))
             
             elif isinstance(opt_name, lisptype.lispKeyword) and opt_name.name == 'DOCUMENTATION':
@@ -2724,24 +2739,7 @@ def eval_defmethod(form, env):
         current = cdr(current)
     
     # Create the method function
-    def make_method_function(param_list, body, captured_env):
-        def method_func(*call_args):
-            method_env = lisptype.Environment(captured_env)
-            for i, param in enumerate(param_list):
-                if i < len(call_args):
-                    method_env.add_variable(param, call_args[i])
-                else:
-                    method_env.add_variable(param, lisptype.NIL)
-            
-            result = lisptype.NIL
-            body_current = body
-            while _consp_internal(body_current):
-                result = eval(car(body_current), method_env)
-                body_current = cdr(body_current)
-            return result
-        return method_func
-    
-    method_fn = make_method_function(params, method_body, env)
+    method_fn = _make_method_function(params, method_body, env, func_name)
     
     # Find the generic function and add the method
     # Walk up to global environment
