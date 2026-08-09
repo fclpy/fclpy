@@ -89,13 +89,6 @@ def assert_fn(test_form, *args, **kwargs):
     arguments describe the error.
     """
     if test_form is None or test_form is lisptype.NIL or test_form == False:
-        # Include the failing test form for easier debugging
-        import traceback as _tb
-        try:
-            print('[DEBUG] ASSERT failed, printing Python stack:')
-            _tb.print_stack()
-        except Exception:
-            pass
         raise lisptype.LispError(f"Assertion failed: {test_form!r}")
     return lisptype.NIL
 

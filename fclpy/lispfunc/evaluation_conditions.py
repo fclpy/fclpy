@@ -105,50 +105,60 @@ def eval_signal(form, env):
     raise ConditionException(condition, recoverable=True)
 
 
-def eval_error(form, env):
-    """Implement ERROR special form.
-    
-    Syntax: (ERROR) or (ERROR condition-object) or (ERROR format-control &rest format-arguments)
-    
-    Signal an error condition. This is like SIGNAL but the condition must be handled,
-    or the program is aborted.
+def _build_condition_from_datum(datum_form, remaining_args_form, env):
+    """Evaluate an ERROR/CERROR datum and build the condition object it
+    designates (CLHS 9.1). Shared by ERROR and CERROR: CERROR's datum and
+    arguments are specified to behave "as if by (apply #'error datum
+    arguments)", so this is one dispatch, not two.
+
+    Always evaluates the datum *before* deciding how to build the condition,
+    so a string datum is treated the same whether it arrived as a literal
+    in the form or via a variable/expression -- deciding based on the raw,
+    unevaluated form would make (error fmt) behave differently from
+    (error "literal") for the same runtime value, which is exactly the bug
+    this replaced (handler-case (simple-error ...) could never match a
+    string datum that came from a variable).
     """
     from .evaluation_core import eval
-    
-    args = cdr(form)
-    
-    # If no arguments, create a generic error
-    if not _consp_internal(args):
-        condition = lisptype.Error(message="Unspecified error")
-        raise ConditionException(condition, recoverable=False)
-    
-    first_arg = car(args)
-    
-    # Check if it's a condition object or format string
-    if isinstance(first_arg, (str, lisptype.LispString)):
-        # String case: (ERROR "format ~a" arg1 arg2 ...). Per ANSI, a string
-        # datum signals a condition of type SIMPLE-ERROR (a subtype of ERROR),
-        # not bare SIMPLE-CONDITION (which handler-case/handler-bind ERROR
-        # clauses would not match).
+    datum = eval(datum_form, env)
+
+    if isinstance(datum, (str, lisptype.LispString)):
+        # String datum: signals a condition of type SIMPLE-ERROR (a subtype
+        # of ERROR), not bare SIMPLE-CONDITION (which handler-case/
+        # handler-bind ERROR clauses would not match).
         format_arguments = []
-        cur = cdr(args)
+        cur = remaining_args_form
         while _consp_internal(cur):
             format_arguments.append(eval(car(cur), env))
             cur = cdr(cur)
-        condition = lisptype.SimpleError(format_control=str(first_arg), format_arguments=format_arguments)
-    else:
-        # Evaluate as condition object
-        first_arg = eval(first_arg, env)
+        return lisptype.SimpleError(format_control=str(datum), format_arguments=format_arguments)
+    elif isinstance(datum, (lisptype.LispSymbol, lisptype.lispKeyword)):
         # Per ANSI condition designators, if the (evaluated) datum is a
         # symbol naming a condition type, build an instance of that type
         # from the remaining keyword init-args rather than signaling the
         # bare type-name symbol itself.
-        if isinstance(first_arg, (lisptype.LispSymbol, lisptype.lispKeyword)):
-            built = _make_condition_from_designator(first_arg, cdr(args), env)
-            condition = built if built is not None else first_arg
-        else:
-            condition = first_arg
+        built = _make_condition_from_designator(datum, remaining_args_form, env)
+        return built if built is not None else datum
+    else:
+        return datum
 
+
+def eval_error(form, env):
+    """Implement ERROR special form.
+
+    Syntax: (ERROR) or (ERROR condition-object) or (ERROR format-control &rest format-arguments)
+
+    Signal an error condition. This is like SIGNAL but the condition must be handled,
+    or the program is aborted.
+    """
+    args = cdr(form)
+
+    # If no arguments, create a generic error
+    if not _consp_internal(args):
+        condition = lisptype.Error(message="Unspecified error")
+        raise ConditionException(condition, recoverable=False)
+
+    condition = _build_condition_from_datum(car(args), cdr(args), env)
     raise ConditionException(condition, recoverable=False)
 
 
@@ -160,24 +170,26 @@ def eval_cerror(form, env):
     Signal an error that has a built-in continue restart. If the user continues,
     CERROR returns NIL and execution resumes.
     """
-    from .evaluation_core import eval
-    
     args = cdr(form)
     if not _consp_internal(args) or not _consp_internal(cdr(args)):
         raise lisptype.LispNotImplementedError("CERROR requires at least condition argument")
-    
+
     continue_format = car(args)  # Format for the continue option
     condition_form = car(cdr(args))
-    
+    # CLHS 9.1: cerror's datum/arguments behave "as if by (apply #'error
+    # datum arguments)" -- same dispatch as ERROR, including string datums
+    # from a variable building a proper SIMPLE-ERROR.
+    remaining_args_form = cdr(cdr(args))
+
     try:
-        condition = eval(condition_form, env)
+        condition = _build_condition_from_datum(condition_form, remaining_args_form, env)
     except ConditionException as e:
         # If evaluating the argument raises a condition, use that condition
         condition = e.condition
-    
+
     if not isinstance(condition, lisptype.Condition):
         condition = lisptype.Error(message=str(condition))
-    
+
     # Mark this as recoverable with a continue restart
     exception = ConditionException(condition, recoverable=True)
     exception.continue_format = continue_format

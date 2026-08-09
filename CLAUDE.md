@@ -5,18 +5,35 @@ Lisp compliance**, measured by running the real ANSI test suite (`ansi-test/`, a
 sibling directory one level above this repo) to completion without crashing, and
 passing as many of its tests as possible.
 
-> **⚠ Status correction, superseded 2026-08-09 (see plan.md's "Update" section for
+> **⚠ Status correction, superseded 2026-08-09 (see plan.md's "Update" sections for
 > details) — kept here for history.** The suite used to silently abort after ~2 990 of
-> 22 036 tests (13.6% coverage) because `LOOP` established no implicit `NIL` block; that
-> is fixed (predates the 2026-08-09 session). FORMAT's argument-cursor bugs (the
-> "817 failures"/"21980/21980 processed"/self-contradictory "629 629 629 629" summary
-> line artifacts) are also fixed as of 2026-08-09. **The suite now runs to completion:
-> 22036/22036 tests execute, 629 real failures (~2.9%).** `scripts/ansi_score.py` still
-> doesn't exist and `expected-failures` is still unwired, so treat 629 as "current
-> failure count," not yet a regression-tracked baseline.
+> 22 036 tests (13.6% coverage) because `LOOP` established no implicit `NIL` block.
+> **That was previously (falsely) marked fixed here — it was not; see plan.md.** It
+> and three more instances of the same "form doesn't establish the block/condition
+> CLHS requires" defect class (CLOS methods, LOOP's `NAMED` clause, `ERROR`/`CERROR`'s
+> condition dispatch) are now genuinely fixed, each verified in isolation and via
+> `pytest -q` (1172 passed / 1 pre-existing unrelated failure throughout). FORMAT's
+> argument-cursor bugs are also fixed (2026-08-09, earlier in the same day).
 >
-> **Current work mode is milestone-driven semantic repair, not crash repair.**
-> Read [plan.md](plan.md) — it is now the roadmap, not a status snapshot.
+> **The suite still does not run to completion.** `run_all_tests.py` now prints a live
+> `COMPLETENESS: total=... accounted=... missing=...` line every run (pulled directly
+> from RT's `*entries*`/`*passed-tests*`/`*failed-tests*`, not parsed from
+> FORMAT-rendered text) — trust that line, not the "N failures ... out of 22036 tests"
+> summary line, which prints the *initial pending count* unconditionally and looks
+> complete even when the run crashed partway through. As of the last verified run the
+> truncation point is past `ERROR.1`/`CERROR.1` (accounted 4623/22036) and not yet
+> identified — see plan.md's later Update for the diagnostic method and why this
+> session stopped there rather than continuing one-crash-at-a-time. A LOOP hitting an
+> unimplemented clause (e.g. `AS`, `BEING`) can no longer hang the whole run forever:
+> `LOOP_TIMEOUT_ERROR` now converts a >10-minute loop into a loud `LispError`.
+> `scripts/ansi_score.py` now exists — run it after `run_all_tests.py` to get a
+> per-subsystem table from `ansi_results/*.txt` and a `docs/ansi_baseline.json`
+> snapshot. `expected-failures` is still unwired.
+>
+> **Current work mode is milestone-driven semantic repair, not crash repair — but
+> crashes (not just this document's claims about them) still need re-verifying before
+> being treated as fixed.** Read [plan.md](plan.md) — it is now the roadmap, not a
+> status snapshot.
 
 ## Environment
 

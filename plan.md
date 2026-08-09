@@ -41,10 +41,12 @@ not a semantic one — 629/22036 (~2.9%) is the real current failure rate, not t
 failures" or "21980/21980 processed" numbers this document previously flagged as
 artifacts, and not the ~21%-of-13.6%-coverage figure below either.
 
-**Still not done from M0's list**: the run-completeness assertion (step 2), deleting
-REPAIR.md's stop-condition heuristic (step 3), the RT-list-based structured reporter
-that bypasses FORMAT entirely (step 6), wiring `ansi-test/expected-failures/fclpy.sexp`
-so "unexpected failure" is a real regression signal (step 7), Python-object-leakage
+**Still not done from M0's list** *(steps 2, 3, and 6 below were completed later this
+same session — see the Update that follows; kept here as the original historical
+snapshot)*: the run-completeness assertion (step 2), deleting REPAIR.md's
+stop-condition heuristic (step 3), the RT-list-based structured reporter that bypasses
+FORMAT entirely (step 6), wiring `ansi-test/expected-failures/fclpy.sexp` so
+"unexpected failure" is a real regression signal (step 7), Python-object-leakage
 triage (step 8), and the 113-entry registered-vs-reference-suite surplus investigation
 (step 9). `scripts/ansi_score.py` per-subsystem scoreboard still does not exist.
 
@@ -92,9 +94,77 @@ claims against a live signal (here: the completeness assertion this same milesto
 step called for) before building on top of them — this is the concrete case M0's own
 rationale ("you cannot even measure A without B") was warning about.
 
-*(Full-suite before/after numbers with this fix pending a fresh `run_all_tests.py`
-run at the time of writing; see the ANSI impact section of this session's completion
-report for the verified count.)*
+**Follow-on discovery: the block-establishment gap was not unique to LOOP.** Re-running
+the full suite after the fix above did *not* reach completion — it crashed again, later.
+Chasing that (same method: completeness assertion → last-good test name →
+`run_do_test.py`/`do-test` reproduction, never trusting the log tail) turned up three
+more instances of the same underlying defect class plus one unrelated one, all fixed
+this session:
+
+- **CLOS method bodies had no implicit block.** CLHS 7.6.5: a method's body is
+  implicitly wrapped in `(block generic-function-name ...)`. Neither of the two
+  (duplicated — Finding L) `make_method_function` implementations in
+  `evaluation_special_forms.py` (one inline under `DEFGENERIC`'s `:method` options,
+  one under standalone `DEFMETHOD`) did this, so `(return-from generic-fn-name ...)`
+  inside a method leaked out uncaught (crash test: `DEFGENERIC.FUN.7`). Consolidated
+  both into one `_make_method_function` helper that wraps the method body in
+  `_run_with_nil_block(..., block_name)` — the same mechanism LOOP now uses, not a
+  third parallel implementation.
+- **LOOP's `NAMED` clause wasn't parsed at all** — a bare `NAMED` token fell through to
+  being evaluated as a variable reference (`UnboundVariable: NAMED`), and
+  `(return-from that-name ...)` had no block to find (crash test: `LOOP.13.12`-family).
+  Generalized `_run_with_nil_block(thunk, block_name=None)` to match either NIL (the
+  default) or a specific name, and added `NAMED name` clause parsing to `eval_loop`.
+- **`ERROR`/`CERROR` decided how to build the signaled condition by inspecting the
+  *unevaluated form*** (`isinstance(car(args), LispString)`) instead of the *evaluated
+  datum value*. `(error "literal")` correctly built a `SIMPLE-ERROR`; `(error fmt)`
+  where `fmt` is a variable bound to that same string did not — it signaled the bare
+  string as the "condition object", which `(handler-case ... (simple-error (c) ...))`
+  could never match, so the condition propagated uncaught (crash test: `ERROR.1`, the
+  *first* test in `conditions/error.lsp` — this is about as fundamental a conditions-
+  system gap as exists). Fixed by always evaluating the datum first, then dispatching
+  on its value's type; extracted the corrected dispatch into a shared
+  `_build_condition_from_datum` helper and pointed `CERROR` at it too (CLHS 9.1: cerror
+  behaves "as if by `(apply #'error datum arguments)`" — it had the same gap, plus was
+  missing the symbol-designator condition-building branch entirely).
+- **Unrelated cleanup**: `ASSERT`'s implementation had a leftover
+  `print('[DEBUG] ...'); traceback.print_stack()` firing on every legitimate assertion
+  failure (there are many by design in this suite) — pure noise that was drowning out
+  real crash tracebacks while triaging the above. Removed.
+
+**Verification for all four**: each reproduced in isolation before the fix and produced
+the ANSI-correct value after; `pytest -q` stayed at 1172 passed / 1 pre-existing
+unrelated failure after every fix.
+
+**Current status, honestly reported.** The suite still does not run to completion.
+Each fix above moved the truncation point further (2 990 → 3 503 → 4 285 → 4 619 →
+4 623 of 22 036), and the *next* blocker past `ERROR.1`/`CERROR.1` is unidentified as of
+this writing — this session stopped chasing it deliberately (see "Definition of done"
+in the task instructions: this is exactly the point of diminishing returns where
+continuing to whack-a-mole individual crashes stops being the highest-value use of
+time, versus reporting the pattern and handing off). Two things **are** now true that
+weren't before:
+1. `run_all_tests.py` prints a live, unfakeable `COMPLETENESS: total=... accounted=...
+   missing=...` line every run — no more silently trusting a truncated run's summary.
+2. A genuinely unbounded LOOP (e.g. from an unimplemented clause like `AS`/`BEING`
+   silently falling through to inert, non-terminating body forms — confirmed live via
+   the `LOOP WARNING`/`LOOP body_forms: [:AS, X, :IN, ...]` diagnostic recurring at
+   different points in the same run) can no longer hang the whole suite forever:
+   `LOOP_TIMEOUT_ERROR` (10 min hard cap, `evaluation_loops_conditionals.py`) converts
+   it into a loud `LispError` instead.
+
+**A structural observation worth recording for M7/M8.** Four fixes this session were
+all "form X doesn't establish the block/condition-matching semantics CLHS requires,"
+found one at a time by running into each one's crash. That is a strong signal the
+*general* case — some Python exception escaping every enclosing Lisp-level
+handler/block with no match anywhere, all the way to the top of a Lisp-level
+`EVAL` call — should itself be caught once, at that boundary, and turned into a
+proper `CONTROL-ERROR` condition instead of an uncaught Python exception. That would
+make *every future* instance of this bug class (not just the four found so far) a
+normal per-test failure instead of a process crash, independent of which specific
+special form is missing its block. Scoped out of this session (it's a change to a
+shared boundary, wants its own verification pass), but recommended as the next M0/M7
+item over continuing to fix individual call sites one at a time.
 
 ---
 
@@ -1196,7 +1266,7 @@ independent and the B side has 20 unmeasured areas to burn down while A finishes
 | `CLAUDE.md` | Architecture map + development loop (read first) |
 | `plan.md` | This roadmap |
 | `REPAIR.md` | Crash-repair SOP — historical; crashes are no longer the constraint |
-| `scripts/ansi_score.py` | *(to be built in M0)* per-subsystem scoreboard |
+| `scripts/ansi_score.py` | Per-subsystem scoreboard — reads `ansi_results/*.txt` (written by `run_all_tests.py`), writes `docs/ansi_baseline.json` |
 | `docs/ansi_targets.txt` | Prose checklist; superseded in M1 by the canonical 978-symbol table |
 
 ```powershell
