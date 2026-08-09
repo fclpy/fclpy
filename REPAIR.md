@@ -1,5 +1,18 @@
 # Test Suite Crash Repair Guide
 
+> **⚠ HISTORICAL — and Step 2's heuristic is actively dangerous.**
+>
+> **Do not use the rule at line 33** ("if the last completed test is also the final
+> test listed in the .lsp file, determine order from doit.log"). That heuristic
+> misread a silent abort as a clean finish: the run stops at `DOTIMES.ERROR.1`, which
+> *is* the last test in `dotimes.lsp`, but the suite had only executed 2 990 of 22 036
+> tests. A run is complete **only** when `(length *passed-tests*) + (length
+> *failed-tests*) = (length (cdr *entries*))` — assert it programmatically, never
+> eyeball the log tail.
+>
+> Crashes are no longer the binding constraint; silent wrong answers are. Current work
+> mode is milestone-driven semantic repair — see [plan.md](plan.md).
+
 > See [CLAUDE.md](CLAUDE.md) for the architecture map (where the reader, evaluator,
 > and registry live) referenced by "Diagnose & Fix" below. This file is the
 > step-by-step procedure; CLAUDE.md is where to look up *what to change*.

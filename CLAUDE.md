@@ -5,8 +5,18 @@ Lisp compliance**, measured by running the real ANSI test suite (`ansi-test/`, a
 sibling directory one level above this repo) to completion without crashing, and
 passing as many of its tests as possible.
 
-Current work mode is a **crash-repair loop**, not feature work: run the suite, find
-the next crash, fix its root cause, verify, repeat. See "The development loop" below.
+> **⚠ Status correction (supersedes anything below that conflicts).** The suite does
+> **not** run to completion. It silently aborts after ~2 990 of 22 036 tests —
+> **13.6% coverage, 20 of 24 areas never executed**. `(loop (return 'a))` in
+> `SLOOP.1` escapes as a `ReturnFromException` (LOOP establishes no implicit `NIL`
+> block) and is swallowed by `eval_dolist`'s `_run_with_nil_block`, which returns
+> RT's driver loop cleanly. No traceback, no crash — which is exactly why
+> **REPAIR.md's "last test in the file means it completed" heuristic read a silent
+> abort as a clean finish.** All previously quoted compliance numbers ("817 failures",
+> "21980/21980 processed") are FORMAT-misalignment artifacts, not measurements.
+>
+> **Current work mode is milestone-driven semantic repair, not crash repair.**
+> Read [plan.md](plan.md) — it is now the roadmap, not a status snapshot.
 
 ## Environment
 
@@ -29,9 +39,11 @@ the next crash, fix its root cause, verify, repeat. See "The development loop" b
   looks like a Python type error on oddly-shaped data, check here first — many
   "evaluator" bugs are actually mis-parsed syntax (dotted pairs, bit-vectors,
   exponent markers, etc).
-- **Types**: `lisptype_basic.py` (symbols, cons cells, packages, NIL/T) and
-  `lisptype_extended.py` (`Environment`, setf-expanders, symbol-macros, condition
-  types). `lisptype.py` re-exports both for convenience.
+- **Types**: `lisptype_basic.py` (symbols, cons cells, NIL/T, `MultipleValues`) and
+  `lisptype_extended.py` (`Environment`, **`Package` — at `:322`, *not* in
+  `lisptype_basic.py`**, symbol-macros, condition types). `lisptype.py` re-exports
+  both. Note `setf-expanders` is **monkey-patched onto `Environment` at runtime**
+  (`evaluation_core.py:1229-1230`) rather than declared in `__init__`.
 - **Evaluator** (`lispfunc/`):
   - `evaluation_core.py` — the `eval`/`apply` dispatcher and the control-transfer
     exceptions (`ReturnFromException`, `ThrowException`, `GoException`,
