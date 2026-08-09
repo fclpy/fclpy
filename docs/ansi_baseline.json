@@ -1,0 +1,139 @@
+{
+  "failed": 1746,
+  "passed": 2877,
+  "per_directory": {
+    "(unmapped: programmatically generated)": {
+      "failed": 28,
+      "passed": 20,
+      "total": 4983
+    },
+    "arrays": {
+      "failed": 0,
+      "passed": 0,
+      "total": 1245
+    },
+    "auxiliary": {
+      "failed": 0,
+      "passed": 2,
+      "total": 2
+    },
+    "characters": {
+      "failed": 0,
+      "passed": 0,
+      "total": 259
+    },
+    "conditions": {
+      "failed": 18,
+      "passed": 9,
+      "total": 303
+    },
+    "cons": {
+      "failed": 0,
+      "passed": 0,
+      "total": 1638
+    },
+    "data-and-control-flow": {
+      "failed": 415,
+      "passed": 1005,
+      "total": 1420
+    },
+    "environment": {
+      "failed": 0,
+      "passed": 0,
+      "total": 192
+    },
+    "eval-and-compile": {
+      "failed": 94,
+      "passed": 224,
+      "total": 318
+    },
+    "files": {
+      "failed": 0,
+      "passed": 0,
+      "total": 87
+    },
+    "hash-tables": {
+      "failed": 0,
+      "passed": 0,
+      "total": 158
+    },
+    "iteration": {
+      "failed": 486,
+      "passed": 352,
+      "total": 838
+    },
+    "misc": {
+      "failed": 0,
+      "passed": 0,
+      "total": 740
+    },
+    "numbers": {
+      "failed": 0,
+      "passed": 0,
+      "total": 1438
+    },
+    "objects": {
+      "failed": 607,
+      "passed": 218,
+      "total": 825
+    },
+    "packages": {
+      "failed": 0,
+      "passed": 0,
+      "total": 340
+    },
+    "pathnames": {
+      "failed": 0,
+      "passed": 0,
+      "total": 215
+    },
+    "printer": {
+      "failed": 0,
+      "passed": 0,
+      "total": 788
+    },
+    "reader": {
+      "failed": 0,
+      "passed": 0,
+      "total": 165
+    },
+    "sequences": {
+      "failed": 0,
+      "passed": 0,
+      "total": 3158
+    },
+    "streams": {
+      "failed": 0,
+      "passed": 0,
+      "total": 543
+    },
+    "strings": {
+      "failed": 0,
+      "passed": 0,
+      "total": 501
+    },
+    "structures": {
+      "failed": 0,
+      "passed": 0,
+      "total": 115
+    },
+    "symbols": {
+      "failed": 98,
+      "passed": 1047,
+      "total": 1145
+    },
+    "system-construction": {
+      "failed": 0,
+      "passed": 0,
+      "total": 75
+    },
+    "types-and-classes": {
+      "failed": 0,
+      "passed": 0,
+      "total": 545
+    }
+  },
+  "total": 22036,
+  "unmapped_count": 4983,
+  "unregistered_source_count": 165
+}
