@@ -73,7 +73,7 @@ __all__ = [
     'special_operator_p',
     'eval_when',
     'locally',
-    'progv',
+    'eval_progv',
     'dynamic_extent',
     'ftype',
     'notinline',

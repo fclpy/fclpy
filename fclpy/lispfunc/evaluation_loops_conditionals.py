@@ -136,6 +136,20 @@ def eval_cond(form, env):
     return None
 
 
+def _primary_value(value):
+    """Coerce a possibly-multiple-valued result to its single primary value.
+
+    Used wherever ANSI evaluates a form in a single-value context (e.g. a
+    CASE-family keyform): if it returned a MultipleValues, only the first
+    value is used (NIL if it returned zero values); anything else passes
+    through unchanged.
+    """
+    if isinstance(value, lisptype.MultipleValues):
+        values = value.get_all()
+        return values[0] if values else lisptype.NIL
+    return value
+
+
 def eval_case(form, env):
     """Evaluate CASE special form.
     
@@ -156,7 +170,7 @@ def eval_case(form, env):
     
     # Evaluate keyform
     keyform = car(args)
-    key_value = eval(keyform, env)
+    key_value = _primary_value(eval(keyform, env))
     
     clauses = cdr(args)
     
@@ -238,7 +252,7 @@ def eval_ccase(form, env):
         raise lisptype.LispProgramError("CCASE requires a place and at least one clause")
 
     place_form = car(args)
-    key_value = eval(place_form, env)
+    key_value = _primary_value(eval(place_form, env))
 
     clauses = cdr(args)
 
@@ -286,6 +300,163 @@ def eval_ccase(form, env):
 
     condition = lisptype.TypeError(datum=key_value, expected_type=member_type)
     raise ConditionException(condition, recoverable=True)
+
+
+def _case_clause_keys(keys):
+    """Return the list of literal keys designated by a CASE-family clause's keys form."""
+    if _consp_internal(keys):
+        items = []
+        current = keys
+        while _consp_internal(current):
+            items.append(car(current))
+            current = cdr(current)
+        return items
+    elif keys is lisptype.NIL or keys == lisptype.NIL:
+        return []
+    else:
+        return [keys]
+
+
+def eval_ecase(form, env):
+    """Evaluate ECASE special form.
+
+    Syntax: (ECASE keyform {normal-clause}*)
+    normal-clause ::= (keys form*)
+
+    Like CASE, but T and OTHERWISE are ordinary keys here (no catch-all
+    clause). keyform is evaluated exactly once. If no clause matches,
+    ECASE signals a TYPE-ERROR (datum = keyform's value, expected-type = a
+    MEMBER type over every key across all clauses).
+    """
+    from .evaluation_core import eval, ConditionException
+    from .comparison import eql
+
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispProgramError("ECASE requires a keyform and at least one clause")
+
+    key_value = _primary_value(eval(car(args), env))
+    clauses = cdr(args)
+
+    all_keys = []
+    current = clauses
+    while _consp_internal(current):
+        clause = car(current)
+        if _consp_internal(clause):
+            keys = _case_clause_keys(car(clause))
+            all_keys.extend(keys)
+            for k in keys:
+                if eql(key_value, k):
+                    result = lisptype.NIL
+                    forms = cdr(clause)
+                    while _consp_internal(forms):
+                        result = eval(car(forms), env)
+                        forms = cdr(forms)
+                    return result
+        current = cdr(current)
+
+    member_type = lisptype.NIL
+    for key in reversed(all_keys):
+        member_type = cons(key, member_type)
+    member_type = cons(lisptype.LispSymbol('MEMBER'), member_type)
+
+    condition = lisptype.TypeError(datum=key_value, expected_type=member_type)
+    raise ConditionException(condition, recoverable=False)
+
+
+def _typecase_dispatch(form, env, exhaustive, correctable, form_name):
+    """Shared implementation for TYPECASE/ETYPECASE/CTYPECASE.
+
+    Syntax: (name keyform {normal-clause}*)
+    normal-clause ::= (type form*)
+
+    keyform is evaluated exactly once; each clause's type is matched with
+    TYPEP (not evaluated). TYPECASE treats a final T/OTHERWISE clause as a
+    catch-all; ETYPECASE/CTYPECASE do not (every key is an ordinary type).
+    """
+    from .evaluation_core import eval, ConditionException
+    from .comparison import typep
+
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispProgramError(f"{form_name} requires a keyform and at least one clause")
+
+    key_value = _primary_value(eval(car(args), env))
+    clauses = cdr(args)
+
+    all_types = []
+    current = clauses
+    while _consp_internal(current):
+        clause = car(current)
+        if _consp_internal(clause):
+            type_spec = car(clause)
+            forms = cdr(clause)
+
+            if (not exhaustive and isinstance(type_spec, lisptype.LispSymbol)
+                    and type_spec.name in ('OTHERWISE', 'T')):
+                result = lisptype.NIL
+                while _consp_internal(forms):
+                    result = eval(car(forms), env)
+                    forms = cdr(forms)
+                return result
+
+            all_types.append(type_spec)
+            if lisptype.is_truthy(typep(key_value, type_spec)):
+                result = lisptype.NIL
+                while _consp_internal(forms):
+                    result = eval(car(forms), env)
+                    forms = cdr(forms)
+                return result
+        current = cdr(current)
+
+    expected_type = lisptype.NIL
+    for t in reversed(all_types):
+        expected_type = cons(t, expected_type)
+    expected_type = cons(lisptype.LispSymbol('OR'), expected_type)
+
+    condition = lisptype.TypeError(datum=key_value, expected_type=expected_type)
+    raise ConditionException(condition, recoverable=correctable)
+
+
+def eval_typecase(form, env):
+    """Evaluate TYPECASE special form (has a T/OTHERWISE catch-all, returns NIL if none match and no catch-all)."""
+    from .evaluation_core import eval
+
+    args = cdr(form)
+    if not _consp_internal(args):
+        return lisptype.NIL
+
+    key_value = _primary_value(eval(car(args), env))
+    from .comparison import typep
+
+    clauses = cdr(args)
+    current = clauses
+    while _consp_internal(current):
+        clause = car(current)
+        if _consp_internal(clause):
+            type_spec = car(clause)
+            forms = cdr(clause)
+            is_catchall = (isinstance(type_spec, lisptype.LispSymbol)
+                           and type_spec.name in ('OTHERWISE', 'T'))
+            if is_catchall or lisptype.is_truthy(typep(key_value, type_spec)):
+                result = lisptype.NIL
+                while _consp_internal(forms):
+                    result = eval(car(forms), env)
+                    forms = cdr(forms)
+                return result
+        current = cdr(current)
+
+    return lisptype.NIL
+
+
+def eval_etypecase(form, env):
+    """Evaluate ETYPECASE special form (exhaustive: signals TYPE-ERROR if nothing matches)."""
+    return _typecase_dispatch(form, env, exhaustive=True, correctable=False, form_name="ETYPECASE")
+
+
+def eval_ctypecase(form, env):
+    """Evaluate CTYPECASE special form (like ETYPECASE but the signaled error is correctable)."""
+    return _typecase_dispatch(form, env, exhaustive=True, correctable=True, form_name="CTYPECASE")
 
 
 def eval_and(form, env):
@@ -336,34 +507,66 @@ def eval_progn(form, env):
 
 def eval_locally(form, env):
     """Evaluate LOCALLY special form.
-    
+
     (LOCALLY declaration* form*)
-    
-    LOCALLY is like PROGN but can include declarations at the start.
-    The declarations affect only the body forms within the LOCALLY.
-    For now, we skip declarations and just evaluate the body forms.
+
+    LOCALLY is like PROGN but can include declarations at the start. Most
+    declarations (TYPE, OPTIMIZE, ...) are advisory and ignored. A (SPECIAL
+    var*) declaration, however, changes semantics: within this LOCALLY's
+    body, references to `var` must go through its global/dynamic value cell
+    (the same cell SYMBOL-VALUE/BOUNDP/SET/PROGV use) instead of any
+    lexical binding. We implement that by installing a symbol-macro that
+    expands `var` to `(SYMBOL-VALUE 'var)` in a child environment, scoped
+    to this LOCALLY's body only.
     """
     from .evaluation_core import eval
-    
+
     args = cdr(form)
     result = lisptype.NIL
-    
-    # Skip DECLARE forms at the start
+    special_vars = []
+
+    # Process DECLARE forms at the start
     while _consp_internal(args):
         first = car(args)
         # Check if this is a DECLARE form
-        if (_consp_internal(first) and 
-            isinstance(car(first), lisptype.LispSymbol) and 
+        if (_consp_internal(first) and
+            isinstance(car(first), lisptype.LispSymbol) and
             car(first).name == 'DECLARE'):
+            decl_specs = cdr(first)
+            while _consp_internal(decl_specs):
+                spec = car(decl_specs)
+                if (_consp_internal(spec) and isinstance(car(spec), lisptype.LispSymbol)
+                        and car(spec).name == 'SPECIAL'):
+                    names = cdr(spec)
+                    while _consp_internal(names):
+                        var = car(names)
+                        if isinstance(var, lisptype.LispSymbol):
+                            special_vars.append(var)
+                        names = cdr(names)
+                decl_specs = cdr(decl_specs)
             # Skip this declaration
             args = cdr(args)
         else:
             # Not a declaration, start evaluating body
             break
-    
+
+    if special_vars:
+        body_env = lisptype.Environment(parent=env)
+        for var in special_vars:
+            # %SPECIAL-REF reads the symbol's dynamic value cell if one has
+            # been established (e.g. by PROGV), falling back to a normal
+            # lexical lookup of `var` otherwise -- so this doesn't break
+            # variables that are only ever bound lexically (e.g. a DO/LET
+            # loop variable that also happens to be declared special for
+            # its own binding form, which isn't dynamically bound here).
+            special_ref_form = cons(lisptype.LispSymbol('%SPECIAL-REF'), cons(var, lisptype.NIL))
+            body_env.add_symbol_macro(var, special_ref_form)
+    else:
+        body_env = env
+
     # Evaluate remaining body forms
     while _consp_internal(args):
-        result = eval(car(args), env)
+        result = eval(car(args), body_env)
         args = cdr(args)
     
     return result
@@ -442,13 +645,19 @@ def eval_let(form, env):
         else:
             break
 
+    # (symbol, had_value, old_value) for each dynamically (specially) bound
+    # variable, so its value cell can be restored when LET exits -- the same
+    # cell SYMBOL-VALUE/BOUNDP/SET/PROGV use, so a SET inside this LET's
+    # extent is visible to plain references to the variable and vice versa.
+    dynamic_saves = []
     for var, value in bindings_list:
         if isinstance(var, lisptype.LispSymbol):
             # If this symbol has been declared SPECIAL locally or globally,
-            # bind it in the global environment (dynamic binding). Otherwise
-            # bind lexically in let_env.
+            # bind its dynamic value cell. Otherwise bind lexically in let_env.
             if var.name in local_specials or (hasattr(global_env, '_special_variables') and var.name in global_env._special_variables):
-                global_env.add_variable(var, value)
+                had_value = getattr(var, 'value', None) is not None
+                dynamic_saves.append((var, had_value, getattr(var, 'value', None)))
+                var.value = value
             else:
                 let_env.add_variable(var, value)
 
@@ -457,11 +666,11 @@ def eval_let(form, env):
                 old_package = getattr(state, 'current_package', None)
                 state.current_package = value
                 has_package_binding = True
-    
+
     # Update state.current_environment for functions that need it (like LOAD)
     old_env = state.current_environment
     state.current_environment = let_env
-    
+
     try:
         # Evaluate body in new environment
         result = None
@@ -469,7 +678,7 @@ def eval_let(form, env):
         while _consp_internal(current):
             result = eval(car(current), let_env)
             current = cdr(current)
-        
+
         return result
     finally:
         # Restore the previous environment
@@ -477,6 +686,9 @@ def eval_let(form, env):
         # Restore *PACKAGE* if it was dynamically bound
         if has_package_binding and old_package is not None:
             state.current_package = old_package
+        # Restore any dynamically (specially) bound variables' value cells
+        for sym, had_value, old_value in dynamic_saves:
+            sym.value = old_value if had_value else None
 
 
 def eval_letstar(form, env):
@@ -931,14 +1143,14 @@ def eval_prog1(form, env):
     if not _consp_internal(args):
         return None
     
-    result = eval(car(args), env)
+    result = _primary_value(eval(car(args), env))
     args = cdr(args)
-    
+
     # Evaluate remaining forms for side effects
     while _consp_internal(args):
         eval(car(args), env)
         args = cdr(args)
-    
+
     return result
 
 
@@ -954,7 +1166,7 @@ def eval_prog2(form, env):
     eval(car(args), env)
     
     # Return value of second form
-    result = eval(car(cdr(args)), env)
+    result = _primary_value(eval(car(cdr(args)), env))
     args = cdr(cdr(args))
     
     # Evaluate remaining forms for side effects

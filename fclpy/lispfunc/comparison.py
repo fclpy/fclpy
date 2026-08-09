@@ -24,7 +24,13 @@ def eql(obj1, obj2):
     # Characters are eql if they are the same character
     if isinstance(obj1, str) and isinstance(obj2, str) and len(obj1) == 1 and len(obj2) == 1:
         return lisptype.lisp_bool(obj1 == obj2)
-    
+    if isinstance(obj1, lisptype.Character) and isinstance(obj2, lisptype.Character):
+        return lisptype.lisp_bool(obj1.char == obj2.char)
+    if isinstance(obj1, lisptype.Character) and isinstance(obj2, str) and len(obj2) == 1:
+        return lisptype.lisp_bool(obj1.char == obj2)
+    if isinstance(obj2, lisptype.Character) and isinstance(obj1, str) and len(obj1) == 1:
+        return lisptype.lisp_bool(obj2.char == obj1)
+
     return lisptype.NIL
 
 
@@ -334,7 +340,11 @@ def typep(object, type_specifier):
             for cls in object.lisp_class.get_linearized_superclasses():
                 if cls is type_specifier:
                     return lisptype.T
-        return lisptype.NIL
+            return lisptype.NIL
+        # Not a CLOS instance -- the class may still name a built-in type
+        # (e.g. #<STANDARD-CLASS SYMBOL>), so fall back to checking the
+        # class's name as an ordinary type-specifier symbol.
+        return typep(object, type_specifier.name)
     
     # Handle string or symbol type specifiers
     if isinstance(type_specifier, str):
@@ -359,6 +369,8 @@ def typep(object, type_specifier):
         return lisptype.lisp_bool(isinstance(object, (int, float, complex, Fraction)))
     elif type_name == 'INTEGER':
         return lisptype.lisp_bool(isinstance(object, int))
+    elif type_name == 'BIT':
+        return lisptype.lisp_bool(isinstance(object, int) and object in (0, 1))
     elif type_name == 'FIXNUM':
         # Fixnum: integers within machine word range
         return lisptype.lisp_bool(isinstance(object, int) and FIXNUM_MIN <= object <= FIXNUM_MAX)

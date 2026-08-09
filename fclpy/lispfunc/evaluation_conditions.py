@@ -2,7 +2,7 @@
 
 import fclpy.state as state
 import fclpy.lisptype as lisptype
-from .core import car, cdr, _consp_internal
+from .core import car, cdr, cons, _consp_internal
 from . import registry as _registry
 from .evaluation_core import ConditionException, ThrowException
 import re
@@ -384,14 +384,113 @@ def eval_abort(form, env):
     raise lisptype.LispError("ABORT: No abort restart available")
 
 
+def _assign_variable_or_place(var, result, env):
+    """Assign `result` to `var`, honoring a SYMBOL-MACROLET expansion.
+
+    If `var` is a plain variable name, SETQ it directly. If it names a
+    symbol-macro (e.g. established by SYMBOL-MACROLET binding it to
+    (CAR X)), re-evaluate the expansion's sub-forms fresh (they may have
+    side effects, per ANSI) and mutate the resulting place. Only CAR/CDR
+    expansions are supported as places here; anything else falls back to
+    plain variable assignment.
+    """
+    from .evaluation_core import eval
+
+    expansion = env.get_symbol_macro(var)
+    if expansion is None:
+        env.set_variable(var, result)
+        return
+
+    if isinstance(expansion, lisptype.LispSymbol):
+        _assign_variable_or_place(expansion, result, env)
+        return
+
+    if _consp_internal(expansion) and isinstance(car(expansion), lisptype.LispSymbol):
+        op_name = car(expansion).name
+        place_args = cdr(expansion)
+        if op_name == 'CAR' and _consp_internal(place_args):
+            target = eval(car(place_args), env)
+            if _consp_internal(target):
+                target.car = result
+                return
+        elif op_name == 'CDR' and _consp_internal(place_args):
+            target = eval(car(place_args), env)
+            if _consp_internal(target):
+                target.cdr = result
+                return
+
+    raise lisptype.LispNotImplementedError(
+        f"MULTIPLE-VALUE-SETQ: unsupported symbol-macro place expansion for {var}")
+
+
 @_registry.cl_special('MULTIPLE-VALUE-SETQ')
 def eval_multiple_value_setq(form, env):
-    """Evaluate MULTIPLE-VALUE-SETQ special form (stub).
-    
-    Full implementation would destructure values from the value form.
+    """Evaluate MULTIPLE-VALUE-SETQ special form.
+
+    Syntax: (MULTIPLE-VALUE-SETQ (var1 var2 ...) value-form)
+
+    Evaluates value-form once. If it returns a MultipleValues, each
+    variable is SETQ'd to the corresponding value (or NIL if there aren't
+    enough values). If it returns a single value, the first variable gets
+    that value and the rest get NIL. Returns the primary (first) value of
+    value-form, regardless of how many variables are given. A var naming a
+    symbol-macro is assigned through its expansion (see
+    _assign_variable_or_place) rather than as a plain variable.
     """
-    # For now, just return NIL - proper implementation later
-    return lisptype.NIL
+    from .evaluation_core import eval
+
+    args = cdr(form)
+    if not _consp_internal(args) or not _consp_internal(cdr(args)):
+        raise lisptype.LispNotImplementedError("MULTIPLE-VALUE-SETQ requires vars and a value-form")
+
+    vars = car(args)
+    value_form = car(cdr(args))
+
+    values = eval(value_form, env)
+
+    var_list = []
+    current = vars
+    while _consp_internal(current):
+        var_list.append(car(current))
+        current = cdr(current)
+
+    if isinstance(values, lisptype.MultipleValues):
+        value_tuple = values.get_all()
+        for i, var in enumerate(var_list):
+            _assign_variable_or_place(var, value_tuple[i] if i < len(value_tuple) else lisptype.NIL, env)
+        return value_tuple[0] if value_tuple else lisptype.NIL
+    else:
+        primary = values if values is not None else lisptype.NIL
+        for i, var in enumerate(var_list):
+            _assign_variable_or_place(var, primary if i == 0 else lisptype.NIL, env)
+        return primary
+
+
+@_registry.cl_special('MULTIPLE-VALUE-PROG1')
+def eval_multiple_value_prog1(form, env):
+    """Evaluate MULTIPLE-VALUE-PROG1 special form.
+
+    Syntax: (MULTIPLE-VALUE-PROG1 first-form form*)
+
+    Evaluates first-form, saving all of its values (primary and any
+    secondary values). Then evaluates the remaining forms in order, for
+    effect only, discarding their results. Finally returns the saved
+    values from first-form.
+    """
+    from .evaluation_core import eval
+
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("MULTIPLE-VALUE-PROG1 requires at least one form")
+
+    saved_values = eval(car(args), env)
+
+    rest = cdr(args)
+    while _consp_internal(rest):
+        eval(car(rest), env)
+        rest = cdr(rest)
+
+    return saved_values
 
 
 @_registry.cl_special('MULTIPLE-VALUE-CALL')

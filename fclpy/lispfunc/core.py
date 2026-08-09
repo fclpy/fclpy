@@ -422,24 +422,29 @@ def remprop(*args):
             symbol.plist = plist
             return lisptype.T
         return lisptype.NIL
-    # Lisp cons-list style: remove first occurrence of indicator and its value
+    # Lisp cons-list style: remove first occurrence of indicator and its value.
+    # prev_value_cell is the cons cell holding the PRECEDING pair's value --
+    # its .cdr must be relinked (not the preceding pair's key cell, whose
+    # .cdr is that same value cell and must stay intact).
     if type(plist) is lisptype.lispCons:
-        prev = None
+        prev_value_cell = None
         curr = plist
         found = False
         while curr is not lisptype.NIL and _consp_internal(curr):
             key = car(curr)
             rest = cdr(curr)
-            val = car(rest) if _consp_internal(rest) else None
-            next_pair = cdr(cdr(curr))
+            if not _consp_internal(rest):
+                break
+            next_pair = cdr(rest)
             if key == indicator and not found:
                 found = True
-                if prev is None:
+                if prev_value_cell is None:
                     plist = next_pair
                 else:
-                    prev.cdr = next_pair
-                break
-            prev = curr
+                    prev_value_cell.cdr = next_pair
+                curr = next_pair
+                continue
+            prev_value_cell = rest
             curr = next_pair
         symbol.plist = plist if plist is not None else lisptype.NIL
         return lisptype.T if found else lisptype.NIL

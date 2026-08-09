@@ -267,7 +267,7 @@ def eval(form, env=None):
         eval_macro_function, eval_lambda, eval_declare, eval_declaim,
         eval_defvar, eval_defparameter, eval_defconstant, eval_defstruct, eval_pop, eval_push,
         eval_incf, eval_decf, eval_defclass, eval_defgeneric, eval_defmethod, eval_define_method_combination,
-        eval_destructuring_bind
+        eval_destructuring_bind, eval_psetq, eval_rotatef
     )
     from .evaluation_control_flow import (
         eval_block, eval_return_from, eval_catch, eval_throw,
@@ -278,12 +278,15 @@ def eval(form, env=None):
         eval_progn, eval_locally, eval_prog1, eval_prog2, eval_prog, eval_prog_star, eval_time, eval_let, eval_letstar, eval_quasiquote,
         eval_loop, eval_eval_when, eval_do, eval_do_star, eval_dolist, eval_dotimes,
         eval_do_symbols, eval_do_external_symbols, eval_do_all_symbols,
-        eval_flet, eval_labels
+        eval_flet, eval_labels,
+        eval_ecase, eval_typecase, eval_etypecase, eval_ctypecase
     )
+    from .utilities_functions import eval_progv
     from .evaluation_conditions import (
         eval_signal, eval_error, eval_cerror, eval_warn,
         eval_restart_case, eval_restart_bind, eval_invoke_restart, eval_abort,
-        eval_multiple_value_call, eval_multiple_value_bind,
+        eval_multiple_value_call, eval_multiple_value_bind, eval_multiple_value_setq,
+        eval_multiple_value_prog1,
         eval_handler_bind, eval_handler_case, eval_ignore_errors
     )
     
@@ -313,6 +316,12 @@ def eval(form, env=None):
         # Check variable bindings first - use has_variable to handle None values
         if env.has_variable(form):
             return env.find_variable(form)
+        # Fall back to the symbol's own global/dynamic value cell -- the same
+        # cell SET/SYMBOL-VALUE/BOUNDP/PROGV read and write -- for special
+        # variables that have no lexical shadow in the current environment
+        # chain.
+        if getattr(form, 'value', None) is not None:
+            return form.value
         # If not found as variable, check function bindings
         value = env.find_func(form)
         if value is not None:
@@ -549,10 +558,11 @@ def eval(form, env=None):
                             elif op_name == 'SYMBOL-VALUE':
                                 sym = eval(car(place_args), env)
                                 if isinstance(sym, lisptype.LispSymbol):
-                                    global_env = env
-                                    while global_env.parent is not None:
-                                        global_env = global_env.parent
-                                    global_env.set_variable(sym, result)
+                                    # SYMBOL-VALUE's getter reads sym.value directly
+                                    # (the same cell BOUNDP/SET/MAKUNBOUND/PROGV use) --
+                                    # its setter must write the same cell, not a
+                                    # lexical environment binding.
+                                    sym.value = result
                                 else:
                                     raise lisptype.LispError("SETF SYMBOL-VALUE: requires a symbol")
                             elif op_name == 'SYMBOL-FUNCTION':
@@ -562,8 +572,9 @@ def eval(form, env=None):
                                 else:
                                     raise lisptype.LispError("SETF SYMBOL-FUNCTION: requires a symbol")
                             elif op_name == 'FDEFINITION':
-                                sym = eval(car(place_args), env)
-                                if isinstance(sym, lisptype.LispSymbol):
+                                from .utilities_functions import _function_spec_to_key
+                                sym = _function_spec_to_key(eval(car(place_args), env))
+                                if sym is not None:
                                     env.add_function(sym, result)
                                 else:
                                     raise lisptype.LispError("SETF FDEFINITION: requires a symbol")
@@ -612,6 +623,13 @@ def eval(form, env=None):
                             elif op_name == 'GET':
                                 sym = eval(car(place_args), env)
                                 indicator = eval(car(cdr(place_args)), env)
+                                # (GET symbol indicator [default]) -- the
+                                # optional default form must still be
+                                # evaluated (for its side effects), even
+                                # though SETF GET never consults its value.
+                                default_args = cdr(cdr(place_args))
+                                if _consp_internal(default_args):
+                                    eval(car(default_args), env)
                                 if isinstance(sym, lisptype.LispSymbol):
                                     if not hasattr(sym, 'plist') or sym.plist is None:
                                         sym.plist = lisptype.NIL
@@ -750,8 +768,21 @@ def eval(form, env=None):
                                         eval_place_args.append(result)
                                         setter_func(*eval_place_args)
                                     else:
-                                        # Unknown place type - just silently accept (many place types exist)
-                                        pass
+                                        # (SETF (accessor arg*) value) where `accessor` has its
+                                        # own registered (SETF accessor) function (e.g. via
+                                        # (DEFUN (SETF accessor) ...) or (SETF (FDEFINITION
+                                        # '(SETF accessor)) ...)). Per ANSI, call it with the
+                                        # new value first, then the access-form's arguments.
+                                        setf_fn_sym = lisptype.LispSymbol(f"(SETF {op_name})")
+                                        setf_fn = env.find_func(setf_fn_sym)
+                                        if setf_fn is not None:
+                                            eval_place_args = [result]
+                                            pa = place_args
+                                            while _consp_internal(pa):
+                                                eval_place_args.append(eval(car(pa), env))
+                                                pa = cdr(pa)
+                                            result = setf_fn(*eval_place_args)
+                                        # else: unknown place type - silently accept (many exist)
                         else:
                             raise lisptype.LispNotImplementedError(f"SETF: place operator must be a symbol, got {place_op}")
                     else:
@@ -819,8 +850,9 @@ def eval(form, env=None):
                                 else:
                                     raise lisptype.LispError("PSETF SYMBOL-FUNCTION: requires a symbol")
                             elif op_name == 'FDEFINITION':
-                                sym = eval(car(place_args), env)
-                                if isinstance(sym, lisptype.LispSymbol):
+                                from .utilities_functions import _function_spec_to_key
+                                sym = _function_spec_to_key(eval(car(place_args), env))
+                                if sym is not None:
                                     env.add_function(sym, value_result)
                                 else:
                                     raise lisptype.LispError("PSETF FDEFINITION: requires a symbol")
@@ -907,6 +939,56 @@ def eval(form, env=None):
                 return eval_case(form, env)
             elif operator.name == 'CCASE':
                 return eval_ccase(form, env)
+            elif operator.name == 'ECASE':
+                return eval_ecase(form, env)
+            elif operator.name == 'TYPECASE':
+                return eval_typecase(form, env)
+            elif operator.name == 'ETYPECASE':
+                return eval_etypecase(form, env)
+            elif operator.name == 'CTYPECASE':
+                return eval_ctypecase(form, env)
+            elif operator.name == 'PROGV':
+                return eval_progv(form, env)
+            elif operator.name == '%SPECIAL-REF':
+                # Internal helper generated by LOCALLY's (DECLARE (SPECIAL x))
+                # handling: read x's dynamic value cell if one has been
+                # established (e.g. by PROGV), else fall back to a plain
+                # lexical lookup of x in the calling environment.
+                sym = car(cdr(form))
+                if getattr(sym, 'value', None) is not None:
+                    return sym.value
+                if env.has_variable(sym):
+                    return env.find_variable(sym)
+                cond = lisptype.UnboundVariable(name=sym, message=f"Unbound variable: {sym.name}")
+                raise ConditionException(cond, recoverable=False)
+            elif operator.name == 'MULTIPLE-VALUE-SETQ':
+                return eval_multiple_value_setq(form, env)
+            elif operator.name == 'MULTIPLE-VALUE-PROG1':
+                return eval_multiple_value_prog1(form, env)
+            elif operator.name == 'PSETQ':
+                return eval_psetq(form, env)
+            elif operator.name == 'ROTATEF':
+                return eval_rotatef(form, env)
+            elif operator.name == 'MULTIPLE-VALUE-LIST':
+                # Must see the raw (possibly multiple-valued) result of its
+                # argument -- unlike ordinary function-call arguments, this
+                # is NOT a single-value context, so it bypasses the generic
+                # argument-evaluation loop below (which coerces to primary
+                # value).
+                from .evaluation_stubs import multiple_value_list as _mvl
+                mvl_args = cdr(form)
+                if not _consp_internal(mvl_args):
+                    raise lisptype.LispNotImplementedError("MULTIPLE-VALUE-LIST requires one form")
+                return _mvl(eval(car(mvl_args), env))
+            elif operator.name == 'NTH-VALUE':
+                # Same rationale as MULTIPLE-VALUE-LIST above: its value-form
+                # argument must not be coerced to a single value.
+                from .evaluation_stubs import nth_value as _nth_value
+                nv_args = cdr(form)
+                if not _consp_internal(nv_args) or not _consp_internal(cdr(nv_args)):
+                    raise lisptype.LispNotImplementedError("NTH-VALUE requires n and a form")
+                n = eval(car(nv_args), env)
+                return _nth_value(n, eval(car(cdr(nv_args)), env))
             elif operator.name == 'AND':
                 return eval_and(form, env)
             elif operator.name == 'OR':
@@ -1551,7 +1633,13 @@ def eval(form, env=None):
         
         while _consp_internal(current):
             arg_val = eval(car(current), env)
-            
+            # Ordinary function-call arguments are single-value contexts:
+            # a MultipleValues result is reduced to its primary value (NIL
+            # if it returned zero values), per ANSI.
+            if isinstance(arg_val, lisptype.MultipleValues):
+                _mv = arg_val.get_all()
+                arg_val = _mv[0] if _mv else lisptype.NIL
+
             # Only treat a keyword as a Python kwarg if:
             # 1. The function accepts kwargs
             # 2. We've already filled all required positional parameters

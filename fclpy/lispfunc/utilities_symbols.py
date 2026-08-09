@@ -47,7 +47,15 @@ def symbol_value(*args):
             f"SYMBOL-VALUE: wrong number of arguments (got {len(args)}, expected 1)"
         )
     symbol = args[0]
-    return getattr(symbol, 'value', None)
+    # T, NIL, and keywords are self-evaluating and therefore always bound.
+    if symbol is lisptype.T or getattr(symbol, 'name', None) in ('T', 'NIL') or isinstance(symbol, lisptype.lispKeyword):
+        return symbol
+    value = getattr(symbol, 'value', None)
+    if value is None:
+        from fclpy.lispfunc.evaluation_core import ConditionException
+        cond = lisptype.UnboundVariable(name=symbol)
+        raise ConditionException(cond, recoverable=False)
+    return value
 
 
 @_registry.cl_function('MAKE-SYMBOL')

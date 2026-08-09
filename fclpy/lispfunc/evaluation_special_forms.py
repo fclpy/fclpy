@@ -98,7 +98,7 @@ def eval_if(form, env):
 def eval_setq(form, env):
     """Evaluate SETQ special form."""
     from .evaluation_core import eval
-    
+
     args = cdr(form)
     result = None
 
@@ -115,6 +115,36 @@ def eval_setq(form, env):
         args = cdr(cdr(args))
 
     return result
+
+
+def eval_psetq(form, env):
+    """Evaluate PSETQ special form.
+
+    Syntax: (PSETQ var1 val1 var2 val2 ...)
+
+    Like SETQ, but all value-forms are evaluated first (left to right,
+    using the OLD values of any vars they reference), and only then are
+    all the vars assigned. Always returns NIL.
+    """
+    from .evaluation_core import eval
+
+    args = cdr(form)
+    pairs = []
+
+    while _consp_internal(args) and _consp_internal(cdr(args)):
+        var = car(args)
+        value_form = car(cdr(args))
+
+        if not isinstance(var, lisptype.LispSymbol):
+            raise lisptype.LispNotImplementedError("PSETQ: variable must be a symbol")
+
+        pairs.append((var, eval(value_form, env)))
+        args = cdr(cdr(args))
+
+    for var, value in pairs:
+        env.set_variable(var, value)
+
+    return lisptype.NIL
 
 
 def eval_the(form, env):
@@ -2212,6 +2242,80 @@ def eval_push(form, env):
         return eval(setq_form, env)
 
     raise lisptype.LispNotImplementedError(f"PUSH not implemented for place: {place}")
+
+
+def _place_accessor(place_form, env):
+    """Evaluate a place form's shared subforms exactly once and return a
+    (get, set) pair of closures for reading/writing it.
+
+    Supports plain variables and (CAR x), (CDR x), (AREF arr idx),
+    (SVREF arr idx) place forms -- enough for ROTATEF/SHIFTF's common
+    cases. Other place kinds raise LispNotImplementedError.
+    """
+    from .evaluation_core import eval
+
+    if isinstance(place_form, lisptype.LispSymbol):
+        sym = place_form
+        return (lambda: eval(sym, env), lambda v: env.set_variable(sym, v))
+
+    if _consp_internal(place_form) and isinstance(car(place_form), lisptype.LispSymbol):
+        op_name = car(place_form).name
+        place_args = cdr(place_form)
+
+        if op_name in ('CAR', 'FIRST') and _consp_internal(place_args):
+            target = eval(car(place_args), env)
+            if not _consp_internal(target):
+                raise lisptype.LispError(f"{op_name} place: target is not a cons")
+            return (lambda: target.car, lambda v: setattr(target, 'car', v))
+
+        if op_name in ('CDR', 'REST') and _consp_internal(place_args):
+            target = eval(car(place_args), env)
+            if not _consp_internal(target):
+                raise lisptype.LispError(f"{op_name} place: target is not a cons")
+            return (lambda: target.cdr, lambda v: setattr(target, 'cdr', v))
+
+        if op_name == 'CADR' and _consp_internal(place_args):
+            target = eval(car(place_args), env)
+            if not _consp_internal(target) or not _consp_internal(target.cdr):
+                raise lisptype.LispError("CADR place: invalid structure")
+            cell = target.cdr
+            return (lambda: cell.car, lambda v: setattr(cell, 'car', v))
+
+        if op_name in ('AREF', 'SVREF') and _consp_internal(place_args) and _consp_internal(cdr(place_args)):
+            arr = eval(car(place_args), env)
+            idx = eval(car(cdr(place_args)), env)
+            return (lambda: arr[idx], lambda v: arr.__setitem__(idx, v))
+
+    raise lisptype.LispNotImplementedError(f"place not supported: {place_form}")
+
+
+def eval_rotatef(form, env):
+    """Evaluate ROTATEF special form.
+
+    (ROTATEF place*) — Evaluates each place's shared subforms exactly
+    once (left to right), then rotates their values: place[i] gets the
+    old value of place[i+1], with the last place getting the first
+    place's old value. Always returns NIL.
+    """
+    args = cdr(form)
+
+    places = []
+    current = args
+    while _consp_internal(current):
+        places.append(car(current))
+        current = cdr(current)
+
+    if not places:
+        return lisptype.NIL
+
+    accessors = [_place_accessor(p, env) for p in places]
+    old_values = [get() for get, _ in accessors]
+
+    n = len(accessors)
+    for i in range(n):
+        accessors[i][1](old_values[(i + 1) % n])
+
+    return lisptype.NIL
 
 
 def eval_defclass(form, env):

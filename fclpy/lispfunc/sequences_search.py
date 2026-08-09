@@ -413,7 +413,14 @@ def member(item, list_seq, test=None, test_not=None, key=None):
         return None
     
     for x in list_seq:
-        if (key(x) if key else x) == item:
+        candidate = key(x) if key else x
+        if test is not None:
+            matched = lisptype.is_truthy(test(item, candidate))
+        elif test_not is not None:
+            matched = not lisptype.is_truthy(test_not(item, candidate))
+        else:
+            matched = candidate == item
+        if matched:
             return list_seq[list_seq.index(x):]
     return None
 

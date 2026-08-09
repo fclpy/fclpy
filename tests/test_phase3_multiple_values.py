@@ -81,10 +81,12 @@ class TestMultipleValues:
         assert result is not None
 
     def test_values_zero_values(self, env):
-        """(VALUES) with no arguments returns NIL."""
+        """(VALUES) with no arguments returns zero values (NIL as the primary value)."""
+        from fclpy.lisptype import MultipleValues
         form = cons(ls('VALUES'), NIL)
         result = eval(form, env)
-        assert result is NIL
+        assert isinstance(result, MultipleValues)
+        assert result.get_all() == ()
 
     def test_values_single_nil(self, env):
         """(VALUES NIL) returns NIL."""

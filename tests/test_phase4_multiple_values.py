@@ -80,10 +80,11 @@ class TestValuesFunction:
     """Test the VALUES function."""
     
     def test_values_no_args(self, env):
-        """(VALUES) returns NIL."""
+        """(VALUES) returns zero values (NIL as the primary value)."""
         form = cons(ls('VALUES'), NIL)
         result = eval(form, env)
-        assert result is NIL
+        assert isinstance(result, MultipleValues)
+        assert result.get_all() == ()
     
     def test_values_single_arg(self, env):
         """(VALUES x) returns x."""

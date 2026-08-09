@@ -4,22 +4,43 @@ import inspect
 import fclpy.lisptype as lisptype
 import fclpy.state as state
 from fclpy.lispfunc import registry as _registry
+from .core import car, cdr, _consp_internal
+
+
+def _function_spec_to_key(spec):
+    """Resolve a function-name designator to the symbol used to key it in
+    the environment/registry: a plain symbol as-is, or a (SETF name) list
+    to the same synthetic "(SETF NAME)" symbol DEFUN uses to store setf
+    functions. Returns None if spec isn't a recognizable function name.
+    """
+    if isinstance(spec, lisptype.LispSymbol):
+        return spec
+    if _consp_internal(spec):
+        head = car(spec)
+        rest = cdr(spec)
+        if (isinstance(head, lisptype.LispSymbol) and head.name == 'SETF'
+                and _consp_internal(rest) and isinstance(car(rest), lisptype.LispSymbol)):
+            return lisptype.LispSymbol(f"(SETF {car(rest).name})")
+    return None
 
 
 # --- Function binding and definition ---
 @_registry.cl_function('FBOUNDP')
 def fboundp(symbol):
     """Test if symbol has function binding.
-    
+
     Returns T if the symbol has a global function definition, NIL otherwise.
+    Accepts either a plain symbol or a (SETF name) function-name designator.
     """
-    if not isinstance(symbol, lisptype.LispSymbol):
-        # Try to convert to symbol
+    key = _function_spec_to_key(symbol)
+    if key is None:
         if isinstance(symbol, str):
-            symbol = lisptype.LispSymbol(symbol.upper())
+            key = lisptype.LispSymbol(symbol.upper())
         else:
             return lisptype.NIL
-    
+    symbol = key
+
+
     # Check in current environment's function bindings
     env = state.current_environment
     if env is not None:
@@ -72,10 +93,10 @@ def fdefinition(symbol):
     """Return the function object bound to a symbol.
 
     Looks up the symbol in the current environment's function bindings.
-    Signals error if the symbol is not fbound.
+    Accepts either a plain symbol or a (SETF name) function-name
+    designator. Signals error if the symbol is not fbound.
     """
-    if not isinstance(symbol, lisptype.LispSymbol):
-        symbol = lisptype.LispSymbol(str(symbol))
+    symbol = _function_spec_to_key(symbol) or lisptype.LispSymbol(str(symbol))
     env = state.current_environment
     if env is None:
         raise lisptype.LispNotImplementedError("FDEFINITION: no environment")
@@ -106,9 +127,14 @@ def symbol_function(*args):
         return fdefinition(symbol)
     except Exception:
         try:
-            return getattr(symbol, 'function', None)
+            fn = getattr(symbol, 'function', None)
         except Exception:
-            return None
+            fn = None
+        if fn is not None:
+            return fn
+        from .evaluation_core import ConditionException
+        cond = lisptype.UndefinedFunction(name=symbol)
+        raise ConditionException(cond, recoverable=False)
 
 
 @_registry.cl_function('FUNCTIONP')
@@ -297,8 +323,17 @@ def special_operator_p(*args):
         )
     symbol = args[0]
     if isinstance(symbol, lisptype.LispSymbol):
-        special_ops = {'QUOTE', 'IF', 'LAMBDA', 'SETQ', 'LET', 'DEFUN', 'DEFVAR',
-                      'PROGN', 'COND', 'AND', 'OR', 'WHEN', 'UNLESS', 'PROGV'}
+        # The canonical ANSI list of 25 special operators (CLHS 3.1.2.1.2.1).
+        # Note DEFUN/DEFVAR/COND/AND/OR/WHEN/UNLESS/LAMBDA are ordinary
+        # macros, not special operators, even though this interpreter
+        # happens to give some of them fast-path handling in eval().
+        special_ops = {
+            'BLOCK', 'CATCH', 'EVAL-WHEN', 'FLET', 'FUNCTION', 'GO', 'IF',
+            'LABELS', 'LET', 'LET*', 'LOAD-TIME-VALUE', 'LOCALLY', 'MACROLET',
+            'MULTIPLE-VALUE-CALL', 'MULTIPLE-VALUE-PROG1', 'PROGN', 'PROGV',
+            'QUOTE', 'RETURN-FROM', 'SETQ', 'SYMBOL-MACROLET', 'TAGBODY',
+            'THE', 'THROW', 'UNWIND-PROTECT',
+        }
         return lisptype.lisp_bool(symbol.name in special_ops)
     return lisptype.lisp_bool(False)
 
@@ -319,9 +354,58 @@ def locally(*body):
 
 
 @_registry.cl_special('PROGV')
-def progv(symbols, values, *body):
-    """Special form PROGV (stub)."""
-    raise lisptype.LispNotImplementedError("PROGV")
+def eval_progv(form, env):
+    """Evaluate PROGV special form.
+
+    Syntax: (PROGV symbols-form values-form body-form*)
+
+    Evaluates symbols-form then values-form, then temporarily rebinds each
+    named symbol's global value cell (the same cell SYMBOL-VALUE / BOUNDP /
+    SET use) to the corresponding value, evaluates the body forms, and
+    restores every touched symbol's prior value-cell state afterward, even
+    if the body exits non-locally. Symbols beyond the number of supplied
+    values are made explicitly unbound for the dynamic extent (per ANSI),
+    even if they already had a dynamic value established elsewhere (e.g. by
+    an enclosing (LET (...) (DECLARE (SPECIAL ...))) )).
+    """
+    from .evaluation_core import eval
+
+    args = cdr(form)
+    if not _consp_internal(args) or not _consp_internal(cdr(args)):
+        raise lisptype.LispNotImplementedError("PROGV requires symbols-form, values-form, and a body")
+
+    symbols_form = car(args)
+    values_form = car(cdr(args))
+    body = cdr(cdr(args))
+
+    symbol_list = []
+    current = eval(symbols_form, env)
+    while _consp_internal(current):
+        symbol_list.append(car(current))
+        current = cdr(current)
+
+    value_list = []
+    current = eval(values_form, env)
+    while _consp_internal(current):
+        value_list.append(car(current))
+        current = cdr(current)
+
+    saved = []
+    for i, sym in enumerate(symbol_list):
+        had_value = getattr(sym, 'value', None) is not None
+        saved.append((sym, had_value, getattr(sym, 'value', None)))
+        sym.value = value_list[i] if i < len(value_list) else None
+
+    try:
+        result = lisptype.NIL
+        b = body
+        while _consp_internal(b):
+            result = eval(car(b), env)
+            b = cdr(b)
+        return result
+    finally:
+        for sym, had_value, old_value in saved:
+            sym.value = old_value if had_value else None
 
 
 # --- Declaration-like functions ---
@@ -529,7 +613,7 @@ __all__ = [
     'special_operator_p',
     'eval_when',
     'locally',
-    'progv',
+    'eval_progv',
     'dynamic_extent',
     'ftype',
     'notinline',

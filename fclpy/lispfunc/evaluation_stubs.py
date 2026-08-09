@@ -150,6 +150,10 @@ def boundp(*args):
         # it can be handled by Lisp-level handlers.
         raise lisptype.LispTypeError(f"BOUNDP: {symbol} is not a symbol", expected_type='symbol', actual_value=symbol)
 
+    # T, NIL, and keywords are self-evaluating and therefore always bound.
+    if symbol is lisptype.T or symbol.name in ('T', 'NIL') or isinstance(symbol, lisptype.lispKeyword):
+        return lisptype.T
+
     # A symbol is considered bound if its value cell is present (even if NIL)
     return lisptype.lisp_bool(getattr(symbol, 'value', None) is not None)
 
@@ -178,18 +182,17 @@ def makunbound(*args):
 
 def values(*args):
     """Return multiple values.
-    
+
     (VALUES a b c) returns three values: a, b, and c.
-    When no arguments are given, returns NIL.
+    When no arguments are given, returns *zero* values (a MultipleValues
+    wrapping an empty tuple) -- not NIL, which would be one value.
     When one argument is given, returns that value directly.
     When multiple arguments are given, returns a MultipleValues wrapper.
     """
-    if not args:
-        return lisptype.NIL
-    elif len(args) == 1:
+    if len(args) == 1:
         return args[0]
     else:
-        # Return as MultipleValues wrapper for multiple values
+        # Return as MultipleValues wrapper for zero or multiple values
         return lisptype.MultipleValues(*args)
 
 

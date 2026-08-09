@@ -1,7 +1,7 @@
 """Sequence composition, sorting, and utility operations."""
 
 import functools
-from .core import cons, car, cdr, atom
+from .core import cons, car, cdr, atom, _consp_internal
 from . import registry as _registry
 from .vectors import AdjustableVector
 import fclpy.lisptype as lisptype
@@ -318,8 +318,22 @@ def copy_seq(sequence):
 
 @_registry.cl_function('COPY-LIST')
 def copy_list(list_seq):
-    """Copy list."""
-    return list(list_seq) if list_seq else []
+    """Copy the top-level list structure (cons spine), preserving a
+    non-list final cdr for dotted lists, per ANSI COPY-LIST. Must return a
+    genuine lispCons chain, not a Python list, so downstream CONSP/EQUAL
+    checks (and further destructive list ops) behave correctly.
+    """
+    if not _consp_internal(list_seq):
+        return list_seq
+    items = []
+    current = list_seq
+    while _consp_internal(current):
+        items.append(car(current))
+        current = cdr(current)
+    result = current  # NIL for a proper list, or the dotted tail
+    for item in reversed(items):
+        result = cons(item, result)
+    return result
 
 
 @_registry.cl_function('COPY-ALIST')
