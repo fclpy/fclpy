@@ -336,6 +336,118 @@ place first, per the dependency graph.
 
 ---
 
+## Update (2026-08-11): M1 steps 1–2 done — canonical CL symbol table, no more
+## leaked internals, blanket `except: pass` deleted
+
+**What changed.** Per this document's own "Priority order," M1 step 1 was next
+after M0. Verified against source first: `lispenv.py` had exactly the two
+defects Finding A described — CL membership was a side effect of whatever the
+function/special registry happened to auto-discover (`register_module()`
+picking up every public callable in a module, per Finding L), and the whole
+~430-line variable-bootstrap block was one `try: ... except Exception: pass`.
+
+1. **`fclpy/cl_symbol_names.py`** (new) — `CL_SYMBOL_NAMES`, the 978 names
+   mechanically extracted from `ansi-test/cl-symbol-names.lsp` (verified count
+   978, no duplicates after uppercasing). This is now the single source of
+   truth for "is this symbol part of ANSI Common Lisp" — before this, nothing
+   in the codebase declared that; membership was inferred from bindings.
+2. **`lispenv.py`**: `setup_standard_environment()` now interns **and**
+   exports all 978 canonical names into `COMMON-LISP` unconditionally, before
+   the registry loop runs and independent of whether any function/variable
+   ends up bound to them. The registry loop was changed from "intern into
+   `COMMON-LISP`, always" to "intern into `COMMON-LISP` (exported) if the name
+   is canonical, else into a new `FCLPY-INTERNAL` package." Verified this
+   closes Finding A's count exactly: after the change, `COMMON_LISP_PACKAGE.
+   external_symbols` is precisely the 978 (0 missing, 0 extra), and the 114
+   non-ANSI names `register_module()` had been leaking (`EVAL-IF`, `PUTPROP`,
+   `LIST-STAR`, `GET-ENV`, the duplicate inline `GenericFunction`'s
+   `CALL-GENERIC-FUNCTION`, ...) now live in `FCLPY-INTERNAL` instead —
+   matching the plan's own "~114 leaked" estimate (measured 114 after
+   excluding entries with no resolved Python callable). Confirmed safe by
+   inspection, not just hope: `find_func`/`find_variable`
+   (`lisptype_extended.py`) key purely on `symbol.name` string (Finding A's
+   own RC-1 diagnosis), so which *package* interned the head symbol cannot
+   affect whether a function is callable; a repo-wide grep found no code
+   anywhere outside `lisptype_extended.py` doing a package-qualified lookup
+   (`COMMON_LISP_PACKAGE.find_symbol(...)`/`.symbols[...]`) on any of the 114
+   names, so nothing depends on their old, wrong home.
+3. **Deleted the blanket `except Exception: pass`** that wrapped the entire
+   variable-bootstrap block (previously `lispenv.py:513-515`, per the plan's
+   own citation) — dedented the ~425-line body in place rather than leaving a
+   silent-failure path standing. Ran `setup_standard_environment()` directly
+   with the swallowing removed: it completes with no exception, so this
+   block was not actually hiding a live defect — but it no longer *could*
+   hide a future one silently (Standing rule 4).
+4. **`FCLPY_INTERNAL_PACKAGE`** (new, `lisptype_extended.py`) — a real
+   `Package("FCLPY-INTERNAL")`, registered into `state.packages` so
+   `FIND-PACKAGE`/`LIST-ALL-PACKAGES` can see it like any other package.
+5. New regression tests, `tests/test_cl_symbol_names.py`: canonical count is
+   978; all 978 are present and external in `COMMON-LISP`; nothing else is;
+   a sample of the leaked names (`EVAL-IF`, `PUTPROP`, `LIST-STAR`,
+   `GET-ENV`) is absent from `COMMON-LISP` and present in `FCLPY-INTERNAL`.
+
+**Not done from M1's list** (steps 3–6: NIL/`LispSymbol` unification, the rest
+of the package-model repairs — `shadowing_symbols`, CL/CL-USER/KEYWORD missing
+from `state.packages`, `IMPORT`/`EXPORT`/`RENAME-PACKAGE` fixes — `INTERN`
+case-sensitivity, `COPY-SYMBOL` `copy-props`). These are real, separately
+scoped, and not prerequisites for steps 1–2's fix; picking up step 4
+(package-model repairs) is the natural continuation of M1.
+
+**Tests.**
+- `pipenv run pytest -q`: **1198 passed** (1194 baseline + 4 new), **1
+  pre-existing unrelated failure** (`STREAM-ELEMENT-TYPE` missing from the
+  function registry, M10 gap, unchanged from the baseline run taken before
+  this change — confirmed byte-identical failure before/after).
+- `ansi-test/symbols/cl-symbols.lsp`, run test-by-test via `run_do_test.py`
+  (see below for why not via `(do-tests)`): `SYMBOL-CAR`, `SYMBOL-NIL`,
+  `SYMBOL-LOOP` (already-present symbols, regression check) and
+  `SYMBOL-DECLARATION`, `SYMBOL-SATISFIES`, `SYMBOL-**`, `SYMBOL-*READ-EVAL*`,
+  `SYMBOL-VARIABLE`, `SYMBOL-STRUCTURE` (previously-missing declaration/
+  REPL-history/type-specifier-head symbols from Finding A's 42-symbol gap)
+  all pass. **`NO-EXTRA-SYMBOLS-EXPORTED-FROM-COMMON-LISP`** — the same
+  file's own real ANSI test for exactly what this session fixed — passes.
+
+**ANSI impact.** Positive but only partially measurable this session. A full
+`run_all_tests.py` run was not attempted: `gclload2.lsp`'s load order puts
+`conditions/` (line 20) before `packages/` (line 33), and `conditions/
+handler-bind.lsp`'s `HANDLER-BIND.13` crash — diagnosed in the Update above as
+an M8 signal-before-unwind gap, unrelated to this change — aborts any full
+run before `packages/` is ever reached. Confirmed this crash is pre-existing
+and not a side effect of this session's change (nothing here touches
+condition handling). `symbols/` loads first (line 5 of `gclload2.lsp`) and is
+therefore already reachable/measurable, and its tests pass as shown above.
+`packages/` remains genuinely unmeasured until M8's handler-stack rewrite (or
+at minimum a fix scoped to `HANDLER-BIND.13` specifically) unblocks the full
+run — this is the same "20 unmeasured areas" gap the "Reality check" section
+already flagged, still unresolved by this session, and worth prioritizing
+precisely because M1 step 4 (package-model repairs) can't get real test
+evidence without it.
+
+**Discovered issues.**
+- **`BOUNDP`/`CONSTANTP` check `symbol.value` (a Python attribute — the
+  "value cell" model), not the environment.** `ansi-test/symbols/cl-symbols.
+  lsp`'s own `CL-VARIABLE-SYMBOLS.1` and `CL-CONSTANT-SYMBOLS.1` tests fail:
+  every variable/constant this session (and the pre-existing ad hoc code
+  below it) binds via `state.current_environment.add_variable(sym, val)` is
+  reported unbound by `BOUNDP`
+  (`evaluation_stubs.py:158`: `getattr(symbol, 'value', None) is not None`),
+  because nothing ever sets that attribute — this is exactly the
+  environment-vs-symbol-value-cell duality M2's Finding G/RC-1 already names,
+  now with a concrete, reproducible test. Not fixed here: it is squarely M2's
+  scope (the environment model), not M1's (symbol/package identity), and
+  fixing `BOUNDP` alone without the rest of M2's dynamic-binding-stack work
+  would be exactly the kind of one-operator patch this plan warns against.
+- `CL-MACRO-SYMBOLS.1` fails, reproducing Finding B live (~90 standard
+  macros have no macro function) — already scoped to M4, no new information,
+  but now has a passing/failing test to track it by by directory instead of
+  by eyeballing `MACRO-FUNCTION.1`'s output.
+- `CL-FUNCTION-SYMBOLS.1` fails on seven names (`COPY-STRUCTURE`, `LDIFF`,
+  `PRINT-NOT-READABLE-OBJECT`, `STREAM-ELEMENT-TYPE`, `STREAM-ERROR-STREAM`,
+  `TAILP`, `UNBOUND-SLOT-INSTANCE`) that are canonical CL symbols but have no
+  working function behind them — ordinary missing-implementation gaps
+  (mostly M10/M8 territory: streams, conditions), not a package-identity
+  problem.
+
 ## Two dimensions of compliance — read this before the milestones
 
 "100% ANSI" is **not** primarily an evaluator problem. It has two independent
@@ -1410,8 +1522,10 @@ both is the worst option.
    `COMPLETENESS: MISMATCH` (currently `accounted=4687` of `22036`, next blocker
    `HANDLER-BIND.13`, see the Update above). Only `expected-failures` wiring (step
    7) remains genuinely undone.
-2. **M1 step 1** — canonical CL symbol table. Highest yield per unit effort; also
-   delete the blanket `except`.
+2. **M1 step 1** — canonical CL symbol table **[DONE 2026-08-11]**; blanket
+   `except` at `lispenv.py:513-515` **[DONE 2026-08-11]**. M1 steps 3–6 (NIL
+   unification, package-model repairs, `INTERN` case, `COPY-SYMBOL`
+   `copy-props`) remain — see the Update above.
 3. **M2** — environment model (RC-1 through RC-4). The prerequisite for M3 and M4, and
    the spine of the project. Do not attempt to fix specials one binding form at a
    time — that just produces a seventh incompatible mechanism.

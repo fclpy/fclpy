@@ -28,6 +28,7 @@ __all__ = [
     # From lisptype_extended
     'Environment',
     'Package', 'KEYWORD_PACKAGE', 'COMMON_LISP_PACKAGE', 'COMMON_LISP_USER_PACKAGE',
+    'FCLPY_INTERNAL_PACKAGE',
     'make_package', 'find_package', 'intern_symbol', 'intern_keyword',
     'Condition', 'SimpleCondition', 'SimpleError', 'Warning', 'Error',
     'TypeError', 'ProgramError', 'ControlError', 'FileError', 'StreamError',

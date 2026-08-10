@@ -509,6 +509,20 @@ T.package = COMMON_LISP_PACKAGE
 
 COMMON_LISP_USER_PACKAGE = Package("COMMON-LISP-USER", use_packages=["COMMON-LISP"], nick_names=['CL-USER'])
 
+# Home for registry entries that are not among the 978 ANSI CL symbols
+# (plan.md Finding A / M1 step 1): implementation-internal helpers must not be
+# exported from - or even interned into - COMMON-LISP, or they pollute the
+# namespace every real CL library relies on being clean.
+FCLPY_INTERNAL_PACKAGE = Package("FCLPY-INTERNAL", use_packages=["COMMON-LISP"])
+
+def _register_bootstrap_packages():
+    import fclpy.state as _state
+    if not hasattr(_state, 'packages') or _state.packages is None:
+        _state.packages = {}
+    _state.packages.setdefault("FCLPY-INTERNAL", FCLPY_INTERNAL_PACKAGE)
+
+_register_bootstrap_packages()
+
 
 
 
@@ -1017,6 +1031,7 @@ __all__ = [
     'Environment',
     # Package system
     'Package', 'KEYWORD_PACKAGE', 'COMMON_LISP_PACKAGE', 'COMMON_LISP_USER_PACKAGE',
+    'FCLPY_INTERNAL_PACKAGE',
     'make_package', 'find_package', 'intern_symbol', 'intern_keyword',
     # Conditions (ANSI condition system)
     'Condition', 'SimpleCondition', 'SimpleError', 'Warning', 'SimpleWarning', 'Error',
