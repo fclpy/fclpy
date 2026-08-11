@@ -23,12 +23,11 @@ def make_condition(type_designator, *args):
     signaled an unmatchable non-condition object (plan.md Finding E) instead
     of a real one.
     """
-    from fclpy.lispfunc.evaluation_conditions import _make_condition_from_evaluated_designator
+    from fclpy.lispfunc.evaluation_conditions import make_condition_of_type
 
-    if isinstance(type_designator, (lisptype.LispSymbol, lisptype.lispKeyword)):
-        built = _make_condition_from_evaluated_designator(type_designator, list(args))
-        if built is not None:
-            return built
+    built = make_condition_of_type(type_designator, list(args))
+    if built is not None:
+        return built
 
     raise lisptype.LispTypeError(
         f"MAKE-CONDITION: {type_designator!r} does not designate a known condition type",
@@ -37,27 +36,34 @@ def make_condition(type_designator, *args):
 
 @_registry.cl_function('SIGNAL')
 def signal_fn(datum, *arguments):
-    """Signal condition (notify handlers without stopping)."""
-    return None
+    """SIGNAL as a function designator (used by FUNCALL/APPLY/#'SIGNAL).
+
+    Delegates to the same signaling core as the SIGNAL special form, so both
+    build the condition the same way and walk the same handler stack. This used
+    to be `return None` -- it notified nothing and signaled nothing, so
+    (funcall #'signal ...) silently did nothing at all.
+    """
+    from fclpy.lispfunc.evaluation_conditions import build_condition, signal_condition_object
+
+    condition = build_condition(datum, list(arguments), lisptype.SimpleCondition)
+    return signal_condition_object(condition)
 
 
 @_registry.cl_function('ERROR')
 def error_fn(datum, *arguments):
-    """Signal error condition (stop execution).
-    
-    If datum is a string (format control), format it with arguments.
+    """ERROR as a function designator (used by FUNCALL/APPLY/#'ERROR).
+
+    Delegates to the same signaling core as the ERROR special form. This used
+    to raise a bare Python `Exception` carrying a formatted message: no
+    condition object existed, so no HANDLER-BIND/HANDLER-CASE clause could
+    match it -- not even (ERROR (C) ...) -- and it escaped every handler
+    (plan.md Finding E). The ANSI suite reaches this path constantly, because
+    RT's own `report-error` calls (apply #'error args).
     """
-    # Import format_fn here to avoid circular import
-    from fclpy.lispfunc.io_write import format_fn
-    
-    # If datum is a string, use FORMAT to process it
-    if isinstance(datum, (str, lisptype.LispString)):
-        control_str = str(datum)
-        # Use format with nil destination to get a string
-        message = format_fn(lisptype.NIL, control_str, *arguments)
-        raise Exception(message)
-    else:
-        raise Exception(str(datum))
+    from fclpy.lispfunc.evaluation_conditions import build_condition, signal_error_object
+
+    condition = build_condition(datum, list(arguments), lisptype.SimpleError)
+    return signal_error_object(condition)
 
 
 @_registry.cl_function('WARN')

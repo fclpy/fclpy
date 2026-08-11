@@ -448,6 +448,412 @@ evidence without it.
   (mostly M10/M8 territory: streams, conditions), not a package-identity
   problem.
 
+## Update (2026-08-12): M8's signaling core landed out of sequence — handlers now
+## run at the signal point, and `conditions/` is measurable for the first time
+
+**Why this was done before M2–M5, contrary to the Priority order below.** The
+previous session's own evidence made the case: `HANDLER-BIND.13` crashed with
+`Uncaught THROW DONE` and aborted every full run at `accounted=4687` of
+`22036`, so **~79% of the suite had never executed** and no milestone after it
+could be measured at all. That is M0's rationale ("nothing below can be
+prioritized without trustworthy measurement") applied to the one defect that
+was actually blocking measurement, not a re-ordering of the roadmap on taste.
+
+**The dependency this document asserted for M8 was partly wrong, and that is
+what made this possible now.** M8's entry says "Dependencies: M2 (dynamic
+environment), M9's class lattice". Verified against source:
+
+- **The class-lattice dependency is already satisfied.** The 2026-08-09 session
+  replaced `_CONDITION_HIERARCHY` with `isinstance` over the real Python class
+  graph. Type-based handler dispatch did not need M9.
+- **The M2 dependency does not apply to the handler stack.** A handler cluster's
+  extent is exactly a Python `with` block's extent, so `state.handler_stack`
+  plus a context manager gives correct dynamic-extent semantics with no
+  dependency on M2's dynamic-binding stack. M2 remains a real prerequisite for
+  the *rest* of M8 (`*BREAK-ON-SIGNALS*`, and restarts as dynamic bindings), but
+  not for signal-before-unwind.
+
+**What changed.**
+
+1. **`state.handler_stack`** (new) — the active handler clusters. Walked by
+   **`signal_condition()`**, which invokes handlers *at the signal point,
+   before any unwinding*, disestablishing the matching cluster and every
+   cluster inside it while a handler runs (CLHS 9.1.4.1, so a re-signaling
+   handler cannot re-enter itself — `HANDLER-BIND.6`).
+2. **`HANDLER-BIND` catches nothing.** It pushes a cluster for the extent of
+   its body. That is the whole fix: a handler's `(THROW 'DONE ...)` now finds a
+   `CATCH` established *inside* the protected form, because those frames are
+   still live when the handler runs.
+3. **`HANDLER-CASE` and `IGNORE-ERRORS` use the same stack**, via a
+   `HandlerCaseTransfer` raised by their handlers. This matters for *ordering*:
+   an inner `HANDLER-BIND` handler must see a condition before an outer
+   `HANDLER-CASE` clause, which is impossible while one form walks a handler
+   stack and the other catches a Python exception. Clause bodies run outside
+   the cluster's `with`, i.e. after unwinding and disestablishment, as ANSI
+   requires.
+4. **`HandlerCaseTransfer` subclasses `ThrowException`** (and lives beside the
+   other control-transfer exceptions in `evaluation_core.py`). It *is* a throw
+   to a dynamically established tag, and subclassing means every existing
+   pass-through tuple in the evaluator handles it automatically. A new
+   unrelated class would have had to be added to each by hand — and the one
+   missed site would silently turn a handler transfer into an error. That was
+   not theoretical: the first implementation used a bare `Exception` and
+   `funcall` immediately mangled it into `"Python error in FUNCALL:
+   HandlerCaseTransfer"`. Its tag class defines identity `__eq__` that never
+   returns `NotImplemented`, so an intervening `(CATCH 'FOO ...)` cannot have
+   the comparison answered by a Lisp object's own `__eq__`.
+5. **One condition builder for all four signaling operators** —
+   `build_condition(datum, arguments, default_class)` — replacing two
+   designator constructors (one for unevaluated forms, one for evaluated
+   arguments: the same logic twice, Finding L) plus a third private copy inside
+   `signal_warning` that had already drifted (it accepted no function
+   format-control). `default_class` is the *only* difference between them:
+   `SIMPLE-ERROR` for ERROR/CERROR, `SIMPLE-CONDITION` for SIGNAL,
+   `SIMPLE-WARNING` for WARN.
+6. **`SIGNAL` is now SIGNAL.** It had no datum dispatch at all — it signaled
+   whatever its argument evaluated to, which `ConditionException` then wrapped
+   in a generic `ERROR`, so `(signal "...")` was wrongly caught by `(ERROR (C)
+   ...)` handlers — and it raised unconditionally, so an unhandled SIGNAL
+   abandoned the rest of the enclosing form. It now builds a
+   `SIMPLE-CONDITION` and returns NIL when no handler transfers control.
+7. **Handler type matching delegates to `TYPEP`**, deleting the second, weaker
+   copy of condition-type dispatch. This is what gained compound specifiers
+   (`(NOT ERROR)`, `HANDLER-BIND.16`) and class objects
+   (`#.(find-class 'error)`, `HANDLER-BIND.17`) — they were not special-cased.
+8. **Handlers are function *designators*** (`HANDLER-BIND.8`), resolved against
+   the lexical environment and otherwise handed to `FUNCALL`, which already
+   resolves global function names — no second resolution path.
+9. **The duplicate `cl_function` SIGNAL/ERROR stubs are consolidated onto the
+   same core** (Finding E asked for this). `#'SIGNAL` was `return None` — it
+   signaled nothing whatsoever. `#'ERROR` raised a bare Python `Exception`
+   carrying only a message, so no handler clause could match it, not even
+   `(ERROR (C) ...)`. RT reaches that path constantly via
+   `(apply #'error args)` in its own `report-error`.
+10. **`IGNORE-ERRORS` is expressed as its CLHS definition** (an ERROR handler
+    on the shared stack). Its `except Exception` also swallowed
+    `ReturnFromException`/`ThrowException`/`GoException`, so
+    `(ignore-errors (throw 'out 1))` silently discarded the throw — Finding K's
+    defect class in a second operator — and it returned `str(e)`, a Python
+    string, where ANSI requires the condition object.
+11. **The condition class lattice is completed to CLHS Figure 9-1**:
+    `SERIOUS-CONDITION` (with `ERROR` reparented under it), `STORAGE-CONDITION`,
+    `CELL-ERROR` (with `UNBOUND-VARIABLE`/`UNDEFINED-FUNCTION`/`UNBOUND-SLOT`
+    reparented under it), `PACKAGE-ERROR`, `PARSE-ERROR`, `READER-ERROR`
+    (genuinely `(PARSE-ERROR STREAM-ERROR)`), `STYLE-WARNING` — which RT binds
+    around *every* test it runs — `SIMPLE-TYPE-ERROR`, `PRINT-NOT-READABLE`,
+    `FLOATING-POINT-INEXACT`. `SIMPLE-CONDITION` now owns the
+    `FORMAT-CONTROL`/`FORMAT-ARGUMENTS` initializer that `SimpleError` and
+    `SimpleWarning` each had a copy of.
+12. **`_condition_class_for_name` is restricted to `Condition` subclasses.** It
+    maps by naming convention over `lisptype`'s namespace, which also holds
+    `Package`, `Environment`, ... — so a type name like `PACKAGE` used to
+    resolve to an unrelated class that `MAKE-CONDITION` would then instantiate
+    as though it were a condition type.
+13. **Simple conditions report themselves properly** — FORMAT applied to
+    format-control and format-arguments, rendered once at construction (not in
+    `__str__`, which runs inside `ConditionException`'s own constructor and
+    would risk recursion if FORMAT ever signaled). Without this every error
+    message printed its raw control string: `~%No test with name ~:@(~S~).`
+    instead of the test's name. The slots still hold the unrendered control, so
+    `SIMPLE-CONDITION-FORMAT-CONTROL` is unaffected.
+
+**A transitional mechanism, named as such.** Most of the codebase predates the
+condition system and reports errors by raising `lisptype.LispError` directly,
+never calling SIGNAL, so those never reach `signal_condition`.
+`_run_handlers_on_unwind` still runs handlers for exactly those on the way out
+— which is where *all* handlers used to run, and is not ANSI. Anything that did
+go through `signal_condition` is marked `handlers_run` and skipped, so no
+handler ever runs twice for one condition. **Migrating those raise sites onto
+SIGNAL is what would let that function be deleted**; until then it is a bounded
+compatibility path, not the mechanism.
+
+**Eight pre-existing unit tests asserted the old non-ANSI behavior** and were
+rewritten rather than preserved: that SIGNAL always raises, and that a condition
+signaled while evaluating SIGNAL's *argument* gets relabelled as SIGNAL's own
+recoverable condition (`(SIGNAL (ERROR))` — the inner ERROR is what signals, and
+it must propagate untouched). The old `eval_signal`/`eval_cerror` swallowed it
+via `except ConditionException`, one of the silent-exception patterns this
+document's standing rules call out.
+
+**Also fixed, because it was blocking diagnosis of this session's own suite
+run.** The slow-loop warning in `evaluation_loops_conditionals.py` was a
+one-shot latch with **no counterpart on any exit path**, and the hard cap's only
+signal was a `LispError` that surfaces in the *`.log`* as an ordinary test
+failure, never on stderr. So "slow but finished", "still spinning right now",
+and "aborted at 600s" were byte-identical in `run_all_tests.err` — making the
+warning useless for the one question it exists to answer. It also had no
+timestamps, and existed as **three drifted copies** (LOOP, DO, DO\*) of which
+only LOOP's had the hard cap at all, leaving a runaway `DO` unbounded.
+Consolidated into one `LoopWatchdog` that emits a stamped
+`RESOLVED`/`EXITED via <exception>`/`ABORTED` line whenever a loop that warned
+ends, by any path including a non-local exit. Durations now use
+`perf_counter()`: `time.time()` is non-monotonic, and on Windows its ~16ms
+granularity is coarse enough for a tight loop to measure `0.0s` elapsed.
+
+**Tests.**
+
+- `pipenv run pytest -q`: **1241 passed** (1199 baseline + 34 new
+  `tests/test_handler_stack_signaling.py` + 8 new `tests/test_loop_watchdog.py`),
+  **1 pre-existing unrelated failure** (`STREAM-ELEMENT-TYPE` missing from the
+  function registry, M10 gap, byte-identical before and after).
+- **All 310 `ansi-test/conditions/` tests, run before and after via `git stash`
+  so the comparison is against this session's own baseline rather than a
+  document claim: 92 → 116 passing, and *zero* regressions** (no test that
+  passed before fails now — verified by joining the two result sets, not by
+  eyeballing totals). `handler-bind.lsp` goes from 13/17 with one run-aborting
+  crash to **17/17**.
+
+**ANSI impact — the suite now executes nearly twice as much of itself.**
+Full `run_all_tests.py`, measured from the `COMPLETENESS:` line (pulled live from
+RT's `*entries*`/`*passed-tests*`/`*failed-tests*`, not parsed from FORMAT output):
+
+| | Before (2026-08-09, last verified run) | After |
+|---|---|---|
+| `accounted` | 4687 | **8971** |
+| `passed` | 2920 | **4514** |
+| `failed` | 1767 | 4457 |
+| `missing` | 17349 | 13065 |
+
+**+1594 passing tests and +4284 tests actually executed.** The failure count rose
+by 2690 for the expected reason and it is not a regression: those tests had
+*never run before*, so they had no prior status to regress from — the increase is
+previously-invisible failures becoming visible, which is what M0 exists to
+achieve. Confirmed by the zero-regression `conditions/` diff above.
+
+**`packages/` is measurable for the first time**, at 72/340 — this document's own
+2026-08-11 update said M1 step 4 (the package-model repairs: `shadowing_symbols`,
+CL/CL-USER/KEYWORD missing from `state.packages`, `IMPORT`/`EXPORT`/
+`RENAME-PACKAGE`, `INTERN` case-sensitivity) "can't get real test evidence
+without" this unblock. It can now. `conditions/` likewise, at 116/303.
+
+**The run still ends in `COMPLETENESS: MISMATCH`, and the new blocker is
+precisely identified rather than left for the next session to hunt.** Truncation
+moved from `conditions/handler-bind.lsp` (`HANDLER-BIND.13`) to
+`packages/do-symbols.lsp` (**`DO-SYMBOLS.8`**), whose own source comment reads
+"Test that the tags work in the tagbody":
+
+```lisp
+(do-symbols (s "DS1")
+  (when (equalt (symbol-name s) "C") (go bar))
+  (push s x) (go foo) bar (push t x) foo)
+```
+
+CLHS specifies `DO-SYMBOLS`' body as an implicit **`tagbody`**. `eval_do_symbols`
+establishes none, so `(go foo)` raises a `GoException` with no frame to catch it;
+because a `GoException` is a control transfer and not a condition, it sails
+straight through RT's own `handler-case` and aborts the run. Traceback confirms
+it: `eval_do_symbols` → `eval_go` → `raise GoException`, uncaught to top level.
+
+**This is the sixth instance of one defect class** — "the form does not establish
+the block/tagbody/condition CLHS says it establishes" — after `LOOP`'s implicit
+NIL block, CLOS method bodies, `LOOP`'s `NAMED` clause, `ERROR`/`CERROR`'s
+condition dispatch, and `HANDLER-BIND`'s handler environment. `DO-EXTERNAL-SYMBOLS`
+has the identical test at `do-external-symbols.lsp:68` and will be the seventh.
+**It is worth auditing every iteration/mapping form for its implicit tagbody and
+NIL block in one pass rather than discovering them one crash at a time** — the
+`_run_with_nil_block` helper already exists for the block half; the tagbody half
+has no shared helper yet, which is precisely why these keep recurring.
+
+**Discovered issues, not addressed.**
+
+- **`RESTART-CASE`/`INVOKE-RESTART` still cannot be reached from a handler, and
+  the cause is confirmed rather than suspected.** M8's completion criterion is
+  "a handler can invoke a restart established inside the protected form". The
+  handler now *runs* at the right time, and the restart *is* on
+  `state.restart_stack` when it does (verified by direct instrumentation), but
+  the invocation still fails with `No restart named MY-RESTART`. Two causes, in
+  order:
+  1. **`lisptype.RestartException` is in none of the evaluator's
+     control-transfer pass-through tuples** and does not subclass any of them,
+     so `funcall` catches it under `except Exception` and converts it into
+     `<ERROR: Python error in FUNCALL: RestartException: ...>` — Finding K's
+     defect class in a fourth place. Confirmed directly:
+     `funcall(fn_that_raises_RestartException)` returns a wrapped
+     `ConditionException`, not the transfer.
+  2. That fabricated `ConditionException` carries no `handlers_run` mark, so
+     `_run_handlers_on_unwind` treats it as an unsignaled condition and invokes
+     the same handler a **second** time — by which point `RESTART-CASE`'s
+     `finally` has popped the restart, hence the "No restart named" message.
+     Instrumentation shows `INVOKE-RESTART` entered twice, with
+     `restart_stack` populated the first time and empty the second.
+  Making `RestartException` a control transfer is a small change, but doing it
+  alone would leave restarts half-working: `eval_invoke_restart` also calls the
+  restart function and *then* raises, and `eval_restart_case` calls it **again**
+  on catching (Finding E's own observation), and `COMPUTE-RESTARTS`/
+  `FIND-RESTART`/`MUFFLE-WARNING` are still stubs. This belongs to M8's restart
+  half as one coherent piece.
+- **`MUFFLE-WARNING` cannot suppress WARN's report.** WARN now offers the
+  warning to handlers first, so a handler can transfer control out of it, but a
+  handler that *declines* after calling `(muffle-warning c)` still gets the
+  report printed, because MUFFLE-WARNING is a no-op stub. Needs the restart work
+  above. RT binds a `STYLE-WARNING` muffler around every test it runs.
+- **`DEFINE-CONDITION` still creates no class** (Finding E, unchanged), so a
+  user-defined condition type degrades in `build_condition` to the operator's
+  default simple type rather than its own type. This is now the largest
+  remaining correctness gap in condition *dispatch*: the mechanism is right, but
+  user types are not in the lattice it dispatches over.
+- **`HANDLER-CASE` still converts an uncaught `THROW` passing through it into
+  `CONTROL-ERROR`.** Deciding that at `HANDLER-CASE` is the wrong place — it
+  needs a catch-tag stack to know at THROW time that no tag matches, which is
+  M7. Left as-is deliberately: removing it without M7 would regress tests that
+  currently reach a `CONTROL-ERROR` clause this way.
+- **A `for-below` LOOP with an empty body ran 617 iterations in 120s** (0.19s per
+  iteration) during this session's suite run — recorded by the new watchdog. It
+  did resolve on its own, so it is a performance smell rather than a hang, but
+  0.19s for an empty body suggests per-iteration work happening outside
+  `body_forms` that nothing accounts for.
+- **`_condition_matches` still has a legacy branch** matching directly-raised
+  `LispError`/`LispTypeError`/`LispProgramError` against hardcoded type-name
+  lists, because those raise sites bypass the condition system. It disappears
+  with the same raise-site migration that removes
+  `_run_handlers_on_unwind`.
+
+**Next recommended task.** Two candidates, and the evidence now favours the
+cheap one first:
+
+**(a) `DO-SYMBOLS`'/`DO-EXTERNAL-SYMBOLS`' implicit tagbody — do this first.**
+It is the single defect blocking 13065 unexecuted tests, it is the sixth instance
+of a class this document already tracks, and the right fix is a shared
+`_run_with_tagbody`-style helper used by every form CLHS defines with an implicit
+tagbody (the audit noted above), not a patch to `eval_do_symbols`. Cheapest
+possible unlock of the remaining 59% of the suite, and it keeps M0's "measurement
+first" ordering honest.
+
+**(b) M8's restart half, as one unit:** make
+`RestartException` a real control transfer, fix the double-invocation between
+`INVOKE-RESTART` and `RESTART-CASE`, build real restart objects, and implement
+`COMPUTE-RESTARTS`/`FIND-RESTART`/`RESTART-NAME`/`MUFFLE-WARNING`/`USE-VALUE`/
+`STORE-VALUE`/`ABORT`/`CONTINUE`/`WITH-SIMPLE-RESTART`. It is now unblocked
+(handlers reach the signal point, which is the prerequisite restarts were
+waiting on), it completes M8's stated completion criterion, and
+`ansi-test/conditions/` is finally measurable end to end so the work has a live
+scoreboard — `restart-case.lsp`, `restart-bind.lsp`, `compute-restarts.lsp`,
+`muffle-warning.lsp`, `use-value.lsp`, `store-value.lsp`, `abort.lsp`,
+`continue.lsp`, `with-simple-restart.lsp` and `with-condition-restarts.lsp` are
+~10 files whose failures are currently dominated by these stubs. `DEFINE-CONDITION`
+creating real types is the natural companion, since both feed the same directory.
+
+## Update (2026-08-12, same session): audit of the unit suite for tests that
+## assert NON-ANSI behavior — partially fixed, remainder catalogued here
+
+**Why this matters more than it looks.** A unit test that asserts a bug makes
+*fixing* the bug look like a regression. Several of this project's stalls trace
+to exactly that. The audit criterion used throughout was deliberately crisp:
+**would this assertion fail if run against SBCL?** Not "is it incomplete" — a
+test that covers only part of a feature is fine; one that pins a wrong answer is
+not.
+
+**Fixed in this session.**
+
+1. **`(PROGN)` returned Python `None` instead of `NIL`** — and
+   `test_phase3_special_forms.py`'s own docstring said "should return NIL" while
+   its assertion demanded `is None`, so the test contradicted its stated intent.
+   `eval_progn` now initialises its result to `lisptype.NIL`. (Python `None` and
+   `lisptype.NIL` are distinct objects here — Finding G.)
+2. **`(VALUES-LIST NIL)` returned NIL (one value) instead of zero values.** CLHS:
+   `(values-list list)` ≡ `(apply #'values list)`. `values` right next door
+   already documented zero values as an empty `MultipleValues`, so the two
+   disagreed on the representation of zero values; the empty case now routes
+   through `values` so there is one answer.
+3. **Two reader tests in `test_reader_errors.py`** — one asserted `read("123abc")
+   == 123`, the other was the tautology `result is not None or result is None`.
+   Both now assert the ANSI answer (the symbols `|123ABC|` and `|1.2.3|`, per
+   CLHS 2.3.1/2.3.1.1 — token accumulation never splits at a digit/letter
+   boundary) under `xfail(strict=True)` naming the CLHS rule. **strict** matters:
+   the moment the module is fixed these fail as unexpected passes rather than
+   silently going green.
+4. Earlier in the session, eight tests in `test_phase4_task4_signaling_functions.py`
+   and `test_phase4_task3_condition_hierarchy.py` that asserted SIGNAL always
+   raises, and that a condition signaled while evaluating SIGNAL's *argument*
+   gets relabelled as SIGNAL's own recoverable condition.
+
+**A structural discovery that explains much of the reader half.**
+**`fclpy/reader.py` is a dead ~480-line second reader implementation.** Verified:
+no module under `fclpy/` imports it — only four test files do
+(`test_reader_errors.py`, `test_printer.py`, `test_reader_and_packages.py`,
+`test_roundtrip.py`), totalling **177 tests, 14% of the suite**. So the *live*
+reader (`tokenizer.py` → `lispreader.py` → `readtable.py`) has essentially no
+unit coverage, while 177 tests certify a module nothing uses. The two disagree on
+conformance: the dead reader splits `123abc` into `123`; **the live reader
+correctly returns the symbol `|123ABC|`**. Finding L's "duplicate and dead
+implementations", at 14%-of-the-suite scale. Options are to repoint those tests
+at the live reader (highest value, but most of the 177 need rewriting and many
+will newly fail once the real reader is actually measured) or to retire the
+module with its tests. **Not decided — needs its own scoped session.** A warning
+header was added to `test_reader_errors.py` so nobody reads green there as
+evidence about the real reader.
+
+**Remaining confirmed non-ANSI assertions — NOT yet fixed.** The four below I
+verified by executing them, so they are facts, not report:
+
+| Expression | fclpy | ANSI | Test pinning it |
+|---|---|---|---|
+| `(gethash 1.0 h)` where key is `1` | `ONE` | `NIL` — `(eql 1 1.0)` is false (CLHS `eql`, 18.1) | `test_phase5_task7_hashtables.py:136` |
+| `(hash-table-test h)` | `"<FUNCTION EQUAL AT 0x…>"` | the **symbol** `EQUAL` | `:249` |
+| `(find 3 '(1 2 3 4 5) :test #'>)` | `4` | `1` — the test is called as `(funcall test item element)`, CLHS 17.2.1 | `test_phase5_task2_sequence_functions.py:50-55` |
+| `(array-dimension <size 10, fill-pointer 5> 0)` | `1` | `10` — the fill pointer affects `LENGTH`/`ELT`, never `ARRAY-DIMENSION` | `test_phase5_task3_vectors.py:249` |
+
+Note the `:test` argument order is reversed in the shared
+`SequenceIterator.matches` (`sequences_search.py`), so it is one defect affecting
+`FIND`/`POSITION`/`COUNT`/`REMOVE` — a single fix, not four.
+
+**Reported by the audit but NOT re-verified by me** (treat as leads, confirm
+before acting — two other "certain" audit claims turned out to be wrong at the
+Lisp level, so this list has a real false-positive rate):
+
+- `#(1 2 3)` read as the cons `(VECTOR 1 2 3)` rather than a simple vector
+  (CLHS 2.4.8.3), and `#()` printed back as `(VECTOR)` — breaks print/read
+  consistency. `test_reader_and_packages.py:215-235`, `test_roundtrip.py:271`.
+- `PRIN1` emitting C-style `\n`/`\t` escapes inside strings, and the tokenizer
+  reading `\n` in a string as a newline. CLHS 2.4.5: backslash is a
+  single-escape, included *without interpretation*; CLHS 22.1.3.4: only `"` and
+  `\` are escaped. The two bugs cancel out, which is why a round-trip test
+  passes. `test_printer.py:73,78`, `test_tokenizer.py:263`, `test_roundtrip.py:138`.
+- `PRINC` keeping the `:` on keywords and the `#\` on characters — `PRINC` binds
+  `*PRINT-ESCAPE*` to NIL (CLHS 22.1.3.2/22.1.3.3), so `(princ :foo)` prints
+  `FOO` and `(princ #\X)` prints `X`. `test_printer.py:143,176`,
+  `test_character.py:58`, `test_keyword_implementation.py:41`.
+- **`INTERN` case-folds its string argument.** Case conversion is the *reader's*
+  job via `readtable-case` (CLHS 23.1.2); `INTERN` uses the string verbatim, so
+  `(eq (intern "myvar") (intern "MYVAR"))` is NIL. This is M1 step 5's
+  "`INTERN` case-sensitivity" item with a concrete test locking it in:
+  `test_symbol_interning.py:35-37`, `test_keyword_implementation.py:65-67`.
+- `READTABLE-CASE` returning the Python string `'UPCASE'` instead of the keyword
+  `:UPCASE`; `GET-MACRO-CHARACTER`'s second value and the `*PRINT-*` booleans as
+  Python `True`/`False`; `*PRINT-CASE*` as a Python string.
+  `test_readtable_advanced.py`, `test_printer_control.py:24-31`.
+- `(typep "a" 'character)` → T and `(type-of "a")` → `CHARACTER`: a length-1
+  Python `str` satisfies both CHARACTER and STRING, which are disjoint types
+  (CLHS 4.2.2). Contradicted by `test_character.py:36`, which asserts a
+  Character is *not* equal to a string. `test_phase6_comprehensive.py:47,203-205`.
+- `RATIONAL` accepting two arguments as a ratio constructor; ANSI `RATIONAL`
+  takes exactly one. `test_rational_arithmetic.py:125-133`.
+- `RATIONALP`/`COMPLEXP`/`REALP` returning Python `bool`. **Confined to the
+  internal Python API** — I verified `(if (rationalp 3.14) 'yes 'no)` correctly
+  yields `NO`, because the evaluator boundary converts. Still worth fixing
+  because **`lisptype.is_truthy(False)` is `True`** (verified), so any Python
+  `False` that ever reaches a Lisp conditional is silently *true*. That is a
+  live landmine even though these particular predicates do not currently step on
+  it.
+
+**Also found: tests that cannot fail.** Not wrong, but worthless, and they
+occupy the place where real coverage should be:
+`test_phase3_unwind_protect.py:131-137` has a body of `pass` with a comment
+saying it "documents" the behavior — and the case it names (cleanup running
+before an error propagates) is the one case the file does not otherwise cover.
+`test_phase4_multiple_values.py:330-353` ends with `or isinstance(result,
+MultipleValues)`, making its else-branch unfalsifiable, and in doing so blesses
+a variable being bound to the `MultipleValues` wrapper when CLHS 3.1.2.1.2
+requires an init form to be evaluated in a single-value context. Similar
+`or`-chained escape hatches at `test_phase3_multiple_values.py:58,72,126-133`
+and `test_loop.py:83-87` (which explicitly tolerates the wrong answer 5 and
+whose comment documents a real `(eq nil 'nil)` bug).
+
+**Untested-but-wrong, noted so it is not mistaken for covered:** `PUSH`/`POP`/
+`PUSHNEW` are registered as *functions* operating on Python lists, and
+`GET-SETF-EXPANSION` returns a Python 5-element list instead of five values —
+both squarely M5, and no test pins either, so M5 is free to fix them.
+
 ## Two dimensions of compliance — read this before the milestones
 
 "100% ANSI" is **not** primarily an evaluator problem. It has two independent
@@ -1526,6 +1932,13 @@ both is the worst option.
    `except` at `lispenv.py:513-515` **[DONE 2026-08-11]**. M1 steps 3–6 (NIL
    unification, package-model repairs, `INTERN` case, `COPY-SYMBOL`
    `copy-props`) remain — see the Update above.
+2b. **M8's signaling core** — signal-before-unwind handler stack **[DONE
+   2026-08-12]**, taken out of sequence because `HANDLER-BIND.13` was aborting
+   every run at `accounted=4687/22036`, leaving ~79% of the suite unmeasurable;
+   see the 2026-08-12 update, which also records that M8's stated M2/M9
+   dependencies did not apply to this piece. **M8's restart half remains and is
+   now the recommended next task** — it is unblocked by this and has a live
+   scoreboard for the first time.
 3. **M2** — environment model (RC-1 through RC-4). The prerequisite for M3 and M4, and
    the spine of the project. Do not attempt to fix specials one binding form at a
    time — that just produces a seventh incompatible mechanism.

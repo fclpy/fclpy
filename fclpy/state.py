@@ -19,3 +19,18 @@ functions_loaded = False
 # Restart stack: list of dictionaries mapping restart names to functions
 # Each entry is a dict of {name: callable, name: callable, ...}
 restart_stack = []
+
+# Handler stack: the active condition handlers, outermost first (CLHS 9.1.4).
+# Each entry is one *handler cluster* -- the handlers established by a single
+# HANDLER-BIND / HANDLER-CASE / IGNORE-ERRORS form -- represented as a list of
+# (type-specifier, function-designator) pairs in the order they were written,
+# because CLHS specifies that handlers within one cluster are tried in order.
+#
+# This exists so signaling can walk the handlers *at the signal point, before
+# unwinding*, which is what ANSI requires and what running handlers from a
+# Python `except` clause cannot do: by the time an `except` runs, every CATCH /
+# RESTART-CASE / UNWIND-PROTECT frame inside the protected form has already
+# been torn down, so a handler could never throw to a tag or invoke a restart
+# established there (plan.md Finding E). Pushed/popped by the establishing
+# forms in lispfunc/evaluation_conditions.py; walked by signal_condition().
+handler_stack = []

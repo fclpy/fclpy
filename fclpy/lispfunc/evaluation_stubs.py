@@ -198,14 +198,25 @@ def values(*args):
 
 def values_list(lst):
     """Return multiple values from a list.
-    
+
     (VALUES-LIST '(a b c)) returns three values: a, b, and c.
     This is essentially the inverse of MULTIPLE-VALUE-LIST.
+
+    CLHS: (values-list list) is equivalent to (apply #'values list). So
+    (values-list nil) returns *zero* values, exactly like (values) -- it used to
+    return NIL, which is *one* value, contradicting `values` directly above on
+    how zero values are represented. Routing the empty case through `values`
+    keeps one answer to that question instead of two.
     """
-    if lst is lisptype.NIL or lst is None:
-        return lisptype.NIL
-    
-    # Convert list to MultipleValues
+    items = []
+    cur = lst
+    while _consp_internal(cur):
+        items.append(car(cur))
+        cur = cdr(cur)
+
+    if not items:
+        return values()
+
     return lisptype.MultipleValues.from_list(lst)
 
 

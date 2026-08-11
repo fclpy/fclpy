@@ -94,6 +94,52 @@ class GoException(Exception):
         super().__init__(f"GO {tag.name if hasattr(tag, 'name') else tag}")
 
 
+class HandlerCaseTag:
+    """A unique CATCH tag identifying one HANDLER-CASE (or IGNORE-ERRORS)
+    frame, used as the tag of a HandlerCaseTransfer.
+
+    `__eq__` is identity and never returns NotImplemented, so the tag
+    comparison in `eval_catch` can never be answered by a Lisp object's own
+    `__eq__` on the other side: an intervening (CATCH 'FOO ...) sees this tag,
+    finds it does not match, and re-raises, exactly as it should.
+    """
+    __slots__ = ()
+
+    def __eq__(self, other):
+        return self is other
+
+    def __hash__(self):
+        return id(self)
+
+    def __repr__(self):
+        return f"#<handler-case-tag {id(self):#x}>"
+
+
+class HandlerCaseTransfer(ThrowException):
+    """Carries control from a HANDLER-CASE handler back to its own frame.
+
+    CLHS defines HANDLER-CASE as HANDLER-BIND plus a transfer of control out to
+    the HANDLER-CASE form: the handler runs at the signal point like any other
+    handler, transfers control here, and only then -- after unwinding, with the
+    handlers disestablished -- is the clause body evaluated. See
+    lispfunc/evaluation_conditions.py for the establishing side.
+
+    It subclasses ThrowException because it *is* a throw to a dynamically
+    established tag, and because that makes every place in the evaluator that
+    already lets a THROW pass through untouched (APPLY, FUNCALL, the special
+    forms' control-transfer re-raise clauses) do the right thing for it
+    automatically. A new, unrelated exception class would have had to be added
+    to each of those tuples by hand, and any site that was missed would
+    silently convert a handler transfer into an error -- the same defect class
+    as plan.md Finding K.
+    """
+
+    def __init__(self, tag, clause, condition):
+        super().__init__(tag, condition)
+        self.clause = clause
+        self.condition = condition
+
+
 class ConditionException(Exception):
     """Exception raised when a Lisp condition is signaled.
 

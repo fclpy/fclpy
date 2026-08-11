@@ -21,6 +21,88 @@ LOOP_TIMEOUT_WARNING = 120  # 2 minutes
 LOOP_TIMEOUT_ERROR = 600  # 10 minutes
 
 
+class LoopWatchdog:
+    """Reports a loop that runs unreasonably long -- and, crucially, reports how
+    it ended.
+
+    The warning alone is not a usable signal. It fires once per loop and nothing
+    is ever printed again, so three very different outcomes look byte-identical
+    in `run_all_tests.err`:
+
+      * the loop was merely slow and finished normally;
+      * the loop is still spinning right now;
+      * the loop hit the hard cap and was aborted -- which raises a LispError
+        that surfaces in the *.log* as an ordinary test failure, never in .err.
+
+    Reading a bare "LOOP WARNING ... 120.1s" therefore cannot tell you whether a
+    run is stuck, which is exactly the question it exists to answer. This class
+    emits a matching RESOLVED/ABORTED line whenever a loop that warned finally
+    ends, by any path including a non-local exit, and stamps every line with the
+    wall clock so it can be placed against the rest of the run.
+
+    It also replaces three separately maintained copies of this logic (LOOP, DO,
+    DO*) that had already drifted apart: only LOOP's had the hard cap at all.
+    `describe` is a callable so the diagnostic detail is only built if a warning
+    actually fires.
+    """
+
+    def __init__(self, kind, describe, hard_cap=0):
+        self.kind = kind
+        self.describe = describe
+        self.hard_cap = hard_cap
+        # perf_counter, not time(): durations need a monotonic clock (a system
+        # clock adjustment mid-run must not make a loop look 30 minutes old), and
+        # on Windows time() has ~16ms granularity, coarse enough that a tight
+        # loop can measure a 0.0s elapsed. The wall clock is only used for the
+        # human-readable stamp.
+        self.start_time = time.perf_counter()
+        self.iterations = 0
+        self.warned = False
+
+    def _stamp(self):
+        return time.strftime('%H:%M:%S', time.localtime())
+
+    def tick(self):
+        """Count one iteration; warn once if slow, abort if past the hard cap."""
+        self.iterations += 1
+        elapsed = time.perf_counter() - self.start_time
+
+        if LOOP_TIMEOUT_WARNING > 0 and not self.warned and elapsed > LOOP_TIMEOUT_WARNING:
+            self.warned = True
+            print(f"\n*** {self.kind} WARNING [{self._stamp()}]: running for "
+                  f"{elapsed:.1f}s ({self.iterations} iterations) ***", file=sys.stderr)
+            for line in self.describe():
+                print(f"*** {self.kind}: {line} ***", file=sys.stderr)
+            sys.stderr.flush()
+
+        if self.hard_cap > 0 and elapsed > self.hard_cap:
+            # Announce on the same stream as the warning before raising: the
+            # LispError itself lands in the .log as a test failure, so .err
+            # would otherwise show a warning with no outcome.
+            print(f"*** {self.kind} ABORTED [{self._stamp()}]: exceeded {self.hard_cap}s "
+                  f"({self.iterations} iterations) ***", file=sys.stderr)
+            sys.stderr.flush()
+            raise lisptype.LispError(
+                f"{self.kind} exceeded {self.hard_cap}s ({self.iterations} iterations) "
+                f"without terminating -- aborting instead of hanging. "
+                f"{'; '.join(self.describe())}")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        # Only report an outcome for loops that warned; a normal fast loop must
+        # stay silent. Reported on every exit path, including a non-local exit
+        # (RETURN-FROM/THROW/GO), which is how most Lisp loops actually end.
+        if self.warned:
+            elapsed = time.perf_counter() - self.start_time
+            how = 'RESOLVED' if exc_type is None else f'EXITED via {exc_type.__name__}'
+            print(f"*** {self.kind} {how} [{self._stamp()}]: after {elapsed:.1f}s "
+                  f"({self.iterations} iterations) ***", file=sys.stderr)
+            sys.stderr.flush()
+        return False
+
+
 def eval_when(form, env):
     """Evaluate WHEN special form."""
     from .evaluation_core import eval
@@ -503,16 +585,22 @@ def eval_or(form, env):
 
 
 def eval_progn(form, env):
-    """Evaluate PROGN special form."""
+    """Evaluate PROGN special form.
+
+    CLHS: "If no forms are supplied, (progn) returns nil." The initial value is
+    `lisptype.NIL`, not Python `None` -- those are distinct objects here (plan.md
+    Finding G), and returning `None` leaked a Python value out as the value of a
+    Lisp form.
+    """
     from .evaluation_core import eval
-    
+
     args = cdr(form)
-    result = None
-    
+    result = lisptype.NIL
+
     while _consp_internal(args):
         result = eval(car(args), env)
         args = cdr(args)
-    
+
     return result
 
 
@@ -1786,6 +1874,13 @@ def eval_loop(form, env):
                     return_triggered = True  # Exit loop immediately
 
     
+    loop_watchdog = LoopWatchdog(
+        'LOOP',
+        lambda: [f"body_forms: {body_forms}",
+                 f"iteration_type: {iteration_type}, iteration_test: {iteration_test}"]
+                + ([f"var: {iteration_var}"] if iteration_var else []),
+        hard_cap=LOOP_TIMEOUT_ERROR)
+
     def _run_loop_and_finalize():
         """Run the loop's iteration/FINALLY/result logic under the loop's own
         implicit NIL block, so a plain (RETURN x) / (RETURN-FROM NIL x) inside
@@ -1794,35 +1889,10 @@ def eval_loop(form, env):
         extent (see plan.md Finding under M0 step 1).
         """
         nonlocal result
-        # Main loop execution with timeout warning
-        loop_start_time = time.time()
-        loop_iterations = 0
-        warning_printed = False
-    
-        def check_loop_timeout():
-            """Warn once if the loop is running long; hard-abort if it never stops.
-
-            The warning alone used to be the entire mechanism: it fires once (via
-            warning_printed) and then never checks again, so a loop that never
-            terminates ran forever with no way for the process -- or an ANSI-suite
-            run driving it -- to ever get control back. LOOP_TIMEOUT_ERROR turns
-            that into a loud, catchable LispError instead of a silent hang.
-            """
-            nonlocal warning_printed, loop_iterations
-            loop_iterations += 1
-            elapsed = time.time() - loop_start_time
-            if LOOP_TIMEOUT_WARNING > 0 and not warning_printed and elapsed > LOOP_TIMEOUT_WARNING:
-                warning_printed = True
-                print(f"\n*** LOOP WARNING: Loop has been running for {elapsed:.1f}s ({loop_iterations} iterations) ***", file=sys.stderr)
-                print(f"*** LOOP body_forms: {body_forms} ***", file=sys.stderr)
-                print(f"*** LOOP iteration_type: {iteration_type}, iteration_test: {iteration_test} ***", file=sys.stderr)
-                if iteration_var:
-                    print(f"*** LOOP var: {iteration_var} ***", file=sys.stderr)
-                sys.stderr.flush()
-            if LOOP_TIMEOUT_ERROR > 0 and elapsed > LOOP_TIMEOUT_ERROR:
-                raise lisptype.LispError(
-                    f"LOOP exceeded {LOOP_TIMEOUT_ERROR}s ({loop_iterations} iterations) "
-                    f"without terminating -- aborting instead of hanging. body_forms={body_forms!r}")
+        # Main loop execution, watched for runaway iteration. The watchdog is
+        # created in the enclosing scope so the RESOLVED/ABORTED counterpart can
+        # be emitted around the whole loop, including its non-local exits.
+        check_loop_timeout = loop_watchdog.tick
 
         def _termination_break(loop_env):
             """Check termination_type/iteration_test if present."""
@@ -2264,7 +2334,8 @@ def eval_loop(form, env):
     
         return result
 
-    return _run_with_nil_block(_run_loop_and_finalize, loop_block_name)
+    with loop_watchdog:
+        return _run_with_nil_block(_run_loop_and_finalize, loop_block_name)
 
 
 def _run_with_nil_block(thunk, block_name=None):
@@ -2363,24 +2434,14 @@ def eval_do(form, env):
     for (var, _, _), value in zip(var_specs, init_values):
         loop_env.set_variable(var, value)
     
-    # Main loop with timeout warning
-    loop_start_time = time.time()
-    loop_iterations = 0
-    warning_printed = False
+    # Main loop, watched for runaway iteration.
+    watchdog = LoopWatchdog(
+        'DO',
+        lambda: [f"end_test: {end_test}", f"var_specs: {var_specs}"])
 
     def _loop():
-        nonlocal loop_iterations, warning_printed
         while True:
-            # Check timeout
-            loop_iterations += 1
-            if LOOP_TIMEOUT_WARNING > 0 and not warning_printed:
-                elapsed = time.time() - loop_start_time
-                if elapsed > LOOP_TIMEOUT_WARNING:
-                    warning_printed = True
-                    print(f"\n*** DO LOOP WARNING: Loop has been running for {elapsed:.1f}s ({loop_iterations} iterations) ***", file=sys.stderr)
-                    print(f"*** DO end_test: {end_test} ***", file=sys.stderr)
-                    print(f"*** DO var_specs: {var_specs} ***", file=sys.stderr)
-                    sys.stderr.flush()
+            watchdog.tick()
 
             # Check end-test
             if lisptype.is_truthy(eval(end_test, loop_env)):
@@ -2404,7 +2465,8 @@ def eval_do(form, env):
             for var, value in new_values:
                 loop_env.set_variable(var, value)
 
-    return _run_with_nil_block(_loop)
+    with watchdog:
+        return _run_with_nil_block(_loop)
 
 
 def eval_do_star(form, env):
@@ -2462,23 +2524,13 @@ def eval_do_star(form, env):
         current = cdr(current)
     
     # Main loop with timeout warning
-    loop_start_time = time.time()
-    loop_iterations = 0
-    warning_printed = False
+    watchdog = LoopWatchdog(
+        'DO*',
+        lambda: [f"end_test: {end_test}", f"var_specs: {var_specs}"])
 
     def _loop():
-        nonlocal loop_iterations, warning_printed
         while True:
-            # Check timeout
-            loop_iterations += 1
-            if LOOP_TIMEOUT_WARNING > 0 and not warning_printed:
-                elapsed = time.time() - loop_start_time
-                if elapsed > LOOP_TIMEOUT_WARNING:
-                    warning_printed = True
-                    print(f"\n*** DO* LOOP WARNING: Loop has been running for {elapsed:.1f}s ({loop_iterations} iterations) ***", file=sys.stderr)
-                    print(f"*** DO* end_test: {end_test} ***", file=sys.stderr)
-                    print(f"*** DO* var_specs: {var_specs} ***", file=sys.stderr)
-                    sys.stderr.flush()
+            watchdog.tick()
 
             # Check end-test
             if lisptype.is_truthy(eval(end_test, loop_env)):
@@ -2499,7 +2551,8 @@ def eval_do_star(form, env):
                     new_value = eval(step_form, loop_env)
                     loop_env.set_variable(var, new_value)
 
-    return _run_with_nil_block(_loop)
+    with watchdog:
+        return _run_with_nil_block(_loop)
 
 
 def eval_dolist(form, env):

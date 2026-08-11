@@ -1,15 +1,15 @@
 {
-  "failed": 1746,
-  "passed": 2877,
+  "failed": 4457,
+  "passed": 4514,
   "per_directory": {
     "(unmapped: programmatically generated)": {
-      "failed": 28,
-      "passed": 20,
+      "failed": 589,
+      "passed": 220,
       "total": 4983
     },
     "arrays": {
-      "failed": 0,
-      "passed": 0,
+      "failed": 725,
+      "passed": 520,
       "total": 1245
     },
     "auxiliary": {
@@ -23,13 +23,13 @@
       "total": 259
     },
     "conditions": {
-      "failed": 18,
-      "passed": 9,
+      "failed": 187,
+      "passed": 116,
       "total": 303
     },
     "cons": {
-      "failed": 0,
-      "passed": 0,
+      "failed": 1058,
+      "passed": 580,
       "total": 1638
     },
     "data-and-control-flow": {
@@ -53,13 +53,13 @@
       "total": 87
     },
     "hash-tables": {
-      "failed": 0,
-      "passed": 0,
+      "failed": 69,
+      "passed": 89,
       "total": 158
     },
     "iteration": {
-      "failed": 486,
-      "passed": 352,
+      "failed": 472,
+      "passed": 366,
       "total": 838
     },
     "misc": {
@@ -73,13 +73,13 @@
       "total": 1438
     },
     "objects": {
-      "failed": 607,
-      "passed": 218,
+      "failed": 610,
+      "passed": 215,
       "total": 825
     },
     "packages": {
-      "failed": 0,
-      "passed": 0,
+      "failed": 198,
+      "passed": 72,
       "total": 340
     },
     "pathnames": {
@@ -118,8 +118,8 @@
       "total": 115
     },
     "symbols": {
-      "failed": 98,
-      "passed": 1047,
+      "failed": 40,
+      "passed": 1105,
       "total": 1145
     },
     "system-construction": {

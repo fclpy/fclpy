@@ -4,69 +4,88 @@ import fclpy.state as state
 import fclpy.lisptype as lisptype
 from .core import car, cdr, cons, _consp_internal
 from . import registry as _registry
-from .evaluation_core import ConditionException, ThrowException
+from .evaluation_core import (
+    ConditionException, ThrowException, ReturnFromException, GoException,
+    HandlerCaseTag, HandlerCaseTransfer)
 import fclpy.lispfunc as lispfunc
 
 
 def _condition_class_for_name(name):
     """Map a CL condition type name (e.g. "TYPE-ERROR") to its Python class
-    in lisptype (e.g. lisptype.TypeError), or None if there isn't one.
+    in lisptype (e.g. lisptype.TypeError), or None if that name does not
+    designate a condition type.
+
+    The camel-cased lookup is a naming convention over lisptype's namespace,
+    which also contains plenty of non-condition classes (`Package`,
+    `Environment`, ...). Requiring the result to be a `Condition` subclass
+    keeps a type name like PACKAGE or ENVIRONMENT from resolving to an
+    unrelated class that some future caller might then `isinstance` against
+    or -- worse, for MAKE-CONDITION -- instantiate as though it were a
+    condition type.
     """
     camel = ''.join(part.capitalize() for part in name.replace('_', '-').split('-') if part)
-    return getattr(lisptype, camel, None)
+    candidate = getattr(lisptype, camel, None)
+    if isinstance(candidate, type) and issubclass(candidate, lisptype.Condition):
+        return candidate
+    return None
 
 
-def _make_condition_from_designator(type_name_symbol, args_forms, env):
-    """Build a condition instance from a (DATUM &rest ARGUMENTS) designator
-    where DATUM names a condition type, per CLHS condition designators (used
-    by ERROR, SIGNAL, CERROR, WARN): the type is instantiated via its
-    keyword init-args, evaluating ARGS_FORMS as alternating keyword/value
-    pairs. Returns None if the type name isn't a known condition class.
+def make_condition_of_type(type_designator, arguments):
+    """Build an instance of the condition type named by `type_designator`
+    from already-evaluated alternating keyword/value init-args, or return
+    None if the designator does not name a condition type.
+
+    This is the single condition-type-designator constructor. It replaces the
+    two that used to exist side by side -- one taking unevaluated init-arg
+    forms plus an environment, one taking evaluated arguments -- which were
+    the same logic written twice (plan.md Finding L). Every caller
+    (ERROR/SIGNAL/CERROR/WARN via build_condition, and MAKE-CONDITION) has
+    already evaluated its arguments by the time it needs a condition, so the
+    evaluated form is the only one actually required.
     """
-    from .evaluation_core import eval
-
-    condition_class = _condition_class_for_name(type_name_symbol.name)
+    if not isinstance(type_designator, (lisptype.LispSymbol, lisptype.lispKeyword)):
+        return None
+    condition_class = _condition_class_for_name(type_designator.name)
     if condition_class is None:
         return None
 
     kwargs = {}
-    cur = args_forms
-    while _consp_internal(cur) and _consp_internal(cdr(cur)):
-        key = eval(car(cur), env)
-        value = eval(car(cdr(cur)), env)
+    it = iter(arguments)
+    for key in it:
+        value = next(it, lisptype.NIL)
         if isinstance(key, (lisptype.LispSymbol, lisptype.lispKeyword)):
             kwargs[key.name.lower().replace('-', '_')] = value
-        cur = cdr(cdr(cur))
-    return condition_class(**kwargs)
+    return _apply_report(condition_class(**kwargs))
 
 
 def _condition_matches(handler_type, error):
-    """Check whether `error` (a signaled condition/exception object) matches
-    the handler/handler-case clause type name `handler_type` (str or symbol).
+    """Check whether `error` (a signaled condition object) is of the type
+    denoted by a HANDLER-BIND binding's / HANDLER-CASE clause's type
+    specifier.
 
-    Uses isinstance() against the Python class the handler type name maps to
-    (via _condition_class_for_name), so subtyping falls out of the real
-    class graph (SimpleError -> Error -> Condition, but SimpleCondition and
-    SimpleWarning -> Condition only, not Error) instead of a hand-maintained
-    hierarchy table. The previous table only listed six ERROR subtypes and
-    fell back to "assume it's an ERROR" for every other condition name --
-    which meant a bare SIMPLE-CONDITION or SIMPLE-WARNING (both real ANSI
-    types that are *not* ERROR subtypes) incorrectly matched an (ERROR (C)
-    ...)  clause ahead of their own, more specific clause (plan.md
-    Finding E).
+    For real condition objects this simply asks TYPEP. CLHS 9.1.4.1 says a
+    handler's type is an ordinary *type specifier*, so it may be a compound
+    form like (OR ERROR WARNING) or (NOT ERROR), or a class object such as
+    (FIND-CLASS 'ERROR) -- not just a type-name symbol. TYPEP already
+    understands all three, and already has a Condition branch that resolves
+    condition type names to their Python classes and uses isinstance(), so
+    routing through it means condition-type dispatch has exactly one
+    implementation instead of a second, weaker copy here that understood only
+    bare symbols (plan.md Finding E: "build the lattice once, use it twice").
+
+    `handler_type` may also be a plain Python str, which some internal
+    callers pass; TYPEP accepts that directly.
     """
-    handler_type_name = handler_type.upper() if isinstance(handler_type, str) else handler_type.name.upper()
-
     if isinstance(error, lisptype.Condition):
-        if handler_type_name in ('T', 'CONDITION'):
-            return True
-        handler_class = _condition_class_for_name(handler_type_name)
-        return isinstance(handler_class, type) and isinstance(error, handler_class)
+        from .comparison import typep
+        return typep(error, handler_type) == lisptype.T
 
     # Legacy LispError-style exceptions predate real condition objects at
     # some raise sites (e.g. argument-validation code that raises
     # lisptype.LispTypeError directly rather than going through SIGNAL/
     # ERROR); keep matching those against the same three names as before.
+    handler_type_name = (handler_type.upper() if isinstance(handler_type, str)
+                         else getattr(handler_type, 'name', str(handler_type)).upper())
     if isinstance(error, lisptype.LispProgramError):
         return handler_type_name in ('PROGRAM-ERROR', 'ERROR', 'CONDITION', 'T')
     elif isinstance(error, lisptype.LispTypeError):
@@ -76,82 +95,299 @@ def _condition_matches(handler_type, error):
     return False
 
 
-def eval_signal(form, env):
-    """Implement SIGNAL special form.
-    
-    Syntax: (SIGNAL condition-object)
-    
-    Signal a condition, which may be handled by surrounding handlers.
-    If not handled, SIGNAL returns NIL (unlike ERROR which doesn't return).
+# --- Signaling: the handler stack, walked before unwinding (CLHS 9.1.4) ---
+
+def signal_condition(condition):
+    """Present `condition` to the active handlers, innermost first, without
+    unwinding. This is the one place handlers are ever invoked.
+
+    Returns None if every applicable handler declined by returning normally
+    (which is how a handler says "not mine"); does not return at all if a
+    handler transfers control, because the handler's non-local exit --
+    RETURN-FROM, THROW, a HANDLER-CASE transfer, invoking a restart -- simply
+    propagates out of here as a Python exception, unwinding the signaler's
+    frames at that point and not before.
+
+    Running handlers *here*, at the signal point, is the whole difference
+    from the previous implementation, which called them from a Python
+    `except` clause in HANDLER-BIND. By the time such an `except` runs, the
+    protected form's frames are gone, so a handler's (THROW 'DONE ...) had no
+    surviving CATCH frame to reach and a handler could never invoke a restart
+    established inside the protected form (plan.md Finding E; ANSI test
+    HANDLER-BIND.13 is the minimal case).
     """
-    from .evaluation_core import eval
-    
-    args = cdr(form)
-    if not _consp_internal(args):
-        raise lisptype.LispNotImplementedError("SIGNAL requires a condition argument")
-    
-    try:
-        condition = eval(car(args), env)
-    except ConditionException as e:
-        # If evaluating the argument raises a condition, re-wrap it as recoverable
-        raise ConditionException(e.condition, recoverable=True)
-    
-    # For now, just raise a ConditionException
-    # In a complete implementation, this would consult handler-bind handlers
-    raise ConditionException(condition, recoverable=True)
+    from .evaluation_core import funcall
+
+    stack = state.handler_stack
+    index = len(stack) - 1
+    while index >= 0:
+        cluster = stack[index]
+        for handler_type, handler in cluster:
+            if not _condition_matches(handler_type, condition):
+                continue
+            # CLHS 9.1.4.1: while a handler runs, the cluster that established
+            # it and every cluster established inside that one are
+            # disestablished, so a handler that re-signals the same condition
+            # cannot re-enter itself (ANSI test HANDLER-BIND.6 relies on this:
+            # its handler calls (ERROR C) again and must reach the *outer*
+            # handler, not loop). Restored on the way out so the establishing
+            # forms' own pops stay balanced whether the handler declines or
+            # exits non-locally.
+            disestablished = stack[index:]
+            del stack[index:]
+            try:
+                funcall(handler, condition)
+            finally:
+                stack.extend(disestablished)
+        index -= 1
+    return None
 
 
-def _build_condition_from_datum(datum_form, remaining_args_form, env):
-    """Evaluate an ERROR/CERROR datum and build the condition object it
-    designates (CLHS 9.1). Shared by ERROR and CERROR: CERROR's datum and
-    arguments are specified to behave "as if by (apply #'error datum
-    arguments)", so this is one dispatch, not two.
+def _resolve_handler(designator, env):
+    """Resolve a handler's *function designator* against the lexical
+    environment where the establishing form appeared.
 
-    Always evaluates the datum *before* deciding how to build the condition,
-    so a string datum is treated the same whether it arrived as a literal
-    in the form or via a variable/expression -- deciding based on the raw,
-    unevaluated form would make (error fmt) behave differently from
-    (error "literal") for the same runtime value, which is exactly the bug
-    this replaced (handler-case (simple-error ...) could never match a
-    string datum that came from a variable).
+    CLHS: HANDLER-BIND's handler is a function designator, so (handler-bind
+    ((simple-error 'my-handler)) ...) -- a quoted symbol rather than a
+    function object -- is legal (ANSI test HANDLER-BIND.8). A symbol with a
+    lexical function binding is resolved here; anything else is handed to
+    FUNCALL unchanged, which already resolves global function names and
+    signals UNDEFINED-FUNCTION for names that have none, so there is no
+    second designator-resolution path to keep in sync.
     """
-    from .evaluation_core import eval
-    datum = eval(datum_form, env)
+    if isinstance(designator, lisptype.LispSymbol) and env is not None:
+        lexical = env.find_func(designator)
+        if lexical is not None:
+            return lexical
+    return designator
 
+
+def _condition_of(exc):
+    """The condition object carried by an unwinding exception.
+
+    ConditionException wraps its condition in `.condition`; a plain
+    LispError-style exception (an older raising convention still used in much
+    of the codebase) is itself the condition object.
+    """
+    return exc.condition if isinstance(exc, ConditionException) else exc
+
+
+def _run_handlers_on_unwind(handlers, exc):
+    """Backstop for conditions that reach an establishing form by *unwinding*
+    rather than by being signaled.
+
+    Most of the codebase predates the condition system and reports errors by
+    raising `lisptype.LispError` (and subclasses) directly from Python, never
+    calling SIGNAL/ERROR, so those never reach `signal_condition` and their
+    handlers would otherwise never run at all. This runs them here, on the way
+    out, which is where *all* handlers used to run.
+
+    That is not ANSI semantics -- the protected form's frames are gone by now,
+    so a handler cannot throw into them -- and it is deliberately limited to
+    the raise sites that bypass signaling. Anything that went through
+    `signal_condition` is marked `handlers_run` and skipped here, so no handler
+    ever runs twice for one condition. Migrating those raise sites onto SIGNAL
+    is what would let this function be deleted.
+    """
+    if getattr(exc, 'handlers_run', False):
+        return
+    condition = _condition_of(exc)
+    for handler_type, handler in handlers:
+        if _condition_matches(handler_type, condition):
+            from .evaluation_core import funcall
+            # A handler that transfers control (RETURN-FROM, THROW, ...) simply
+            # propagates out of here, replacing the in-flight exception.
+            funcall(handler, condition)
+
+
+class _HandlerCluster:
+    """Context manager establishing one handler cluster for a dynamic extent.
+
+    Used by HANDLER-BIND, HANDLER-CASE and IGNORE-ERRORS alike so that
+    establishing handlers is one operation with one unwinding discipline,
+    rather than three hand-rolled push/pop pairs.
+    """
+
+    def __init__(self, handlers):
+        self.handlers = handlers
+
+    def __enter__(self):
+        state.handler_stack.append(self.handlers)
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        # Remove by identity rather than popping the end: signal_condition
+        # temporarily removes and restores a suffix of the stack while a
+        # handler runs, and a handler that exits non-locally unwinds through
+        # here mid-restore. Identity keeps this correct without depending on
+        # that interleaving.
+        stack = state.handler_stack
+        for i in range(len(stack) - 1, -1, -1):
+            if stack[i] is self.handlers:
+                del stack[i]
+                return False
+        return False
+
+
+def _apply_report(condition):
+    """Render a simple condition's report into the slot `__str__` reads, and
+    return the condition.
+
+    CLHS 9.1.3: a simple condition reports itself by applying FORMAT to its
+    FORMAT-CONTROL and FORMAT-ARGUMENTS. The two slots keep the *unrendered*
+    control and arguments, so SIMPLE-CONDITION-FORMAT-CONTROL still returns the
+    control string rather than the report.
+
+    Rendering happens here, once, at construction -- not in
+    `Condition.__str__`. `__str__` runs during error reporting and inside
+    ConditionException's own constructor, so calling FORMAT from there would
+    recurse if FORMAT ever signaled while rendering a condition. Without this
+    step every error message printed the raw control string
+    ("~%No test with name ~:@(~S~)." instead of the test's name), because
+    Condition.__str__ returns the message slot verbatim.
+    """
+    from fclpy.lispfunc.io_write import format_fn
+
+    if not isinstance(condition, lisptype.SimpleCondition):
+        return condition
+    control = condition.get_slot('format-control')
+    if not isinstance(control, (str, lisptype.LispString)):
+        # A function format control (FORMATTER's result) is left to whoever
+        # reports the condition; FORMAT dispatches on it directly.
+        return condition
+    condition.message = format_fn(
+        lisptype.NIL, str(control), *(condition.get_slot('format-arguments') or []))
+    return condition
+
+
+def build_condition(datum, arguments, default_class):
+    """Turn an evaluated (DATUM &rest ARGUMENTS) condition designator into a
+    real condition object (CLHS 9.1.2.1).
+
+    `default_class` is the condition type a format-control datum designates,
+    which is the *only* thing that differs between the signaling operators:
+    SIMPLE-ERROR for ERROR and CERROR, SIMPLE-CONDITION for SIGNAL,
+    SIMPLE-WARNING for WARN. Passing it in is what lets all four share one
+    dispatch; previously ERROR/CERROR shared one copy and WARN had a second,
+    near-identical one that had already drifted (it accepted no function
+    format-control), and SIGNAL had no dispatch at all -- it signaled whatever
+    its argument evaluated to, so (signal "a string") produced a generic ERROR
+    and was wrongly caught by (ERROR (C) ...) handlers.
+
+    The datum is always inspected *after* evaluation, so a string datum
+    behaves the same whether it arrived as a literal or through a variable.
+
+    Always returns a `lisptype.Condition`: a designator this function cannot
+    interpret degrades to `default_class` carrying the datum's printed
+    representation rather than being passed through as itself, because a
+    non-condition object signaled as a condition matches no handler at all --
+    not even (T (C) ...) -- and therefore escapes every enclosing handler and
+    aborts the run (plan.md Finding E).
+    """
     if isinstance(datum, lisptype.Condition):
         # Already a condition object (e.g. built earlier by MAKE-CONDITION);
         # signal it as-is.
         return datum
-    elif isinstance(datum, (str, lisptype.LispString)) or callable(datum):
+
+    if isinstance(datum, (str, lisptype.LispString)) or callable(datum):
         # CLHS glossary "format control": a format-control datum is either a
         # string or a function of (stream &rest args) -- e.g. the closure
-        # FORMATTER returns. Both signal a condition of type SIMPLE-ERROR (a
-        # subtype of ERROR, not bare SIMPLE-CONDITION, which handler-case/
-        # handler-bind ERROR clauses would not match). A function datum must
-        # be kept as the function object, not stringified -- FORMAT
-        # dispatches on it directly (CLHS 22.3.1); stringifying it here used
-        # to hand FORMAT the string "<function ... at 0x...>" to interpret as
-        # literal format text, and worse, a non-condition datum with no
-        # matching branch used to be signaled as-is, leaking a raw Python
-        # function through as "the condition object" -- unmatchable by any
-        # handler, escaping every enclosing HANDLER-CASE/HANDLER-BIND and
-        # aborting the whole run (see plan.md Finding E).
+        # FORMATTER returns. A function datum must be kept as the function
+        # object, not stringified, because FORMAT dispatches on it directly
+        # (CLHS 22.3.1); stringifying it here used to hand FORMAT the text
+        # "<function ... at 0x...>" to interpret as a literal format string.
         format_control = str(datum) if isinstance(datum, (str, lisptype.LispString)) else datum
-        format_arguments = []
-        cur = remaining_args_form
-        while _consp_internal(cur):
-            format_arguments.append(eval(car(cur), env))
-            cur = cdr(cur)
-        return lisptype.SimpleError(format_control=format_control, format_arguments=format_arguments)
-    elif isinstance(datum, (lisptype.LispSymbol, lisptype.lispKeyword)):
-        # Per ANSI condition designators, if the (evaluated) datum is a
-        # symbol naming a condition type, build an instance of that type
-        # from the remaining keyword init-args rather than signaling the
-        # bare type-name symbol itself.
-        built = _make_condition_from_designator(datum, remaining_args_form, env)
-        return built if built is not None else datum
-    else:
-        return datum
+        return _apply_report(default_class(format_control=format_control,
+                                          format_arguments=list(arguments)))
+
+    built = make_condition_of_type(datum, arguments)
+    if built is not None:
+        # Per ANSI condition designators, a symbol naming a condition type
+        # designates an instance of that type built from the remaining keyword
+        # init-args -- not the bare type-name symbol itself.
+        return built
+
+    # An unrecognized designator: most often a symbol naming a condition type
+    # that DEFINE-CONDITION accepted but never actually created a class for
+    # (plan.md Finding E, still open -- M8's DEFINE-CONDITION work). Degrading
+    # to `default_class` keeps the "a signaled condition is always a real
+    # condition object" invariant, and keeps the severity right: such a datum
+    # used to become a generic ERROR regardless of which operator signaled it,
+    # so (signal 'undefined-type) was catchable as an ERROR.
+    return default_class(format_control=str(datum), format_arguments=list(arguments))
+
+
+def _build_condition_from_forms(datum_form, remaining_args_form, env, default_class):
+    """Evaluate a signaling operator's datum and argument *forms*, then build
+    the condition they designate. The special-form front end to
+    `build_condition`; the function-designator entry points (`#'ERROR`,
+    `#'SIGNAL`, `#'WARN` in utilities_errors.py) call `build_condition`
+    directly because the registry has already evaluated their arguments.
+    """
+    from .evaluation_core import eval
+
+    datum = eval(datum_form, env)
+    arguments = []
+    cur = remaining_args_form
+    while _consp_internal(cur):
+        arguments.append(eval(car(cur), env))
+        cur = cdr(cur)
+    return build_condition(datum, arguments, default_class)
+
+
+def signal_condition_object(condition):
+    """SIGNAL's runtime behavior for an already-built condition: offer it to
+    the handlers, and if none takes control, return NIL (CLHS SIGNAL).
+
+    SIGNAL returns NIL when no handler transfers control, whether or not any
+    handler ran -- it does not unwind and it does not enter the debugger for a
+    non-serious condition. The previous implementation raised unconditionally,
+    so (signal ...) behaved like ERROR: a declining handler still lost control
+    of the rest of the protected form.
+    """
+    signal_condition(condition)
+    return lisptype.NIL
+
+
+def eval_signal(form, env):
+    """Implement SIGNAL special form.
+
+    Syntax: (SIGNAL datum &rest arguments)
+
+    Signals the condition designated by datum/arguments -- default type
+    SIMPLE-CONDITION, per CLHS -- and returns NIL if no handler transfers
+    control.
+    """
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispNotImplementedError("SIGNAL requires a condition argument")
+
+    condition = _build_condition_from_forms(car(args), cdr(args), env, lisptype.SimpleCondition)
+    return signal_condition_object(condition)
+
+
+def signal_error_object(condition, recoverable=False, continue_format=None):
+    """ERROR's/CERROR's runtime behavior for an already-built condition: offer
+    it to the handlers first, and only if none takes control unwind by raising.
+
+    ERROR never returns (CLHS): if every handler declines, the condition goes
+    to the debugger, which here means propagating out as a ConditionException.
+    That raise happens *after* the handler walk, not instead of it, which is
+    the point -- a handler now runs while the signaling form's CATCH,
+    RESTART-CASE and UNWIND-PROTECT frames are all still live.
+
+    The raised exception is marked `handlers_run` so the unwinding backstop in
+    HANDLER-BIND/HANDLER-CASE (still needed for raise sites that bypass
+    signaling entirely -- see eval_handler_bind) can tell "already offered to
+    the handlers and declined" from "never offered", and so never runs a
+    handler twice for one condition.
+    """
+    exception = ConditionException(condition, recoverable=recoverable)
+    exception.handlers_run = True
+    if continue_format is not None:
+        exception.continue_format = continue_format
+    signal_condition(condition)
+    raise exception
 
 
 def eval_error(form, env):
@@ -159,18 +395,17 @@ def eval_error(form, env):
 
     Syntax: (ERROR) or (ERROR condition-object) or (ERROR format-control &rest format-arguments)
 
-    Signal an error condition. This is like SIGNAL but the condition must be handled,
-    or the program is aborted.
+    Signals the error designated by datum/arguments -- default type
+    SIMPLE-ERROR -- and does not return.
     """
     args = cdr(form)
 
     # If no arguments, create a generic error
     if not _consp_internal(args):
-        condition = lisptype.Error(message="Unspecified error")
-        raise ConditionException(condition, recoverable=False)
+        return signal_error_object(lisptype.Error(message="Unspecified error"))
 
-    condition = _build_condition_from_datum(car(args), cdr(args), env)
-    raise ConditionException(condition, recoverable=False)
+    condition = _build_condition_from_forms(car(args), cdr(args), env, lisptype.SimpleError)
+    return signal_error_object(condition)
 
 
 def eval_cerror(form, env):
@@ -192,69 +427,38 @@ def eval_cerror(form, env):
     # from a variable building a proper SIMPLE-ERROR.
     remaining_args_form = cdr(cdr(args))
 
-    try:
-        condition = _build_condition_from_datum(condition_form, remaining_args_form, env)
-    except ConditionException as e:
-        # If evaluating the argument raises a condition, use that condition
-        condition = e.condition
+    condition = _build_condition_from_forms(
+        condition_form, remaining_args_form, env, lisptype.SimpleError)
 
-    if not isinstance(condition, lisptype.Condition):
-        condition = lisptype.Error(message=str(condition))
-
-    # Mark this as recoverable with a continue restart
-    exception = ConditionException(condition, recoverable=True)
-    exception.continue_format = continue_format
-    raise exception
-
-
-def _make_condition_from_evaluated_designator(type_name_symbol, arguments):
-    """Like `_make_condition_from_designator`, but for a condition-type
-    designator whose init-args have already been evaluated (the case for
-    ordinary function calls, e.g. `(funcall #'warn 'my-warning :foo 1)`,
-    where the registry evaluates all arguments before the call).
-    """
-    condition_class = _condition_class_for_name(type_name_symbol.name)
-    if condition_class is None:
-        return None
-
-    kwargs = {}
-    it = iter(arguments)
-    for key in it:
-        value = next(it, lisptype.NIL)
-        if isinstance(key, (lisptype.LispSymbol, lisptype.lispKeyword)):
-            kwargs[key.name.lower().replace('-', '_')] = value
-    return condition_class(**kwargs)
+    # Recoverable: CERROR's condition carries a CONTINUE restart. Handlers get
+    # to run before any unwinding, same as ERROR.
+    return signal_error_object(condition, recoverable=True, continue_format=continue_format)
 
 
 def signal_warning(datum, arguments):
-    """Build the warning condition for WARN's (DATUM &rest ARGUMENTS) designator,
-    print it, and return NIL. Shared by both the WARN special form (eval_warn,
-    for unevaluated call sites) and the WARN function designator (warn_fn in
-    utilities_errors.py, used by FUNCALL/APPLY/#'WARN) so there is exactly one
-    place that knows how a warning is built and reported.
+    """WARN's runtime behavior: build the warning designated by an already
+    evaluated (DATUM &rest ARGUMENTS), offer it to the handlers, and report it
+    on *ERROR-OUTPUT* only if no handler took control. Returns NIL.
 
-    Real handler-stack dispatch (so HANDLER-BIND/MUFFLE-WARNING can intercept
-    this before it prints) requires the signal-before-unwind rewrite planned
-    for M8; until then this always prints, matching WARN's unhandled behavior.
+    Shared by the WARN special form (eval_warn) and the WARN function
+    designator (warn_fn in utilities_errors.py, used by FUNCALL/APPLY/#'WARN)
+    so there is exactly one place that knows how a warning is built and
+    reported. Condition construction is now `build_condition`'s job, the same
+    dispatch ERROR/CERROR/SIGNAL use, rather than a fourth private copy of it.
+
+    Now that handlers run before unwinding, a HANDLER-BIND on WARNING /
+    SIMPLE-WARNING / STYLE-WARNING actually sees the warning and can transfer
+    control out of it -- previously WARN never consulted a handler at all and
+    unconditionally printed.
     """
-    from fclpy.lispfunc.io_write import format_fn
+    condition = build_condition(datum, arguments, lisptype.SimpleWarning)
+    signal_condition(condition)
 
-    if isinstance(datum, (str, lisptype.LispString)):
-        control_str = str(datum)
-        message = format_fn(lisptype.NIL, control_str, *arguments)
-        condition = lisptype.SimpleWarning(format_control=control_str, format_arguments=list(arguments))
-    elif isinstance(datum, lisptype.Condition):
-        condition = datum
-        message = str(datum)
-    elif isinstance(datum, (lisptype.LispSymbol, lisptype.lispKeyword)):
-        built = _make_condition_from_evaluated_designator(datum, arguments)
-        condition = built if built is not None else lisptype.Warning(message=str(datum))
-        message = str(condition)
-    else:
-        condition = lisptype.Warning(message=str(datum))
-        message = str(condition)
-
-    print(f"Warning: {message}")
+    # No handler transferred control, so WARN reports the warning itself.
+    # MUFFLE-WARNING -- the restart that suppresses this report -- needs the
+    # restart system M8's second half covers; until then a declining handler
+    # cannot suppress the report, which is WARN's correct *unhandled* behavior.
+    print(f"Warning: {condition}")
     return lisptype.NIL
 
 
@@ -695,6 +899,14 @@ def eval_handler_bind(form, env):
     Note: bindings may be NIL (empty), which is common for #+/-sbcl conditional
     code that excludes certain bindings for non-SBCL implementations; an empty
     binding list simply means nothing here can handle the condition.
+
+    Implementation: the bindings are pushed onto `state.handler_stack` for the
+    dynamic extent of the body and invoked by `signal_condition` at the signal
+    point. HANDLER-BIND itself catches nothing -- which is exactly why a
+    handler can now THROW to a tag or invoke a restart established *inside*
+    the protected form (ANSI test HANDLER-BIND.13). Running handlers from a
+    Python `except` here, as this used to, meant those frames were already
+    gone (plan.md Finding E).
     """
     from .evaluation_core import eval
 
@@ -705,15 +917,14 @@ def eval_handler_bind(form, env):
     bindings = car(args)
     body = cdr(args)
 
-    parsed_bindings = []
+    handlers = []
     current = bindings
     while _consp_internal(current):
         binding = car(current)
         if _consp_internal(binding) and _consp_internal(cdr(binding)):
             condition_type = car(binding)
             handler_form = car(cdr(binding))
-            handler_fn = eval(handler_form, env)
-            parsed_bindings.append((condition_type, handler_fn))
+            handlers.append((condition_type, _resolve_handler(eval(handler_form, env), env)))
         current = cdr(current)
 
     def run_body():
@@ -724,175 +935,181 @@ def eval_handler_bind(form, env):
             cur = cdr(cur)
         return result
 
+    # The try/except sits *outside* the `with` so the cluster is already
+    # disestablished if the legacy backstop below has to run a handler.
     try:
-        return run_body()
+        with _HandlerCluster(handlers):
+            return run_body()
     except (ConditionException, lisptype.LispError) as exc:
-        # ConditionException wraps its condition in `.condition`; plain
-        # LispError-style exceptions (an older raising convention still used
-        # in parts of the codebase) are themselves the condition object.
-        cond_obj = exc.condition if isinstance(exc, ConditionException) else exc
-        for condition_type, handler_fn in parsed_bindings:
-            if isinstance(condition_type, lisptype.LispSymbol) and _condition_matches(condition_type.name, cond_obj):
-                if callable(handler_fn):
-                    # If the handler performs a non-local exit (RETURN-FROM,
-                    # THROW, invoking a restart, ...) that exception simply
-                    # propagates out of this call and out of eval_handler_bind.
-                    handler_fn(cond_obj)
-        # No matching handler transferred control: continue signaling outward.
+        _run_handlers_on_unwind(handlers, exc)
         raise
+
+
+def _run_handler_case_clause(clause, condition, env):
+    """Evaluate one HANDLER-CASE clause body, binding its optional variable to
+    the condition. Runs after unwinding, with the handlers disestablished.
+    """
+    from .evaluation_core import eval
+
+    var_list = car(cdr(clause))
+    clause_body = cdr(cdr(clause))
+
+    new_env = lisptype.Environment(parent=env)
+    if _consp_internal(var_list):
+        new_env.add_variable(car(var_list), condition)
+
+    result = lisptype.NIL
+    while _consp_internal(clause_body):
+        result = eval(car(clause_body), new_env)
+        clause_body = cdr(clause_body)
+    return result
 
 
 def eval_handler_case(form, env):
     """Implement HANDLER-CASE special form.
-    
+
     Syntax: (HANDLER-CASE expression
               (condition-type ([var]) form*) ...)
-    
-    Evaluates expression. If a condition of one of the specified types is signaled,
-    control transfers to the corresponding handler clause and the forms are evaluated.
-    
-    For now, this is a minimal implementation.
+
+    Evaluates expression. If a condition of one of the specified types is
+    signaled, the stack unwinds back to this form and the matching clause's
+    body is evaluated, with `var` (if given) bound to the condition.
+
+    Implementation: HANDLER-CASE establishes a handler cluster like
+    HANDLER-BIND does, whose handlers immediately transfer control back here
+    (CLHS defines HANDLER-CASE in exactly those terms). Sharing one mechanism
+    is what makes handler *ordering* right between the two forms: an inner
+    HANDLER-BIND handler must get the condition before an outer HANDLER-CASE
+    clause, which cannot happen while one form walks a handler stack and the
+    other catches a Python exception. The clause body runs outside the `with`,
+    so the handlers are disestablished first, as ANSI requires.
     """
     from .evaluation_core import eval
-    
+
     args = cdr(form)
-    
+
     if not _consp_internal(args):
         return lisptype.NIL
-    
+
     expression = car(args)
     clauses = cdr(args)
 
-    matches_condition_type = _condition_matches
+    tag = HandlerCaseTag()
+    handlers = []
+    clause_list = []
+    current = clauses
+    while _consp_internal(current):
+        clause = car(current)
+        if _consp_internal(clause):
+            clause_list.append(clause)
+
+            def make_handler(the_clause):
+                def transfer(condition):
+                    raise HandlerCaseTransfer(tag, the_clause, condition)
+                return transfer
+
+            handlers.append((car(clause), make_handler(clause)))
+        current = cdr(current)
 
     try:
-        # Try to evaluate the expression
-        return eval(expression, env)
+        with _HandlerCluster(handlers):
+            return eval(expression, env)
+    except HandlerCaseTransfer as transfer:
+        if transfer.tag is not tag:
+            # Belongs to an enclosing HANDLER-CASE; let it through.
+            raise
+        return _run_handler_case_clause(transfer.clause, transfer.condition, env)
     except ThrowException as e:
-        # Uncaught THROW - convert to a CONTROL-ERROR condition
+        # An uncaught THROW is a CONTROL-ERROR (CLHS 5.2). Converting it here
+        # rather than at the THROW itself is a known approximation: it needs a
+        # catch-tag stack to know at throw time that no tag matches (M7). A
+        # clause matching CONTROL-ERROR therefore still gets a chance.
         control_error = lisptype.ControlError(message=f"Uncaught THROW {e.tag}")
-        ce = ConditionException(control_error, recoverable=False)
-        cond_obj = ce.condition
-        current = clauses
-        while _consp_internal(current):
-            clause = car(current)
-            if _consp_internal(clause):
-                condition_type = car(clause)
-                # Check if this clause matches the condition
-                if isinstance(condition_type, lisptype.LispSymbol):
-                    if matches_condition_type(condition_type.name, cond_obj):
-                        var_list = car(cdr(clause))
-                        clause_body = cdr(cdr(clause))
-
-                        # Create new environment with optional condition variable
-                        new_env = lisptype.Environment(parent=env)
-                        if _consp_internal(var_list):
-                            var = car(var_list)
-                            # Store the condition object in the variable
-                            new_env.add_variable(var, cond_obj)
-
-                        # Evaluate clause body
-                        result = lisptype.NIL
-                        while _consp_internal(clause_body):
-                            result = eval(car(clause_body), new_env)
-                            clause_body = cdr(clause_body)
-                        return result
-            current = cdr(current)
-        # No handler found for the condition; re-raise as ConditionException
-        raise ce
-    except ConditionException as ce:
-        # A Lisp condition was signaled; try to match clauses against the condition object
-        cond_obj = ce.condition
-        current = clauses
-        while _consp_internal(current):
-            clause = car(current)
-            if _consp_internal(clause):
-                condition_type = car(clause)
-                # Check if this clause matches the condition
-                if isinstance(condition_type, lisptype.LispSymbol):
-                    if matches_condition_type(condition_type.name, cond_obj):
-                        var_list = car(cdr(clause))
-                        clause_body = cdr(cdr(clause))
-
-                        # Create new environment with optional condition variable
-                        new_env = lisptype.Environment(parent=env)
-                        if _consp_internal(var_list):
-                            var = car(var_list)
-                            # Store the condition object in the variable
-                            new_env.add_variable(var, cond_obj)
-
-                        # Evaluate clause body
-                        result = lisptype.NIL
-                        while _consp_internal(clause_body):
-                            result = eval(car(clause_body), new_env)
-                            clause_body = cdr(clause_body)
-                        return result
-            current = cdr(current)
-        # No handler found for the condition; re-raise the original exception
+        for clause in clause_list:
+            if _condition_matches(car(clause), control_error):
+                return _run_handler_case_clause(clause, control_error, env)
         raise
-    except lisptype.LispError as e:
-        # Legacy behavior: handle LispError exceptions similarly
-        current = clauses
-        while _consp_internal(current):
-            clause = car(current)
-            if _consp_internal(clause):
-                condition_type = car(clause)
-                # Check if this clause matches the error
-                if isinstance(condition_type, lisptype.LispSymbol):
-                    if matches_condition_type(condition_type.name, e):
-                        # This clause handles the error
-                        var_list = car(cdr(clause))
-                        clause_body = cdr(cdr(clause))
-
-                        # Create new environment with optional error variable
-                        new_env = lisptype.Environment(parent=env)
-                        if _consp_internal(var_list):
-                            var = car(var_list)
-                            # Store the actual exception object, not just its string
-                            new_env.add_variable(var, e)
-
-                        # Evaluate clause body
-                        result = lisptype.NIL
-                        while _consp_internal(clause_body):
-                            result = eval(car(clause_body), new_env)
-                            clause_body = cdr(clause_body)
-                        return result
-            current = cdr(current)
-        # No handler found, re-raise
+    except (ConditionException, lisptype.LispError) as exc:
+        # Backstop for conditions raised without being signaled -- see
+        # _run_handlers_on_unwind. For HANDLER-CASE this is semantically fine
+        # (HANDLER-CASE unwinds before running its clause anyway), so matching
+        # here yields correct behavior rather than an approximation.
+        if getattr(exc, 'handlers_run', False):
+            raise
+        condition = _condition_of(exc)
+        for clause in clause_list:
+            if _condition_matches(car(clause), condition):
+                return _run_handler_case_clause(clause, condition, env)
         raise
 
 
 def eval_ignore_errors(form, env):
     """Implement IGNORE-ERRORS special form.
-    
+
     Syntax: (IGNORE-ERRORS form*)
-    
+
     Evaluates the body forms in sequence. If any form signals an error,
     execution stops and IGNORE-ERRORS returns two values: NIL and the
-    condition object. If no error occurs, returns the primary value of
-    the last form and NIL.
-    
-    Returns: MultipleValues(primary-value, condition-or-nil)
+    condition object. If no error occurs, returns the primary value of the
+    last form and NIL.
+
+    CLHS defines this as (HANDLER-CASE (PROGN form*) (ERROR (C) (VALUES NIL
+    C))), and that is how it is implemented -- as an ERROR handler on the same
+    handler stack -- so it participates in handler ordering like any other
+    establishing form instead of being a third, independent way to intercept
+    errors.
+
+    Two defects this replaces, both of the "catches too much" kind: the
+    previous `except Exception` swallowed the control-transfer exceptions as
+    well, so (IGNORE-ERRORS (RETURN-FROM F 1)) silently discarded the
+    RETURN-FROM (the same defect as plan.md Finding K's `funcall` bug); and it
+    returned `str(e)` as the second value, i.e. a Python string where ANSI
+    requires the condition object.
     """
     from .evaluation_core import eval
-    
+
     args = cdr(form)
-    
+    tag = HandlerCaseTag()
+
+    def transfer(condition):
+        raise HandlerCaseTransfer(tag, None, condition)
+
+    handlers = [('ERROR', transfer)]
+
     try:
-        # Evaluate body forms
-        result = lisptype.NIL
-        while _consp_internal(args):
-            result = eval(car(args), env)
-            args = cdr(args)
-        
-        # Success: return primary value and NIL
-        return lisptype.MultipleValues(result, lisptype.NIL)
-    
-    except Exception as e:
-        # Error occurred: return NIL and the condition
-        # Convert Python exception to a string representation
-        condition = str(e) if not isinstance(e, lisptype.LispError) else e
-        return lisptype.MultipleValues(lisptype.NIL, condition)
+        with _HandlerCluster(handlers):
+            result = lisptype.NIL
+            cur = args
+            while _consp_internal(cur):
+                result = eval(car(cur), env)
+                cur = cdr(cur)
+            return lisptype.MultipleValues(result, lisptype.NIL)
+    except HandlerCaseTransfer as transferred:
+        if transferred.tag is not tag:
+            raise
+        return lisptype.MultipleValues(lisptype.NIL, transferred.condition)
+    except (ConditionException, lisptype.LispError) as exc:
+        # Raised without being signaled -- see _run_handlers_on_unwind.
+        if getattr(exc, 'handlers_run', False):
+            raise
+        condition = _condition_of(exc)
+        if _condition_matches('ERROR', condition):
+            return lisptype.MultipleValues(lisptype.NIL, condition)
+        raise
+    except (ReturnFromException, ThrowException, GoException):
+        # Non-local control transfers are not conditions and must pass through.
+        raise
+    except Exception as exc:  # noqa: BLE001
+        # A bare Python exception escaping the evaluator is an fclpy bug, not a
+        # Lisp condition. It is converted here rather than passed through so a
+        # single interpreter defect cannot abort a whole ANSI suite run, but it
+        # is converted into a *real* condition object so nothing downstream
+        # sees a Python value. plan.md's M0 structural observation asks for
+        # this conversion to happen once at the EVAL boundary instead; when it
+        # does, this clause should be deleted rather than kept in parallel.
+        return lisptype.MultipleValues(
+            lisptype.NIL,
+            lisptype.Error(message=f"{type(exc).__name__}: {exc}"))
 
 
 __all__ = [

@@ -28,7 +28,10 @@ class TestConditionHierarchy:
     
     def test_simple_condition(self):
         """Create a simple condition with format string."""
-        cond = SimpleCondition("Error: ~A", format_control="Error: ~A")
+        # SIMPLE-CONDITION's first parameter is FORMAT-CONTROL (the slot CLHS
+        # gives the type), shared with SIMPLE-ERROR/SIMPLE-WARNING which
+        # inherit the initializer from it.
+        cond = SimpleCondition("Error: ~A")
         assert cond.get_slot('format-control') == "Error: ~A"
         assert isinstance(cond, SimpleCondition)
         assert isinstance(cond, Condition)

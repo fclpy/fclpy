@@ -125,11 +125,20 @@ class TestValuesListFunction:
     """Test the VALUES-LIST function."""
     
     def test_values_list_empty(self, env):
-        """(VALUES-LIST NIL) returns NIL."""
+        """(VALUES-LIST NIL) returns ZERO values, exactly like (VALUES).
+
+        CLHS: (values-list list) is equivalent to (apply #'values list), so an
+        empty list yields no values at all. This used to assert `result is NIL`
+        -- one value -- which contradicted this file's own
+        `test_values_no_args`, where zero values are represented as an empty
+        MultipleValues.
+        """
         form = cons(ls('VALUES-LIST'), cons(NIL, NIL))
         result = eval(form, env)
-        assert result is NIL
-    
+        # Same representation test_values_no_args uses for (VALUES).
+        assert isinstance(result, MultipleValues)
+        assert result.get_all() == ()
+
     def test_values_list_single(self, env):
         """(VALUES-LIST '(42)) returns single value or MultipleValues."""
         # Use QUOTE to construct the list

@@ -736,27 +736,16 @@ class Condition(lispT):
 
 
 class SimpleCondition(Condition):
-    """A simple condition with just a message."""
-    pass
+    """CLHS SIMPLE-CONDITION: the condition type that owns the FORMAT-CONTROL
+    and FORMAT-ARGUMENTS slots, and the type SIGNAL builds by default from a
+    format-control datum.
 
-
-class Warning(Condition):
-    """Base class for warning conditions."""
-    pass
-
-
-class SimpleWarning(Warning, SimpleCondition):
-    """Simple warning condition with format control and arguments.
-
-    This is used for warnings created with the SIMPLE-WARNING type specifier,
-    and by WARN when its datum is a format-control string.
-
-    CLHS Figure 9-1 defines simple-warning's superclass list as (WARNING
-    SIMPLE-CONDITION) -- true multiple inheritance, not just WARNING. Every
-    accessor and TYPEP/HANDLER-CASE clause keyed on SIMPLE-CONDITION (the ANSI
-    suite's own FROB-SIMPLE-CONDITION helper, for one) depends on that second
-    parent; without it (typep <simple-warning> 'simple-condition) is NIL.
+    SIMPLE-ERROR and SIMPLE-WARNING get these slots by inheriting from this
+    class (CLHS Figure 9-1 lists both as (<parent> SIMPLE-CONDITION)), which is
+    why the initializer lives here rather than being repeated in each of them
+    as it previously was.
     """
+
     def __init__(self, format_control="", format_arguments=None, message="", **kwargs):
         # format_control may be a function (CLHS format-control designator,
         # e.g. FORMATTER's result) rather than a string; __str__ must always
@@ -774,8 +763,64 @@ class SimpleWarning(Warning, SimpleCondition):
         self._slots['format-arguments'] = format_arguments or []
 
 
-class Error(Condition, BaseException):
-    """Base class for error conditions."""
+class SeriousCondition(Condition):
+    """CLHS Figure 9-1: SERIOUS-CONDITION, a direct subtype of CONDITION and
+    the supertype of both ERROR and STORAGE-CONDITION.
+
+    "Serious" is the property SIGNAL keys off: a serious condition that no
+    handler handles enters the debugger, while a non-serious one makes SIGNAL
+    simply return NIL. It also exists so (typep c 'serious-condition) and a
+    (SERIOUS-CONDITION (C) ...) handler clause work at all -- before this class
+    existed the name resolved to no Python class and every such test silently
+    took the "not a subtype" branch.
+    """
+    pass
+
+
+class StorageCondition(SeriousCondition):
+    """CLHS STORAGE-CONDITION: a serious condition, but deliberately *not* an
+    ERROR, so an (ERROR (C) ...) handler must not catch it."""
+    pass
+
+
+class Warning(Condition):
+    """Base class for warning conditions."""
+    pass
+
+
+class StyleWarning(Warning):
+    """CLHS STYLE-WARNING: a WARNING subtype for stylistic problems.
+
+    The ANSI suite's own RT harness binds a STYLE-WARNING handler around every
+    test it runs (`rt.lsp`'s do-entry), so this type name is consulted 22036
+    times per full suite run.
+    """
+    pass
+
+
+class SimpleWarning(Warning, SimpleCondition):
+    """Simple warning condition with format control and arguments.
+
+    This is used for warnings created with the SIMPLE-WARNING type specifier,
+    and by WARN when its datum is a format-control string.
+
+    CLHS Figure 9-1 defines simple-warning's superclass list as (WARNING
+    SIMPLE-CONDITION) -- true multiple inheritance, not just WARNING. Every
+    accessor and TYPEP/HANDLER-CASE clause keyed on SIMPLE-CONDITION (the ANSI
+    suite's own FROB-SIMPLE-CONDITION helper, for one) depends on that second
+    parent; without it (typep <simple-warning> 'simple-condition) is NIL.
+    The FORMAT-CONTROL/FORMAT-ARGUMENTS initializer comes from SimpleCondition.
+    """
+    pass
+
+
+class Error(SeriousCondition, BaseException):
+    """Base class for error conditions.
+
+    CLHS Figure 9-1 makes ERROR a subtype of SERIOUS-CONDITION, not a direct
+    subtype of CONDITION; inheriting through SeriousCondition is what makes
+    (typep <any-error> 'serious-condition) true, as ANSI requires.
+    """
     pass
 
 
@@ -787,6 +832,55 @@ class TypeError(Error):
         super().__init__(message, **kwargs)
         self._slots['datum'] = datum
         self._slots['expected-type'] = expected_type
+
+
+class SimpleTypeError(TypeError, SimpleCondition):
+    """CLHS Figure 9-1: SIMPLE-TYPE-ERROR is (TYPE-ERROR SIMPLE-CONDITION), so
+    it carries both the DATUM/EXPECTED-TYPE slots and the FORMAT-CONTROL/
+    FORMAT-ARGUMENTS pair."""
+    def __init__(self, datum=None, expected_type=None, format_control="",
+                 format_arguments=None, message="", **kwargs):
+        if not message and format_control and isinstance(format_control, (str, LispString)):
+            message = str(format_control)
+        super().__init__(datum=datum, expected_type=expected_type, message=message, **kwargs)
+        self._slots['format-control'] = format_control
+        self._slots['format-arguments'] = format_arguments or []
+
+
+class CellError(Error):
+    """CLHS CELL-ERROR: the supertype of UNBOUND-VARIABLE, UNDEFINED-FUNCTION
+    and UNBOUND-SLOT, carrying the NAME slot they all share (CELL-ERROR-NAME).
+    """
+    def __init__(self, name=None, message="", **kwargs):
+        if not message and name is not None:
+            message = f"Cell error: {name}"
+        super().__init__(message, **kwargs)
+        if name is not None:
+            self._slots['name'] = name
+
+
+class PackageError(Error):
+    """CLHS PACKAGE-ERROR, with the PACKAGE-ERROR-PACKAGE slot."""
+    def __init__(self, package=None, message="", **kwargs):
+        if not message and package is not None:
+            message = f"Package error: {package}"
+        super().__init__(message, **kwargs)
+        if package is not None:
+            self._slots['package'] = package
+
+
+class ParseError(Error):
+    """CLHS PARSE-ERROR: a parsing failure; supertype of READER-ERROR."""
+    pass
+
+
+class PrintNotReadable(Error):
+    """CLHS PRINT-NOT-READABLE, with the PRINT-NOT-READABLE-OBJECT slot."""
+    def __init__(self, object=None, message="", **kwargs):
+        if not message:
+            message = "Object cannot be printed readably"
+        super().__init__(message, **kwargs)
+        self._slots['object'] = object
 
 
 class ProgramError(Error):
@@ -817,26 +911,44 @@ class EndOfFile(StreamError):
             self._slots['stream'] = stream
 
 
-class UndefinedFunction(Error):
-    """Condition for undefined-function errors."""
+class ReaderError(ParseError, StreamError):
+    """CLHS Figure 9-1: READER-ERROR is (PARSE-ERROR STREAM-ERROR) -- true
+    multiple inheritance, so an (ERROR (C) ...), a (PARSE-ERROR (C) ...) and a
+    (STREAM-ERROR (C) ...) clause must all match it."""
+    def __init__(self, stream=None, message="Reader error", **kwargs):
+        super().__init__(message, **kwargs)
+        if stream is not None:
+            self._slots['stream'] = stream
+
+
+class UndefinedFunction(CellError):
+    """Condition for undefined-function errors.
+
+    CLHS Figure 9-1: a subtype of CELL-ERROR (which is where the NAME slot and
+    CELL-ERROR-NAME come from), not a direct subtype of ERROR.
+    """
     def __init__(self, name=None, message=None, **kwargs):
         if message is None:
             message = f"Undefined function: {name}" if name is not None else "Undefined function"
-        super().__init__(message, **kwargs)
-        if name is not None:
-            # store the function name in a slot for handlers
-            self._slots['name'] = name
+        super().__init__(name=name, message=message, **kwargs)
 
 
-class UnboundVariable(Error):
-    """Condition for unbound-variable errors."""
+class UnboundVariable(CellError):
+    """Condition for unbound-variable errors (CLHS: a CELL-ERROR subtype)."""
     def __init__(self, name=None, message=None, **kwargs):
         if message is None:
             message = f"Unbound variable: {name}" if name is not None else "Unbound variable"
-        super().__init__(message, **kwargs)
-        if name is not None:
-            # store the symbol (or name) in a slot for handlers to inspect
-            self._slots['name'] = name
+        super().__init__(name=name, message=message, **kwargs)
+
+
+class UnboundSlot(CellError):
+    """CLHS UNBOUND-SLOT: a CELL-ERROR subtype with the additional
+    UNBOUND-SLOT-INSTANCE slot naming the object whose slot was unbound."""
+    def __init__(self, name=None, instance=None, message=None, **kwargs):
+        if message is None:
+            message = f"Unbound slot: {name}" if name is not None else "Unbound slot"
+        super().__init__(name=name, message=message, **kwargs)
+        self._slots['instance'] = instance
 
 
 class ArithmeticError(Error):
@@ -872,6 +984,12 @@ class FloatingPointUnderflow(ArithmeticError):
     pass
 
 
+class FloatingPointInexact(ArithmeticError):
+    """CLHS FLOATING-POINT-INEXACT, completing Figure 9-1's four
+    FLOATING-POINT-* ARITHMETIC-ERROR subtypes."""
+    pass
+
+
 class SimpleError(Error, SimpleCondition):
     """Simple error condition with format control and arguments.
 
@@ -882,22 +1000,9 @@ class SimpleError(Error, SimpleCondition):
     accessor and TYPEP/HANDLER-CASE clause keyed on SIMPLE-CONDITION (the ANSI
     suite's own FROB-SIMPLE-CONDITION helper, for one) depends on that second
     parent; without it (typep <simple-error> 'simple-condition) is NIL.
+    The FORMAT-CONTROL/FORMAT-ARGUMENTS initializer comes from SimpleCondition.
     """
-    def __init__(self, format_control="", format_arguments=None, message="", **kwargs):
-        # format_control may be a function (CLHS format-control designator,
-        # e.g. FORMATTER's result) rather than a string; __str__ must always
-        # return a plain str, so only borrow it as the message when it is
-        # string-like, and coerce a LispString (a distinct class with no str
-        # base -- see plan.md Finding I) to str -- storing the LispString
-        # object itself as `message` would make str(condition) raise
-        # "__str__ returned non-string (type LispString)" the moment
-        # anything printed or matched the condition. A callable format
-        # control leaves message empty rather than crashing the same way.
-        if not message and format_control and isinstance(format_control, (str, LispString)):
-            message = str(format_control)
-        super().__init__(message, **kwargs)
-        self._slots['format-control'] = format_control
-        self._slots['format-arguments'] = format_arguments or []
+    pass
 
 
 def resolve_environment(env=None):
@@ -1033,12 +1138,16 @@ __all__ = [
     'Package', 'KEYWORD_PACKAGE', 'COMMON_LISP_PACKAGE', 'COMMON_LISP_USER_PACKAGE',
     'FCLPY_INTERNAL_PACKAGE',
     'make_package', 'find_package', 'intern_symbol', 'intern_keyword',
-    # Conditions (ANSI condition system)
-    'Condition', 'SimpleCondition', 'SimpleError', 'Warning', 'SimpleWarning', 'Error',
-    'TypeError', 'ProgramError', 'ControlError', 'FileError', 'StreamError',
+    # Conditions (ANSI condition system -- CLHS Figure 9-1)
+    'Condition', 'SimpleCondition', 'SeriousCondition', 'StorageCondition',
+    'SimpleError', 'Warning', 'StyleWarning', 'SimpleWarning', 'Error',
+    'TypeError', 'SimpleTypeError', 'ProgramError', 'ControlError', 'FileError',
+    'StreamError', 'ReaderError', 'ParseError', 'PrintNotReadable',
+    'CellError', 'PackageError',
     'EndOfFile', 'ArithmeticError', 'DivisionByZero',
-    'UndefinedFunction','UnboundVariable',
+    'UndefinedFunction', 'UnboundVariable', 'UnboundSlot',
     'FloatingPointInvalidOperation', 'FloatingPointOverflow', 'FloatingPointUnderflow',
+    'FloatingPointInexact',
     # Restarts
     'Restart', 'RestartException',
     # Utilities

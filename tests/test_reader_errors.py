@@ -2,9 +2,21 @@
 Tests for reader error handling.
 
 Tests that appropriate exceptions are raised for malformed input.
+
+WARNING -- these tests exercise `fclpy.reader`, which is NOT the reader the
+implementation uses. The live reader is `fclpy.tokenizer` -> `fclpy.lispreader`
+-> `fclpy.readtable` (see CLAUDE.md's architecture map); `fclpy.reader` is a
+separate ~480-line implementation that no module under `fclpy/` imports -- only
+four test files do (this one, test_printer.py, test_reader_and_packages.py,
+test_roundtrip.py). So ~177 tests here cover a dead duplicate while the real
+reader goes untested at the unit level, and the two disagree on conformance:
+`fclpy.reader` splits "123abc" into 123, the real reader correctly returns the
+symbol |123ABC|. Repointing these at the live reader (or retiring the duplicate)
+is tracked in plan.md; until then, treat green here as evidence about dead code.
 """
 
 import pytest
+from fclpy.lisptype import LispSymbol
 from fclpy.reader import (
     Reader, read, read_all,
     ReaderError, UnexpectedEOF, UnbalancedParen, InvalidNumber
@@ -99,20 +111,42 @@ class TestDottedListErrors:
 class TestInvalidNumberErrors:
     """Test handling of invalid numbers."""
     
+    # CLHS 2.3.1: token accumulation stops only at whitespace or a terminating
+    # macro character, so "123abc" and "1.2.3" are each ONE token. Neither is a
+    # potential number (CLHS 2.3.1.1 -- "abc" is three adjacent letters, so they
+    # are not number markers), so both are read as symbols. A reader must never
+    # split a token at a digit/letter boundary.
+    #
+    # These two tests previously asserted the opposite: that "123abc" reads as
+    # the integer 123. The other one asserted `result is not None or result is
+    # None`, a tautology that could not fail. Both now state the ANSI answer and
+    # are marked xfail(strict) against `fclpy.reader`, so they will start failing
+    # -- loudly, as unexpected passes -- the moment that module is fixed or
+    # retired, instead of certifying the bug as correct.
+    #
+    # NOTE: the *real* reader (fclpy.tokenizer -> fclpy.lispreader), the one the
+    # ANSI suite runs through, already gets both of these right: it returns the
+    # symbols |123ABC| and |1.2.3|. `fclpy.reader` is a separate 480-line
+    # implementation that no production code imports -- see the note at the top
+    # of this file.
+
+    @pytest.mark.xfail(strict=True,
+                       reason="fclpy.reader splits '1.2.3' into the float 1.2; "
+                              "ANSI reads it as the symbol |1.2.3|")
     def test_invalid_float_format(self):
-        """Test invalid float format (not actually caught by tokenizer)."""
-        # The tokenizer handles this, but we test reader behavior
-        result = read("1.2.3")  # This should fail or be two tokens
-        # Depends on tokenizer implementation
-        # For now, just verify reader doesn't crash
-        assert result is not None or result is None
-    
+        """"1.2.3" is a single token and reads as a symbol, not a float."""
+        result = read("1.2.3")
+        assert isinstance(result, LispSymbol)
+        assert result.name == "1.2.3"
+
+    @pytest.mark.xfail(strict=True,
+                       reason="fclpy.reader splits '123abc' into the integer 123; "
+                              "ANSI reads it as the symbol |123ABC|")
     def test_number_with_invalid_suffix(self):
-        """Test that numbers are parsed separately from following symbols."""
-        # "123abc" gets tokenized as 123 (integer) followed by "abc" (symbol)
+        """"123abc" is a single token and reads as a symbol, not an integer."""
         result = read("123abc")
-        # read() gets just the first token
-        assert result == 123  # Tokenizer reads just the number part
+        assert isinstance(result, LispSymbol)
+        assert result.name == "123ABC"
 
 
 class TestErrorMessages:

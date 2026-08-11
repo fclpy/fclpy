@@ -54,11 +54,44 @@ class TestErrorFunction:
 
 
 class TestSignalFunction:
-    """Test SIGNAL function for raising recoverable conditions."""
-    
-    def test_signal_with_error_object(self, env):
-        """SIGNAL raises a ConditionException with recoverable=True."""
-        # Create form: (SIGNAL (ERROR))
+    """Test SIGNAL, which offers a condition to the handlers without unwinding."""
+
+    def test_signal_returns_nil_when_unhandled(self, env):
+        """(SIGNAL datum) returns NIL if no handler transfers control.
+
+        CLHS SIGNAL: signaling a condition no handler handles simply returns
+        NIL -- SIGNAL does not unwind and does not enter the debugger for a
+        non-serious condition. This previously raised unconditionally, so a
+        SIGNAL nobody handled aborted the rest of the enclosing form.
+        """
+        form = cons(ls('SIGNAL'), cons("a simple condition", NIL))
+
+        assert eval(form, env) == NIL
+
+    def test_signal_of_string_datum_builds_a_simple_condition(self, env):
+        """SIGNAL's default condition type is SIMPLE-CONDITION, not an ERROR.
+
+        This is what keeps (HANDLER-BIND ((ERROR ...)) (SIGNAL "...")) from
+        wrongly invoking the ERROR handler: a SIMPLE-CONDITION is not an ERROR
+        subtype. Previously SIGNAL signaled whatever its argument evaluated to,
+        which ConditionException then wrapped in a generic ERROR.
+        """
+        from fclpy.lispfunc.evaluation_conditions import build_condition
+        import fclpy.lisptype as lisptype
+
+        condition = build_condition("a simple condition", [], lisptype.SimpleCondition)
+        assert isinstance(condition, lisptype.SimpleCondition)
+        assert not isinstance(condition, lisptype.Error)
+        assert condition.get_slot('format-control') == "a simple condition"
+
+    def test_condition_signaled_while_evaluating_datum_propagates_unchanged(self, env):
+        """A condition signaled by SIGNAL's *argument* is not SIGNAL's condition.
+
+        (SIGNAL (ERROR)) evaluates (ERROR) first, which signals a
+        non-recoverable error; that must propagate as-is. SIGNAL used to catch
+        it and re-raise it as its own recoverable condition, silently changing
+        the severity of an unrelated error.
+        """
         form = cons(
             ls('SIGNAL'),
             cons(
@@ -66,27 +99,12 @@ class TestSignalFunction:
                 NIL
             )
         )
-        
+
         with pytest.raises(ConditionException) as exc_info:
             eval(form, env)
-        
-        assert exc_info.value.recoverable is True
+
+        assert exc_info.value.recoverable is False
         assert isinstance(exc_info.value.condition, Condition)
-    
-    def test_signal_is_recoverable(self, env):
-        """SIGNAL raises exception marked as recoverable."""
-        form = cons(
-            ls('SIGNAL'),
-            cons(
-                cons(ls('ERROR'), NIL),
-                NIL
-            )
-        )
-        
-        with pytest.raises(ConditionException) as exc_info:
-            eval(form, env)
-        
-        assert exc_info.value.recoverable is True
 
 
 class TestCerrorFunction:
@@ -94,24 +112,21 @@ class TestCerrorFunction:
     
     def test_cerror_raises_recoverable_exception(self, env):
         """CERROR raises an exception marked as recoverable."""
-        # Create form: (CERROR "Continue anyway" (ERROR))
+        # (CERROR "Continue anyway" "the error")
         form = cons(
             ls('CERROR'),
             cons(
                 "Continue anyway",
-                cons(
-                    cons(ls('ERROR'), NIL),
-                    NIL
-                )
+                cons("the error", NIL)
             )
         )
-        
+
         with pytest.raises(ConditionException) as exc_info:
             eval(form, env)
-        
+
         assert isinstance(exc_info.value.condition, Condition)
         assert exc_info.value.recoverable is True
-    
+
     def test_cerror_stores_continue_format(self, env):
         """CERROR stores the continue format string."""
         continue_msg = "Press space to continue"
@@ -119,16 +134,13 @@ class TestCerrorFunction:
             ls('CERROR'),
             cons(
                 continue_msg,
-                cons(
-                    cons(ls('ERROR'), NIL),
-                    NIL
-                )
+                cons("the error", NIL)
             )
         )
-        
+
         with pytest.raises(ConditionException) as exc_info:
             eval(form, env)
-        
+
         assert hasattr(exc_info.value, 'continue_format')
         assert exc_info.value.continue_format == continue_msg
 
@@ -213,7 +225,11 @@ class TestSignalingIntegration:
     """Integration tests combining multiple signaling operations."""
     
     def test_signal_in_function_propagates(self, env):
-        """A SIGNAL in a function propagates to caller."""
+        """An error signaled inside a function propagates to the caller.
+
+        The body here is (SIGNAL (ERROR)): the inner (ERROR) is what signals,
+        so what reaches the caller is that non-recoverable error, unchanged.
+        """
         # Define a function that signals: (DEFUN SIGNAL-ERROR () (SIGNAL (ERROR)))
         defun_form = cons(
             ls('DEFUN'),
@@ -240,8 +256,8 @@ class TestSignalingIntegration:
         form = cons(ls('SIGNAL-ERROR'), NIL)
         with pytest.raises(ConditionException) as exc_info:
             eval(form, env)
-        
-        assert exc_info.value.recoverable is True
+
+        assert exc_info.value.recoverable is False
     
     def test_nested_error_calls(self, env):
         """Nested function calls that raise errors propagate correctly."""
@@ -307,31 +323,16 @@ class TestConditionExceptionProperties:
             eval(form1, env)
         assert exc_info.value.recoverable is False
         
-        # Recoverable (SIGNAL)
+        # Recoverable (CERROR) -- CERROR's condition carries a CONTINUE restart
         form2 = cons(
-            ls('SIGNAL'),
+            ls('CERROR'),
             cons(
-                cons(ls('ERROR'), NIL),
-                NIL
+                "continue",
+                cons("the error", NIL)
             )
         )
         with pytest.raises(ConditionException) as exc_info:
             eval(form2, env)
-        assert exc_info.value.recoverable is True
-        
-        # Recoverable (CERROR)
-        form3 = cons(
-            ls('CERROR'),
-            cons(
-                "continue",
-                cons(
-                    cons(ls('ERROR'), NIL),
-                    NIL
-                )
-            )
-        )
-        with pytest.raises(ConditionException) as exc_info:
-            eval(form3, env)
         assert exc_info.value.recoverable is True
 
 
@@ -357,35 +358,22 @@ class TestSignalingEdgeCases:
         result = eval(form, env)
         assert result == 42
     
-    def test_signal_and_error_both_raise(self, env):
-        """Both SIGNAL and ERROR raise exceptions (though recoverable differs)."""
-        # SIGNAL
-        form1 = cons(
-            ls('SIGNAL'),
-            cons(
-                cons(ls('ERROR'), NIL),
-                NIL
-            )
-        )
-        with pytest.raises(ConditionException):
-            eval(form1, env)
-        
-        # ERROR
-        form2 = cons(ls('ERROR'), NIL)
-        with pytest.raises(ConditionException):
-            eval(form2, env)
-        
-        # Verify recoverability difference
-        with pytest.raises(ConditionException) as exc1:
-            eval(form1, env)
-        signal_exc = exc1.value
-        
-        with pytest.raises(ConditionException) as exc2:
-            eval(form2, env)
-        error_exc = exc2.value
-        
-        assert signal_exc.recoverable is True
-        assert error_exc.recoverable is False
+    def test_error_unwinds_but_signal_does_not(self, env):
+        """ERROR never returns; SIGNAL returns NIL when unhandled.
+
+        This is the difference CLHS draws between the two, and the one the
+        previous implementation erased by making both raise: SIGNAL only
+        transfers control if a *handler* chooses to.
+        """
+        # (SIGNAL "a simple condition") -- nothing handles it, so it returns NIL
+        signal_form = cons(ls('SIGNAL'), cons("a simple condition", NIL))
+        assert eval(signal_form, env) == NIL
+
+        # (ERROR) -- unhandled, so it unwinds
+        error_form = cons(ls('ERROR'), NIL)
+        with pytest.raises(ConditionException) as exc_info:
+            eval(error_form, env)
+        assert exc_info.value.recoverable is False
 
 
 class TestSignalingWithEnvironment:

@@ -165,13 +165,20 @@ class TestProgn2SpecialForm:
         assert result == 42
     
     def test_progn_empty(self, env):
-        """PROGN with no forms should return NIL."""
+        """PROGN with no forms should return NIL.
+
+        CLHS Special Operator PROGN: "If no forms are supplied, (progn) returns
+        nil." This used to assert `result is None` -- a Python None, which is a
+        different object from `lisptype.NIL` (plan.md Finding G) -- while the
+        docstring said NIL, so the test contradicted its own stated intent and
+        pinned a Python value leaking out as a Lisp form's value.
+        """
         progn_sym = LispSymbol('PROGN')
         form = lispCons(progn_sym, NIL)
-        
+
         result = eval(form, env)
-        
-        assert result is None
+
+        assert result is NIL
 
 
 class TestSpecialFormDispatcher:

@@ -5,7 +5,23 @@ Lisp compliance**, measured by running the real ANSI test suite (`ansi-test/`, a
 sibling directory one level above this repo) to completion without crashing, and
 passing as many of its tests as possible.
 
-> **⚠ Status correction, superseded 2026-08-09 (see plan.md's "Update" sections for
+> **Current status (2026-08-12).** The suite runs **8971 of 22036** tests
+> (`passed=4514 failed=4457`), up from `accounted=4687 passed=2920` — the
+> signal-before-unwind handler-stack rewrite (plan.md's 2026-08-12 update)
+> removed the `HANDLER-BIND.13` abort. **It still does not run to completion:**
+> the truncation point is now `DO-SYMBOLS.8` (`packages/do-symbols.lsp`), because
+> `DO-SYMBOLS` establishes no implicit `tagbody`, so its `(go foo)` raises an
+> uncaught `GoException` — a control transfer, not a condition, so RT's own
+> `handler-case` cannot stop it. That is the **sixth** instance of "the form
+> doesn't establish the block/tagbody CLHS requires"; auditing every iteration
+> and mapping form for both in one pass is recommended over fixing them one
+> crash at a time. `conditions/` (116/303) and `packages/` (72/340) are
+> measurable for the first time; 14 directories after `packages/` in
+> `gclload2.lsp` are still at zero. Trust the `COMPLETENESS:` line, not the
+> "N failures ... out of 22036 tests" summary, which prints the initial pending
+> count unconditionally and looks complete even when the run died partway.
+>
+> **⚠ Older status correction, superseded 2026-08-09 (see plan.md's "Update" sections for
 > details) — kept here for history.** The suite used to silently abort after ~2 990 of
 > 22 036 tests (13.6% coverage) because `LOOP` established no implicit `NIL` block.
 > **That was previously (falsely) marked fixed here — it was not; see plan.md.** It
@@ -75,7 +91,18 @@ passing as many of its tests as possible.
     a function. Adding a new special form to the language means registering it
     here *and* implementing it in `evaluation_core.py`/`evaluation_special_forms.py`.
   - `evaluation_loops_conditionals.py` — `LET`/`LET*`/`DO`/`DOLIST`/`DOTIMES`/`LOOP`/`COND`.
-  - `evaluation_conditions.py` — `HANDLER-BIND`/`HANDLER-CASE`, condition signaling.
+  - `evaluation_conditions.py` — `HANDLER-BIND`/`HANDLER-CASE`/`IGNORE-ERRORS`,
+    `SIGNAL`/`ERROR`/`CERROR`/`WARN`, condition signaling. **Handlers are invoked
+    in exactly one place: `signal_condition()`, which walks
+    `state.handler_stack` at the signal point, before any unwinding.** The
+    establishing forms catch nothing; they push a handler cluster for the extent
+    of their body. If you are tempted to add a `try/except` that runs a handler,
+    that is the bug this replaced — an `except` clause runs after the protected
+    form's `CATCH`/`RESTART-CASE`/`UNWIND-PROTECT` frames are already gone.
+    Condition *construction* is likewise one function, `build_condition`, whose
+    only per-operator parameter is the default condition type; condition *type
+    matching* delegates to `TYPEP`. `_run_handlers_on_unwind` is a transitional
+    path for raise sites that bypass signaling — see plan.md's 2026-08-12 update.
   - `evaluation_control_flow.py` — `BLOCK`/`RETURN-FROM`/`CATCH`/`THROW`/`TAGBODY`/`GO`.
   - `registry.py` — `@cl_function`/`@cl_special`/`@cl_macro` decorators and
     `register_module()` auto-registration. A form registered as `cl_function`
@@ -84,8 +111,8 @@ passing as many of its tests as possible.
     `cl_special` or `cl_macro` instead, or its arguments will be evaluated too
     early and it will crash or silently misbehave.
 - **State**: `state.py` holds the few intentional cross-module globals
-  (`packages`, `current_package`, `current_environment`, `restart_stack`). Don't
-  add new ad-hoc globals elsewhere — put them here.
+  (`packages`, `current_package`, `current_environment`, `restart_stack`,
+  `handler_stack`). Don't add new ad-hoc globals elsewhere — put them here.
 - **Environment bootstrap**: `lispenv.py` — `setup_standard_environment()` builds
   the initial global environment from the registries above.
 
@@ -140,6 +167,17 @@ improvising. Summary:
 - Special forms that need unevaluated arguments (`MACROLET`, `SYMBOL-MACROLET`,
   `DEFSETF`, `DEFPACKAGE`, ...) must be registered via `cl_special`, never as a
   plain function — see the registry note above.
+- **A new control-transfer exception must be added to every pass-through tuple**
+  (`except (ReturnFromException, ThrowException, GoException)` in
+  `evaluation_core.py`'s APPLY/FUNCALL and the special forms), or the one site
+  you miss silently converts a control transfer into an error — plan.md
+  Finding K's defect class. Prefer subclassing an existing one, as
+  `HandlerCaseTransfer` subclasses `ThrowException`, so the existing tuples
+  cover it. **`lisptype.RestartException` does *not* subclass any of them and is
+  in none of those tuples** — `funcall` wraps it into a condition, which is why
+  a handler still cannot invoke a restart (confirmed, see plan.md's Discovered
+  issues). Note also that `lisptype.Error` extends `BaseException`, not
+  `Exception`, so `except Exception` does not catch a directly-raised one.
 - `merge-pathnames` must tell apart "defaults names a file" (use its parent
   directory) from "defaults names a directory" (use as-is); getting this backward
   makes `LOAD` resolve relative paths to the wrong place.
