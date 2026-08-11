@@ -2693,35 +2693,32 @@ def eval_do_symbols(form, env):
     # Create loop environment
     loop_env = lisptype.Environment(env)
     loop_env.set_variable(var, lisptype.NIL)
-    
-    # Iterate over all symbols in package (internal + external)
-    for name, sym in pkg.symbols.items():
-        loop_env.set_variable(var, sym)
-        current = body
-        while _consp_internal(current):
-            eval(car(current), loop_env)
-            current = cdr(current)
-    
-    # Also iterate over inherited symbols from used packages
-    for used_pkg in getattr(pkg, 'use_list', []):
-        if used_pkg is not None:
-            external_names = getattr(used_pkg, 'external_symbols', set())
-            for item in external_names:
-                # Handle both string names and LispSymbol objects
-                if isinstance(item, lisptype.LispSymbol):
-                    sym = item
-                else:
-                    sym = used_pkg.symbols.get(item)
-                if sym is not None:
-                    loop_env.set_variable(var, sym)
-                    current = body
-                    while _consp_internal(current):
-                        eval(car(current), loop_env)
-                        current = cdr(current)
-    
-    # Set var to NIL for result form
-    loop_env.set_variable(var, lisptype.NIL)
-    return eval(result_form, loop_env)
+
+    def _loop():
+        # Iterate over all symbols in package (internal + external)
+        for name, sym in list(pkg.symbols.items()):
+            loop_env.set_variable(var, sym)
+            _exec_iteration_body(body, loop_env)
+
+        # Also iterate over inherited symbols from used packages
+        for used_pkg in getattr(pkg, 'use_list', []):
+            if used_pkg is not None:
+                external_names = getattr(used_pkg, 'external_symbols', set())
+                for item in list(external_names):
+                    # Handle both string names and LispSymbol objects
+                    if isinstance(item, lisptype.LispSymbol):
+                        sym = item
+                    else:
+                        sym = used_pkg.symbols.get(item)
+                    if sym is not None:
+                        loop_env.set_variable(var, sym)
+                        _exec_iteration_body(body, loop_env)
+
+        # Set var to NIL for result form
+        loop_env.set_variable(var, lisptype.NIL)
+        return eval(result_form, loop_env)
+
+    return _run_with_nil_block(_loop)
 
 
 def eval_do_external_symbols(form, env):
@@ -2765,27 +2762,27 @@ def eval_do_external_symbols(form, env):
     # Create loop environment
     loop_env = lisptype.Environment(env)
     loop_env.set_variable(var, lisptype.NIL)
-    
-    # Iterate over external symbols only
-    # Note: external_symbols may contain strings (symbol names) or LispSymbol objects
-    external_names = getattr(pkg, 'external_symbols', set())
-    for item in external_names:
-        # Handle both string names and LispSymbol objects
-        if isinstance(item, lisptype.LispSymbol):
-            sym = item
-        else:
-            # It's a string name, look up the symbol
-            sym = pkg.symbols.get(item)
-        if sym is not None:
-            loop_env.set_variable(var, sym)
-            current = body
-            while _consp_internal(current):
-                eval(car(current), loop_env)
-                current = cdr(current)
-    
-    # Set var to NIL for result form
-    loop_env.set_variable(var, lisptype.NIL)
-    return eval(result_form, loop_env)
+
+    def _loop():
+        # Iterate over external symbols only
+        # Note: external_symbols may contain strings (symbol names) or LispSymbol objects
+        external_names = getattr(pkg, 'external_symbols', set())
+        for item in list(external_names):
+            # Handle both string names and LispSymbol objects
+            if isinstance(item, lisptype.LispSymbol):
+                sym = item
+            else:
+                # It's a string name, look up the symbol
+                sym = pkg.symbols.get(item)
+            if sym is not None:
+                loop_env.set_variable(var, sym)
+                _exec_iteration_body(body, loop_env)
+
+        # Set var to NIL for result form
+        loop_env.set_variable(var, lisptype.NIL)
+        return eval(result_form, loop_env)
+
+    return _run_with_nil_block(_loop)
 
 
 def eval_do_all_symbols(form, env):
@@ -2815,22 +2812,22 @@ def eval_do_all_symbols(form, env):
     # Create loop environment
     loop_env = lisptype.Environment(env)
     loop_env.set_variable(var, lisptype.NIL)
-    
-    # Get all unique packages
-    unique_packages = {id(p): p for p in state.packages.values()}
-    
-    # Iterate over all symbols in all packages
-    for pkg in unique_packages.values():
-        for name, sym in pkg.symbols.items():
-            loop_env.set_variable(var, sym)
-            current = body
-            while _consp_internal(current):
-                eval(car(current), loop_env)
-                current = cdr(current)
-    
-    # Set var to NIL for result form
-    loop_env.set_variable(var, lisptype.NIL)
-    return eval(result_form, loop_env)
+
+    def _loop():
+        # Get all unique packages
+        unique_packages = {id(p): p for p in state.packages.values()}
+
+        # Iterate over all symbols in all packages
+        for pkg in unique_packages.values():
+            for name, sym in list(pkg.symbols.items()):
+                loop_env.set_variable(var, sym)
+                _exec_iteration_body(body, loop_env)
+
+        # Set var to NIL for result form
+        loop_env.set_variable(var, lisptype.NIL)
+        return eval(result_form, loop_env)
+
+    return _run_with_nil_block(_loop)
 
 
 __all__ = [
