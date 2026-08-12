@@ -12,53 +12,75 @@ that history is preserved in condensed form in [Changelog](#changelog).
 
 ## 1. Status
 
-**Last full run: 2026-08-12, in flight at time of writing.** The numbers below
-are from the **previous** run (2026-08-12 01:03), which was still truncated —
-treat every figure as provisional and regenerate after the current run lands.
+**First complete run in the project's history: 2026-08-12.**
+
+```
+COMPLETENESS: total=22036 passed=8960 failed=13076 accounted=22036 missing=0 extra=0
+COMPLETENESS: OK
+```
 
 | | value |
 |---|---|
 | Registered tests | 22036 |
-| Executed (`accounted`) | 8971 |
-| Passed | 4514 |
-| Failed | 4457 |
-| Never executed | 13065 |
+| Executed (`accounted`) | **22036 (100%)** |
+| Passed | **8960 (40.7%)** |
+| Failed | 13076 |
+| Never executed | **0** |
+| Wall time | ~7.5 hours |
 
-**Three things changed recently, and they reset the plan's premises:**
+**This is the first trustworthy scoreboard.** Every previous version of this
+document ranked work using a sample of roughly a third of the suite, and said so.
+That constraint is now gone — and the complete data **reordered the priorities
+substantially**, exactly as the sampling-artifact warning in [§6](#6-the-two-dimensions)
+predicted it would.
 
-1. **The suite now reaches every test.** Every prior version of this document was
-   written under a truncated run — the majority of tests had never executed, so
-   every priority call was made on a sample of roughly a third of the suite. The
-   last blocker (`DO-SYMBOLS`' missing implicit tagbody) is fixed.
-2. **A full run now costs 4+ hours**, so it can no longer be the development
-   loop. See [§2](#2-how-to-work).
-3. **~76% of that runtime is one defect** — LOOP's `for var = expr` driver. See
-   [C1](#c1-loop-for-var--expr-driver--core).
+**What the completion changed.** Comparing against the last truncated run
+(`accounted=8971 passed=4514`): passed nearly doubled to 8960, and the failure
+count rose to 13076 because **13065 tests that had never executed now run**. That
+rise is not a regression — those tests had no prior status to regress from. It is
+previously-invisible failure becoming visible, which is what M0 existed to
+achieve.
 
-**Read the per-directory table with care.** In the data above, a directory with
-`failed=0` is almost always *unmeasured*, not passing:
+**The single biggest surprise:** `FORMAT`/`FORMATTER` is now the **largest
+failing cluster in the suite at 1623 failures** — 3.6× LOOP, which the truncated
+data had ranked first. It was invisible in every prior run because `printer/`
+never executed.
 
-| directory | passed | failed | never ran | total |
+### Per-directory scoreboard (complete)
+
+| directory | passed | failed | total | pass rate |
 |---|---|---|---|---|
-| sequences | 0 | 0 | **3158** | 3158 |
-| numbers | 0 | 0 | **1438** | 1438 |
-| printer | 0 | 0 | **788** | 788 |
-| misc | 0 | 0 | **740** | 740 |
-| types-and-classes | 0 | 0 | **545** | 545 |
-| streams | 0 | 0 | **543** | 543 |
-| strings | 0 | 0 | **501** | 501 |
-| characters / pathnames / environment / reader / structures / files / system-construction | 0 | 0 | **1108** | 1108 |
-| cons | 580 | 1058 | 0 | 1638 |
-| arrays | 520 | 725 | 0 | 1245 |
-| objects | 215 | 610 | 0 | 825 |
-| iteration | 366 | 472 | 0 | 838 |
-| data-and-control-flow | 1005 | 415 | 0 | 1420 |
-| conditions | 116 | 187 | 0 | 303 |
-| packages | 72 | 198 | 70 | 340 |
-| eval-and-compile | 224 | 94 | 0 | 318 |
-| hash-tables | 89 | 69 | 0 | 158 |
-| symbols | 1105 | 40 | 0 | 1145 |
-| (programmatically generated) | 220 | 589 | 4174 | 4983 |
+| (programmatically generated) | 1075 | **3908** | 4983 | 21.6% |
+| sequences | 990 | **2168** | 3158 | 31.3% |
+| cons | 580 | **1058** | 1638 | 35.4% |
+| arrays | 520 | 725 | 1245 | 41.8% |
+| printer | 137 | 651 | 788 | **17.4%** |
+| objects | 215 | 610 | 825 | 26.1% |
+| numbers | 872 | 566 | 1438 | 60.6% |
+| iteration | 366 | 472 | 838 | 43.7% |
+| data-and-control-flow | 1007 | 413 | 1420 | 70.9% |
+| strings | 113 | 388 | 501 | 22.6% |
+| streams | 161 | 382 | 543 | 29.7% |
+| types-and-classes | 283 | 262 | 545 | 51.9% |
+| packages | 108 | 232 | 340 | 31.8% |
+| conditions | 116 | 187 | 303 | 38.3% |
+| pathnames | 79 | 136 | 215 | 36.7% |
+| reader | 29 | 136 | 165 | **17.6%** |
+| environment | 67 | 125 | 192 | 34.9% |
+| misc | 618 | 122 | 740 | 83.5% |
+| characters | 156 | 103 | 259 | 60.2% |
+| structures | 14 | 101 | 115 | **12.2%** |
+| eval-and-compile | 224 | 94 | 318 | 70.4% |
+| hash-tables | 89 | 69 | 158 | 56.3% |
+| files | 23 | 64 | 87 | 26.4% |
+| system-construction | 11 | 64 | 75 | **14.7%** |
+| symbols | 1105 | 40 | 1145 | **96.5%** |
+
+The spread is the useful signal: `symbols` at 96.5% and `misc` at 83.5% against
+`structures` at 12.2%, `system-construction` at 14.7%, `printer` at 17.4%, and
+`reader` at 17.6%. **The four worst are all subsystems where one absent mechanism
+fails everything downstream of it** — which is what makes them the cheapest wins,
+not the hardest problems.
 
 ---
 
@@ -106,14 +128,41 @@ failing, the binding constraint is a small number of core mechanisms.
 - A test that passes for the wrong reason is not progress.
 - Per-test work becomes correct only in [Tier 3](#tier-3--the-genuine-tail).
 
-### Regenerating the checklist
+### The checklist artifact
+
+**`docs/ansi_checklist.md`** is the working checklist: all 13076 failures grouped
+**directory → file**, ordered by failure count, each with a checkbox and the
+exact command to re-verify it. Generated, never hand-edited.
 
 ```powershell
-# cluster failures by operator
-sed 's/\.[0-9].*$//' ansi_results/failed.txt | sort | uniq -c | sort -rn | head -40
-# per-subsystem scoreboard -> docs/ansi_baseline.json
-pipenv run python scripts/ansi_score.py
-# root-cause shapes leaking into results
+pipenv run python scripts/ansi_checklist.py                # regenerate
+pipenv run python scripts/ansi_checklist.py --detail       # + every failing test name
+pipenv run python scripts/ansi_checklist.py --dir sequences
+# mark progress against a saved snapshot (shows -N fixed / +N REGRESSION per file)
+pipenv run python scripts/ansi_checklist.py --baseline docs/ansi_checklist_baseline.json
+```
+
+It reuses `ansi_score.py`'s `(deftest ...)` scan rather than re-implementing it —
+two copies of that mapping would drift, and a checklist that disagrees with the
+scoreboard is worse than none (standing rule 3).
+
+**Two properties to understand before trusting a number in it:**
+
+1. **It is an index, not a count.** 3908 failures have no literal `(deftest ...)`
+   form because they are generated at load time — `cons/cxr.lsp` builds 40 of its
+   own tests with ``(eval `(deftest ,(intern ...)))``. Those are **still reached
+   by targeted runs**; only the static attribution misses them. Consequence:
+   `run_ansi.py <file>` normally reports *more* registered tests than the
+   checklist attributes to that file (cxr.lsp: 176 vs 136). **The targeted run is
+   the authority for a file.**
+2. **Order is by cluster size, not by priority.** A file with 90 failures is
+   nearly always one missing mechanism, not 90 bugs.
+
+### Other analyses
+
+```powershell
+sed 's/\.[0-9].*$//' ansi_results/failed.txt | sort | uniq -c | sort -rn | head -40   # by operator
+pipenv run python scripts/ansi_score.py                                              # per-subsystem
 grep -a -o "Python error in [^\"]\{0,70\}" run_all_tests.log | sort | uniq -c | sort -rn | head
 grep -a -o "Undefined function[: ]*[A-Z0-9-]*" run_all_tests.log | sed 's/.*[: ]//' | sort | uniq -c | sort -rn | head
 ```
@@ -123,7 +172,7 @@ grep -a -o "Undefined function[: ]*[A-Z0-9-]*" run_all_tests.log | sed 's/.*[: ]
 1. **Never implement a test. Implement the mechanism the test checks.**
 2. **Any Python object appearing as a Lisp value is a bug** — including
    exceptions (`TypeError`, `FileNotFoundError`, `RestartException`) surfacing as
-   test results. There are currently **~1600 such leaks** ([C2](#c2-python-exceptions-leaking-as-lisp-values--core)).
+   test results. There are currently **~1600 such leaks** ([X1](#x1-python-exceptions-leaking-as-lisp-values)).
 3. **When two implementations of one operator exist, delete one.** Duplication is
    how fixes silently fail to apply.
 4. **Never `pass`, never `return form` in a bare `except`, never "silently
@@ -141,19 +190,96 @@ grep -a -o "Undefined function[: ]*[A-Z0-9-]*" run_all_tests.log | sed 's/.*[: ]
 
 ## 3. The checklist
 
-Ranked by evidence. **Tier 1 items are core mechanisms**: each is one defect
-behind many failures. Counts are from the provisional data in §1 and from the
-in-flight run's log; the *command that produced each number* is given so it can
-be re-derived rather than trusted.
+Ranked by evidence from the **complete** run. **Tier 1 items are core
+mechanisms**: each is one defect behind many failures. The *command that produced
+each number* is given so it can be re-derived rather than trusted.
+
+### Cluster sizes (complete data, 13076 failures)
+
+```powershell
+sed 's/\.[0-9].*$//' ansi_results/failed.txt | sed 's/\.ERROR.*$//' | sort | uniq -c | sort -rn | head -40
+grep -cE "^FORMAT" ansi_results/failed.txt        # aggregate a family
+```
+
+| cluster | failures | % of all failures | one mechanism? |
+|---|---|---|---|
+| **`FORMAT` + `FORMATTER`** | **1623** | 12.4% | yes — one directive engine |
+| **Sequence functions** (`SORT`/`MERGE`/`CONCATENATE`/`FIND`/`POSITION`/`COUNT`/`REMOVE`/`SUBSTITUTE`) | **1266** | 9.7% | largely — `:test`/`:key` + designators |
+| **`DEFSTRUCT` family** | **944** | 7.2% | yes — one macro generates nothing |
+| **Set/list operations** | **598** | 4.6% | largely — shared `:test`/`:key` |
+| **Arrays** (`MAKE-ARRAY`/`ADJUST-ARRAY`/`VECTOR-PUSH`/`SIMPLE-ARRAY`) | **574** | 4.4% | yes — array object model |
+| **`LOOP`** | **450** | 3.4% | yes — `for var =` driver |
+| **`PRINT*`** | **442** | 3.4% | yes — printer control variables |
+| **CLOS** (`DEFGENERIC`/`DEFMETHOD`/`DEFCLASS`/`SHARED-INITIALIZE`/`CHANGE-CLASS`) | **291** | 2.2% | no — two implementations |
+| **`OPEN`** | **193** | 1.5% | yes — stream/file model |
+| **`SUBTYPEP`** | **156** | 1.2% | yes — no type lattice |
+
+Those ten account for **~6537 failures, half the total**, across **nine
+mechanisms**.
+
+### Cross-cutting root causes
+
+These are not clusters — they *inflate* the clusters above, so fixing them moves
+many rows at once. Fix these first within any cluster you pick up.
+
+#### X1. Python exceptions leaking as Lisp values
+
+**Evidence** (`grep -a -c` on the run log): **889** `Undefined function`, **531**
+`Unbound variable`, **530** `Python error in`, 18 `AttributeError`.
+
+Raw Python exception text is returned *as the value of a Lisp form*, violating
+standing rule 2. Worse, it makes the suite report a **wrong value** where it
+should report an **unimplemented feature**, so the log systematically
+*undercounts* what is missing. Sampled shapes:
+
+| occurrences | leak |
+|---|---|
+| 82 | `FileNotFoundError: File not found: ...` |
+| 76 | `FileExistsError: File exists: ...` |
+| 18 | `RuntimeError: CALL-NEXT-METHOD: No next method available` |
+| 10 each | `ValueError: math domain error`; `RestartException: Restart: FOO`; `NameError: Class not found: ARITHMETIC-ERROR`; `AttributeError: Slot A not found`; `OSError: Cannot open ...` |
+| 6 | `RecursionError: maximum recursion depth exceeded` |
+| 5 | `AttributeError: 'lispCons' object has no attribute 'remove'` |
+| many | `NameError: Class not found: STRUCT-TEST-nn` |
+
+Each row is a different underlying gap, but the *leak* is one mechanism: the
+boundary that should convert a Python exception into a signaled Lisp condition.
+**Owner:** M8's raise-site migration ([C8](#c8-conditions-restarts-and-define-condition)).
+
+#### X2. Function designators are not resolved
+
+**Evidence.** The most common "undefined functions" are single letters — `X`
+(336), `S` (296), `OS` (192), `A` (166), `IS` (118), `S1` (94). These are
+*variables holding functions*, not missing standard functions: designator
+coercion is absent. **Finding J with over 1200 occurrences attached.**
+
+Every site accepting a function designator (`:test`, `:key`, `FUNCALL`, `APPLY`,
+`MAP*`, `SORT`, `REDUCE`) needs **one shared coercion**, not a local `callable()`
+check. This is a large fraction of the 1266-failure sequence cluster and the
+598-failure set-operation cluster. **Owner:** M3/M6 boundary.
+
+#### X3. Reversed `:test` argument order
+
+`SequenceIterator.matches` (`sequences_search.py`) calls the test with its
+arguments reversed; CLHS 17.2.1 requires `(funcall test item element)`. One fix
+affecting `FIND`/`POSITION`/`COUNT`/`REMOVE` and plausibly the whole set-operation
+family. Pinned by a unit test asserting the wrong answer — see
+[§3 non-ANSI assertions](#known-non-ansi-assertions-in-the-unit-suite).
 
 ### Tier 1 — core mechanisms (do these first)
 
-#### C1. LOOP `for var = expr` driver — **CORE**
+#### C1. LOOP `for var = expr` driver — **do this first**
 
-**Evidence.** `LOOP` is the single largest failing cluster at **449 failures**
-(`grep "^LOOP" ansi_results/failed.txt | wc -l`). `for var =` appears **2784
-times across 260 test files** (`grep -rn "for [a-z-]* = " --include=*.lsp | wc -l`).
-It is also responsible for **~76% of full-run wall time** (below).
+**Not because it is the largest cluster — it is sixth.** Do it first because it
+is the only item that **makes every later measurement affordable**: it owns ~76%
+of a 7.5-hour full run, and it is already fully diagnosed and reproducible in six
+one-line expressions. Every other cluster is cheaper to work on after it lands.
+
+**Evidence.** **450 failures** (`grep -cE "^LOOP" ansi_results/failed.txt`);
+`iteration/` is 366 passing of 838. `for var =` appears **2784 times across 260
+test files** (`grep -rn "for [a-z-]* = " --include=*.lsp | wc -l`), so the blast
+radius extends well beyond `iteration/` into every directory that uses LOOP to
+drive its own assertions.
 
 **Two distinct defects**, both verified by direct execution, each case in its own
 process:
@@ -202,87 +328,97 @@ delete the premise from the comment.
 **Owner:** M3-adjacent (LOOP is its own clause parser today).
 **Verify:** `run_ansi.py iteration`, then `numbers/deposit-field.lsp`, `numbers/sqrt.lsp`.
 
-#### C2. Python exceptions leaking as Lisp values — **CORE**
+#### C2. `FORMAT` / `FORMATTER` — **largest cluster in the suite**
 
-**Evidence** (`grep -a -c` on the run log): **889** `Undefined function`, **531**
-`Unbound variable`, **530** `Python error in`, 18 `AttributeError`.
+**Evidence.** **1623 failures** (`grep -cE "^FORMAT" ansi_results/failed.txt`),
+of which 638 are `FORMATTER`. `printer/` overall is **137 passing of 788 —
+17.4%**. Largest sub-clusters: `FORMAT.A` 59, `FORMAT.JUSTIFY` 58,
+`FORMAT.LOGICAL-BLOCK` 54, `FORMAT.S` 49, `FORMATTER.A` 48, `FORMAT.R` 38,
+`FORMAT.{` 35, plus eight `FORMAT`/`FORMATTER` `^`-directive variants at 39 each.
 
-Raw Python exception text is being returned *as the value of a Lisp form*, which
-violates standing rule 2 and — worse — means the suite reports a **wrong value**
-where it should report an **unimplemented feature**. Sampled shapes:
+**Why this was never visible:** `printer/` had never executed in any prior run.
+This is the sampling artifact in [§6](#6-the-two-dimensions) made concrete — the
+plan warned that ranking by observed failures ranks language-semantics over
+ecosystem *by construction*, and the moment the ecosystem directory ran, it took
+the top spot.
 
-| occurrences | leak |
-|---|---|
-| 82 | `FileNotFoundError: File not found: ...` |
-| 76 | `FileExistsError: File exists: ...` |
-| 18 | `RuntimeError: CALL-NEXT-METHOD: No next method available` |
-| 10 | `ValueError: math domain error` |
-| 10 | `RestartException: Restart: FOO` |
-| 10 | `NameError: Class not found: ARITHMETIC-ERROR` |
-| 10 | `AttributeError: Slot A not found` |
-| 10 | `OSError: Cannot open ...` |
-| ~7 | `ValueError: I/O operation on closed file` |
-| 6 | `RecursionError: maximum recursion depth exceeded` |
-| 5 | `AttributeError: 'lispCons' object has no attribute 'remove'` |
-| many | `NameError: Class not found: STRUCT-TEST-nn` |
+One mechanism: a real directive engine covering `~A ~S ~R ~D ~B ~O ~X`,
+iteration (`~{~}`), escape (`~^`), justification (`~<~>`), conditionals
+(`~[~]`), case conversion, and the pretty-printer's logical blocks. `FORMATTER`
+is the same engine reached through a macro, so it should not be a second
+implementation. **The current implementation is known to contain
+`if 'NIL' in part: break`** — a string hack in the directive loop (standing rule
+4). **Owner:** M10. **Verify:** `run_ansi.py printer`.
 
-Each row is a different underlying gap, but the *leak itself* is one mechanism:
-the boundary that should convert a Python exception into a signaled Lisp
-condition. Fixing that boundary converts ~1600 wrong answers into honest,
-countable failures — which is a prerequisite for trusting every other number in
-this document.
+#### C3. Sequence functions — `:test`/`:key` and designators
 
-**Owner:** M8's raise-site migration (see [C7](#c7-conditions-restarts-and-define-condition)).
+**Evidence.** **1266 failures** across
+`SORT`/`MERGE`/`CONCATENATE`/`FIND`/`POSITION`/`COUNT`/`REMOVE`/`SUBSTITUTE`;
+`sequences/` is 990 passing of 3158 (**31.3%**). Notable: `CONCATENATE` 39,
+`MERGE-STRING` 38, `FIND-VECTOR` 36.
 
-#### C3. Function designators are not resolved — **CORE**
-
-**Evidence.** The most common "undefined functions" are single letters —
-`X` (336), `S` (296), `OS` (192), `A` (166), `IS` (118), `S1` (94). These are
-*variables holding functions*, not missing standard functions: the implementation
-is failing to coerce a function designator to a function.
-
-This is **Finding J** ("there is no `coerce_to_function`") with a number attached:
-over **1200** occurrences. Every site that accepts a function designator
-(`:test`, `:key`, `FUNCALL`, `APPLY`, `MAP*`, `SORT`, `REDUCE`) needs one shared
-coercion, not a local `callable()` check.
-
-**Owner:** M3/M6 boundary. **Verify:** `run_ansi.py sequences` once it runs.
+This cluster is dominated by the two cross-cutting causes above — **X2**
+(designator coercion) and **X3** (reversed `:test` argument order) — rather than
+by 40 individually wrong functions. Fix X2 and X3 first, re-run, and re-measure
+before touching any individual sequence function. **Owner:** M6.
+**Verify:** `run_ansi.py sequences`.
 
 #### C4. `DEFSTRUCT` generates no accessors and no class
 
-**Evidence.** `COPY-STRUCTURE` (132), plus `MAKE-STRUCT-TEST-06` (22),
-`MAKE-SBT-16` (18), and a long tail of `STRUCT-TEST-nn-ann` accessor names (8
-each), plus `NameError: Class not found: STRUCT-TEST-nn` in the leak table.
-`structures/` (115 tests) has never executed; the failures above are its spill
-into `objects/` and the generated tests.
+**Evidence.** **944 failures** (`grep -cE "^STRUCT|^DEFSTRUCT|^COPY-STRUCTURE"`).
+`structures/` is **14 passing of 115 — 12.2%, the worst rate in the suite**.
+`COPY-STRUCTURE` 132, `MAKE-STRUCT-TEST-06` 22, `MAKE-SBT-16` 18, a long tail of
+`STRUCT-TEST-nn-ann` accessor names, plus `NameError: Class not found:
+STRUCT-TEST-nn` in the leak table.
 
 One mechanism: `DEFSTRUCT` must define the constructor, copier, predicate,
-accessors, and a real type/class. **Owner:** M9.
+accessors, and a real type/class. Nothing downstream can pass until it does —
+which is exactly why the pass rate is 12%. **Owner:** M9.
+**Verify:** `run_ansi.py structures`.
 
-#### C5. `MAKE-ARRAY` / adjustable / displaced arrays
+#### C5. Set and list operations
 
-**Evidence.** `MAKE-ARRAY` 47, `SIMPLE-ARRAY` 44, `ARRAY` 41,
-`VECTOR-PUSH-EXTEND` 39, `ADJUST-ARRAY` 39, `SIMPLE-ARRAY-T` 34, `ARRAY-T` 34,
-`MAKE-ARRAY.DISPLACED` 31, `VECTOR-PUSH` 29, `ADJUST-ARRAY.STRING` 22,
-`ADJUST-ARRAY.BIT-VECTOR` 22 — **~380 failures**, and `arrays/` is 725 failing of
-1245. Also `IndexError: Expected 2 indices, got 1` in the leak table.
+**Evidence.** **598 failures** — `UNION` 37, `NUNION` 34, `SET-EXCLUSIVE-OR` 30,
+`RASSOC` 30, `SET-DIFFERENCE` 26, `MEMBER` 26, `NSET-DIFFERENCE` 25,
+`INTERSECTION` 24, `ADJOIN` 24, `NINTERSECTION` 23, `SUBSETP` 21.
 
-The cluster shape (fill pointers, adjustability, displacement, element types)
-says the array *object model* is missing those properties rather than that many
-functions are individually wrong. **Owner:** M9.
+Eleven operators failing in near-identical proportion is the signature of **one
+shared `:test`/`:key` defect**, not eleven bugs — again X2 and X3. **Owner:** M6.
 
-#### C6. CLOS — `DEFGENERIC` / `DEFMETHOD` / `DEFCLASS` / `CHANGE-CLASS`
+#### C6. Arrays — fill pointers, adjustability, displacement
 
-**Evidence.** `DEFGENERIC` 52, `SHARED-INITIALIZE` 41, `CHANGE-CLASS` 34,
-`DEFMETHOD` 26, `DEFCLASS` 22, `MAKE-INSTANCES-OBSOLETE` 8, plus
-`RuntimeError: CALL-NEXT-METHOD: No next method available` (18) and
-`AttributeError: Slot A not found` (10). `objects/` is 610 failing of 825, and
-`types-and-classes/` (545) has never run.
+**Evidence.** **574 failures**; `arrays/` is 520 passing of 1245 (41.8%).
+`MAKE-ARRAY` 47, `SIMPLE-ARRAY` 44, `ARRAY` 41, `VECTOR-PUSH-EXTEND` 39,
+`ADJUST-ARRAY` 39, `SIMPLE-ARRAY-T` 34, `ARRAY-T` 34, `MAKE-ARRAY.DISPLACED` 31,
+`VECTOR-PUSH` 29, `ADJUST-ARRAY.STRING` 22, `ADJUST-ARRAY.BIT-VECTOR` 22. Also
+`IndexError: Expected 2 indices, got 1` in the leak table.
+
+The cluster shape says the array *object model* lacks these properties, rather
+than that many functions are individually wrong. **Owner:** M9.
+
+#### C7. Printer control variables
+
+**Evidence.** **442 failures** — `PRINT.INTEGERS.BASE` 84,
+`PRINT.INTEGERS.RADIX.BASE` 77, `PRINT.ARRAY` 47.
+
+`*PRINT-BASE*`/`*PRINT-RADIX*` alone account for 161. Known specifics: `#(1 2 3)`
+reads as the cons `(VECTOR 1 2 3)`; `PRIN1` emits C-style escapes; `PRINC` keeps
+the `:` on keywords and `#\` on characters (it must bind `*PRINT-ESCAPE*` to NIL,
+CLHS 22.1.3.2); `*PRINT-CASE*` and `READTABLE-CASE` return Python strings rather
+than keywords. **Owner:** M10.
+
+#### C8. CLOS — `DEFGENERIC` / `DEFMETHOD` / `DEFCLASS` / `CHANGE-CLASS`
+
+**Evidence.** **291 failures** — `DEFGENERIC` 52, `SHARED-INITIALIZE` 41,
+`CHANGE-CLASS` 34, `DEFMETHOD` 26, `DEFCLASS` 22, `MAKE-INSTANCES-OBSOLETE` 8 —
+plus `RuntimeError: CALL-NEXT-METHOD: No next method available` (18) and
+`AttributeError: Slot A not found` (10). `objects/` is 610 failing of 825;
+`types-and-classes/` 262 of 545.
 
 **Two CLOS implementations still coexist** (Finding L). Consolidate before
-fixing. **Owner:** M9.
+fixing, or fixes will silently fail to apply. **Owner:** M9.
 
-#### C7. Conditions, restarts, and `DEFINE-CONDITION`
+#### C9. Conditions, restarts, and `DEFINE-CONDITION`
 
 **Evidence.** `RESTART-CASE` 27, `RestartException` leaking (10),
 `NameError: Class not found: ARITHMETIC-ERROR` (10); `conditions/` is 187 failing
@@ -304,11 +440,11 @@ The signaling core landed (handlers run at the signal point, before unwinding).
   are not in the lattice it dispatches over.
 - `_run_handlers_on_unwind` and `_condition_matches`' legacy branch are
   transitional compatibility paths that disappear once raise sites migrate onto
-  `SIGNAL` — the same migration as [C2](#c2-python-exceptions-leaking-as-lisp-values--core).
+  `SIGNAL` — the same migration as [X1](#x1-python-exceptions-leaking-as-lisp-values).
 
 **Owner:** M8. **Verify:** `run_ansi.py conditions`.
 
-#### C8. Package model
+#### C10. Package model
 
 **Evidence.** `MAKE-PACKAGE` 51, `DEFPACKAGE` 27, `UNUSE-PACKAGE` 23,
 `PACKAGE-NAME` 21, `USE-PACKAGE` 20; `packages/` is 198 failing of 340 with 70
@@ -324,15 +460,17 @@ be NIL. **Owner:** M1. **Verify:** `run_ansi.py packages`.
 
 These are large but conventional: the mechanism is absent rather than wrong.
 
-| # | cluster | evidence | owner |
+| # | cluster | evidence (complete run) | owner |
 |---|---|---|---|
-| C9 | **Set/list operations** — `UNION` 37, `NUNION` 34, `SET-EXCLUSIVE-OR` 30, `RASSOC` 30, `SET-DIFFERENCE` 26, `MEMBER` 26, `NSET-DIFFERENCE` 25, `INTERSECTION` 24, `ADJOIN` 24, `SUBSETP` 21, `NINTERSECTION` 23 (**~300**) — almost certainly one shared `:test`/`:key` defect, not 11 bugs. The known reversed `:test` argument order in `SequenceIterator.matches` (`sequences_search.py`) is a single fix affecting `FIND`/`POSITION`/`COUNT`/`REMOVE` and likely all of these. | M6 |
-| C10 | **Places / `SETF`** — `PSETF` 31, `PUSHNEW` 27, `ROTATEF` 23. Five parallel place protocols; `GET-SETF-EXPANSION` is a stub returning a Python 5-element list instead of five values; `PUSH`/`POP`/`PUSHNEW` are registered as *functions* over Python lists. | M5 |
-| C11 | **Lambda lists** — `FLET` 35, `LAMBDA` 22, `DESTRUCTURING-BIND` 22. Six copy-pasted binders. | M3 |
-| C12 | **Streams / files / pathnames** — `FileNotFoundError`/`FileExistsError`/`OSError` leaks (~170). `streams/` 543, `pathnames/` 215, `files/` 87 never ran. | M10 |
-| C13 | **Missing standard functions** — `LDIFF` 38, `TAILP` 20, `CHECK-TYPE` 18, `STREAM-ELEMENT-TYPE` 10, `MAKE-INSTANCES-OBSOLETE` 8. Genuinely absent; cheap. | M1 |
-| C14 | **Numeric tower** — `ValueError: math domain error` (10); `numbers/` 1438 never ran. Bignums, ratios, complex, float contagion. | Phase 4 |
-| C15 | **Reader / printer** — `reader/` 165 and `printer/` 788 never ran. `#(1 2 3)` reads as the cons `(VECTOR 1 2 3)`; `PRIN1` emits C-style escapes; `PRINC` keeps `:` on keywords and `#\` on characters; `READTABLE-CASE` returns a Python string. **Also: `fclpy/reader.py` is a dead ~480-line second reader** that nothing imports but **177 tests (14% of the unit suite)** certify — while the live reader has essentially no unit coverage. Retire it or repoint those tests. | M10 |
+| C11 | **Streams, files, pathnames** — `OPEN` 193 (`OPEN` 83, `OPEN.PROBE` 36, `OPEN.OUTPUT` 35, `OPEN.IO` 35); `streams/` 382 failing of 543, `pathnames/` 136 of 215, `files/` 64 of 87, `system-construction/` 64 of 75 (**14.7%**). ~170 `FileNotFoundError`/`FileExistsError`/`OSError` leaks. Gates ASDF and all library loading. | M10 |
+| C12 | **Reader** — `reader/` 136 failing of 165 (**17.6%**). `#(1 2 3)` reads as the cons `(VECTOR 1 2 3)` (CLHS 2.4.8.3); the tokenizer interprets `\n` inside strings, where CLHS 2.4.5 requires backslash to be a single-escape included *without interpretation*. **Also: `fclpy/reader.py` is a dead ~480-line second reader** that nothing under `fclpy/` imports, yet **177 unit tests (14% of that suite)** certify it — while the live reader (`tokenizer.py` → `lispreader.py` → `readtable.py`) has essentially no unit coverage, and the two disagree on conformance. Retire it or repoint those tests. | M10 |
+| C13 | **Strings** — `strings/` 388 failing of 501 (**22.6%**); `MERGE-STRING` 38. Rooted in the `LispString`/Python-`str` split (Finding I), which also blocks `EQUAL`/`EQUALP`. A length-1 `str` currently satisfies both `CHARACTER` and `STRING`, which are disjoint types (CLHS 4.2.2). | M9 |
+| C14 | **Types / `SUBTYPEP`** — `SUBTYPEP` 156 (`SUBTYPEP.INTEGER` 46); `types-and-classes/` 262 failing of 545. `SUBTYPEP` is a string-pair lookup table with no type lattice (Finding F). | M9 |
+| C15 | **Numeric tower** — `numbers/` 566 failing of 1438 (60.6% passing — better than most); `PARSE-INTEGER` 49, `ValueError: math domain error` leaks. Bignums, ratios, complex, float contagion. | Phase 4 |
+| C16 | **Places / `SETF`** — `PSETF` 31, `PUSHNEW` 27, `ROTATEF` 23. Five parallel place protocols; `GET-SETF-EXPANSION` is a stub returning a Python 5-element list instead of five values; `PUSH`/`POP`/`PUSHNEW` are registered as *functions* over Python lists. No test pins either, so M5 is free to fix them. | M5 |
+| C17 | **Lambda lists** — `FLET` 35, `LAMBDA` 22, `DESTRUCTURING-BIND` 22. Six copy-pasted binders (Finding C). | M3 |
+| C18 | **Environment / misc** — `environment/` 125 failing of 192; `hash-tables/` 69 of 158; `characters/` 103 of 259. `misc/` is 83.5% passing — leave it alone. | M1 / Phase 4 |
+| C19 | **Missing standard functions** — `LDIFF` 38, `TAILP` 20, `CHECK-TYPE` 18, `STREAM-ELEMENT-TYPE` 10, `MAKE-INSTANCES-OBSOLETE` 8. Genuinely absent; cheap; `STREAM-ELEMENT-TYPE` is also the one failing unit test. | M1 |
 
 ### Tier 3 — the genuine tail
 
@@ -373,22 +511,38 @@ Milestones now describe *mechanisms*, and map onto the clusters above.
 
 | | milestone | state | clusters |
 |---|---|---|---|
-| **M0** | Trustworthy measurement | **essentially done** — suite reaches every test; scoreboard + targeted runner exist. Remaining: `expected-failures/` wiring | — |
-| **M1** | Symbol, NIL, package identity | canonical CL symbol table **done**; package model outstanding | C8, C13 |
-| **M2** | Environment model | **not started** — the spine. Do not fix specials one binding form at a time; that produces a seventh mechanism | C1, C3 |
-| **M3** | One lambda-list engine | not started — six copy-pasted binders | C11, C1 |
+| **M0** | Trustworthy measurement | **DONE** — `COMPLETENESS: OK`, 22036/22036 accounted. Remaining: `expected-failures/` wiring | — |
+| **M1** | Symbol, NIL, package identity | canonical CL symbol table **done**; package model outstanding | C10, C18, C19 |
+| **M2** | Environment model | **not started** — the spine. Do not fix specials one binding form at a time; that produces a seventh mechanism | C1, X2 |
+| **M3** | One lambda-list engine | not started — six copy-pasted binders | C17, X2 |
 | **M4** | A real macro system | not started — ~90 standard macros are special forms. **Most ecosystem-critical** | — |
-| **M5** | `GET-SETF-EXPANSION` / places | not started — deletes ~600 lines of ladder code | C10 |
-| **M6** | Multiple values | partial | C9, C3 |
+| **M5** | `GET-SETF-EXPANSION` / places | not started — deletes ~600 lines of ladder code | C16 |
+| **M6** | Multiple values, sequences | partial | C3, C5, X2, X3 |
 | **M7** | Non-local control flow | partial — name-based block/tag matching, no identity objects | — |
-| **M8** | Conditions and restarts | **signaling core done**; restart half + `DEFINE-CONDITION` + raise-site migration remain | C2, C7 |
-| **M9** | Types, `SUBTYPEP`, CLOS | not started — two CLOS implementations; `SUBTYPEP` is a string-pair table | C4, C5, C6 |
-| **M10** | Reader, printer, streams, pathnames, loader | not started — **gates ASDF and all library loading** | C12, C15 |
+| **M8** | Conditions and restarts | **signaling core done**; restart half + `DEFINE-CONDITION` + raise-site migration remain | C9, X1 |
+| **M9** | Types, `SUBTYPEP`, CLOS, structures | not started — two CLOS implementations; `SUBTYPEP` is a string-pair table | C4, C6, C8, C13, C14 |
+| **M10** | Reader, printer, `FORMAT`, streams, pathnames, loader | not started — **now the largest single body of failures, and gates ASDF** | C2, C7, C11, C12 |
 
-**Ordering.** C1 first (cheapest large unlock, and it makes full runs affordable
-again). Then M2, because C3 and much of C1 bottom out in the environment model,
-and M3/M4 depend on it. Then re-derive priorities from the **first complete
-scoreboard** — 13065 tests have never run, and they will reorder this table.
+### Recommended order
+
+1. **C1 — LOOP `for var =`.** Not the largest, but it makes every later
+   measurement affordable (76% of a 7.5-hour run) and is already diagnosed.
+2. **X2 + X3 — designator coercion and `:test` argument order.** Two small,
+   well-localized fixes that plausibly move a large share of C3 (1266) and
+   C5 (598). **Measure before and after rather than assuming** — this is the
+   highest-uncertainty, highest-leverage item on the list.
+3. **C4 — `DEFSTRUCT`.** One macro, the worst pass rate in the suite (12.2%),
+   944 failures, no architectural prerequisites.
+4. **M10's `FORMAT` engine (C2).** The largest cluster at 1623. Bigger than the
+   three above combined, but also the most work — and note it is dimension **B**,
+   which §6 argues has been systematically under-ranked.
+5. **Re-measure, then re-derive this list.** After the first four, the residual
+   distribution will differ enough that ranking further ahead is guesswork.
+
+**A note on M2.** It remains the architectural spine, and C1/X2 both bottom out
+in it. If fixing C1 and X2 turns into repeated local patches to the environment,
+stop and do M2 properly instead — that is exactly the "seventh incompatible
+mechanism" this plan has warned about since the beginning.
 
 ---
 
@@ -427,11 +581,18 @@ Anything knowingly non-ANSI, with the milestone that removes it. Empty means
 | Failure if wrong | code computes the **wrong answer** | code **cannot be loaded at all** |
 | Milestones | M2–M9 | M0, M1, M9 (types-as-interface), M10, Phase 4 |
 
-**Why this must stay explicit.** Nearly every failure visible today is an
-A-dimension failure *because A is most of what has executed*. Ranking work by
-observed failure count ranks A over B by construction — a sampling artifact.
-`sequences`, `printer`, `streams`, `strings`, `characters`, `pathnames`,
-`reader`, `structures`, and `files` are **~8000 tests that have never run**.
+**This warning was proven correct, and the proof is worth keeping.** Earlier
+versions of this document said that ranking work by observed failure count ranks
+A over B *by construction*, because B directories had never executed. When the
+first complete run landed, **`FORMAT`/`FORMATTER` went straight to #1 at 1623
+failures** — ahead of every A-dimension cluster — and four of the five worst pass
+rates in the suite (`structures` 12.2%, `system-construction` 14.7%, `printer`
+17.4%, `reader` 17.6%) are B-dimension. The sampling artifact was real and it had
+been distorting this plan's priorities for its entire history.
+
+**The standing implication:** B-work is not "later." M10 is now the largest single
+body of failures in the suite *and* the milestone that gates ASDF, i.e. the
+ability to load any real library at all.
 
 **Rule of thumb:** when A-work and B-work are both unblocked, prefer whichever
 **unblocks measurement or unblocks loading**. Correct semantics for code you
@@ -519,7 +680,9 @@ rather than discovering these one crash at a time.
 | `plan.md` | this document |
 | `scripts/run_ansi.py` | **targeted runner — the development inner loop** |
 | `scripts/ansi_score.py` | per-subsystem scoreboard → `docs/ansi_baseline.json` |
-| `ansi_results/failed.txt` | **the working checklist** — group by operator; never work top-to-bottom |
+| `docs/ansi_checklist.md` | **the working checklist** — 13076 failures by directory → file, with per-entry verify commands |
+| `scripts/ansi_checklist.py` | regenerates the checklist; `--baseline` marks fixed/regressed per file |
+| `ansi_results/failed.txt` | raw RT output — the checklist's input, not a work list |
 | `run_all_tests.py` | full suite (4+ hours) — authority, not inner loop |
 | `REPAIR.md` | crash-repair SOP — historical; crashes are no longer the constraint |
 
@@ -541,6 +704,11 @@ landed, not a test count.
   `tests/test_do_symbols_family.py`; `pytest` 1246 passed, 1 pre-existing
   unrelated failure (`STREAM-ELEMENT-TYPE`). **ANSI impact unmeasured** — the run
   that would measure it was still in flight.
+- **2026-08-12 (e)** — **First complete run in the project's history:
+  `COMPLETENESS: OK`, 22036/22036 accounted, 0 missing.** M0's central goal, and
+  the first trustworthy scoreboard: 8960 passing (40.7%), ~7.5 hours. It
+  reordered the checklist immediately — `FORMAT`/`FORMATTER` took first place at
+  1623 failures, ahead of LOOP (450), which the truncated data had ranked #1.
 - **2026-08-12 (c)** — LOOP `for var = expr` diagnosed as the cause of ~76% of
   full-run wall time; `scripts/run_ansi.py` built; this document restructured
   around the failure checklist.

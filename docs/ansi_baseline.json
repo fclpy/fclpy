@@ -1,10 +1,10 @@
 {
-  "failed": 4457,
-  "passed": 4514,
+  "failed": 13076,
+  "passed": 8960,
   "per_directory": {
     "(unmapped: programmatically generated)": {
-      "failed": 589,
-      "passed": 220,
+      "failed": 3908,
+      "passed": 1075,
       "total": 4983
     },
     "arrays": {
@@ -18,8 +18,8 @@
       "total": 2
     },
     "characters": {
-      "failed": 0,
-      "passed": 0,
+      "failed": 103,
+      "passed": 156,
       "total": 259
     },
     "conditions": {
@@ -33,13 +33,13 @@
       "total": 1638
     },
     "data-and-control-flow": {
-      "failed": 415,
-      "passed": 1005,
+      "failed": 413,
+      "passed": 1007,
       "total": 1420
     },
     "environment": {
-      "failed": 0,
-      "passed": 0,
+      "failed": 125,
+      "passed": 67,
       "total": 192
     },
     "eval-and-compile": {
@@ -48,8 +48,8 @@
       "total": 318
     },
     "files": {
-      "failed": 0,
-      "passed": 0,
+      "failed": 64,
+      "passed": 23,
       "total": 87
     },
     "hash-tables": {
@@ -63,13 +63,13 @@
       "total": 838
     },
     "misc": {
-      "failed": 0,
-      "passed": 0,
+      "failed": 122,
+      "passed": 618,
       "total": 740
     },
     "numbers": {
-      "failed": 0,
-      "passed": 0,
+      "failed": 566,
+      "passed": 872,
       "total": 1438
     },
     "objects": {
@@ -78,43 +78,43 @@
       "total": 825
     },
     "packages": {
-      "failed": 198,
-      "passed": 72,
+      "failed": 232,
+      "passed": 108,
       "total": 340
     },
     "pathnames": {
-      "failed": 0,
-      "passed": 0,
+      "failed": 136,
+      "passed": 79,
       "total": 215
     },
     "printer": {
-      "failed": 0,
-      "passed": 0,
+      "failed": 651,
+      "passed": 137,
       "total": 788
     },
     "reader": {
-      "failed": 0,
-      "passed": 0,
+      "failed": 136,
+      "passed": 29,
       "total": 165
     },
     "sequences": {
-      "failed": 0,
-      "passed": 0,
+      "failed": 2168,
+      "passed": 990,
       "total": 3158
     },
     "streams": {
-      "failed": 0,
-      "passed": 0,
+      "failed": 382,
+      "passed": 161,
       "total": 543
     },
     "strings": {
-      "failed": 0,
-      "passed": 0,
+      "failed": 388,
+      "passed": 113,
       "total": 501
     },
     "structures": {
-      "failed": 0,
-      "passed": 0,
+      "failed": 101,
+      "passed": 14,
       "total": 115
     },
     "symbols": {
@@ -123,13 +123,13 @@
       "total": 1145
     },
     "system-construction": {
-      "failed": 0,
-      "passed": 0,
+      "failed": 64,
+      "passed": 11,
       "total": 75
     },
     "types-and-classes": {
-      "failed": 0,
-      "passed": 0,
+      "failed": 262,
+      "passed": 283,
       "total": 545
     }
   },
