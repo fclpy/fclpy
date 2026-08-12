@@ -64,6 +64,14 @@ def check_completeness(env):
     with open(os.path.join(results_dir, 'failed.txt'), 'w') as f:
         f.write('\n'.join(failed_names) + '\n')
 
+    # A full run supersedes every targeted run merged in since the last one
+    # (scripts/ansi_checklist.py --merge), so the amendment log starts over --
+    # otherwise the checklist would keep claiming to be "amended by" runs whose
+    # results this file has just overwritten.
+    merge_log = os.path.join(results_dir, 'merges.log')
+    if os.path.exists(merge_log):
+        os.remove(merge_log)
+
     return ok
 
 

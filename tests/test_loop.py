@@ -130,6 +130,82 @@ class TestLoopWhileUntil:
         assert list_to_python(counter_result) == [2, 1, 0]
 
 
+class TestLoopClauseComposition:
+    """Iteration-control clauses compose (CLHS 6.1.2); none replaces another.
+
+    Every case here failed before the clause parser stopped folding all of
+    FOR/REPEAT/WHILE/UNTIL into one `iteration_type` scalar, where whichever
+    clause parsed last silently discarded the rest. The two failure shapes were
+    an unbound driver variable (the driver's engine never ran) and a loop with
+    no bound at all (the bounding clause's engine never ran).
+    """
+
+    def test_for_equals_with_repeat(self):
+        """(LOOP FOR x = 7 REPEAT 5 COLLECT x) -> (7 7 7 7 7)"""
+        result = read_and_eval("(loop for x = 7 repeat 5 collect x)")
+        assert list_to_python(result) == [7, 7, 7, 7, 7]
+
+    def test_repeat_before_for_equals(self):
+        """Clause order must not change the meaning -- this shape used to hang."""
+        result = read_and_eval("(loop repeat 3 for x = 9 collect x)")
+        assert list_to_python(result) == [9, 9, 9]
+
+    def test_for_equals_then_with_repeat(self):
+        """(LOOP FOR x = 0 THEN (1+ x) REPEAT 4 COLLECT x) -> (0 1 2 3)"""
+        result = read_and_eval("(loop for x = 0 then (1+ x) repeat 4 collect x)")
+        assert list_to_python(result) == [0, 1, 2, 3]
+
+    def test_two_for_equals_clauses(self):
+        """Every FOR clause is a driver, not just the first."""
+        result = read_and_eval("(loop for a = 1 for b = 2 repeat 4 collect (+ a b))")
+        assert list_to_python(result) == [3, 3, 3, 3]
+
+    def test_repeat_bounds_a_range_driver(self):
+        """REPEAT and FROM/BELOW both apply; the loop ends at whichever runs out."""
+        result = read_and_eval("(loop for i from 0 below 3 repeat 2 collect i)")
+        assert list_to_python(result) == [0, 1]
+
+    def test_repeat_bounds_a_list_driver(self):
+        result = read_and_eval("(loop for x in '(a b c) repeat 2 collect x)")
+        assert list_to_python(result) == ['A', 'B']
+
+    def test_while_sees_the_driver_variable(self):
+        """The test is evaluated after this iteration's variables are bound."""
+        result = read_and_eval("(loop for i from 0 to 10 while (< i 3) collect i)")
+        assert list_to_python(result) == [0, 1, 2]
+
+    def test_while_sees_a_for_equals_variable(self):
+        result = read_and_eval("(loop for x = 1 then (* 2 x) while (< x 20) collect x)")
+        assert list_to_python(result) == [1, 2, 4, 8, 16]
+
+    def test_sequential_for_equals_sees_earlier_driver(self):
+        """FOR c = (f i) is computed after I is bound for this iteration."""
+        result = read_and_eval("(loop for i from 1 to 3 for j = (* 10 i) collect j)")
+        assert list_to_python(result) == [10, 20, 30]
+
+    def test_until_is_tested_before_the_body(self):
+        """(LOOP UNTIL T COLLECT 1) -> NIL, not (1): UNTIL is a pre-test."""
+        result = read_and_eval("(loop until t collect 1)")
+        assert result is lisptype.NIL or result == lisptype.NIL
+
+    def test_multiple_termination_tests_compose(self):
+        """A loop may carry more than one WHILE/UNTIL; all of them bound it."""
+        result = read_and_eval(
+            "(loop for i from 0 to 100 while (< i 10) until (> i 4) collect i)")
+        assert list_to_python(result) == [0, 1, 2, 3, 4]
+
+    def test_finally_sees_the_loop_variables(self):
+        """CLHS 6.1.4: the epilogue runs inside the loop's variable bindings."""
+        result = read_and_eval(
+            "(loop for i from 1 to 3 collect i finally (return (list i)))")
+        assert list_to_python(result) == [3]
+
+    def test_repeat_requires_a_number(self):
+        """A non-numeric REPEAT count is a loud error, never a silent no-op."""
+        with pytest.raises(lisptype.LispNotImplementedError):
+            read_and_eval("(loop repeat 'a collect 1)")
+
+
 class TestLoopConditionals:
     """Test LOOP with WHEN and UNLESS conditions."""
     

@@ -23,6 +23,25 @@ exactly the duplication failure mode plan.md's standing rule 3 exists to prevent
 they would drift, and a checklist that disagrees with the scoreboard is worse
 than no checklist.
 
+Keeping it current without a full run
+-------------------------------------
+`ansi_results/*.txt` is written by the full runner, so without help the
+checklist could only be refreshed by a 4+ hour run -- which in practice means it
+goes stale the moment anyone fixes anything, and a stale checklist is worse than
+none (it is supposed to be *the authority for what is failing*).
+
+`--merge` closes that gap. A targeted `run_ansi.py` run reports RT's own
+`*passed-tests*`/`*failed-tests*` for exactly the files it loaded; merging that
+back into `ansi_results/*.txt` updates the status of those tests and leaves
+every other test untouched. The result is the last full run, amended with every
+targeted run since -- which is precisely what a checklist needs to be.
+
+What merging is *not*: it is not a new scoreboard. A targeted run can register a
+slightly different test set than the full run does (files that generate tests at
+load time, aux files loaded in a different order), so the merged totals are an
+index, not an official measurement. Refresh `--save-baseline` only from a full
+run.
+
 Usage
 -----
     python scripts/ansi_checklist.py                  # write docs/ansi_checklist.md
@@ -30,6 +49,8 @@ Usage
     python scripts/ansi_checklist.py --dir sequences  # restrict to one directory
     python scripts/ansi_checklist.py --baseline docs/ansi_checklist_baseline.json
                                                       # mark progress vs. a saved run
+    python scripts/ansi_checklist.py --merge ansi_results/targeted-last.json
+                                                      # fold in a targeted run, then regenerate
 """
 
 import argparse
@@ -37,6 +58,7 @@ import json
 import os
 import sys
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -45,12 +67,78 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ansi_score import (  # noqa: E402
     ANSI_TEST_ROOT,
     REPO_ROOT,
+    RESULTS_DIR,
     build_name_to_file_map,
     read_names,
     top_dir,
 )
 
 UNMAPPED = '(unmapped: programmatically generated)'
+MERGE_LOG = 'merges.log'
+
+
+def merge_targeted(results_path):
+    """Fold one targeted run's outcomes into `ansi_results/*.txt`.
+
+    Only names the targeted run actually accounted for are touched; a test the
+    run did not load keeps whatever status the last full run gave it. Names the
+    run reports that the full run never registered are appended to `all.txt`,
+    since they demonstrably exist.
+
+    Returns (moved_to_passed, moved_to_failed, newly_seen) counts.
+    """
+    with open(results_path, encoding='utf-8') as handle:
+        results = json.load(handle)
+
+    run_passed = [n.upper() for n in results.get('passed', [])]
+    run_failed = [n.upper() for n in results.get('failed', [])]
+
+    all_names = read_names('all.txt')
+    passed = set(read_names('passed.txt'))
+    failed = set(read_names('failed.txt'))
+
+    moved_to_passed = sum(1 for n in run_passed if n in failed)
+    moved_to_failed = sum(1 for n in run_failed if n in passed)
+
+    for name in run_passed:
+        failed.discard(name)
+        passed.add(name)
+    for name in run_failed:
+        passed.discard(name)
+        failed.add(name)
+
+    known = set(all_names)
+    newly_seen = [n for n in run_passed + run_failed if n not in known]
+    all_names.extend(newly_seen)
+
+    _write_names('all.txt', all_names)
+    # Keep the ordering of all.txt so diffs between runs stay readable.
+    order = {name: i for i, name in enumerate(all_names)}
+    _write_names('passed.txt', sorted(passed, key=lambda n: order.get(n, len(order))))
+    _write_names('failed.txt', sorted(failed, key=lambda n: order.get(n, len(order))))
+
+    with open(RESULTS_DIR / MERGE_LOG, 'a', encoding='utf-8') as handle:
+        handle.write('%s  targets=%s  passed=%d failed=%d  '
+                     '(fixed %d, regressed %d, new %d)\n'
+                     % (datetime.now().isoformat(timespec='seconds'),
+                        ','.join(results.get('targets', [])) or '?',
+                        len(run_passed), len(run_failed),
+                        moved_to_passed, moved_to_failed, len(newly_seen)))
+
+    return moved_to_passed, moved_to_failed, len(newly_seen)
+
+
+def _write_names(filename, names):
+    (RESULTS_DIR / filename).write_text('\n'.join(names) + '\n', encoding='utf-8')
+
+
+def _recent_merges():
+    """Targeted runs folded in since the last full run, most recent first."""
+    path = RESULTS_DIR / MERGE_LOG
+    if not path.exists():
+        return []
+    lines = [l.strip() for l in path.read_text(encoding='utf-8').splitlines() if l.strip()]
+    return list(reversed(lines))
 
 
 def collect(restrict_dir=None):
@@ -113,6 +201,19 @@ def render(per_file, per_dir, unmapped_failures, detail, baseline):
     w('Generated by `scripts/ansi_checklist.py` from `ansi_results/*.txt`.')
     w('**Regenerate after any run** (full or targeted) -- do not hand-edit counts.')
     w('')
+    merges = _recent_merges()
+    if merges:
+        w('> These counts are the last **full** run amended by %d targeted run(s)'
+          % len(merges))
+        w('> (`run_ansi.py <target> --update-checklist`). Most recent first:')
+        w('>')
+        for line in merges[:5]:
+            w('> - `%s`' % line)
+        w('>')
+        w('> Amended counts are an *index*, not an official scoreboard: a targeted run')
+        w('> can register a slightly different test set than the full run does. Move')
+        w('> the official number, and `--save-baseline`, only from a full run.')
+        w('')
     w('| | |')
     w('|---|---|')
     w('| Failing tests | **%d** |' % total_failed)
@@ -215,27 +316,51 @@ def main():
                         help='JSON of {file: failed_count} to mark progress against')
     parser.add_argument('--save-baseline',
                         help='write the current {file: failed_count} map to this path')
+    parser.add_argument('--merge', action='append', default=[], metavar='RESULTS.JSON',
+                        help='fold a targeted run\'s results (run_ansi.py --results-out) '
+                             'into ansi_results/*.txt before regenerating; repeatable')
     args = parser.parse_args()
 
-    per_file, per_dir, unmapped_failures = collect(args.restrict_dir)
+    for results_path in args.merge:
+        fixed, regressed, new = merge_targeted(results_path)
+        print('Merged %s: %d newly passing, %d newly failing, %d not previously registered'
+              % (results_path, fixed, regressed, new))
+        if regressed:
+            print('  WARNING: %d test(s) moved from passed to failed -- investigate before '
+                  'treating this as progress' % regressed)
+
+    main_render(restrict_dir=args.restrict_dir, detail=args.detail,
+                baseline_path=args.baseline, out=args.out,
+                save_baseline=args.save_baseline)
+
+
+def main_render(restrict_dir=None, detail=False, baseline_path=None,
+                out=None, save_baseline=None):
+    """Regenerate docs/ansi_checklist.md from the current ansi_results/*.txt.
+
+    Separated from main() so run_ansi.py --update-checklist can regenerate the
+    checklist directly instead of shelling out to a second process (or, worse,
+    growing its own copy of the renderer).
+    """
+    per_file, per_dir, unmapped_failures = collect(restrict_dir)
 
     baseline = None
-    if args.baseline:
-        with open(args.baseline) as handle:
+    if baseline_path:
+        with open(baseline_path) as handle:
             baseline = json.load(handle)
 
-    text = render(per_file, per_dir, unmapped_failures, args.detail, baseline)
+    text = render(per_file, per_dir, unmapped_failures, detail, baseline)
 
-    out_path = Path(args.out) if args.out else REPO_ROOT / 'docs' / 'ansi_checklist.md'
+    out_path = Path(out) if out else REPO_ROOT / 'docs' / 'ansi_checklist.md'
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(text, encoding='utf-8')
 
-    if args.save_baseline:
+    if save_baseline:
         snapshot = {f.replace('\\', '/'): v['failed']
                     for f, v in per_file.items() if v['failed']}
-        with open(args.save_baseline, 'w') as handle:
+        with open(save_baseline, 'w') as handle:
             json.dump(snapshot, handle, indent=2, sort_keys=True)
-        print('Baseline written to %s' % args.save_baseline)
+        print('Baseline written to %s' % save_baseline)
 
     total_failed = sum(d['failed'] for d in per_dir.values()) + len(unmapped_failures)
     files_with = sum(1 for f in per_file.values() if f['failed'])

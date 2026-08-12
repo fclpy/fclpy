@@ -9,16 +9,44 @@ import sys
 # Timeout for loop warning (in seconds) - set to 0 to disable
 LOOP_TIMEOUT_WARNING = 120  # 2 minutes
 
-# Hard cap for LOOP's own simple-loop (no iteration clause) repeat-until-non-local-exit
-# path (CLHS 6.1.1). That path has no driver of its own to bound iteration -- an
-# unrecognized/misparsed clause silently falling through to an inert body form (e.g.
-# a loop-keyword synonym the clause parser doesn't know, so its tokens land in
-# body_forms instead of being consumed) has no other way to ever terminate. Every
-# other iteration construct here (DO/DOTIMES/DOLIST, and LOOP's own FOR/REPEAT/WHILE
-# drivers) is naturally bounded by its own driver, so only this path needs a hard
-# stop. Set well above LOOP_TIMEOUT_WARNING so it never fires on a legitimately slow
+# Hard cap for any loop that fails to terminate. The obvious case is LOOP's
+# simple-loop path (CLHS 6.1.1), which has no driver at all: an unrecognized or
+# misparsed clause whose tokens land in body_forms instead of being consumed has
+# no way to ever terminate.
+#
+# It is NOT the only case, and the comment that used to stand here -- claiming
+# every other construct "is naturally bounded by its own driver" -- was false.
+# `for var = form` is an unbounded driver by definition (CLHS 6.1.2.1.3): it is
+# bounded only by a *separate* clause, so any defect that drops that clause
+# produces a driver-path runaway. `repeat 5 for x = 7` was exactly that, and it
+# hung with no bound to stop it. The cap therefore applies to every path.
+#
+# Set well above LOOP_TIMEOUT_WARNING so it never fires on a legitimately slow
 # ANSI test, only on a genuine runaway.
 LOOP_TIMEOUT_ERROR = 600  # 10 minutes
+
+# LOOP's accumulation clauses (CLHS 6.1.3) mapped to the accumulator each one
+# feeds. ALWAYS/THEREIS are termination-test clauses rather than accumulations,
+# but they are parsed and executed through the same slot, so they live here too.
+# One table instead of one parse branch per keyword: the branches differed only
+# in this string, which is how INTO came to be handled in none of them.
+ACCUMULATION_CLAUSES = {
+    'COLLECT': 'collect', 'COLLECTING': 'collect',
+    'APPEND': 'append', 'APPENDING': 'append',
+    'NCONC': 'nconc', 'NCONCING': 'nconc',
+    'SUM': 'sum', 'SUMMING': 'sum',
+    'COUNT': 'count', 'COUNTING': 'count',
+    'ALWAYS': 'always',
+    'THEREIS': 'thereis',
+}
+
+# Every token that begins a new LOOP clause, and therefore ends the one being
+# parsed. Single source of truth: this used to be two hand-maintained copies
+# (the FOR-clause scanner and the DO body scanner) that could drift apart.
+LOOP_CLAUSE_KEYWORDS = frozenset(ACCUMULATION_CLAUSES) | {
+    'FOR', 'AS', 'WHILE', 'UNTIL', 'REPEAT', 'DO', 'DOING',
+    'WHEN', 'UNLESS', 'IF', 'RETURN', 'INITIALLY', 'FINALLY',
+}
 
 
 class LoopWatchdog:
@@ -1437,31 +1465,36 @@ def eval_loop(form, env):
 
     # Parse loop clauses into structured form
     i = 0
-    
-    # Loop state
-    iteration_type = None  # 'for-range', 'for-in', 'for-on', 'for-equals', 'while', 'until', 'repeat', None
-    iteration_var = None
-    iteration_test = None  # for WHILE/UNTIL termination
-    termination_type = None  # 'while' or 'until' - can be used with FOR clauses
-    iteration_start = 0
-    iteration_end = None
-    iteration_step = 1
-    iteration_list = None  # for FOR ... IN/ON
-    repeat_count = None
 
-    # Primary + additional iteration drivers (for parallel FOR clauses).
-    # Each driver is a dict with keys: var, kind, and kind-specific data.
+    # Iteration drivers, in clause order. Each driver is a dict with keys var,
+    # kind and kind-specific data. CLHS 6.1.2: every iteration-control clause
+    # (FOR/AS, and REPEAT, which is a bounding clause in the same group) is a
+    # driver, and drivers *compose* -- the loop runs while all of them still
+    # have a value. There is deliberately no scalar "the iteration type" here:
+    # a single scalar cannot represent `for x = 7 repeat 5`, and whichever
+    # clause was parsed last silently won.
     iteration_drivers = []
 
-    # Additional FOR bindings that don't drive the primary iteration.
-    # Minimal support for ANSI patterns like:
-    #   (LOOP FOR I FROM 0 BELOW 256 FOR C = (CODE-CHAR I) WHEN C COLLECT C)
-    aux_for_bindings = []  # list of (var, init_form, then_form_or_None)
-    
+    # WHILE/UNTIL termination tests (CLHS 6.1.2.1.2). Also composing: a loop may
+    # carry several, and they bound whatever drivers are present rather than
+    # replacing them.
+    #
+    # Position matters. A termination test is evaluated where it is written
+    # (CLHS 6.1.2.1.2), so `while x collect x` tests before accumulating while
+    # `collect x until x` accumulates and then tests -- which is why each entry
+    # records whether a main clause had already been seen when it was parsed.
+    termination_tests = []  # list of ('while'/'until', test_form, after_body)
+
     conditionals = []  # list of ('when'/'unless', test_form)
     body_forms = []
-    accumulation = None  # ('collect'/'append'/'sum'/'count'/'always'/'thereis', form)
-    accumulation_conditionals = []  # conditionals that apply to accumulation
+
+    # Accumulation clauses, in order. CLHS 6.1.3 permits several in one loop
+    # (`collect i into foo always (< i 20)`); a single slot silently kept only
+    # the last one parsed and discarded the rest.
+    # Each entry: {'type', 'form', 'into', 'conditionals'}.
+    accumulations = []
+
+    initially_forms = []  # INITIALLY prologue, run once before the first iteration
     finally_forms = []
     return_form = None  # RETURN clause form to evaluate during loop
     finally_return_form = None  # RETURN clause in FINALLY section (evaluated at end)
@@ -1489,11 +1522,7 @@ def eval_loop(form, env):
             if not (isinstance(candidate_var, lisptype.LispSymbol) or _consp_internal(candidate_var)):
                 raise lisptype.LispNotImplementedError('LOOP FOR requires a symbol')
 
-            clause_stop = ('FOR', 'AS', 'WHILE', 'UNTIL', 'REPEAT', 'DO', 'DOING',
-                           'COLLECT', 'COLLECTING', 'APPEND', 'APPENDING',
-                           'NCONC', 'NCONCING', 'SUM', 'SUMMING', 'COUNT', 'COUNTING',
-                           'ALWAYS', 'THEREIS',
-                           'WHEN', 'UNLESS', 'IF', 'RETURN', 'FINALLY')
+            clause_stop = LOOP_CLAUSE_KEYWORDS
 
             # Parse the FOR clause into either a driver (IN/ON/ACROSS/FROM...) or an aux binding (=
             # without FROM/IN/etc) when a driver already exists.
@@ -1603,13 +1632,6 @@ def eval_loop(form, env):
             if driver_kind is None and saw_driver_keyword and driver_start is not None:
                 driver_kind = 'for-from'
 
-            # Decide whether this clause is a driver or an aux binding.
-            if iteration_drivers and (not saw_driver_keyword) and (driver_kind == 'for-equals'):
-                # Second/subsequent "FOR var = ..." is treated as aux binding.
-                aux_for_bindings.append((candidate_var, aux_init, aux_then))
-                i = j
-                continue
-
             if driver_kind is None:
                 # e.g., "FOR X" without IN/FROM/=
                 raise lisptype.LispNotImplementedError('LOOP FOR clause missing iteration spec')
@@ -1624,55 +1646,38 @@ def eval_loop(form, env):
                 else:
                     driver_step = cons(lisptype.LispSymbol('-'), cons(driver_step, lisptype.NIL))
 
-            driver = {
+            iteration_drivers.append({
                 'var': candidate_var,
                 'kind': driver_kind,
                 'start': driver_start,
                 'end': driver_end,
                 'step': driver_step,
                 'list': driver_list,
-            }
-            iteration_drivers.append(driver)
-
-            # Preserve previous single-driver state for existing execution paths.
-            if iteration_var is None:
-                iteration_var = candidate_var
-                iteration_type = driver_kind
-                if driver_kind in ('for-range', 'for-below'):
-                    iteration_start = driver_start if driver_start is not None else 0
-                    iteration_end = driver_end
-                    if driver_step is not None:
-                        iteration_step = driver_step
-                elif driver_kind in ('for-in', 'for-on', 'for-across'):
-                    iteration_list = driver_list
-                elif driver_kind == 'for-equals':
-                    iteration_start = driver_start
-                    iteration_step = driver_step
+            })
 
             i = j
             continue
-            
+
         elif name == 'WHILE':
-            # If we already have an iteration type (e.g. FOR clause), this is just a termination test
-            if iteration_type is None:
-                iteration_type = 'while'
-            termination_type = 'while'
-            iteration_test = forms[i+1]
+            termination_tests.append(('while', forms[i+1], bool(body_forms or accumulations)))
             i += 2
-            
+
         elif name == 'UNTIL':
-            # If we already have an iteration type (e.g. FOR clause), this is just a termination test
-            if iteration_type is None:
-                iteration_type = 'until'
-            termination_type = 'until'
-            iteration_test = forms[i+1]
+            termination_tests.append(('until', forms[i+1], bool(body_forms or accumulations)))
             i += 2
-            
+
         elif name == 'REPEAT':
-            iteration_type = 'repeat'
-            repeat_count = forms[i+1]
+            # CLHS 6.1.2.1.1: REPEAT bounds the iteration; it does not replace
+            # whatever driver is present. Modelling it as an anonymous driver is
+            # what makes `for x = 7 repeat 5` and `repeat 5 for x = 7` mean the
+            # same thing regardless of clause order.
+            iteration_drivers.append({
+                'var': None,
+                'kind': 'repeat',
+                'count': forms[i+1],
+            })
             i += 2
-            
+
         elif name in ('WHEN', 'IF'):
             conditionals.append(('when', forms[i+1]))
             i += 2
@@ -1685,63 +1690,44 @@ def eval_loop(form, env):
             # Collect body forms until next clause keyword
             # DO clause consumes the current conditionals - they don't apply to subsequent clauses
             i += 1
-            while i < len(forms):
-                f = forms[i]
-                fname = sym_name(f)
-                if fname in ('FOR', 'AS', 'WHILE', 'UNTIL', 'REPEAT', 'DO', 'DOING',
-                             'COLLECT', 'COLLECTING', 'APPEND', 'APPENDING',
-                             'NCONC', 'NCONCING', 'SUM', 'SUMMING', 'COUNT', 'COUNTING',
-                             'ALWAYS', 'THEREIS',
-                             'WHEN', 'UNLESS', 'IF', 'RETURN', 'FINALLY'):
-                    break
-                body_forms.append(f)
+            while i < len(forms) and sym_name(forms[i]) not in LOOP_CLAUSE_KEYWORDS:
+                body_forms.append(forms[i])
                 i += 1
-                
-        elif name in ('COLLECT', 'COLLECTING'):
-            # If there are pending conditionals (no DO consumed them), they apply to this
-            if not body_forms:  # No DO clause consumed the conditionals
-                accumulation_conditionals = list(conditionals)
-            accumulation = ('collect', forms[i+1])
+
+        elif name == 'INITIALLY':
+            # CLHS 6.1.7.1: the prologue. Its forms run once, after the
+            # iteration variables are established and before the first
+            # iteration. Previously unrecognized, so its forms fell into
+            # body_forms and were re-run every iteration (or were dropped
+            # outright once a driver had been parsed).
+            i += 1
+            while i < len(forms) and sym_name(forms[i]) not in LOOP_CLAUSE_KEYWORDS:
+                initially_forms.append(forms[i])
+                i += 1
+
+        elif name in ACCUMULATION_CLAUSES:
+            # One branch for all the accumulation clauses. They differ only in
+            # the accumulator they feed, which execute_iteration_body already
+            # dispatches on, so a parse branch per keyword only meant one more
+            # place for INTO to be forgotten.
+            clause = {
+                'type': ACCUMULATION_CLAUSES[name],
+                'form': forms[i+1],
+                'into': None,
+                # Pending conditionals apply here only if no DO consumed them.
+                'conditionals': [] if body_forms else list(conditionals),
+            }
             i += 2
-            
-        elif name in ('APPEND', 'APPENDING'):
-            if not body_forms:
-                accumulation_conditionals = list(conditionals)
-            accumulation = ('append', forms[i+1])
-            i += 2
-            
-        elif name in ('NCONC', 'NCONCING'):
-            if not body_forms:
-                accumulation_conditionals = list(conditionals)
-            accumulation = ('nconc', forms[i+1])
-            i += 2
-            
-        elif name in ('SUM', 'SUMMING'):
-            if not body_forms:
-                accumulation_conditionals = list(conditionals)
-            accumulation = ('sum', forms[i+1])
-            i += 2
-            
-        elif name in ('COUNT', 'COUNTING'):
-            if not body_forms:
-                accumulation_conditionals = list(conditionals)
-            accumulation = ('count', forms[i+1])
-            i += 2
-            
-        elif name == 'ALWAYS':
-            # ALWAYS test-form - returns T if test is true for all iterations, NIL otherwise
-            if not body_forms:
-                accumulation_conditionals = list(conditionals)
-            accumulation = ('always', forms[i+1])
-            i += 2
-            
-        elif name == 'THEREIS':
-            # THEREIS test-form - returns the test result if true for any iteration, NIL otherwise
-            if not body_forms:
-                accumulation_conditionals = list(conditionals)
-            accumulation = ('thereis', forms[i+1])
-            i += 2
-            
+            # CLHS 6.1.3: "into var" accumulates into a loop-local variable
+            # instead of into the loop's value. Previously the INTO token and
+            # its variable simply fell through to the unrecognized-keyword
+            # branch and were dropped, so the accumulation silently became the
+            # loop's value and the named variable was never bound at all.
+            if i < len(forms) and sym_name(forms[i]) == 'INTO':
+                clause['into'] = forms[i+1]
+                i += 2
+            accumulations.append(clause)
+
         elif name == 'RETURN':
             # Store return form for evaluation during loop execution
             if i + 1 < len(forms):
@@ -1752,9 +1738,9 @@ def eval_loop(form, env):
             
         elif name == 'FINALLY':
             i += 1
-            while i < len(forms):
+            while i < len(forms) and sym_name(forms[i]) not in LOOP_CLAUSE_KEYWORDS:
                 f = forms[i]
-                # Check if this form is (RETURN ...) 
+                # Check if this form is (RETURN ...)
                 if _consp_internal(f):
                     car_f = car(f)
                     if isinstance(car_f, lisptype.LispSymbol) and car_f.name.upper() == 'RETURN':
@@ -1771,114 +1757,137 @@ def eval_loop(form, env):
                     i += 1
                 
         else:
-            # Simple loop - just evaluate body repeatedly until explicit return
-            # Or if no iteration, evaluate once
-            if iteration_type is None:
-                # Simple infinite loop or body evaluation
+            # Simple loop (CLHS 6.1.1): with no iteration-control clause seen so
+            # far the compound forms are the loop body. Once a driver or a
+            # termination test exists this is an unrecognized loop keyword; it is
+            # still dropped here, as it always has been -- see plan.md's
+            # Discovered issues, this is the one remaining silent path in LOOP.
+            if not iteration_drivers and not termination_tests:
                 body_forms.append(token)
             i += 1
     
     # Execute the loop
     result = None
-    accumulated = []
-    sum_result = 0
-    count_result = 0
-    always_failed = False  # Track if ALWAYS test failed
-    thereis_result = None  # Track result from THEREIS test
     return_triggered = False  # Flag for when RETURN is executed
 
-    aux_first_iter = True
+    # ALWAYS/THEREIS decide the loop's value directly rather than accumulating.
+    always_failed = False
+    thereis_result = None
 
-    def bind_aux(loop_env):
-        """Bind auxiliary FOR variables for this iteration."""
-        nonlocal aux_first_iter
-        if not aux_for_bindings:
-            return
-        for var, init_form, then_form in aux_for_bindings:
-            form = init_form if (aux_first_iter or then_form is None) else then_form
-            loop_env.set_variable(var, eval(form, loop_env))
-        aux_first_iter = False
-    
-    def should_execute_body(loop_env):
-        """Check conditionals for body forms."""
-        for cond_type, cond_form in conditionals:
+    # One accumulator per INTO destination, keyed by the variable's name (None
+    # is "the loop's own value"). Several clauses may share a destination, which
+    # is what makes `collect a into x collect b into x` accumulate in order.
+    # Each state is {'type': str, 'items': [], 'number': int}.
+    acc_states = {}
+
+    def _acc_key(clause):
+        into = clause['into']
+        return None if into is None else into.name
+
+    for _clause in accumulations:
+        _key = _acc_key(_clause)
+        if _key not in acc_states:
+            acc_states[_key] = {'type': _clause['type'], 'items': [], 'number': 0}
+
+    def _conditionals_pass(clause_conditionals, loop_env):
+        """Evaluate a WHEN/UNLESS conditional list against this iteration."""
+        for cond_type, cond_form in clause_conditionals:
             cond_result = eval(cond_form, loop_env)
             if cond_type == 'when' and not lisptype.is_truthy(cond_result):
                 return False
             if cond_type == 'unless' and lisptype.is_truthy(cond_result):
                 return False
         return True
-    
-    def should_execute_accumulation(loop_env):
-        """Check conditionals for accumulation (may be different from body)."""
-        for cond_type, cond_form in accumulation_conditionals:
-            cond_result = eval(cond_form, loop_env)
-            if cond_type == 'when' and not lisptype.is_truthy(cond_result):
-                return False
-            if cond_type == 'unless' and lisptype.is_truthy(cond_result):
-                return False
-        return True
-    
+
+    def _accumulated_value(key):
+        """The Lisp value accumulated so far for one INTO destination.
+
+        Shared by the loop's return value and by INTO, which is the same
+        accumulator merely stored somewhere else -- computing it in two places
+        is how they would drift.
+        """
+        state = acc_states.get(key)
+        if state is None:
+            return lisptype.NIL
+        acc_type = state['type']
+        if acc_type in ('collect', 'append', 'nconc'):
+            result_list = lisptype.NIL
+            for item in reversed(state['items']):
+                result_list = cons(item, result_list)
+            return result_list
+        if acc_type in ('sum', 'count'):
+            return state['number']
+        if acc_type == 'always':
+            # T for all iterations, including vacuous truth
+            return lisptype.NIL if always_failed else lisptype.T
+        if acc_type == 'thereis':
+            return thereis_result if thereis_result is not None else lisptype.NIL
+        return lisptype.NIL
+
     def execute_iteration_body(loop_env):
         """Execute one iteration of the loop body."""
-        nonlocal result, accumulated, sum_result, count_result, always_failed, thereis_result, return_triggered
-        
+        nonlocal result, always_failed, thereis_result, return_triggered
+
         # Check for RETURN form and evaluate it if present
         if return_form is not None:
             result = eval(return_form, loop_env)
             return_triggered = True
             return
-        
+
         # Execute body forms (controlled by main conditionals like WHEN/UNLESS)
-        if should_execute_body(loop_env):
+        if _conditionals_pass(conditionals, loop_env):
             for f in body_forms:
                 result = eval(f, loop_env)
-        
-        # Handle accumulation - uses its own conditionals (may be empty)
-        if accumulation and should_execute_accumulation(loop_env):
-            acc_type, acc_form = accumulation
-            acc_value = eval(acc_form, loop_env)
+
+        # Each accumulation clause has its own conditionals (possibly empty).
+        for clause in accumulations:
+            if not _conditionals_pass(clause['conditionals'], loop_env):
+                continue
+            acc_type = clause['type']
+            key = _acc_key(clause)
+            state = acc_states[key]
+            acc_value = eval(clause['form'], loop_env)
+
             if acc_type == 'collect':
-                accumulated.append(acc_value)
-            elif acc_type == 'append':
-                # Append list to result
+                state['items'].append(acc_value)
+            elif acc_type in ('append', 'nconc'):
+                # NCONC is destructive in ANSI; the observable result is the
+                # same here because the accumulator owns its own list.
                 if _consp_internal(acc_value):
                     cur = acc_value
                     while _consp_internal(cur):
-                        accumulated.append(car(cur))
+                        state['items'].append(car(cur))
                         cur = cdr(cur)
-                elif acc_value is not lisptype.NIL and acc_value is not None:
-                    accumulated.append(acc_value)
-            elif acc_type == 'nconc':
-                # Similar to append but destructive (same behavior for us)
-                if _consp_internal(acc_value):
-                    cur = acc_value
-                    while _consp_internal(cur):
-                        accumulated.append(car(cur))
-                        cur = cdr(cur)
+                elif acc_type == 'append' and acc_value is not lisptype.NIL and acc_value is not None:
+                    state['items'].append(acc_value)
             elif acc_type == 'sum':
-                sum_result += acc_value
+                state['number'] += acc_value
             elif acc_type == 'count':
                 if lisptype.is_truthy(acc_value):
-                    count_result += 1
+                    state['number'] += 1
             elif acc_type == 'always':
-                # ALWAYS: test form should be true for all iterations
-                # If test is false for any iteration, set always_failed flag
+                # ALWAYS: the test must hold on every iteration; the first
+                # failure ends the loop with NIL.
                 if not lisptype.is_truthy(acc_value):
                     always_failed = True
-                    return_triggered = True  # Exit loop immediately
+                    return_triggered = True
             elif acc_type == 'thereis':
-                # THEREIS: return the value if it's true (non-nil/non-false)
+                # THEREIS: the first true value ends the loop and is its value.
                 if lisptype.is_truthy(acc_value):
                     thereis_result = acc_value
-                    return_triggered = True  # Exit loop immediately
+                    return_triggered = True
 
-    
+            if clause['into'] is not None:
+                loop_env.set_variable(clause['into'], _accumulated_value(key))
+
+            if return_triggered:
+                return
+
     loop_watchdog = LoopWatchdog(
         'LOOP',
         lambda: [f"body_forms: {body_forms}",
-                 f"iteration_type: {iteration_type}, iteration_test: {iteration_test}"]
-                + ([f"var: {iteration_var}"] if iteration_var else []),
+                 f"drivers: {[(d['kind'], d['var']) for d in iteration_drivers]}",
+                 f"termination_tests: {termination_tests}"],
         hard_cap=LOOP_TIMEOUT_ERROR)
 
     def _run_loop_and_finalize():
@@ -1894,15 +1903,21 @@ def eval_loop(form, env):
         # be emitted around the whole loop, including its non-local exits.
         check_loop_timeout = loop_watchdog.tick
 
-        def _termination_break(loop_env):
-            """Check termination_type/iteration_test if present."""
-            if iteration_test is None or termination_type is None:
-                return False
-            test_result = eval(iteration_test, loop_env)
-            if termination_type == 'until' and lisptype.is_truthy(test_result):
-                return True
-            if termination_type == 'while' and not lisptype.is_truthy(test_result):
-                return True
+        def _termination_break(loop_env, after_body):
+            """True if a WHILE/UNTIL clause at this position ends the loop.
+
+            after_body selects the tests written after the first main clause, so
+            `collect x until x` accumulates and then tests, while `while x
+            collect x` tests first (CLHS 6.1.2.1.2).
+            """
+            for kind, test_form, test_after_body in termination_tests:
+                if test_after_body != after_body:
+                    continue
+                test_result = eval(test_form, loop_env)
+                if kind == 'until' and lisptype.is_truthy(test_result):
+                    return True
+                if kind == 'while' and not lisptype.is_truthy(test_result):
+                    return True
             return False
 
         def _init_driver(loop_env, driver):
@@ -1915,7 +1930,13 @@ def eval_loop(form, env):
                 driver['_idx'] = 0
                 return True
             if kind in ('for-range', 'for-below'):
-                start_form = driver.get('start', 0)
+                # `for x to 5` and `for x below 5` omit FROM, so 'start' is
+                # present but None; the CLHS default is 0. (driver.get('start', 0)
+                # does not do this -- the key exists, so the default never
+                # applies and the loop evaluated None as its start value.)
+                start_form = driver.get('start')
+                if start_form is None:
+                    start_form = 0
                 end_form = driver.get('end')
                 step_form = driver.get('step')
                 if step_form is None:
@@ -1930,7 +1951,13 @@ def eval_loop(form, env):
                 driver['_step'] = step
                 return True
             if kind == 'for-from':
-                start_form = driver.get('start', 0)
+                # `for x to 5` and `for x below 5` omit FROM, so 'start' is
+                # present but None; the CLHS default is 0. (driver.get('start', 0)
+                # does not do this -- the key exists, so the default never
+                # applies and the loop evaluated None as its start value.)
+                start_form = driver.get('start')
+                if start_form is None:
+                    start_form = 0
                 step_form = driver.get('step')
                 if step_form is None:
                     step_form = 1
@@ -1941,11 +1968,23 @@ def eval_loop(form, env):
                 driver['_cur'] = start
                 driver['_step'] = step
                 return True
+            if kind == 'repeat':
+                count = eval(driver['count'], loop_env)
+                if not isinstance(count, (int, float)) or isinstance(count, bool):
+                    raise lisptype.LispNotImplementedError(
+                        f'LOOP REPEAT requires a number, got {count!r}')
+                driver['_remaining'] = count
+                return True
             if kind == 'for-equals':
-                start_form = driver.get('start')
-                step_form = driver.get('step')
-                driver['_cur'] = eval(start_form, loop_env)
-                driver['_step_form'] = step_form
+                # Nothing is evaluated here. CLHS 6.1.2.1.3: for-as-equals-then
+                # computes its value on each iteration, and for sequential FOR
+                # clauses that value may depend on a driver bound earlier in the
+                # same iteration -- e.g.
+                #   (LOOP FOR I FROM 0 BELOW 256 FOR C = (CODE-CHAR I) ...)
+                # so the init form is evaluated in _bind_driver, after the
+                # preceding drivers have bound their variables, not at loop setup
+                # when I does not exist yet.
+                driver['_first'] = True
                 return True
             if kind == 'for-being-symbols':
                 # Evaluate package spec (could be string, symbol, or package object)
@@ -1960,8 +1999,13 @@ def eval_loop(form, env):
                     except Exception:
                         pkg_val = pkg_spec
 
-                    # pkg_val may be a LispPackage, LispSymbol, or string
-                    import fclpy.lisptype as lisptype
+                    # pkg_val may be a LispPackage, LispSymbol, or string.
+                    # (No local `import fclpy.lisptype as lisptype` here: it
+                    # made lisptype a local of the whole enclosing function, so
+                    # every earlier `lisptype.LispNotImplementedError` in
+                    # _init_driver raised UnboundLocalError instead. The
+                    # module-level import at the top of this file is the one to
+                    # use.)
                     if isinstance(pkg_val, lisptype.Package):
                         pkg = pkg_val
                     else:
@@ -2018,7 +2062,12 @@ def eval_loop(form, env):
             if kind == 'for-from':
                 return True
             if kind == 'for-equals':
+                # An unbounded driver: `for x = form` never terminates on its
+                # own (CLHS 6.1.2.1.3), so something else -- REPEAT, WHILE,
+                # another driver, or a non-local exit -- must bound the loop.
                 return True
+            if kind == 'repeat':
+                return driver.get('_remaining', 0) > 0
             if kind == 'for-being-symbols':
                 return _consp_internal(driver.get('_cur'))
             return False
@@ -2046,7 +2095,16 @@ def eval_loop(form, env):
                 _bind_varspec(loop_env, var, driver['_cur'])
                 return
             if kind == 'for-equals':
-                _bind_varspec(loop_env, var, driver['_cur'])
+                if driver['_first']:
+                    value_form = driver.get('start')
+                    driver['_first'] = False
+                else:
+                    # No THEN form means the init form supplies every value.
+                    step_form = driver.get('step')
+                    value_form = driver.get('start') if step_form is None else step_form
+                _bind_varspec(loop_env, var, eval(value_form, loop_env))
+                return
+            if kind == 'repeat':
                 return
             if kind == 'for-being-symbols':
                 _bind_varspec(loop_env, var, car(driver['_cur']))
@@ -2067,266 +2125,102 @@ def eval_loop(form, env):
                 driver['_cur'] = driver['_cur'] + driver['_step']
                 return
             if kind == 'for-equals':
-                step_form = driver.get('_step_form')
-                if step_form is not None:
-                    driver['_cur'] = eval(step_form, loop_env)
-                else:
-                    driver['_cur'] = eval(driver.get('start'), loop_env)
+                # Stepping happens in _bind_driver -- see _init_driver.
+                return
+            if kind == 'repeat':
+                driver['_remaining'] -= 1
                 return
             if kind == 'for-being-symbols':
                 driver['_cur'] = cdr(driver['_cur'])
                 return
     
-        # Parallel drivers: iterate while all drivers can produce values.
-        if len(iteration_drivers) > 1:
-            loop_env = lisptype.Environment(env)
-            for d in iteration_drivers:
-                _init_driver(loop_env, d)
+        # ------------------------------------------------------------------
+        # The one iteration engine.
+        #
+        # There used to be nine near-duplicate copies of this loop here -- one
+        # per iteration_type ('while', 'until', 'repeat', 'for-range',
+        # 'for-below', 'for-in', 'for-on', 'for-across', 'for-equals') -- plus
+        # this generic driver path, which only ever ran for driver kinds that
+        # had no inline copy. Because a single `iteration_type` scalar selected
+        # among them, the *last* iteration-control clause parsed decided which
+        # engine ran and every other clause was discarded: `for x = 7 repeat 5`
+        # ran REPEAT's copy, which never binds a driver variable (hence
+        # "Unbound variable: X"), and `repeat 5 for x = 7` ran for-equals' copy,
+        # which has no bound, hence a loop that never terminates.
+        #
+        # CLHS 6.1.2 has no such scalar: iteration-control clauses compose, and
+        # the loop ends when any one of them runs out. That is exactly what
+        # `all(_driver_has_value(...))` expresses, so all the special cases are
+        # gone rather than fixed.
+        # ------------------------------------------------------------------
+        loop_env = lisptype.Environment(env)
+        for d in iteration_drivers:
+            _init_driver(loop_env, d)
 
+        # INTO names a variable local to the loop (CLHS 6.1.3), so bind it here
+        # -- add_variable, not set_variable, or the accumulation would assign
+        # through to an outer binding of the same name and clobber it.
+        for clause in accumulations:
+            if clause['into'] is not None:
+                loop_env.add_variable(clause['into'], _accumulated_value(_acc_key(clause)))
+
+        # The prologue runs once, after the iteration variables exist and
+        # before the first termination test (CLHS 6.1.7.1).
+        for f in initially_forms:
+            eval(f, loop_env)
+
+        # With no drivers, no termination test and nothing to execute there is
+        # nothing to iterate; running would just spin until the hard cap.
+        if iteration_drivers or termination_tests or body_forms or accumulations \
+                or (return_form is not None):
             while all(_driver_has_value(d) for d in iteration_drivers):
                 check_loop_timeout()
-                if _termination_break(loop_env):
-                    break
 
+                # Bind before testing. A termination test routinely reads the
+                # variable its own driver supplies -- (loop for x = 1 then (* 2 x)
+                # while (< x 20) ...) -- so testing first sees either an unbound
+                # variable on the first iteration or a stale one thereafter.
                 for d in iteration_drivers:
                     _bind_driver(loop_env, d)
-                bind_aux(loop_env)
+
+                if _termination_break(loop_env, after_body=False):
+                    break
+
                 execute_iteration_body(loop_env)
-            
                 if return_triggered:
+                    break
+
+                if _termination_break(loop_env, after_body=True):
                     break
 
                 for d in iteration_drivers:
                     _step_driver(loop_env, d)
 
-        elif iteration_type == 'while':
-            while lisptype.is_truthy(eval(iteration_test, env)):
-                check_loop_timeout()
-                bind_aux(env)
-                execute_iteration_body(env)
-                if return_triggered:
-                    break
-            
-        elif iteration_type == 'until':
-            while True:
-                check_loop_timeout()
-                bind_aux(env)
-                execute_iteration_body(env)
-                if return_triggered:
-                    break
-                if lisptype.is_truthy(eval(iteration_test, env)):
-                    break
-                
-        elif iteration_type == 'repeat':
-            count = eval(repeat_count, env)
-            for _ in range(count):
-                check_loop_timeout()
-                bind_aux(env)
-                execute_iteration_body(env)
-                if return_triggered:
-                    break
-            
-        elif iteration_type == 'for-range':
-            start = eval(iteration_start, env) if not isinstance(iteration_start, int) else iteration_start
-            end = eval(iteration_end, env)
-            step = eval(iteration_step, env) if not isinstance(iteration_step, int) else iteration_step
-            if step == 0:
-                raise lisptype.LispNotImplementedError('LOOP BY step cannot be 0')
-        
-            loop_env = lisptype.Environment(env)
-            cur = start
-            compare = (lambda a, b: a <= b) if step > 0 else (lambda a, b: a >= b)
-            while compare(cur, end):
-                check_loop_timeout()
-                if _termination_break(loop_env):
-                    break
-                _bind_varspec(loop_env, iteration_var, cur)
-                bind_aux(loop_env)
-                execute_iteration_body(loop_env)
-                if return_triggered:
-                    break
-                cur = cur + step
-            
-        elif iteration_type == 'for-below':
-            start = eval(iteration_start, env) if not isinstance(iteration_start, int) else iteration_start
-            end = eval(iteration_end, env)
-            step = eval(iteration_step, env) if not isinstance(iteration_step, int) else iteration_step
-            if step == 0:
-                raise lisptype.LispNotImplementedError('LOOP BY step cannot be 0')
-        
-            loop_env = lisptype.Environment(env)
-            cur = start
-            compare = (lambda a, b: a < b) if step > 0 else (lambda a, b: a > b)
-            while compare(cur, end):
-                check_loop_timeout()
-                if _termination_break(loop_env):
-                    break
-                _bind_varspec(loop_env, iteration_var, cur)
-                bind_aux(loop_env)
-                execute_iteration_body(loop_env)
-                if return_triggered:
-                    break
-                cur = cur + step
-            
-        elif iteration_type == 'for-in':
-            lst = eval(iteration_list, env)
-            loop_env = lisptype.Environment(env)
-            cur = lst
-            while _consp_internal(cur):
-                check_loop_timeout()
-                if _termination_break(loop_env):
-                    break
-                _bind_varspec(loop_env, iteration_var, car(cur))
-                bind_aux(loop_env)
-                execute_iteration_body(loop_env)
-                if return_triggered:
-                    break
-                cur = cdr(cur)
-            
-        elif iteration_type == 'for-on':
-            lst = eval(iteration_list, env)
-            loop_env = lisptype.Environment(env)
-            cur = lst
-            while _consp_internal(cur):
-                check_loop_timeout()
-                if _termination_break(loop_env):
-                    break
-                _bind_varspec(loop_env, iteration_var, cur)
-                bind_aux(loop_env)
-                execute_iteration_body(loop_env)
-                if return_triggered:
-                    break
-                cur = cdr(cur)
-            
-        elif iteration_type == 'for-across':
-            # FOR x ACROSS vector/string - iterate over array elements
-            seq = eval(iteration_list, env)
-            loop_env = lisptype.Environment(env)
-        
-            # Handle different sequence types
-            if isinstance(seq, str):
-                # String - iterate over characters as plain strings (not Character objects).
-                # The rest of the system treats characters as single-char strings.
-                for char in seq:
-                    check_loop_timeout()
-                    _bind_varspec(loop_env, iteration_var, char)
-                    bind_aux(loop_env)
-                    execute_iteration_body(loop_env)
-                    if return_triggered:
-                        break
-            elif hasattr(seq, '__iter__') and hasattr(seq, '__len__') and not _consp_internal(seq):
-                # Array/vector with __iter__ (AdjustableVector, list, tuple, etc.)
-                for elem in seq:
-                    check_loop_timeout()
-                    _bind_varspec(loop_env, iteration_var, elem)
-                    bind_aux(loop_env)
-                    execute_iteration_body(loop_env)
-                    if return_triggered:
-                        break
-            else:
-                raise lisptype.LispNotImplementedError(f'LOOP FOR ACROSS requires a vector or string, got {type(seq).__name__}')
-            
-        elif iteration_type == 'for-equals':
-            # FOR var = init-form [THEN step-form]
-            # iteration_start = init-form, iteration_step = step-form or None
-            loop_env = lisptype.Environment(env)
-            # Initial value
-            cur_value = eval(iteration_start, loop_env)
-            _bind_varspec(loop_env, iteration_var, cur_value)
-        
-            first_iteration = True
-            while True:
-                check_loop_timeout()
-                bind_aux(loop_env)
-            
-                # Check termination condition
-                if iteration_test is not None:
-                    test_result = eval(iteration_test, loop_env)
-                    if termination_type == 'until' and lisptype.is_truthy(test_result):
-                        break
-                    if termination_type == 'while' and not lisptype.is_truthy(test_result):
-                        break
-            
-                execute_iteration_body(loop_env)
-                if return_triggered:
-                    break
-                first_iteration = False
-            
-                # Step to next value
-                if iteration_step is not None:
-                    cur_value = eval(iteration_step, loop_env)
-                    _bind_varspec(loop_env, iteration_var, cur_value)
-                else:
-                    # Without THEN, just re-evaluate init-form
-                    cur_value = eval(iteration_start, loop_env)
-                    _bind_varspec(loop_env, iteration_var, cur_value)
-                
-        elif len(iteration_drivers) == 1:
-            # Single driver that wasn't set as iteration_type (e.g., single FOR clause)
-            loop_env = lisptype.Environment(env)
-            driver = iteration_drivers[0]
-            _init_driver(loop_env, driver)
-        
-            while _driver_has_value(driver):
-                check_loop_timeout()
-                if _termination_break(loop_env):
-                    break
-            
-                _bind_driver(loop_env, driver)
-                bind_aux(loop_env)
-                execute_iteration_body(loop_env)
-            
-                if return_triggered:
-                    break
-            
-                _step_driver(loop_env, driver)
-    
-        elif iteration_type is None:
-            # Simple LOOP form (CLHS 6.1.1): with no iteration (FOR/REPEAT/...)
-            # clause, the body compound-forms are evaluated repeatedly forever
-            # until a non-local exit (RETURN/RETURN-FROM/GO/THROW) transfers
-            # control out -- there is no driver to terminate it otherwise.
-            # The RETURN loop-keyword-clause (return_form) is the one case
-            # that terminates without an exception, via return_triggered, e.g.
-            # (LOOP RETURN 42) which must return 42 after a single execution.
-            if body_forms or accumulation or (return_form is not None):
-                while True:
-                    check_loop_timeout()
-                    execute_iteration_body(env)
-                    if return_triggered:
-                        break
-    
-        # Execute FINALLY forms
+        # CLHS 6.1.2.2: ALWAYS/NEVER/THEREIS terminate the loop *immediately*
+        # when their test decides the answer -- the epilogue does not run, so a
+        # FINALLY (RETURN ...) cannot override the NIL or the found value.
+        if always_failed or thereis_result is not None:
+            return thereis_result if thereis_result is not None else lisptype.NIL
+
+        # Execute FINALLY forms -- in the loop environment, so they can see the
+        # iteration variables and any INTO accumulator (CLHS 6.1.4: the epilogue
+        # is inside the loop's variable bindings).
         for f in finally_forms:
-            result = eval(f, env)
-    
+            result = eval(f, loop_env)
+
         # Execute FINALLY RETURN if present (overrides early RETURN)
         if finally_return_form is not None:
-            result = eval(finally_return_form, env)
-    
-        # Return accumulated result or last result
-        if accumulation:
-            acc_type = accumulation[0]
-            if acc_type in ('collect', 'append', 'nconc'):
-                # Convert accumulated list to Lisp list
-                if not accumulated:
-                    return lisptype.NIL
-                result_list = lisptype.NIL
-                for item in reversed(accumulated):
-                    result_list = cons(item, result_list)
-                return result_list
-            elif acc_type == 'sum':
-                return sum_result
-            elif acc_type == 'count':
-                return count_result
-            elif acc_type == 'always':
-                # ALWAYS returns T if test was true for all iterations (including vacuous truth)
-                # Returns NIL if test failed for any iteration
-                return lisptype.NIL if always_failed else lisptype.T
-            elif acc_type == 'thereis':
-                # THEREIS returns the value if true for any iteration, otherwise NIL
-                return thereis_result if thereis_result is not None else lisptype.NIL
-    
+            # CLHS 6.1.1.4: a value returned by the epilogue takes precedence
+            # over the one an accumulation clause would have produced, so this
+            # must return directly rather than fall through to the accumulation
+            # block below, which would discard it.
+            return eval(finally_return_form, loop_env)
+
+        # An accumulation with INTO feeds its variable, not the loop's value;
+        # only a destination-less clause supplies the value of the LOOP form.
+        if None in acc_states:
+            return _accumulated_value(None)
+
         # Ensure we always return a Lisp value, never None
         # If result is still None (no body executed, no return form), return NIL
         if result is None:

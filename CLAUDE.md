@@ -5,51 +5,27 @@ Lisp compliance**, measured by running the real ANSI test suite (`ansi-test/`, a
 sibling directory one level above this repo) to completion without crashing, and
 passing as many of its tests as possible.
 
-> **Current status (2026-08-12).** The suite runs **8971 of 22036** tests
-> (`passed=4514 failed=4457`), up from `accounted=4687 passed=2920` — the
-> signal-before-unwind handler-stack rewrite (plan.md's 2026-08-12 update)
-> removed the `HANDLER-BIND.13` abort. **It still does not run to completion:**
-> the truncation point is now `DO-SYMBOLS.8` (`packages/do-symbols.lsp`), because
-> `DO-SYMBOLS` establishes no implicit `tagbody`, so its `(go foo)` raises an
-> uncaught `GoException` — a control transfer, not a condition, so RT's own
-> `handler-case` cannot stop it. That is the **sixth** instance of "the form
-> doesn't establish the block/tagbody CLHS requires"; auditing every iteration
-> and mapping form for both in one pass is recommended over fixing them one
-> crash at a time. `conditions/` (116/303) and `packages/` (72/340) are
-> measurable for the first time; 14 directories after `packages/` in
-> `gclload2.lsp` are still at zero. Trust the `COMPLETENESS:` line, not the
-> "N failures ... out of 22036 tests" summary, which prints the initial pending
-> count unconditionally and looks complete even when the run died partway.
+> **Current status (2026-08-12).** The suite **runs to completion**: the first
+> full run in the project's history landed on 2026-08-12 with
+> `COMPLETENESS: OK`, 22036/22036 accounted, 0 missing, 8960 passing (40.7%),
+> ~7.5 hours. Crashes are no longer the constraint; **semantics are**.
 >
-> **⚠ Older status correction, superseded 2026-08-09 (see plan.md's "Update" sections for
-> details) — kept here for history.** The suite used to silently abort after ~2 990 of
-> 22 036 tests (13.6% coverage) because `LOOP` established no implicit `NIL` block.
-> **That was previously (falsely) marked fixed here — it was not; see plan.md.** It
-> and three more instances of the same "form doesn't establish the block/condition
-> CLHS requires" defect class (CLOS methods, LOOP's `NAMED` clause, `ERROR`/`CERROR`'s
-> condition dispatch) are now genuinely fixed, each verified in isolation and via
-> `pytest -q` (1172 passed / 1 pre-existing unrelated failure throughout). FORMAT's
-> argument-cursor bugs are also fixed (2026-08-09, earlier in the same day).
+> **[plan.md](plan.md) is the roadmap**, organised around the mechanism at fault
+> rather than test counts, and **`docs/ansi_checklist.md` is the authority for
+> what is failing and where.** Read both before starting. The checklist is
+> generated — never hand-edit it — and it is kept current *without* a full run
+> by folding targeted runs into it:
 >
-> **The suite still does not run to completion.** `run_all_tests.py` now prints a live
-> `COMPLETENESS: total=... accounted=... missing=...` line every run (pulled directly
-> from RT's `*entries*`/`*passed-tests*`/`*failed-tests*`, not parsed from
-> FORMAT-rendered text) — trust that line, not the "N failures ... out of 22036 tests"
-> summary line, which prints the *initial pending count* unconditionally and looks
-> complete even when the run crashed partway through. As of the last verified run the
-> truncation point is past `ERROR.1`/`CERROR.1` (accounted 4623/22036) and not yet
-> identified — see plan.md's later Update for the diagnostic method and why this
-> session stopped there rather than continuing one-crash-at-a-time. A LOOP hitting an
-> unimplemented clause (e.g. `AS`, `BEING`) can no longer hang the whole run forever:
-> `LOOP_TIMEOUT_ERROR` now converts a >10-minute loop into a loud `LispError`.
-> `scripts/ansi_score.py` now exists — run it after `run_all_tests.py` to get a
-> per-subsystem table from `ansi_results/*.txt` and a `docs/ansi_baseline.json`
-> snapshot. `expected-failures` is still unwired.
+> ```powershell
+> pipenv run python scripts/run_ansi.py <group> --update-checklist
+> ```
 >
-> **Current work mode is milestone-driven semantic repair, not crash repair — but
-> crashes (not just this document's claims about them) still need re-verifying before
-> being treated as fixed.** Read [plan.md](plan.md) — it is now the roadmap, not a
-> status snapshot.
+> Do that after every fix. See plan.md's "Keeping the checklist current without a
+> full run" for what a merged count does and does not mean.
+>
+> Trust the `COMPLETENESS:` line, not the "N failures ... out of 22036 tests"
+> summary, which prints the initial pending count unconditionally and looks
+> complete even when a run died partway. `expected-failures/` is still unwired.
 
 ## Environment
 
@@ -91,6 +67,14 @@ passing as many of its tests as possible.
     a function. Adding a new special form to the language means registering it
     here *and* implementing it in `evaluation_core.py`/`evaluation_special_forms.py`.
   - `evaluation_loops_conditionals.py` — `LET`/`LET*`/`DO`/`DOLIST`/`DOTIMES`/`LOOP`/`COND`.
+    **`LOOP` has exactly one iteration engine.** Every iteration-control clause
+    (`FOR`/`AS`, and `REPEAT`) becomes a driver in `iteration_drivers`, and the
+    loop runs while `all(_driver_has_value(...))` — CLHS 6.1.2's rule that these
+    clauses *compose*. It previously had nine near-duplicate engines selected by
+    a scalar `iteration_type`, so the last clause parsed silently discarded the
+    rest. If you are about to add an `if kind == ...` branch to the four driver
+    primitives, that is the right place; if you are about to add a second loop,
+    it is not.
   - `evaluation_conditions.py` — `HANDLER-BIND`/`HANDLER-CASE`/`IGNORE-ERRORS`,
     `SIGNAL`/`ERROR`/`CERROR`/`WARN`, condition signaling. **Handlers are invoked
     in exactly one place: `signal_condition()`, which walks

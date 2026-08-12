@@ -42,6 +42,11 @@ COMPLETENESS: OK
 | Never executed | **0** |
 | Wall time | ~7.5 hours |
 
+**These numbers are the last full run and move only on a full run.** The
+*checklist* is kept current between full runs by merging targeted runs into it
+(see [below](#keeping-the-checklist-current-without-a-full-run)); its header
+lists which runs it has been amended with. Do not copy an amended count here.
+
 **This is the first trustworthy scoreboard.** Every previous version of this
 document ranked work using a sample of roughly a third of the suite, and said so.
 That constraint is now gone — and the complete data **reordered the priorities
@@ -113,17 +118,63 @@ whereas prose in this document ages.
 3. Fix the **mechanism**. Consolidate onto an existing helper if one exists.
 4. **Verify with the targeted command printed next to that checklist entry.**
 5. Run `pytest` for regressions.
-6. **Regenerate the checklist** and diff against the baseline:
+6. **Fold that targeted run into the checklist — every time progress is made.**
+   ```powershell
+   pipenv run python scripts/run_ansi.py iteration --update-checklist
+   ```
+   This is not optional bookkeeping. `docs/ansi_checklist.md` is declared *the
+   authority for what is failing*, and an authority that is only refreshed by a
+   4+ hour run is stale the moment anyone fixes anything — at which point every
+   later decision is made against numbers that are quietly wrong.
+7. **Diff against the baseline** to classify the fix:
    ```powershell
    pipenv run python scripts/ansi_checklist.py --baseline docs/ansi_checklist_baseline.json
    ```
    Every file you did not touch must show no `+N REGRESSION`.
-7. Run the full suite only to move the official scoreboard or close a milestone —
+8. Run the full suite only to move the official scoreboard or close a milestone —
    then refresh the baseline with `--save-baseline`.
 
-**The step that matters most is 6.** A fix that moves only the files you targeted
+**The step that matters most is 7.** A fix that moves only the files you targeted
 is a symptom fix; a fix that moves files you did not target is a mechanism fix.
 The checklist diff is the instrument that tells you which one you just did.
+
+### Keeping the checklist current without a full run
+
+`ansi_results/*.txt` is written by the full runner, so on its own the checklist
+could only ever be regenerated from a 4+ hour run. `run_ansi.py` closes that gap:
+
+```powershell
+# run a target and amend the checklist with its outcome in one step
+pipenv run python scripts/run_ansi.py iteration --update-checklist
+
+# every run writes its results anyway, so it can also be merged after the fact
+pipenv run python scripts/run_ansi.py numbers/sqrt.lsp
+pipenv run python scripts/ansi_checklist.py --merge ansi_results/targeted-last.json
+```
+
+Merging updates the status of **exactly the tests that ran** and leaves every
+other test at whatever the last full run said. The checklist therefore reads as
+"the last full run, amended with every targeted run since", which is what it
+needs to be to stay usable between full runs.
+
+Three rules that keep this honest:
+
+- **A merged total is an index, not a scoreboard.** A targeted run can register
+  a slightly different test set than the full run does (load-time-generated
+  tests, aux files loaded in a different order). Move the official number in
+  [§1](#1-status) only from a full run.
+- **`--save-baseline` is full-run-only.** The baseline is the regression gate;
+  refreshing it from a partial run erases the data for every file that run did
+  not load.
+- **The amendment log is provenance, not decoration.** Each merge appends to
+  `ansi_results/merges.log`, the checklist header lists the merges it contains,
+  and `run_all_tests.py` deletes the log because a full run supersedes them all.
+  If the header says "amended by 6 targeted runs", the numbers below it have not
+  been independently confirmed together.
+
+`--update-checklist` refuses to merge a run that reported `unaccounted` tests: a
+run that aborted partway has no opinion about the tests it never reached, and
+recording one would mark them as still-failing on no evidence.
 
 ```powershell
 pipenv install --dev                                              # one-time
@@ -342,68 +393,72 @@ family. Pinned by a unit test asserting the wrong answer — see
 
 ### Tier 1 — core mechanisms (do these first)
 
-#### C1. LOOP `for var = expr` driver — **do this first**
+#### C1. LOOP clause composition — **DONE (2026-08-12 f)**
 
-**Not because it is the largest cluster — it is sixth.** Do it first because it
-is the only item that **makes every later measurement affordable**: it owns ~76%
-of a 7.5-hour full run, and it is already fully diagnosed and reproducible in six
-one-line expressions. Every other cluster is cheaper to work on after it lands.
+`iteration/` **371 → 409 passing of 843** on `run_ansi.py iteration`: 38 tests
+fixed, 0 regressions. Only 12 of the 38 were targeted; the other 26 moved
+because the mechanism moved. Details in the [Changelog](#changelog).
 
-**Evidence.** **450 failures** (`grep -cE "^LOOP" ansi_results/failed.txt`);
-`iteration/` is 366 passing of 838. `for var =` appears **2784 times across 260
-test files** (`grep -rn "for [a-z-]* = " --include=*.lsp | wc -l`), so the blast
-radius extends well beyond `iteration/` into every directory that uses LOOP to
-drive its own assertions.
+**The diagnosis this section carried was wrong, and the way it was wrong is
+worth keeping.** It read the six-expression table below as *two* defects — a
+binding-environment defect ("the variable is bound where the driver sees it but
+not where the body does") plus a separate `repeat`-folding defect. Both rows are
+the same defect, and it is neither of those: `eval_loop` held a single scalar
+`iteration_type` and had **nine near-duplicate iteration engines** selected by
+it, so the *last* iteration-control clause parsed decided which engine ran and
+silently discarded every other clause.
 
-**Two distinct defects**, both verified by direct execution, each case in its own
-process:
+| expression | expected | before | why |
+|---|---|---|---|
+| `(loop for x = 7 repeat 5 collect x)` | `(7 7 7 7 7)` | `Unbound variable: X` | REPEAT parsed last → REPEAT's engine ran → no driver ever bound X |
+| `(loop repeat 3 for x = 9 collect x)` | `(9 9 9)` | hangs | FOR parsed last → for-equals' engine ran → nothing bounded it |
+| `(loop for x = 1 repeat 3 count t)` | `3` | correct | the control: REPEAT's engine is correct as long as nothing *references* the discarded driver |
 
-| expression | expected | fclpy |
-|---|---|---|
-| `(loop repeat 5 collect 1)` | `(1 1 1 1 1)` | correct |
-| `(loop for x = 7 repeat 5 collect x)` | `(7 7 7 7 7)` | **`Unbound variable: X`** |
-| `(loop for x = 0 then (1+ x) repeat 4 collect x)` | `(0 1 2 3)` | **`Unbound variable: X`** |
-| `(loop for a = 1 for b = 2 repeat 4 collect (+ a b))` | `(3 3 3 3)` | **`Unbound variable: A`** |
-| `(loop repeat 3 for x = 9 collect x)` | `(9 9 9)` | **infinite loop (hangs)** |
-| `(loop for x = 1 repeat 3 count t)` | `3` | correct |
+Reading the control row as "the binding environment is wrong" was the error.
+The variable was not mis-bound; **the clause that binds it was not executed at
+all.** The fix is one engine over a list of composing drivers (CLHS 6.1.2), not
+a repair to any binding form — which matters, because "fix the binding
+environment" would have been a local patch to the environment model, exactly
+what [§4's note on M2](#recommended-order) warns produces a seventh incompatible
+mechanism.
 
-1. **The variable is bound where the driver sees it but not where the body and
-   accumulation clauses do.** The last row is the control: the loop is correct
-   precisely when it never *references* the variable. A binding-environment
-   defect, not a parsing one.
-2. **`repeat` before `for =` loses termination entirely.** Clause order decides
-   whether the loop terminates, so `repeat` is being folded into the driver
-   instead of composing with it (CLHS 6.1.2.1 — bounding clauses compose with
-   other drivers, they do not replace them).
+**Evidence at the time.** 450 failures (`grep -cE "^LOOP" ansi_results/failed.txt`);
+`for var =` appears 2784 times across 260 test files, so the blast radius extends
+well beyond `iteration/` into every directory that uses LOOP to drive its own
+assertions.
 
-**This is not a performance problem.** Measured: `(loop for i below 400)` runs at
-**2.5 µs/iteration**, and every shape tested (`collect`, `count`, `always`,
-`unless collect`, `for =`) scales **linearly**, ×1.9–2.1 per doubling. A
-65536-iteration char loop should cost ~6s; the observed 473s is ~80× that because
-the loops burning the time *never terminate*.
+**This was never a performance problem.** Measured: `(loop for i below 400)` runs
+at **2.5 µs/iteration**, and every shape tested scales **linearly**, ×1.9–2.1 per
+doubling. The ~3h18m of a 4h20m run charged to ~31 LOOP forms (10 aborted at the
+600s cap, 21 warning past 120s) was loops that *never terminate* —
+`SQRT.12`–`.17`, `DEPOSIT-FIELD.1`–`.5`, `DPB.2`. `run_ansi.py iteration` now
+completes in **6s**.
 
-**Runtime accounting** (run started 05:57, still going at 10:17):
+**Still open in LOOP** — see [Discovered issues](#c1-follow-ups-still-open):
+`INTO` for multiple destinations of mixed type, `WITH`, `NEVER`, `MAXIMIZE`/
+`MINIMIZE`, `OF-TYPE`, and full clause-order execution for the body itself.
 
-| | count | wall time |
-|---|---|---|
-| LOOP forms aborted at the 600s cap | 10 | 1h40m |
-| LOOP forms that warned (>120s) then finished | 21 | 1h38m |
-| **~31 loop forms** | | **~3h18m of 4h20m** |
+##### C1 follow-ups, still open
 
-Tests confirmed aborting on this shape: `SQRT.12`–`.17`, `DEPOSIT-FIELD.1`–`.5`,
-`DPB.2`.
+Now that LOOP has one engine, these are additions to it rather than repairs of
+it — but each is a *clause*, so none of them justifies a second engine.
 
-**Also fix in the same change:** `LOOP_TIMEOUT_ERROR`'s hard cap guards only the
-*simple-loop* path, on the stated premise that "every other iteration construct
-is naturally bounded by its own driver." The hang above disproves that premise —
-a driver-path runaway is bounded by nothing. Extend the cap to all paths or
-delete the premise from the comment.
-
-**Checklist entries:** `iteration/loop10.lsp` 70/101, **`iteration/loop6.lsp`
-47/47**, **`iteration/loop7.lsp` 35/35**, `iteration/loop14.lsp` 33/49. Two of
-these are total failures.
-**Owner:** M3-adjacent (LOOP is its own clause parser today).
-**Verify:** `run_ansi.py iteration`, then `numbers/deposit-field.lsp`, `numbers/sqrt.lsp`.
+- **Clause-order execution for the body.** WHILE/UNTIL now record their position
+  and run before or after the body accordingly, which is what `collect x until x`
+  needs. Body forms, WHEN/UNLESS conditionals and accumulations are still
+  executed in bucket order, so a loop that interleaves them (`when a collect b
+  when c collect d`) still applies the wrong conditionals. Making the whole main
+  clause list ordered subsumes the pre/post flag.
+- **`INTO` of mixed types into one destination.** Each destination's accumulator
+  is typed on first use, so `collect a into x sum b into x` is wrong. ANSI
+  forbids incompatible types here, so the fix is to *detect and signal* it.
+- **`WITH`, `NEVER`, `MAXIMIZE`/`MINIMIZE`, `OF-TYPE`, `AND`-joined parallel
+  clauses.** Unimplemented; their tokens are dropped.
+- **The last silent path.** An unrecognized loop keyword is still discarded once
+  a driver has been parsed (standing rule 4). It was left alone deliberately —
+  turning it loud converts a large number of currently-wrong answers into
+  errors at once, which should be its own measured change, not a rider on this
+  one.
 
 #### C2. `FORMAT` / `FORMATTER` — **largest cluster in the suite**
 
@@ -618,8 +673,10 @@ Milestones now describe *mechanisms*, and map onto the clusters above.
 
 ### Recommended order
 
-1. **C1 — LOOP `for var =`.** Not the largest, but it makes every later
-   measurement affordable (76% of a 7.5-hour run) and is already diagnosed.
+1. ~~**C1 — LOOP `for var =`.**~~ **Done 2026-08-12 (f).** It did what it was
+   ranked first to do: `run_ansi.py iteration` fell from a run dominated by
+   never-terminating loops to **6 seconds**, so every later measurement is now
+   affordable.
 2. **X2 + X3 — designator coercion and `:test` argument order.** Two small,
    well-localized fixes that plausibly move a large share of C3 (1266) and
    C5 (598). **Measure before and after rather than assuming** — this is the
@@ -646,9 +703,10 @@ Anything knowingly non-ANSI, with the milestone that removes it. Empty means
 
 | deviation | why tolerated | removed by |
 |---|---|---|
-| LOOP `for var = expr` invisible to body/accumulation clauses | driver-path binding defect | C1 |
-| LOOP `repeat` before `for =` never terminates | `repeat` folded into the driver | C1 |
-| LOOP hard cap guards only the simple-loop path | its premise is false | C1 |
+| LOOP: one accumulation destination per *type*; `INTO` of mixed types into one var unsupported | accumulator state is typed on first use | C1 follow-up |
+| LOOP `WITH`, `NEVER`, `MAXIMIZE`/`MINIMIZE`, `OF-TYPE` unimplemented; tokens dropped | never written | C1 follow-up |
+| LOOP body/accumulation clauses execute in bucket order, not clause order | only WHILE/UNTIL are position-aware so far | C1 follow-up |
+| LOOP silently drops an unrecognized keyword once a driver exists | violates standing rule 4 | C1 follow-up |
 | `_run_handlers_on_unwind` + `_condition_matches` legacy branch | most raise sites bypass `SIGNAL` | M8 |
 | `DEFINE-CONDITION` creates no class | predates the class lattice | M8 |
 | `HANDLER-CASE` converts an uncaught `THROW` into `CONTROL-ERROR` | needs a catch-tag stack to decide at THROW time | M7 |
@@ -779,11 +837,13 @@ rather than discovering these one crash at a time.
 |---|---|
 | `CLAUDE.md` | architecture map — read first |
 | `plan.md` | this document |
-| `scripts/run_ansi.py` | **targeted runner — the development inner loop** |
+| `scripts/run_ansi.py` | **targeted runner — the development inner loop**; `--update-checklist` amends the checklist with the run |
 | `scripts/ansi_score.py` | per-subsystem scoreboard → `docs/ansi_baseline.json` |
-| `docs/ansi_checklist.md` | **the working checklist** — 13076 failures by directory → file, with per-entry verify commands |
-| `scripts/ansi_checklist.py` | regenerates the checklist; `--baseline` marks fixed/regressed per file |
+| `docs/ansi_checklist.md` | **the working checklist** — failures by directory → file, with per-entry verify commands |
+| `scripts/ansi_checklist.py` | regenerates the checklist; `--merge` folds in a targeted run, `--baseline` marks fixed/regressed per file |
 | `ansi_results/failed.txt` | raw RT output — the checklist's input, not a work list |
+| `ansi_results/targeted-last.json` | the last targeted run's outcomes, written by every `run_ansi.py` run so it can be merged later |
+| `ansi_results/merges.log` | which targeted runs the current checklist has been amended with; cleared by a full run |
 | `run_all_tests.py` | full suite (4+ hours) — authority, not inner loop |
 | `REPAIR.md` | crash-repair SOP — historical; crashes are no longer the constraint |
 
@@ -794,6 +854,30 @@ rather than discovering these one crash at a time.
 Condensed from the previous chronological plan. Each entry is a *mechanism*
 landed, not a test count.
 
+- **2026-08-12 (f)** — **C1: LOOP has one iteration engine.** `eval_loop` held a
+  scalar `iteration_type` and nine near-duplicate loops selected by it, so the
+  last iteration-control clause parsed decided which one ran and discarded the
+  rest — the cause of both `Unbound variable: X` for `for x = 7 repeat 5` and
+  the non-terminating `repeat 5 for x = 7`. All nine are gone; drivers (FOR/AS,
+  and REPEAT, now modelled as an anonymous driver) compose in one loop over
+  `all(_driver_has_value(...))`, per CLHS 6.1.2. `for var = form` evaluates at
+  bind time so a later clause can depend on an earlier driver, WHILE/UNTIL
+  compose and are position-aware, and the eight copy-pasted accumulation parse
+  branches became one table — which is how `INTO` came to be implemented at all
+  (it had been silently dropped in every one of them). Also landed as part of
+  the same mechanism: `INITIALLY`, several accumulation clauses per loop, the
+  CLHS 6.1.1.4 rule that a FINALLY value overrides an accumulation, and the
+  6.1.2.2 rule that ALWAYS/THEREIS skip the epilogue. Fixed en route: a local
+  `import fclpy.lisptype` inside `_init_driver` that turned every
+  `LispNotImplementedError` in that function into `UnboundLocalError`, and
+  `for x to 5`'s start defaulting to `None` instead of 0.
+  **`run_ansi.py iteration` 371 → 409 passing of 843, 0 regressions**, and the
+  run itself went from LOOP-dominated to **6 seconds**. 13 new tests in
+  `tests/test_loop.py`; `pytest` 1259 passed, 1 pre-existing unrelated failure
+  (`STREAM-ELEMENT-TYPE`). Tooling: `run_ansi.py --update-checklist` and
+  `ansi_checklist.py --merge` now keep `docs/ansi_checklist.md` current from
+  targeted runs, so the checklist no longer needs a 4+ hour run to stop being
+  stale.
 - **2026-08-12 (d)** — `DO-SYMBOLS`/`DO-EXTERNAL-SYMBOLS`/`DO-ALL-SYMBOLS`
   implicit tagbody + NIL block. All three ran their bodies as a flat `eval` over
   the form list, so `(go foo)` raised an uncaught `GoException` to top level,

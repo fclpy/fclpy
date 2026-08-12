@@ -31,24 +31,36 @@ Usage
     python scripts/run_ansi.py cons/nconc.lsp cons/append.lsp iteration
     # list what directories are available
     python scripts/run_ansi.py --list
+    # run a target AND amend docs/ansi_checklist.md with the outcome
+    python scripts/run_ansi.py iteration --update-checklist
 
 A directory argument is resolved to its own `load.lsp`, which is what
 `gclload2.lsp` itself loads, so intra-directory file ordering and any
 directory-local auxiliary file are handled by the suite's own manifest rather
 than guessed at here.
 
+Keeping the checklist current
+----------------------------
+`docs/ansi_checklist.md` is generated from `ansi_results/*.txt`, which only the
+full runner writes -- so without help it could only ever be refreshed by a 4+
+hour run. Every run here writes its outcomes to `ansi_results/targeted-last.json`,
+and `--update-checklist` folds them straight back in, updating the status of
+exactly the tests that ran. See plan.md, "Keeping the checklist current without a
+full run".
+
 Timeouts
 --------
-The implementation still has LOOP forms that never terminate (a `for var = expr`
-driver whose only bound is `repeat n`), and LOOP's hard cap only guards the
-simple-loop path, so a driver-path runaway hangs forever. `--timeout` installs a
-process-level watchdog thread that reports what was running and hard-exits, so
-an unattended targeted run cannot wedge. `--loop-cap` additionally lowers LOOP's
-own in-evaluator cap so a runaway is charged to the individual test as a failure
-instead of costing the default 600 seconds.
+LOOP's in-evaluator hard cap applies to every path, but a form can still fail to
+terminate for reasons of its own (a predicate that never converges, an
+unimplemented clause). `--timeout` installs a process-level watchdog thread that
+reports what was running and hard-exits, so an unattended targeted run cannot
+wedge. `--loop-cap` additionally lowers LOOP's own in-evaluator cap so a runaway
+is charged to the individual test as a failure instead of costing the default
+600 seconds.
 """
 
 import argparse
+import json
 import os
 import sys
 import threading
@@ -180,6 +192,13 @@ def main():
                              "(0 keeps the default 600)")
     parser.add_argument('--quiet', action='store_true',
                         help="suppress the suite's own per-test chatter")
+    parser.add_argument('--results-out', default=None, metavar='PATH',
+                        help="write this run's passed/failed names as JSON "
+                             "(default ansi_results/targeted-last.json)")
+    parser.add_argument('--update-checklist', action='store_true',
+                        help="merge this run's results into ansi_results/*.txt and "
+                             "regenerate docs/ansi_checklist.md -- the way to keep the "
+                             "checklist current without a 4+ hour full run")
     args = parser.parse_args()
 
     if args.list:
@@ -269,6 +288,31 @@ def main():
         print("\nFAILED (%d):" % len(failed))
         for name in sorted(failed):
             print("  %s" % name)
+
+    # Always record the run so the checklist can be brought up to date from it
+    # later, whether or not --update-checklist was asked for on this invocation.
+    results_path = args.results_out or os.path.join(
+        REPO_ROOT, 'ansi_results', 'targeted-last.json')
+    os.makedirs(os.path.dirname(results_path), exist_ok=True)
+    with open(results_path, 'w', encoding='utf-8') as handle:
+        json.dump({'targets': args.targets,
+                   'passed': sorted(passed),
+                   'failed': sorted(failed),
+                   'unaccounted': sorted(missing)},
+                  handle, indent=1)
+    print("\nResults written to %s" % os.path.relpath(results_path, REPO_ROOT))
+
+    if args.update_checklist:
+        if missing:
+            print("NOT updating the checklist: %d registered tests never ran, so this "
+                  "run's view of those files is incomplete." % len(missing))
+        else:
+            sys.path.insert(0, os.path.join(REPO_ROOT, 'scripts'))
+            import ansi_checklist
+            fixed, regressed, new = ansi_checklist.merge_targeted(results_path)
+            print("Checklist merge: %d newly passing, %d newly failing, %d new names"
+                  % (fixed, regressed, new))
+            ansi_checklist.main_render()
 
     return 1 if (failed or missing) else 0
 
