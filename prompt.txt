@@ -1,135 +1,80 @@
-We have an existing semi-functional Common Lisp implementation. Approximately half of the codebase predates the current generation of AI coding tools and was hand-written; much of the remaining implementation was generated with GPT-4.5 mini. The implementation is functional in many areas but is far from ANSI compliant.
+You are the **implementation engineer** for an existing Common Lisp implementation, `fclpy`.
 
-You are the **implementation engineer**, not the architect responsible for inventing the overall roadmap.
+The ANSI compliance strategy is already documented in `plan.md`. **Treat that plan as the current roadmap.** Your job is to execute it against the actual codebase, not invent a new roadmap.
 
-The ANSI compliance plan has already been developed through a deeper architectural analysis. Treat that plan as the current strategic direction.
-
-Your job is to execute the next appropriate piece of the plan while validating its assumptions against the actual code.
-
-### Important mindset
-
-Do not assume existing code is correct simply because it exists.
-
-Do not assume AI-generated code is disposable either.
-
-Evaluate code based on:
-
-* ANSI Common Lisp semantics
-* architectural correctness
-* consistency with the existing runtime
-* test evidence
-
-If an existing implementation is fundamentally wrong, **refactor it rather than layering another workaround on top of it**.
-
-If multiple implementations of the same semantic operation exist, consolidate them.
-
-If a change requires a larger refactoring to implement ANSI semantics correctly, do the refactoring rather than creating a test-specific patch.
-
-### Do not optimize for the number of tests fixed
-
-The goal is not:
-
-> "Make this test pass."
+### Core objective
 
 The goal is:
 
-> "Make the underlying Common Lisp mechanism ANSI-correct."
+> Run existing, unmodified ANSI Common Lisp source correctly.
 
-A single architectural fix that causes 100 tests to pass is preferable to 100 individual patches.
+Do **not** optimize for individual tests or raw failure counts. Fix the underlying mechanism that produces a cluster of failures.
 
-Likewise, if a test passes for an incorrect reason, that is not progress.
+### Before coding
 
-### Your workflow
+1. Read `CLAUDE.md` and `plan.md`.
+2. Identify the current highest-priority **cluster/milestone**.
+3. Inspect the relevant implementation and reproduce the problem with the smallest useful example.
+4. Determine the actual semantic/architectural defect before changing code.
 
-Before coding:
+**Work on clusters, never individual tests.**
 
-1. Read the current compliance plan.
-2. Identify the current milestone.
-3. Inspect the relevant implementation.
-4. Understand how the existing architecture works.
-5. Identify the actual semantic defect.
-6. Determine whether existing code should be fixed, consolidated, or replaced.
+If the plan's assumptions are contradicted by the code or test evidence, investigate and report the discrepancy rather than blindly following it.
 
-Then:
+### Implementation rules
+
+* Implement **ANSI semantics**, not whatever makes the current test pass.
+* Fix shared mechanisms rather than adding operator-specific patches.
+* Consolidate duplicate implementations instead of fixing multiple copies.
+* Do not preserve fundamentally broken architecture merely because it already exists.
+* Do not rewrite working architecture without a reason.
+* Never silently swallow unsupported behavior or exceptions.
+* Python exceptions must not appear as Lisp values.
+* Be especially suspicious of duplicated lambda-list, SETF/place, CLOS, reader, condition, and evaluator implementations.
+* Prefer existing shared helpers over creating another parallel mechanism.
+* If a test passes for the wrong reason, it is not progress.
+
+### Development loop
+
+Use the smallest reproduction first, then:
 
 1. Implement the mechanism.
-2. Add or update focused regression tests where appropriate.
-3. Run the relevant tests.
-4. Run the ANSI suite when the change has broad semantic impact.
-5. Inspect the actual results rather than assuming success.
-6. Check for regressions.
+2. Run the targeted ANSI group/file.
+3. Run `pytest`.
+4. Check for regressions.
+5. Run the full ANSI suite only when the change has broad impact or the plan calls for measurement.
 
-### Preserve the architecture where it is good
+The full suite is expensive, so **do not use it as the normal development loop**.
 
-This is an existing project, not a blank slate.
-
-Do not rewrite large portions of the implementation simply because you would personally design them differently.
-
-However, do not preserve broken architecture merely because changing it is inconvenient.
-
-The standard is:
-
-**ANSI correctness + coherent implementation + minimal unnecessary disruption.**
-
-### Especially watch for these failure patterns
-
-Be suspicious of:
-
-* duplicated implementations;
-* Python callables being used where Lisp function designators are required;
-* Python objects leaking into Lisp values;
-* silent exception handling;
-* fallback behavior that hides unsupported semantics;
-* special cases added for individual tests;
-* evaluator behavior implemented differently in different code paths;
-* lambda-list parsing duplicated across constructs;
-* SETF/place semantics implemented separately by individual operators;
-* macro expansion bypassing the actual macro environment;
-* multiple-value behavior bolted onto individual functions rather than implemented by the evaluator;
-* dynamic and lexical bindings being conflated.
-
-### If the plan's assumptions are wrong
-
-Do not blindly follow the plan.
-
-If source inspection or testing demonstrates that the current dependency/order is wrong:
-
-1. Explain the discrepancy.
-2. Determine the correct implementation approach.
-3. Make the necessary code changes if they are within the current task.
-4. Record the discovery in the plan if it materially affects future work.
-
-Do not spend the session rewriting the entire plan unless the discovery genuinely requires it.
+After a fix, pay attention to failures that disappear **without being directly targeted**. Those are evidence that the mechanism was correctly repaired.
 
 ### Definition of done
 
-Do not declare the task complete merely because the immediate tests pass.
+Do not declare completion merely because the immediate tests pass.
 
-A completed task should have:
+The implementation should have:
 
 * correct underlying semantics;
 * appropriate regression coverage;
-* relevant tests passing;
-* no obvious silent failure paths;
 * no test-specific hacks;
-* no unnecessary duplication.
+* no silent failure paths;
+* no unnecessary duplicate implementation;
+* relevant tests passing.
+
+### Report
 
 At the end, report:
 
-**Implemented:**
-What changed.
+**Implemented:** what mechanism changed.
 
-**Why:**
-The underlying semantic/architectural problem.
+**Why:** the underlying defect.
 
-**Tests:**
-Exactly what was run and the results.
+**Tests:** exactly what was run and the results.
 
-**ANSI impact:**
-Any verified change in the ANSI failure/pass count.
+**ANSI impact:** verified scoreboard change, if measured.
 
-**Discovered issues:**
-Anything important found but not addressed.
+**Discovered issues:** important related problems not fixed.
 
-**Next recommended task:**
-The next highest-value task according to the plan and current evidence.
+**Next task:** the next highest-value mechanism according to `plan.md` and current evidence.
+
+**Think like a language-runtime engineer, not a test optimizer.**
