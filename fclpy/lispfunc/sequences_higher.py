@@ -1,11 +1,11 @@
 """Higher-order sequence operations, arrays, and set operations."""
 
-import functools
 from .core import cons, car, cdr, atom
 from . import registry as _registry
 import fclpy.lisptype as lisptype
 # Import make_array from vectors to avoid circular dependency
 from .vectors import make_array
+from .sequences_search import _make_matcher
 
 
 def _cons_to_list(seq):
@@ -30,12 +30,23 @@ def _cons_to_list(seq):
     return [seq]
 
 
+def _matcher_contains(matcher, item, seq):
+    """True if `item` matches some element of `seq` under `matcher`."""
+    return any(matcher(item, x) for x in seq)
+
+
 # Association list operations
 @_registry.cl_function('ADJOIN')
-def adjoin(x, seq, test=lambda x, y: x is y):
-    """Tests whether item is the same as an existing element of list."""
-    seq = _cons_to_list(seq)
-    return seq if any(map(functools.partial(test, x), seq)) else cons(x, seq)
+def adjoin(x, seq, test=None, test_not=None, key=None, **kwargs):
+    """Tests whether item is the same as an existing element of list.
+
+    Supports :test/:test-not/:key like every other CLHS "two-argument
+    test" sequence function (default is eql-like equality); previously
+    ignored :key entirely and hardcoded `is` for :test.
+    """
+    matcher = _make_matcher(test=test, test_not=test_not, key=key)
+    seq_list = _cons_to_list(seq)
+    return seq if _matcher_contains(matcher, x, seq_list) else cons(x, seq)
 
 
 @_registry.cl_function('PAIRLIS')
@@ -235,72 +246,104 @@ def reduce_fn(function, sequence, key=None, from_end=None, start=None, end=None,
     return result
 
 
+def _finish_list(pylist):
+    """Return a Python list result as a Lisp value.
+
+    `_cons_to_list` turns NIL into `[]` for iteration; on the way back out
+    an empty Python list must become NIL again rather than printing as the
+    distinct-looking `()`, even though they are the same Lisp object --
+    otherwise `(nunion nil nil)` regresses from `NIL` to `()`.
+    """
+    return pylist if pylist else lisptype.NIL
+
+
+def _set_op_matcher(kwargs):
+    """Build the shared :test/:test-not/:key matcher for a set operation
+    from its **kwargs. All eleven set/list operations below (CLHS calls
+    them out as sharing one comparison protocol) previously ignored these
+    arguments completely and compared with bare Python `==`/`in`
+    (plan.md C5/X2/X3).
+    """
+    return _make_matcher(
+        test=kwargs.get('test'),
+        test_not=kwargs.get('test_not'),
+        key=kwargs.get('key'),
+    )
+
+
 # Set operations
 @_registry.cl_function('INTERSECTION')
 def intersection(list1, list2, **kwargs):
     """Set intersection."""
-    return [x for x in list1 if x in list2]
+    matcher = _set_op_matcher(kwargs)
+    list2 = _cons_to_list(list2)
+    return _finish_list([x for x in list1 if _matcher_contains(matcher, x, list2)])
 
 
 @_registry.cl_function('UNION')
 def union(list1, list2, **kwargs):
     """Set union."""
-    result = list(list1)
-    for item in list2:
-        if item not in result:
+    matcher = _set_op_matcher(kwargs)
+    result = _cons_to_list(list1)
+    for item in _cons_to_list(list2):
+        if not _matcher_contains(matcher, item, result):
             result.append(item)
-    return result
+    return _finish_list(result)
 
 
 @_registry.cl_function('NUNION')
 def nunion(list1, list2, **kwargs):
     """Destructive set union."""
-    for item in list2:
-        if item not in list1:
+    matcher = _set_op_matcher(kwargs)
+    list1 = _cons_to_list(list1)
+    for item in _cons_to_list(list2):
+        if not _matcher_contains(matcher, item, list1):
             list1.append(item)
-    return list1
+    return _finish_list(list1)
 
 
 @_registry.cl_function('SET-DIFFERENCE')
 def set_difference(list1, list2, **kwargs):
     """Set difference."""
-    return [x for x in list1 if x not in list2]
+    matcher = _set_op_matcher(kwargs)
+    list2 = _cons_to_list(list2)
+    return _finish_list([x for x in list1 if not _matcher_contains(matcher, x, list2)])
 
 
 @_registry.cl_function('NSET-DIFFERENCE')
 def nset_difference(list1, list2, **kwargs):
     """Destructive set difference."""
-    for item in list2:
-        while item in list1:
-            list1.remove(item)
-    return list1
+    matcher = _set_op_matcher(kwargs)
+    list1 = _cons_to_list(list1)
+    list2 = _cons_to_list(list2)
+    return _finish_list([x for x in list1 if not _matcher_contains(matcher, x, list2)])
 
 
 @_registry.cl_function('SET-EXCLUSIVE-OR')
 def set_exclusive_or(list1, list2, **kwargs):
     """Set exclusive or."""
-    return [x for x in list1 if x not in list2] + [x for x in list2 if x not in list1]
+    matcher = _set_op_matcher(kwargs)
+    list1 = _cons_to_list(list1)
+    list2 = _cons_to_list(list2)
+    return _finish_list(
+        [x for x in list1 if not _matcher_contains(matcher, x, list2)]
+        + [x for x in list2 if not _matcher_contains(matcher, x, list1)]
+    )
 
 
 @_registry.cl_function('NSET-EXCLUSIVE-OR')
 def nset_exclusive_or(list1, list2, **kwargs):
     """Destructive set exclusive or."""
-    # Remove items from list1 that are in list2
-    for item in list2:
-        while item in list1:
-            list1.remove(item)
-    # Add items from list2 that are not already in list1
-    for item in list2:
-        if item not in list1:
-            list1.append(item)
-    return list1
+    return set_exclusive_or(list1, list2, **kwargs)
 
 
 @_registry.cl_function('SUBSETP')
 def subsetp(subset, set_arg, **kwargs):
     """Test if subset is a subset of set_arg."""
-    for item in subset:
-        if item not in set_arg:
+    matcher = _set_op_matcher(kwargs)
+    set_arg = _cons_to_list(set_arg)
+    for item in _cons_to_list(subset):
+        if not _matcher_contains(matcher, item, set_arg):
             return lisptype.NIL
     return lisptype.T
 
@@ -308,7 +351,7 @@ def subsetp(subset, set_arg, **kwargs):
 @_registry.cl_function('NINTERSECTION')
 def nintersection(list1, list2, **kwargs):
     """Destructive intersection."""
-    return [x for x in list1 if x in list2]
+    return intersection(list1, list2, **kwargs)
 
 
 # Stack operations

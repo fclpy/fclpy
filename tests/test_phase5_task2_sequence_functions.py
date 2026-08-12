@@ -48,11 +48,15 @@ class TestFindFunction:
         assert result == 'bb'
     
     def test_find_with_test(self):
-        """Test FIND with custom test."""
+        """Test FIND with custom test.
+
+        Per CLHS 17.2.1, test is called as `(funcall test item element)`,
+        i.e. `(> 3 element)` here -- the first element for which that
+        holds is 1, not an element greater than 3.
+        """
         seq = [1, 2, 3, 4, 5]
         result = find(3, seq, test=lambda x, y: x > y)
-        # First element where x > 3
-        assert result in [4, 5]
+        assert result == 1
     
     def test_find_with_start_end(self):
         """Test FIND with start and end boundaries."""

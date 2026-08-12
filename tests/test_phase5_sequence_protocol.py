@@ -60,13 +60,18 @@ class TestSequenceIterator:
         assert iterator.get_value('fghij') == 5
     
     def test_iterator_with_custom_test(self):
-        """Test iterator with custom test function."""
+        """Test iterator with custom test function.
+
+        Per CLHS 17.2.1, `matches(element, target)` calls the test as
+        `(funcall test target element)` -- the searched-for value is
+        always the test's first argument, the sequence element its second.
+        """
         seq = [1, 2, 3, 4, 5]
         test_fn = lambda x, y: x < y  # Custom: less than test
         iterator = iterate(seq, test=test_fn)
-        
-        assert iterator.matches(2, 5) == True  # 2 < 5
-        assert iterator.matches(5, 2) == False  # 5 < 2 is False
+
+        assert iterator.matches(2, 5) == False  # test(5, 2) -> 5 < 2 is False
+        assert iterator.matches(5, 2) == True  # test(2, 5) -> 2 < 5 is True
     
     def test_iterator_current_index(self):
         """Test tracking current index during iteration."""
@@ -99,16 +104,20 @@ class TestSequenceIterator:
         assert iterator.index == 2
     
     def test_iterator_key_and_test_together(self):
-        """Test iterator with both key and test functions."""
+        """Test iterator with both key and test functions.
+
+        Per CLHS 17.2.1, key transforms the element (second argument);
+        the target passed to `matches` is always the test's first argument.
+        """
         seq = ['ab', 'cde', 'f']
         key_fn = len
         test_fn = lambda x, y: x > y
         iterator = iterate(seq, key=key_fn, test=test_fn)
-        
-        # 'ab' -> len=2, test: 2 > 1 = True
-        assert iterator.matches('ab', 1) == True
-        # 'f' -> len=1, test: 1 > 2 = False
-        assert iterator.matches('f', 2) == False
+
+        # 'ab' -> len=2, test(1, 2) -> 1 > 2 = False
+        assert iterator.matches('ab', 1) == False
+        # 'f' -> len=1, test(2, 1) -> 2 > 1 = True
+        assert iterator.matches('f', 2) == True
     
     def test_iterate_empty_sequence(self):
         """Test iterating over empty sequences."""

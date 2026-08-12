@@ -3,144 +3,143 @@
 from .core import cons, car, cdr, atom
 from . import registry as _registry
 import fclpy.lisptype as lisptype
-from .sequences_search import iterate, _seq_length, _seq_to_list
+from .sequences_search import (
+    iterate, _seq_length, _seq_to_list, _make_matcher, _coerce_function_designator,
+    _lisp_truthy,
+)
 
 
 @_registry.cl_function('REMOVE')
 def remove(item, sequence, **kwargs):
     """Remove item from sequence.
-    
+
     Supports:
-      :key - function to apply to each element before comparison
-      :test - comparison function (default is eql)
+      :key - function (or designator) to apply to each element before comparison
+      :test / :test-not - comparison function/designator (default is eql-like)
       :start - start index
       :end - end index
     """
     # Convert lispCons to list
     if hasattr(sequence, 'car') and hasattr(sequence, 'cdr'):
         sequence = _seq_to_list(sequence)
-    
+
     start = kwargs.get('start', 0)
     end = kwargs.get('end', _seq_length(sequence))
     key = kwargs.get('key', None)
-    test = kwargs.get('test', lambda x, y: x == y)
-    
+    test = kwargs.get('test', None)
+    test_not = kwargs.get('test_not', None)
+
     result = []
-    iterator = iterate(sequence, start=start, end=end, key=key, test=test)
-    
+    iterator = iterate(sequence, start=start, end=end, key=key, test=test, test_not=test_not)
+
     # Add elements before start
     result.extend(sequence[:start])
-    
+
     # Filter and add elements in range
     for element in iterator:
         if not iterator.matches(element, item):
             result.append(element)
-    
+
     # Add elements after end
     if end < _seq_length(sequence):
         result.extend(sequence[end:])
-    
+
     return result
 
 
 @_registry.cl_function('REMOVE-IF')
 def remove_if(test, sequence, **kwargs):
     """Remove elements satisfying test.
-    
+
     Supports:
-      :key - function to apply to each element before testing
+      :key - function (or designator) to apply to each element before testing
       :start - start index
       :end - end index
     """
     # Convert lispCons to list
     if hasattr(sequence, 'car') and hasattr(sequence, 'cdr'):
         sequence = _seq_to_list(sequence)
-    
+
     start = kwargs.get('start', 0)
     end = kwargs.get('end', _seq_length(sequence))
     key = kwargs.get('key', None)
-    
+    test = _coerce_function_designator(test)
+
     result = []
     iterator = iterate(sequence, start=start, end=end, key=key)
-    
+
     # Add elements before start
     result.extend(sequence[:start])
-    
+
     # Filter and add elements in range
     for element in iterator:
         test_value = iterator.get_value(element)
-        keep = test(test_value)
-        if not keep:
+        if not _lisp_truthy(test(test_value)):
             result.append(element)
-    
+
     # Add elements after end
     if end < _seq_length(sequence):
         result.extend(sequence[end:])
-    
+
     return result
 
 
 @_registry.cl_function('REMOVE-IF-NOT')
 def remove_if_not(test, sequence, **kwargs):
     """Remove elements not satisfying test.
-    
+
     Supports:
-      :key - function to apply to each element before testing
+      :key - function (or designator) to apply to each element before testing
       :start - start index
       :end - end index
     """
     # Convert lispCons to list
     if hasattr(sequence, 'car') and hasattr(sequence, 'cdr'):
         sequence = _seq_to_list(sequence)
-    
+
     start = kwargs.get('start', 0)
     end = kwargs.get('end', _seq_length(sequence))
     key = kwargs.get('key', None)
-    
+    test = _coerce_function_designator(test)
+
     result = []
     iterator = iterate(sequence, start=start, end=end, key=key)
-    
+
     # Add elements before start
     result.extend(sequence[:start])
-    
+
     # Filter and add elements in range
     for element in iterator:
         test_value = iterator.get_value(element)
-        if test(test_value):
+        if _lisp_truthy(test(test_value)):
             result.append(element)
-    
+
     # Add elements after end
     if end < _seq_length(sequence):
         result.extend(sequence[end:])
-    
+
     return result
 
 
 @_registry.cl_function('DELETE')
 def delete_fn(item, sequence, **kwargs):
-    """Delete item from sequence."""
-    # Convert lispCons to list
-    if hasattr(sequence, 'car') and hasattr(sequence, 'cdr'):
-        sequence = _seq_to_list(sequence)
-    return [x for x in sequence if x != item]
+    """Delete item from sequence.
+
+    Supports the same :test/:test-not/:key/:start/:end arguments as REMOVE.
+    """
+    return remove(item, sequence, **kwargs)
 
 
 @_registry.cl_function('DELETE-IF')
 def delete_if(predicate, sequence, **kwargs):
-    """Delete if predicate true."""
-    # Convert lispCons to list
-    if hasattr(sequence, 'car') and hasattr(sequence, 'cdr'):
-        sequence = _seq_to_list(sequence)
-    return [x for x in sequence if not predicate(x)]
+    """Delete if predicate true. Supports :key/:start/:end like REMOVE-IF."""
+    return remove_if(predicate, sequence, **kwargs)
 
 
 @_registry.cl_function('DELETE-IF-NOT')
 def delete_if_not(predicate, sequence, **kwargs):
-    """Delete if predicate false."""
-    # Convert lispCons to list
-    if hasattr(sequence, 'car') and hasattr(sequence, 'cdr'):
-        sequence = _seq_to_list(sequence)
-    return [x for x in sequence if predicate(x)]
+    """Delete if predicate false. Supports :key/:start/:end like REMOVE-IF-NOT."""
+    return remove_if_not(predicate, sequence, **kwargs)
 
 
 @_registry.cl_function('REMOVE-DUPLICATES')
@@ -173,29 +172,61 @@ def delete_duplicates(sequence, **kwargs):
 
 @_registry.cl_function('SUBSTITUTE')
 def substitute(newitem, olditem, sequence, **kwargs):
-    """Substitute elements in sequence."""
+    """Substitute elements in sequence.
+
+    Supports :key, :test/:test-not, :start, :end like REMOVE.
+    """
     # Convert lispCons to list
     if hasattr(sequence, 'car') and hasattr(sequence, 'cdr'):
         sequence = _seq_to_list(sequence)
-    return [newitem if x == olditem else x for x in sequence]
+
+    start = kwargs.get('start', 0)
+    end = kwargs.get('end', _seq_length(sequence))
+    key = kwargs.get('key', None)
+    test = kwargs.get('test', None)
+    test_not = kwargs.get('test_not', None)
+    matcher = _make_matcher(test=test, test_not=test_not, key=key)
+
+    return [
+        newitem if (start <= i < end and matcher(olditem, x)) else x
+        for i, x in enumerate(sequence)
+    ]
 
 
 @_registry.cl_function('SUBSTITUTE-IF')
 def substitute_if(newitem, test, sequence, **kwargs):
-    """Substitute using predicate."""
+    """Substitute using predicate. Supports :key, :start, :end."""
     # Convert lispCons to list
     if hasattr(sequence, 'car') and hasattr(sequence, 'cdr'):
         sequence = _seq_to_list(sequence)
-    return [newitem if test(x) else x for x in sequence]
+
+    start = kwargs.get('start', 0)
+    end = kwargs.get('end', _seq_length(sequence))
+    key = _coerce_function_designator(kwargs.get('key', None))
+    test = _coerce_function_designator(test)
+
+    return [
+        newitem if (start <= i < end and _lisp_truthy(test(key(x) if key else x))) else x
+        for i, x in enumerate(sequence)
+    ]
 
 
 @_registry.cl_function('SUBSTITUTE-IF-NOT')
 def substitute_if_not(newitem, test, sequence, **kwargs):
-    """Substitute using negated predicate."""
+    """Substitute using negated predicate. Supports :key, :start, :end."""
     # Convert lispCons to list
     if hasattr(sequence, 'car') and hasattr(sequence, 'cdr'):
         sequence = _seq_to_list(sequence)
-    return [newitem if not test(x) else x for x in sequence]
+
+    start = kwargs.get('start', 0)
+    end = kwargs.get('end', _seq_length(sequence))
+    key = _coerce_function_designator(kwargs.get('key', None))
+    test = _coerce_function_designator(test)
+
+    return [
+        newitem if (start <= i < end and not _lisp_truthy(test(key(x) if key else x))) else x
+        for i, x in enumerate(sequence)
+    ]
 
 
 @_registry.cl_function('NSUBSTITUTE')
@@ -217,24 +248,29 @@ def nsubstitute_if_not(newitem, test, sequence, **kwargs):
 
 
 @_registry.cl_function('SUBST')
-def subst(new, old, tree, test=None):
-    """Substitute old with new in tree."""
-    if test is None:
-        test = lambda x, y: x == y
-    
-    if test(tree, old):
+def subst(new, old, tree, test=None, test_not=None, key=None):
+    """Substitute old with new in tree.
+
+    Per CLHS 15.4, the test is called with `old` as the first argument and
+    the (possibly key-transformed) subexpression as the second -- this
+    previously called `test(tree, old)`, the reversed order (plan.md X3).
+    """
+    matcher = _make_matcher(test=test, test_not=test_not, key=key)
+
+    if matcher(old, tree):
         return new
     elif atom(tree):
         return tree
     else:
-        return cons(subst(new, old, car(tree), test),
-                   subst(new, old, cdr(tree), test))
+        return cons(subst(new, old, car(tree), test, test_not, key),
+                   subst(new, old, cdr(tree), test, test_not, key))
 
 
 @_registry.cl_function('SUBST-IF')
 def subst_if(new, predicate, tree):
     """Substitute with predicate."""
-    if predicate(tree):
+    predicate = _coerce_function_designator(predicate)
+    if _lisp_truthy(predicate(tree)):
         return new
     elif atom(tree):
         return tree
@@ -246,23 +282,29 @@ def subst_if(new, predicate, tree):
 @_registry.cl_function('SUBST-IF-NOT')
 def subst_if_not(new, predicate, tree):
     """Substitute with negated predicate."""
-    return subst_if(new, lambda x: not predicate(x), tree)
+    predicate = _coerce_function_designator(predicate)
+    return subst_if(new, lambda x: not _lisp_truthy(predicate(x)), tree)
 
 
 @_registry.cl_function('SUBLIS')
-def sublis(alist, tree, test=None):
-    """Substitute using association list."""
-    if test is None:
-        test = lambda x, y: x == y
-    
+def sublis(alist, tree, test=None, test_not=None, key=None):
+    """Substitute using association list.
+
+    Per CLHS 15.4, :key is applied to each subexpression of `tree` (the
+    candidate), and the test is called with the alist entry's key as the
+    first argument -- this previously called `test(tree, pair[0])`, the
+    reversed order (plan.md X3), with no :key support at all.
+    """
+    matcher = _make_matcher(test=test, test_not=test_not, key=key)
+
     if atom(tree):
         for pair in alist:
-            if pair and len(pair) > 1 and test(tree, pair[0]):
+            if pair and len(pair) > 1 and matcher(pair[0], tree):
                 return pair[1]
         return tree
     else:
-        return cons(sublis(alist, car(tree), test),
-                   sublis(alist, cdr(tree), test))
+        return cons(sublis(alist, car(tree), test, test_not, key),
+                   sublis(alist, cdr(tree), test, test_not, key))
 
 
 @_registry.cl_function('NSUBST')
