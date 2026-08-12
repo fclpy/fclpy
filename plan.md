@@ -3,10 +3,24 @@
 **Goal:** take existing, unmodified ANSI Common Lisp source and run it correctly.
 A passing scoreboard is the instrument, not the objective.
 
-**This document is organized as a checklist of what is still broken**, ranked by
-the *mechanism* at fault rather than by test count. It replaced a chronological
-plan whose eight stacked "Update" sections had become longer than its content;
-that history is preserved in condensed form in [Changelog](#changelog).
+**This document is organized around what is still broken**, ranked by the
+*mechanism* at fault rather than by test count. It replaced a chronological plan
+whose eight stacked "Update" sections had become longer than its content; that
+history is preserved in condensed form in [Changelog](#changelog).
+
+> ### 📋 This plan observes `docs/ansi_checklist.md`
+>
+> That generated file is **the authority for what is failing and where** — all
+> 13076 failures grouped directory → file, each with the command to re-verify it.
+> This plan supplies the *why* and the *order*; the checklist supplies the *what*
+> and the *where*.
+>
+> **When they disagree, the checklist is right.** It is regenerated from RT's own
+> output; prose here ages. Regenerate it after every run
+> (`scripts/ansi_checklist.py`), never hand-edit it, and diff it against
+> `docs/ansi_checklist_baseline.json` after every change — see
+> [the development loop](#the-development-loop) step 6 and
+> [preventing regression](#preventing-regression).
 
 ---
 
@@ -88,12 +102,28 @@ not the hardest problems.
 
 ### The development loop
 
-1. Pick a **cluster** from [§3](#3-the-checklist), never a test.
+**`docs/ansi_checklist.md` is the authority for what is broken.** This plan
+explains *why* and *in what order*; the checklist says *what and where*. When the
+two disagree, the checklist is right — it is regenerated from RT's own output,
+whereas prose in this document ages.
+
+1. **Open `docs/ansi_checklist.md`** and pick a **cluster** — a file or group of
+   files sharing a mechanism. Never pick a test.
 2. Reproduce it in the smallest expression that shows the defect.
 3. Fix the **mechanism**. Consolidate onto an existing helper if one exists.
-4. Verify with a **targeted run** of the owning group.
+4. **Verify with the targeted command printed next to that checklist entry.**
 5. Run `pytest` for regressions.
-6. Run the full suite only to move the scoreboard or close a milestone.
+6. **Regenerate the checklist** and diff against the baseline:
+   ```powershell
+   pipenv run python scripts/ansi_checklist.py --baseline docs/ansi_checklist_baseline.json
+   ```
+   Every file you did not touch must show no `+N REGRESSION`.
+7. Run the full suite only to move the official scoreboard or close a milestone —
+   then refresh the baseline with `--save-baseline`.
+
+**The step that matters most is 6.** A fix that moves only the files you targeted
+is a symptom fix; a fix that moves files you did not target is a mechanism fix.
+The checklist diff is the instrument that tells you which one you just did.
 
 ```powershell
 pipenv install --dev                                              # one-time
@@ -217,6 +247,50 @@ grep -cE "^FORMAT" ansi_results/failed.txt        # aggregate a family
 Those ten account for **~6537 failures, half the total**, across **nine
 mechanisms**.
 
+### Files failing 100% — the strongest mechanism-absent signal
+
+**23 files fail every single test they contain (592 tests).** A file at 100% is
+qualitatively different from a file at 60%: it means the operator is not merely
+buggy, it is **absent or fundamentally broken**, so nothing downstream of it can
+pass. These are the cheapest wins in the suite and the clearest evidence that
+counting individual tests is the wrong lens.
+
+```powershell
+# regenerate this list
+python -c "import re;[print(m.group(1),m.group(2)) for l in open('docs/ansi_checklist.md',encoding='utf-8') for m in [re.match(r'^- \[ \] .(\S+). — \*\*(\d+)\*\* failing of \2$',l)] if m]"
+```
+
+| tests | file | mechanism absent | cluster |
+|---|---|---|---|
+| 56 | `conditions/define-condition.lsp` | `DEFINE-CONDITION` creates no class | C9 |
+| 47 | `iteration/loop6.lsp` | LOOP driver | C1 |
+| 35 | `iteration/loop7.lsp` | LOOP driver | C1 |
+| 30 | `packages/make-package.lsp` | package model | C10 |
+| 30 | `cons/pushnew.lsp` | place protocol | C16 |
+| 29 | `hash-tables/make-hash-table.lsp` | `:test` as a designator | X2 |
+| 27 | `reader/read.lsp` | reader | C12 |
+| 27 | `reader/read-preserving-whitespace.lsp` | reader | C12 |
+| 27 | `packages/defpackage.lsp` | package model | C10 |
+| 26 | `objects/defmethod.lsp` | CLOS | C8 |
+| 25 | `streams/with-input-from-string.lsp` | string streams | C11 |
+| 25 | `printer/format/format-logical-block.lsp` | pretty printer | C2 |
+| 25 | `printer/format/format-e.lsp` | `~E` directive | C2 |
+| 24 | `streams/peek-char.lsp` | stream protocol | C11 |
+| 22 | `pathnames/make-pathname.lsp` | pathname model | C11 |
+| 20 | `printer/print-cons.lsp` | printer | C7 |
+| 19 | `printer/format/format-s.lsp` | `~S` directive | C2 |
+| 18 | `sequences/search-vector.lsp` | sequence + designators | C3 |
+| 17 | `printer/pprint-exit-if-list-exhausted.lsp` | pretty printer | C2 |
+| 17 | `cons/ldiff.lsp` | `LDIFF` absent | C19 |
+| 16 | `streams/with-output-to-string.lsp` | string streams | C11 |
+| 15 | `printer/format/format-a.lsp` | `~A` directive | C2 |
+| 15 | `environment/trace.lsp` | `TRACE` absent | C18 |
+
+**`conditions/define-condition.lsp` at 56/56 is the single best cost/benefit
+entry in the suite** — one macro, already diagnosed in [C9](#c9-conditions-restarts-and-define-condition),
+no architectural prerequisite, and it also unblocks every user-defined condition
+type in the `conditions/` directory's other files.
+
 ### Cross-cutting root causes
 
 These are not clusters — they *inflate* the clusters above, so fixing them moves
@@ -325,6 +399,9 @@ is naturally bounded by its own driver." The hang above disproves that premise �
 a driver-path runaway is bounded by nothing. Extend the cap to all paths or
 delete the premise from the comment.
 
+**Checklist entries:** `iteration/loop10.lsp` 70/101, **`iteration/loop6.lsp`
+47/47**, **`iteration/loop7.lsp` 35/35**, `iteration/loop14.lsp` 33/49. Two of
+these are total failures.
 **Owner:** M3-adjacent (LOOP is its own clause parser today).
 **Verify:** `run_ansi.py iteration`, then `numbers/deposit-field.lsp`, `numbers/sqrt.lsp`.
 
@@ -348,7 +425,12 @@ iteration (`~{~}`), escape (`~^`), justification (`~<~>`), conditionals
 is the same engine reached through a macro, so it should not be a second
 implementation. **The current implementation is known to contain
 `if 'NIL' in part: break`** — a string hack in the directive loop (standing rule
-4). **Owner:** M10. **Verify:** `run_ansi.py printer`.
+4). **Checklist entries:** `printer/print-array.lsp` 66/67,
+`printer/print-vector.lsp` 38/39, **`format/format-logical-block.lsp` 25/25**,
+**`format/format-e.lsp` 25/25**, **`format/format-s.lsp` 19/19**,
+**`format/format-a.lsp` 15/15**, **`pprint-exit-if-list-exhausted.lsp` 17/17** —
+five total failures, i.e. those directives do not work *at all*.
+**Owner:** M10. **Verify:** `run_ansi.py printer`.
 
 #### C3. Sequence functions — `:test`/`:key` and designators
 
@@ -361,6 +443,12 @@ This cluster is dominated by the two cross-cutting causes above — **X2**
 (designator coercion) and **X3** (reversed `:test` argument order) — rather than
 by 40 individually wrong functions. Fix X2 and X3 first, re-run, and re-measure
 before touching any individual sequence function. **Owner:** M6.
+**Checklist entries:** `sequences/nsubstitute.lsp` 119/145,
+`sequences/substitute.lsp` 118/147, `sequences/find.lsp` 115/174,
+`sequences/remove.lsp` 102/127, `sequences/position.lsp` 98/154,
+`sequences/mismatch.lsp` 95/149. **Six files, one shape** — that is the
+signature of a shared defect, and it is why X2/X3 must be measured before any of
+these files is opened individually.
 **Verify:** `run_ansi.py sequences`.
 
 #### C4. `DEFSTRUCT` generates no accessors and no class
@@ -374,6 +462,8 @@ STRUCT-TEST-nn` in the leak table.
 One mechanism: `DEFSTRUCT` must define the constructor, copier, predicate,
 accessors, and a real type/class. Nothing downstream can pass until it does —
 which is exactly why the pass rate is 12%. **Owner:** M9.
+**Checklist entries:** `structures/structures-03.lsp` 63/64,
+`structures/structures-02.lsp` 26/28, `structures/structures-04.lsp` 8/8.
 **Verify:** `run_ansi.py structures`.
 
 #### C5. Set and list operations
@@ -442,6 +532,9 @@ The signaling core landed (handlers run at the signal point, before unwinding).
   transitional compatibility paths that disappear once raise sites migrate onto
   `SIGNAL` — the same migration as [X1](#x1-python-exceptions-leaking-as-lisp-values).
 
+**Checklist entries:** **`conditions/define-condition.lsp` 56/56** — a total
+failure and the best cost/benefit entry in the suite — `restart-case.lsp` 27/37,
+`restart-bind.lsp` 17/26, **`check-type.lsp` 9/9**.
 **Owner:** M8. **Verify:** `run_ansi.py conditions`.
 
 #### C10. Package model
@@ -630,6 +723,14 @@ ecosystem," and **nothing in the ANSI suite tests it.**
 
 ### Preventing regression
 
+- **The checklist baseline is the regression gate.**
+  `docs/ansi_checklist_baseline.json` is a committed `{file: failed_count}`
+  snapshot; regenerating with `--baseline` marks any file that got worse as
+  `+N REGRESSION`. **A per-file regression is a build failure even if the total
+  improved** — a total can hide a mechanism trade where one fix breaks another
+  subsystem, which is precisely the failure mode a single scoreboard number
+  cannot see. Refresh the baseline only from a full run, never from a targeted
+  one (a targeted run has no data for the files it did not load).
 - CI runs the full suite; **any increase in failures is a build failure.** Commit
   the scoreboard so deltas are reviewable.
 - `pytest` is the fast inner loop; **`ansi-test` is the authority.** When they
