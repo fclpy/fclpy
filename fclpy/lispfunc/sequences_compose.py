@@ -452,12 +452,24 @@ def elt(sequence, index):
 
 @_registry.cl_function('MAKE-LIST')
 def make_list(size, initial_element=None):
-    """Make list of given size."""
-    # Ensure size is an integer
+    """Make list of given size (CLHS: make-list size &key initial-element).
+
+    Previously returned a bare Python list, a second incompatible list
+    representation (finding M/X2's defect class, same one FORMATTER's
+    returned tail had): `(equal (make-list 3) (list nil nil nil))` compared
+    a Python list against a real `lispCons` list and depended on EQUAL's
+    fallback for two Python lists, which silently broke the moment either
+    side became a proper Lisp list -- exactly what happened once FORMATTER's
+    tail was fixed to return one.
+    """
     if isinstance(size, lisptype.lispCons):
         size = size.car
     size = int(size)
-    return [initial_element] * size
+    element = initial_element if initial_element is not None else lisptype.NIL
+    result = lisptype.NIL
+    for _ in range(size):
+        result = lisptype.lispCons(element, result)
+    return result
 
 
 @_registry.cl_function('MAKE-SEQUENCE')

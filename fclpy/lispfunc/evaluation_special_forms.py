@@ -529,6 +529,37 @@ def with_input_from_string_macro(spec, *body):
     )
 
 
+@_registry.cl_macro('ASSERT', documentation='ASSERT macro expander (CLHS 5.1)')
+def assert_macro(test_form, *rest):
+    """Macro expander for ASSERT (CLHS 5.1):
+        (assert test-form [(place*) [datum-form argument-form*]])
+
+    The `(place*)` list names SETF-able places an interactive CONTINUE
+    restart could prompt new values into before retrying test-form -- it is
+    syntax, not a form to evaluate. `ASSERT` was previously a `cl_function`,
+    so `cl_function`'s eager argument evaluation ran that list as an
+    ordinary call: `(assert (= (length tail) 0) (tail) ...)` failed with
+    `Undefined function TAIL` regardless of whether the assertion would
+    have passed -- the same defect class as the WITH-*-STRING macros above.
+
+    This runtime has no interactive user to drive the retry loop, so
+    `place*` is accepted per the grammar and otherwise ignored, matching
+    every non-interactive caller of ASSERT in the ANSI suite: on failure
+    they want an error signaled, not a prompt.
+    """
+    datum_and_args = list(rest[1:]) if len(rest) > 1 else []
+    if datum_and_args:
+        error_call = _cons_from([lisptype.LispSymbol('ERROR')] + datum_and_args)
+    else:
+        quoted_test = _cons_from([lisptype.LispSymbol('QUOTE'), test_form])
+        error_call = _cons_from([
+            lisptype.LispSymbol('ERROR'),
+            lisptype.LispString("Assertion failed: ~S"),
+            quoted_test,
+        ])
+    return _cons_from([lisptype.LispSymbol('IF'), test_form, lisptype.NIL, error_call])
+
+
 @_registry.cl_macro('WITH-OPEN-STREAM',
                     documentation='WITH-OPEN-STREAM macro expander')
 def with_open_stream_macro(spec, *body):

@@ -875,6 +875,220 @@ def _capitalize_first_word(s):
     return ''.join(result)
 
 
+def _is_unspecified(value):
+    """A FORMAT prefix parameter position that was left blank (`None`, an
+    empty comma slot) or supplied as Lisp NIL (typically via `~V`)."""
+    return value is None or value is lisptype.NIL
+
+
+def _format_char_param(value, default):
+    """Read a pad/comma character prefix parameter: `'x` literal, `~V`
+    (which supplies a CHARACTER object or a one-char string), or unspecified."""
+    if _is_unspecified(value):
+        return default
+    if isinstance(value, lisptype.Character):
+        return value.char
+    s = str(value)
+    return s[:1] if s else default
+
+
+def _numeric_pad_params(params):
+    """Read the `mincol,padchar,commachar,comma-interval` prefix parameters
+    shared by `~D`, `~X`, `~O`, `~B` and `~R` (CLHS 22.3.2), applying each
+    one's default. `comma-interval` defaults to 3 and a non-positive value
+    (which would make grouping meaningless) falls back to the same default."""
+    def _p(i):
+        return params[i] if len(params) > i else None
+
+    mincol = _lisp_number(_p(0), 0)
+    padchar = _format_char_param(_p(1), ' ')
+    commachar = _format_char_param(_p(2), ',')
+    comma_interval = _lisp_number(_p(3), 3)
+    if comma_interval <= 0:
+        comma_interval = 3
+    return mincol, padchar, commachar, comma_interval
+
+
+_RADIX_DIGITS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+
+def _int_to_radix_digits(num, radix):
+    """Render a non-negative integer's magnitude in `radix` (2-36), one
+    engine for `~D`/`~X`/`~O`/`~B` and explicit-radix `~R` instead of four
+    copies each hardcoded to a Python builtin (`hex`/`oct`/`bin`) that only
+    covers three of the five radices FORMAT needs."""
+    if num == 0:
+        return '0'
+    chars = []
+    while num:
+        num, rem = divmod(num, radix)
+        chars.append(_RADIX_DIGITS[rem])
+    return ''.join(reversed(chars))
+
+
+def _insert_comma_groups(digits, commachar, interval):
+    """Group `digits` from the right in chunks of `interval`, per CLHS
+    22.3.2's `:` modifier. A single group (interval >= len(digits)) gets no
+    separator at all -- that is what makes `~,,,#:d` applied with a
+    comma-interval equal to the digit count print with no commas."""
+    n = len(digits)
+    if interval <= 0 or interval >= n:
+        return digits
+    first_len = n % interval or interval
+    parts = [digits[:first_len]]
+    for i in range(first_len, n, interval):
+        parts.append(digits[i:i + interval])
+    return commachar.join(parts)
+
+
+def _format_A_fallback(val):
+    """CLHS 22.3.2: if the argument to `~D`/`~X`/`~O`/`~B`/`~R` is not an
+    integer, it is printed as if by `~A` -- a fresh, unmodified `~A`, not
+    this directive's own colon/at flags reinterpreted."""
+    if val is None or val is lisptype.NIL:
+        return "NIL"
+    if isinstance(val, str):
+        return val
+    return lisptype.lisp_str(val)
+
+
+def _format_integer_directive(val, radix, params, colon_flag, at_flag):
+    """The shared digit-printing engine behind `~D`/`~X`/`~O`/`~B` and
+    explicit-radix `~R`: sign, radix conversion, `:` comma-grouping, then
+    `mincol`/`padchar` right-justification -- in that order, since padding
+    must see the sign and commas already in place (CLHS 22.3.2)."""
+    if not isinstance(val, int):
+        return _format_A_fallback(val)
+    mincol, padchar, commachar, comma_interval = _numeric_pad_params(params)
+    neg = val < 0
+    digits = _int_to_radix_digits(abs(val), radix)
+    if colon_flag:
+        digits = _insert_comma_groups(digits, commachar, comma_interval)
+    sign = '-' if neg else ('+' if at_flag else '')
+    body = sign + digits
+    if len(body) < mincol:
+        body = padchar * (mincol - len(body)) + body
+    return body
+
+
+_ENGLISH_ONES = [
+    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight",
+    "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen",
+    "sixteen", "seventeen", "eighteen", "nineteen",
+]
+_ENGLISH_TENS = [
+    "", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy",
+    "eighty", "ninety",
+]
+_ENGLISH_SCALES = [
+    "", "thousand", "million", "billion", "trillion", "quadrillion",
+    "quintillion", "sextillion", "septillion", "octillion", "nonillion",
+    "decillion", "undecillion", "duodecillion", "tredecillion",
+]
+
+
+def _english_below_100(n):
+    if n < 20:
+        return _ENGLISH_ONES[n]
+    tens, rem = divmod(n, 10)
+    return _ENGLISH_TENS[tens] + ("-" + _ENGLISH_ONES[rem] if rem else "")
+
+
+def _english_below_1000(n):
+    hundreds, rem = divmod(n, 100)
+    if hundreds == 0:
+        return _english_below_100(rem)
+    text = _ENGLISH_ONES[hundreds] + " hundred"
+    return text + (" " + _english_below_100(rem) if rem else "")
+
+
+def _english_cardinal(n):
+    """Spell `n` out in English (CLHS 22.3.2's `~R` with no radix and
+    neither modifier). Groups by thousands rather than a 0-100 lookup table
+    so it is not silently wrong the moment a test uses 101."""
+    if n == 0:
+        return "zero"
+    neg = n < 0
+    n = abs(n)
+    groups = []
+    scale = 0
+    while n > 0:
+        n, grp = divmod(n, 1000)
+        if grp:
+            groups.append((grp, scale))
+        scale += 1
+    parts = []
+    for grp, idx in reversed(groups):
+        text = _english_below_1000(grp)
+        if idx > 0:
+            scale_name = (_ENGLISH_SCALES[idx] if idx < len(_ENGLISH_SCALES)
+                          else "*1000^%d" % idx)
+            text += " " + scale_name
+        parts.append(text)
+    return ("negative " if neg else "") + " ".join(parts)
+
+
+_ENGLISH_ORDINAL_ONES = {
+    "zero": "zeroth", "one": "first", "two": "second", "three": "third",
+    "four": "fourth", "five": "fifth", "six": "sixth", "seven": "seventh",
+    "eight": "eighth", "nine": "ninth", "ten": "tenth", "eleven": "eleventh",
+    "twelve": "twelfth", "thirteen": "thirteenth", "fourteen": "fourteenth",
+    "fifteen": "fifteenth", "sixteen": "sixteenth", "seventeen": "seventeenth",
+    "eighteen": "eighteenth", "nineteen": "nineteenth",
+}
+_ENGLISH_ORDINAL_TENS = {
+    "twenty": "twentieth", "thirty": "thirtieth", "forty": "fortieth",
+    "fifty": "fiftieth", "sixty": "sixtieth", "seventy": "seventieth",
+    "eighty": "eightieth", "ninety": "ninetieth",
+}
+_ENGLISH_ORDINAL_SCALES = {
+    name: name + "th" for name in _ENGLISH_SCALES if name
+}
+_ENGLISH_ORDINAL_SCALES["hundred"] = "hundredth"
+
+
+def _ordinal_word(word):
+    if '-' in word:
+        prefix, suffix = word.rsplit('-', 1)
+        return prefix + '-' + _ENGLISH_ORDINAL_ONES.get(suffix, suffix)
+    return (_ENGLISH_ORDINAL_TENS.get(word)
+            or _ENGLISH_ORDINAL_SCALES.get(word)
+            or _ENGLISH_ORDINAL_ONES.get(word, word))
+
+
+def _english_ordinal(n):
+    """`~:R`: only the *last* word of the cardinal spelling becomes ordinal
+    (CLHS gives `one hundredth`, not `oneth hundredth`) -- so this builds on
+    `_english_cardinal` rather than a second number-to-words implementation."""
+    cardinal = _english_cardinal(n)
+    prefix = ""
+    if cardinal.startswith("negative "):
+        prefix, cardinal = "negative ", cardinal[len("negative "):]
+    words = cardinal.split(" ")
+    words[-1] = _ordinal_word(words[-1])
+    return prefix + " ".join(words)
+
+
+_ROMAN_TABLE = [
+    (1000, 'M'), (900, 'CM'), (500, 'D'), (400, 'CD'),
+    (100, 'C'), (90, 'XC'), (50, 'L'), (40, 'XL'),
+    (10, 'X'), (9, 'IX'), (5, 'V'), (4, 'IV'), (1, 'I'),
+]
+_OLD_ROMAN_TABLE = [
+    (1000, 'M'), (500, 'D'), (100, 'C'), (50, 'L'), (10, 'X'), (5, 'V'), (1, 'I'),
+]
+
+
+def _roman_numeral(n, table):
+    if n <= 0:
+        return ''
+    parts = []
+    for value, sym in table:
+        count, n = divmod(n, value)
+        parts.append(sym * count)
+    return ''.join(parts)
+
+
 def _format_directive(control_string, cursor, pos):
     """Process a single format directive starting at pos (after ~).
 
@@ -967,136 +1181,44 @@ def _format_directive(control_string, cursor, pos):
 
 
     elif directive == 'D':
-        # ~D - Decimal integer
-        val = get_arg()
-        try:
-            num = int(val) if val is not None else 0
-            if at_flag and num >= 0:
-                result = '+' + str(num)
-            else:
-                result = str(num)
-            # Apply mincol padding
-            if params:
-                mincol = params[0] if params[0] is not None else 0
-                padchar = params[1] if len(params) > 1 and params[1] else ' '
-                if len(result) < mincol:
-                    padding = str(padchar) * (mincol - len(result))
-                    result = padding + result
-            # Add commas for :
-            if colon_flag:
-                # Insert commas every 3 digits from right
-                sign = ''
-                if result[0] in '+-':
-                    sign = result[0]
-                    result = result[1:]
-                parts = []
-                while len(result) > 3:
-                    parts.append(result[-3:])
-                    result = result[:-3]
-                parts.append(result)
-                result = sign + ','.join(reversed(parts))
-        except (TypeError, ValueError):
-            result = str(val)
-        return (result, pos)
-    
+        # ~D - Decimal integer (CLHS 22.3.2)
+        return (_format_integer_directive(get_arg(), 10, params, colon_flag, at_flag), pos)
+
     elif directive == 'X':
         # ~X - Hexadecimal
-        val = get_arg()
-        try:
-            num = int(val) if val is not None else 0
-            if num < 0:
-                result = '-' + hex(-num)[2:].upper()
-            else:
-                result = hex(num)[2:].upper()
-            if at_flag and num >= 0:
-                result = '+' + result
-        except (TypeError, ValueError):
-            result = str(val)
-        return (result, pos)
-    
+        return (_format_integer_directive(get_arg(), 16, params, colon_flag, at_flag), pos)
+
     elif directive == 'O':
         # ~O - Octal
-        val = get_arg()
-        try:
-            num = int(val) if val is not None else 0
-            if num < 0:
-                result = '-' + oct(-num)[2:]
-            else:
-                result = oct(num)[2:]
-            if at_flag and num >= 0:
-                result = '+' + result
-        except (TypeError, ValueError):
-            result = str(val)
-        return (result, pos)
-    
+        return (_format_integer_directive(get_arg(), 8, params, colon_flag, at_flag), pos)
+
     elif directive == 'B':
         # ~B - Binary
-        val = get_arg()
-        try:
-            num = int(val) if val is not None else 0
-            if num < 0:
-                result = '-' + bin(-num)[2:]
-            else:
-                result = bin(num)[2:]
-            if at_flag and num >= 0:
-                result = '+' + result
-        except (TypeError, ValueError):
-            result = str(val)
-        return (result, pos)
-    
+        return (_format_integer_directive(get_arg(), 2, params, colon_flag, at_flag), pos)
+
     elif directive == 'R':
-        # ~R - Radix (with param) or English (without)
-        if params and params[0] is not None:
-            radix = params[0]
+        # ~R - explicit radix (same mincol/padchar/commachar/comma-interval
+        # tail as ~D/~X/~O/~B, radix is just an extra leading parameter) or,
+        # with no parameters at all, English/Roman spelling per CLHS 22.3.2.
+        if params and not _is_unspecified(params[0]):
+            radix = _lisp_number(params[0], 10)
             val = get_arg()
-            try:
-                num = int(val) if val is not None else 0
-                if radix == 10:
-                    result = str(num)
-                elif radix == 16:
-                    result = hex(num)[2:].upper() if num >= 0 else '-' + hex(-num)[2:].upper()
-                elif radix == 8:
-                    result = oct(num)[2:] if num >= 0 else '-' + oct(-num)[2:]
-                elif radix == 2:
-                    result = bin(num)[2:] if num >= 0 else '-' + bin(-num)[2:]
-                else:
-                    # General radix conversion
-                    if num == 0:
-                        result = '0'
-                    else:
-                        digits = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-                        neg = num < 0
-                        num = abs(num)
-                        chars = []
-                        while num:
-                            chars.append(digits[num % radix])
-                            num //= radix
-                        result = ('-' if neg else '') + ''.join(reversed(chars))
-            except (TypeError, ValueError):
-                result = str(val)
+            if isinstance(val, int):
+                result = _format_integer_directive(val, radix, params[1:], colon_flag, at_flag)
+            else:
+                result = _format_A_fallback(val)
         else:
-            # English representation
             val = get_arg()
-            try:
-                num = int(val) if val is not None else 0
-                # Simple English for small numbers
-                if colon_flag:
-                    # Ordinal: 1st, 2nd, 3rd, etc.
-                    ordinals = {1: 'first', 2: 'second', 3: 'third', 4: 'fourth',
-                               5: 'fifth', 6: 'sixth', 7: 'seventh', 8: 'eighth',
-                               9: 'ninth', 10: 'tenth', 11: 'eleventh', 12: 'twelfth'}
-                    result = ordinals.get(num, str(num) + ('th' if num not in (1,2,3) or (11 <= num <= 13) else
-                                                          'st' if num % 10 == 1 else
-                                                          'nd' if num % 10 == 2 else
-                                                          'rd' if num % 10 == 3 else 'th'))
-                else:
-                    # Cardinal: one, two, three, etc.
-                    cardinals = {0: 'zero', 1: 'one', 2: 'two', 3: 'three', 4: 'four',
-                                5: 'five', 6: 'six', 7: 'seven', 8: 'eight', 9: 'nine',
-                                10: 'ten', 11: 'eleven', 12: 'twelve'}
-                    result = cardinals.get(num, str(num))
-            except (TypeError, ValueError):
-                result = str(val)
+            if not isinstance(val, int):
+                result = _format_A_fallback(val)
+            elif at_flag and colon_flag:
+                result = _roman_numeral(val, _OLD_ROMAN_TABLE) if val > 0 else ('-' + _roman_numeral(-val, _OLD_ROMAN_TABLE) if val < 0 else '')
+            elif at_flag:
+                result = _roman_numeral(val, _ROMAN_TABLE) if val > 0 else ('-' + _roman_numeral(-val, _ROMAN_TABLE) if val < 0 else '')
+            elif colon_flag:
+                result = _english_ordinal(val)
+            else:
+                result = _english_cardinal(val)
         return (result, pos)
     
     elif directive == 'C':
@@ -1820,8 +1942,15 @@ def formatter(control_string):
         # Use internal processor to obtain remaining-args index (tail)
         formatted, consumed = _format_process_with_tail(control_string_str, args)
         _write_stream_output(stream, formatted)
-        # Return the tail (remaining args) as a list
-        return list(args[consumed:])
+        # Return the tail (remaining args) as a proper Lisp list -- a bare
+        # Python list here is a second, incompatible list representation
+        # (finding M), so `(equal (funcall fn stream ... 'a) '(a))` was
+        # comparing a `lispCons` against a Python list and always failing,
+        # regardless of whether the tail's contents were otherwise correct.
+        tail = lisptype.NIL
+        for item in reversed(args[consumed:]):
+            tail = lisptype.lispCons(item, tail)
+        return tail
 
     return format_func
 

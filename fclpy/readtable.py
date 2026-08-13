@@ -541,6 +541,19 @@ class Readtable:
                 elif c == 'A' or c == 'a':
                     # Array: #nA(...)
                     return self._read_item(stream)  # Return nested structure
+                elif c == 'R' or c == 'r':
+                    # Radix literal: #nR -> integer read in base n (CLHS 2.4.8.7),
+                    # e.g. #3r1021101. Previously unhandled: the digit branch
+                    # above only recognized '=', '#' and 'A' as followers, so
+                    # anything else (including 'R') fell through to `break`
+                    # with the accumulated digits discarded and `r1021101...`
+                    # left on the stream to be read as a bare symbol token --
+                    # `Unbound variable: R1021101`, not a reader error, which
+                    # is what made this defect look evaluator-side.
+                    radix = int(num)
+                    if radix < 2 or radix > 36:
+                        raise ValueError(f"Invalid radix: {radix}")
+                    return self._read_radix_number(stream, radix)
                 else:
                     if c:
                         stream.unread_char(c)
@@ -752,35 +765,34 @@ class Readtable:
         path_str = self._read_string_literal(stream)
         return Pathname(path_str)
     
+    _RADIX_DIGIT_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
     def _read_radix_number(self, stream, radix):
-        """Read a number in the specified radix (base).
-        
+        """Read a number in the specified radix (base), CLHS 2.4.8.
+
         Examples:
             #xFF -> 255 (radix 16)
-            #b1010 -> 10 (radix 2)  
+            #b1010 -> 10 (radix 2)
             #o17 -> 15 (radix 8)
-        
+            #3r1021101 -> a base-3 integer (radix 3, via #nR)
+
+        One digit-set formula for any radix 2-36 rather than three
+        hand-picked sets plus a `0123456789`-only fallback that silently
+        broke every other explicit radix `#nR` can name.
+
         Args:
             stream: Input stream
-            radix: The base (2 for binary, 8 for octal, 16 for hex)
-            
+            radix: The base (2-36)
+
         Returns:
             Integer value
         """
-        # Define valid digit characters for each radix
-        if radix == 2:
-            valid_chars = '01'
-        elif radix == 8:
-            valid_chars = '01234567'
-        elif radix == 16:
-            valid_chars = '0123456789abcdefABCDEF'
-        else:
-            valid_chars = '0123456789'
-        
+        valid_chars = self._RADIX_DIGIT_CHARS[:radix]
+
         # Read the number token
         token = ''
         negative = False
-        
+
         # Check for sign
         c = stream.read_char()
         if c == '-':
@@ -788,19 +800,19 @@ class Readtable:
             c = stream.read_char()
         elif c == '+':
             c = stream.read_char()
-        
+
         # Read digits
-        while c and (c in valid_chars):
+        while c and c.upper() in valid_chars:
             token += c
             c = stream.read_char()
-        
+
         # Put back the last character if it's not EOF
         if c:
             stream.unread_char(c)
-        
+
         if not token:
             raise ValueError(f"No digits found for radix-{radix} number")
-        
+
         # Parse the number
         try:
             value = int(token, radix)

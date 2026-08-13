@@ -60,19 +60,10 @@ def with_standard_io_syntax(*body):
 
 
 # --- Miscellaneous utilities ---
-@_registry.cl_function('ASSERT')
-def assert_fn(test_form, *args, **kwargs):
-    """ASSERT macro - signals error if test-form evaluates to NIL.
-    
-    (ASSERT test-form [(place*) [datum argument*]])
-    
-    If test-form is NIL, signals an error. The optional places specify
-    values that may be setf'd before retrying. The optional datum and
-    arguments describe the error.
-    """
-    if test_form is None or test_form is lisptype.NIL or test_form == False:
-        raise lisptype.LispError(f"Assertion failed: {test_form!r}")
-    return lisptype.NIL
+# ASSERT is a macro expander in evaluation_special_forms.py, not a
+# `cl_function` here -- see that module for why (its `(place*)` list is
+# syntax, never evaluated, and `cl_function` evaluates every argument
+# eagerly).
 
 
 @_registry.cl_function('COMPLEX')
@@ -1205,7 +1196,6 @@ def is_variable_special(symbol, env=None):
 
 
 __all__ = [
-    'assert_fn',
     'with_accessors',
     'with_compilation_unit',
     'with_pprint_logical_block',
