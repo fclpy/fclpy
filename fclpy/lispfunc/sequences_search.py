@@ -1,7 +1,7 @@
 """Sequence search and query operations."""
 
 import functools
-from .core import cons, car, cdr, atom
+from .core import cons, car, cdr, atom, _consp_internal
 from . import registry as _registry
 import fclpy.lisptype as lisptype
 
@@ -36,10 +36,11 @@ def _seq_length(sequence):
 
 def _seq_to_list(sequence):
     """Convert any sequence to a Python list for easier processing.
-    
+
     Args:
-        sequence: List, string, tuple, lispCons, or other sequence type
-        
+        sequence: List, string, tuple, lispCons, AdjustableVector,
+            LispString, or any other iterable sequence type
+
     Returns:
         A Python list containing the elements.
     """
@@ -59,6 +60,14 @@ def _seq_to_list(sequence):
             result.append(current.car)
             current = current.cdr
         return result
+    # Everything else that carries the Lisp VECTOR/STRING protocol --
+    # `AdjustableVector` (reader-built `#(...)` literals) and `LispString`
+    # (`COPY-SEQ` on a string) -- supports plain Python iteration; falling
+    # through to `[]` for "unrecognized type" silently dropped every
+    # element of both, which is exactly the "Python type test standing in
+    # for a Lisp type test" pattern plan.md's Finding M warns about.
+    if hasattr(sequence, '__iter__'):
+        return list(sequence)
     return []
 
 
@@ -101,6 +110,81 @@ def _coerce_function_designator(designator):
         return designator
     from .evaluation_core import coerce_to_function
     return coerce_to_function(designator, 'sequence function')
+
+
+def _char_text(item):
+    """Return a 1-character Python str for a Lisp character-like value.
+
+    Elements pulled out of a string sequence are either a `lisptype.Character`
+    or, on some paths, an already-plain length-1 Python `str` (plan.md
+    Finding I). Rebuilding a string result needs plain text either way.
+    """
+    if isinstance(item, lisptype.Character):
+        return item.char
+    return item
+
+
+def _rebuild_sequence(original, elements):
+    """Reconstruct a result in the same kind of sequence as `original`.
+
+    CLHS 17.1: a generic sequence function (one with no `:result-type`
+    argument, e.g. REMOVE/SUBSTITUTE and their `N`-destructive counterparts)
+    returns a sequence of the *same type* as its `sequence` argument. Every
+    caller here has already flattened `original` into a plain Python
+    `elements` list via `_seq_to_list` for easy processing; returning that
+    list verbatim silently turns a LIST argument into an object that prints
+    identically to a proper Lisp list but is not `CONSP`/`EQUAL` to one
+    (plan.md Finding M -- a Python container standing in for a Lisp one),
+    and turns a STRING argument into a list of one-character pieces instead
+    of a string.
+    """
+    if original is lisptype.NIL or original is None or (
+        hasattr(original, 'car') and hasattr(original, 'cdr')
+    ):
+        result = lisptype.NIL
+        for item in reversed(elements):
+            result = lisptype.lispCons(item, result)
+        return result
+    if isinstance(original, lisptype.LispString):
+        return lisptype.LispString(''.join(_char_text(e) for e in elements))
+    if isinstance(original, str):
+        return ''.join(_char_text(e) for e in elements)
+    if isinstance(original, tuple):
+        return tuple(elements)
+    return elements
+
+
+def _matched_positions(start, end, from_end, count, matches_at):
+    """Select which indices in `[start, end)` a sequence-modifying function
+    should act on, per CLHS 17.2.1's `:count`/`:from-end` protocol.
+
+    `matches_at(i)` is called to test each candidate index and may have
+    side effects (a `:test`/predicate function is a full function, not a
+    pure comparison -- ANSI's own `nsubstitute-list.20`-style tests rely on
+    a stateful lambda). Two things distinguish this from filtering a
+    precomputed list and slicing it: `matches_at` is called in the *scan
+    order* CLHS specifies -- descending when `:from-end` is true, ascending
+    otherwise -- so a stateful predicate observes the same call sequence a
+    conforming implementation would; and scanning stops as soon as `count`
+    matches have been found, so `matches_at` is never called more times than
+    necessary. A NIL/None `count` means "no limit"; CLHS treats a negative
+    count as zero.
+    """
+    if count is not None:
+        try:
+            count = int(count)
+        except (TypeError, ValueError):
+            count = None
+    chosen = set()
+    if count is not None and count <= 0:
+        return chosen
+    indices = range(end - 1, start - 1, -1) if from_end else range(start, end)
+    for i in indices:
+        if matches_at(i):
+            chosen.add(i)
+            if count is not None and len(chosen) >= count:
+                break
+    return chosen
 
 
 def _make_matcher(test=None, test_not=None, key=None):
@@ -651,6 +735,8 @@ def rassoc_if_not(predicate, alist, key=None):
 
 
 __all__ = [
+    # Shared helpers
+    '_rebuild_sequence', '_matched_positions', '_char_text',
     # SequenceIterator protocol
     'SequenceIterator', 'iterate', 'with_sequence_protocol',
     # Find operations

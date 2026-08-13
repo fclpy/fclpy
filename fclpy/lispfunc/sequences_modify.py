@@ -1,124 +1,101 @@
 """Sequence modification operations - remove, delete, substitute."""
 
-from .core import cons, car, cdr, atom
+from .core import cons, car, cdr, atom, _consp_internal
 from . import registry as _registry
 import fclpy.lisptype as lisptype
 from .sequences_search import (
     iterate, _seq_length, _seq_to_list, _make_matcher, _coerce_function_designator,
-    _lisp_truthy,
+    _lisp_truthy, _rebuild_sequence, _matched_positions,
 )
 
 
 @_registry.cl_function('REMOVE')
 def remove(item, sequence, **kwargs):
-    """Remove item from sequence.
+    """Remove item from sequence (CLHS 17.2.1). Non-destructive: `sequence`
+    is never mutated, and the result is of the same kind (list/string/
+    vector) as `sequence`, not a raw Python list (plan.md Finding M).
 
     Supports:
       :key - function (or designator) to apply to each element before comparison
       :test / :test-not - comparison function/designator (default is eql-like)
+      :count - maximum number of elements to remove
+      :from-end - if true, the :count-limited elements are the last matches
       :start - start index
       :end - end index
     """
-    # Convert lispCons to list
-    if hasattr(sequence, 'car') and hasattr(sequence, 'cdr'):
-        sequence = _seq_to_list(sequence)
-
+    original = sequence
+    elements = _seq_to_list(sequence)
     start = kwargs.get('start', 0)
-    end = kwargs.get('end', _seq_length(sequence))
+    end = min(kwargs.get('end', len(elements)), len(elements))
     key = kwargs.get('key', None)
     test = kwargs.get('test', None)
     test_not = kwargs.get('test_not', None)
+    from_end = _lisp_truthy(kwargs.get('from_end', None))
+    matcher = _make_matcher(test=test, test_not=test_not, key=key)
 
-    result = []
-    iterator = iterate(sequence, start=start, end=end, key=key, test=test, test_not=test_not)
+    doomed = _matched_positions(
+        start, end, from_end, kwargs.get('count', None),
+        lambda i: matcher(item, elements[i]),
+    )
 
-    # Add elements before start
-    result.extend(sequence[:start])
-
-    # Filter and add elements in range
-    for element in iterator:
-        if not iterator.matches(element, item):
-            result.append(element)
-
-    # Add elements after end
-    if end < _seq_length(sequence):
-        result.extend(sequence[end:])
-
-    return result
+    result = [x for i, x in enumerate(elements) if i not in doomed]
+    return _rebuild_sequence(original, result)
 
 
 @_registry.cl_function('REMOVE-IF')
 def remove_if(test, sequence, **kwargs):
-    """Remove elements satisfying test.
+    """Remove elements satisfying test (CLHS 17.2.1).
 
     Supports:
       :key - function (or designator) to apply to each element before testing
+      :count - maximum number of elements to remove
+      :from-end - if true, the :count-limited elements are the last matches
       :start - start index
       :end - end index
     """
-    # Convert lispCons to list
-    if hasattr(sequence, 'car') and hasattr(sequence, 'cdr'):
-        sequence = _seq_to_list(sequence)
-
+    original = sequence
+    elements = _seq_to_list(sequence)
     start = kwargs.get('start', 0)
-    end = kwargs.get('end', _seq_length(sequence))
-    key = kwargs.get('key', None)
+    end = min(kwargs.get('end', len(elements)), len(elements))
+    key = _coerce_function_designator(kwargs.get('key', None))
     test = _coerce_function_designator(test)
+    from_end = _lisp_truthy(kwargs.get('from_end', None))
 
-    result = []
-    iterator = iterate(sequence, start=start, end=end, key=key)
+    doomed = _matched_positions(
+        start, end, from_end, kwargs.get('count', None),
+        lambda i: _lisp_truthy(test(key(elements[i]) if key else elements[i])),
+    )
 
-    # Add elements before start
-    result.extend(sequence[:start])
-
-    # Filter and add elements in range
-    for element in iterator:
-        test_value = iterator.get_value(element)
-        if not _lisp_truthy(test(test_value)):
-            result.append(element)
-
-    # Add elements after end
-    if end < _seq_length(sequence):
-        result.extend(sequence[end:])
-
-    return result
+    result = [x for i, x in enumerate(elements) if i not in doomed]
+    return _rebuild_sequence(original, result)
 
 
 @_registry.cl_function('REMOVE-IF-NOT')
 def remove_if_not(test, sequence, **kwargs):
-    """Remove elements not satisfying test.
+    """Remove elements not satisfying test (CLHS 17.2.1).
 
     Supports:
       :key - function (or designator) to apply to each element before testing
+      :count - maximum number of elements to remove
+      :from-end - if true, the :count-limited elements are the last matches
       :start - start index
       :end - end index
     """
-    # Convert lispCons to list
-    if hasattr(sequence, 'car') and hasattr(sequence, 'cdr'):
-        sequence = _seq_to_list(sequence)
-
+    original = sequence
+    elements = _seq_to_list(sequence)
     start = kwargs.get('start', 0)
-    end = kwargs.get('end', _seq_length(sequence))
-    key = kwargs.get('key', None)
+    end = min(kwargs.get('end', len(elements)), len(elements))
+    key = _coerce_function_designator(kwargs.get('key', None))
     test = _coerce_function_designator(test)
+    from_end = _lisp_truthy(kwargs.get('from_end', None))
 
-    result = []
-    iterator = iterate(sequence, start=start, end=end, key=key)
+    doomed = _matched_positions(
+        start, end, from_end, kwargs.get('count', None),
+        lambda i: not _lisp_truthy(test(key(elements[i]) if key else elements[i])),
+    )
 
-    # Add elements before start
-    result.extend(sequence[:start])
-
-    # Filter and add elements in range
-    for element in iterator:
-        test_value = iterator.get_value(element)
-        if _lisp_truthy(test(test_value)):
-            result.append(element)
-
-    # Add elements after end
-    if end < _seq_length(sequence):
-        result.extend(sequence[end:])
-
-    return result
+    result = [x for i, x in enumerate(elements) if i not in doomed]
+    return _rebuild_sequence(original, result)
 
 
 @_registry.cl_function('DELETE')
@@ -172,79 +149,164 @@ def delete_duplicates(sequence, **kwargs):
 
 @_registry.cl_function('SUBSTITUTE')
 def substitute(newitem, olditem, sequence, **kwargs):
-    """Substitute elements in sequence.
+    """Substitute elements in sequence (CLHS 17.2.1). Non-destructive.
 
-    Supports :key, :test/:test-not, :start, :end like REMOVE.
+    Supports :key, :test/:test-not, :count, :from-end, :start, :end like REMOVE.
     """
-    # Convert lispCons to list
-    if hasattr(sequence, 'car') and hasattr(sequence, 'cdr'):
-        sequence = _seq_to_list(sequence)
-
+    original = sequence
+    elements = _seq_to_list(sequence)
     start = kwargs.get('start', 0)
-    end = kwargs.get('end', _seq_length(sequence))
+    end = min(kwargs.get('end', len(elements)), len(elements))
     key = kwargs.get('key', None)
     test = kwargs.get('test', None)
     test_not = kwargs.get('test_not', None)
+    from_end = _lisp_truthy(kwargs.get('from_end', None))
     matcher = _make_matcher(test=test, test_not=test_not, key=key)
 
-    return [
-        newitem if (start <= i < end and matcher(olditem, x)) else x
-        for i, x in enumerate(sequence)
-    ]
+    chosen = _matched_positions(
+        start, end, from_end, kwargs.get('count', None),
+        lambda i: matcher(olditem, elements[i]),
+    )
+
+    result = [newitem if i in chosen else x for i, x in enumerate(elements)]
+    return _rebuild_sequence(original, result)
 
 
 @_registry.cl_function('SUBSTITUTE-IF')
 def substitute_if(newitem, test, sequence, **kwargs):
-    """Substitute using predicate. Supports :key, :start, :end."""
-    # Convert lispCons to list
-    if hasattr(sequence, 'car') and hasattr(sequence, 'cdr'):
-        sequence = _seq_to_list(sequence)
+    """Substitute using predicate (CLHS 17.2.1). Non-destructive.
 
+    Supports :key, :count, :from-end, :start, :end.
+    """
+    original = sequence
+    elements = _seq_to_list(sequence)
     start = kwargs.get('start', 0)
-    end = kwargs.get('end', _seq_length(sequence))
+    end = min(kwargs.get('end', len(elements)), len(elements))
     key = _coerce_function_designator(kwargs.get('key', None))
     test = _coerce_function_designator(test)
+    from_end = _lisp_truthy(kwargs.get('from_end', None))
 
-    return [
-        newitem if (start <= i < end and _lisp_truthy(test(key(x) if key else x))) else x
-        for i, x in enumerate(sequence)
-    ]
+    chosen = _matched_positions(
+        start, end, from_end, kwargs.get('count', None),
+        lambda i: _lisp_truthy(test(key(elements[i]) if key else elements[i])),
+    )
+
+    result = [newitem if i in chosen else x for i, x in enumerate(elements)]
+    return _rebuild_sequence(original, result)
 
 
 @_registry.cl_function('SUBSTITUTE-IF-NOT')
 def substitute_if_not(newitem, test, sequence, **kwargs):
-    """Substitute using negated predicate. Supports :key, :start, :end."""
-    # Convert lispCons to list
-    if hasattr(sequence, 'car') and hasattr(sequence, 'cdr'):
-        sequence = _seq_to_list(sequence)
+    """Substitute using negated predicate (CLHS 17.2.1). Non-destructive.
 
+    Supports :key, :count, :from-end, :start, :end.
+    """
+    original = sequence
+    elements = _seq_to_list(sequence)
     start = kwargs.get('start', 0)
-    end = kwargs.get('end', _seq_length(sequence))
+    end = min(kwargs.get('end', len(elements)), len(elements))
     key = _coerce_function_designator(kwargs.get('key', None))
     test = _coerce_function_designator(test)
+    from_end = _lisp_truthy(kwargs.get('from_end', None))
 
-    return [
-        newitem if (start <= i < end and not _lisp_truthy(test(key(x) if key else x))) else x
-        for i, x in enumerate(sequence)
-    ]
+    chosen = _matched_positions(
+        start, end, from_end, kwargs.get('count', None),
+        lambda i: not _lisp_truthy(test(key(elements[i]) if key else elements[i])),
+    )
+
+    result = [newitem if i in chosen else x for i, x in enumerate(elements)]
+    return _rebuild_sequence(original, result)
+
+
+def _apply_nsubstitution(sequence, newitem, chosen):
+    """Shared engine for NSUBSTITUTE/NSUBSTITUTE-IF/NSUBSTITUTE-IF-NOT once
+    the set of positions to replace has been decided.
+
+    CLHS 17.2.1 permits (and ANSI's own `nsubstitute-list.2`-style tests
+    require, since they re-read the original binding rather than the
+    return value) `sequence` to be modified in place: a cons list is
+    mutated cell-by-cell via `.car`; a vector (`AdjustableVector`, a plain
+    Python `list`) or `LispString` supports `__setitem__` and is mutated
+    element-by-element the same way regardless of which of those concrete
+    types it is -- duck-typed rather than an `isinstance` list, so a vector
+    representation nothing here has been taught about yet still works. A
+    plain Python `str` cannot be mutated in place, but the ANSI string
+    tests only ever check the *returned* value, never the original
+    binding, so returning a freshly built same-kind result is sufficient
+    there.
+    """
+    if hasattr(sequence, 'car') and hasattr(sequence, 'cdr'):
+        cell = sequence
+        i = 0
+        while _consp_internal(cell):
+            if i in chosen:
+                cell.car = newitem
+            cell = cell.cdr
+            i += 1
+        return sequence
+    if hasattr(sequence, '__setitem__'):
+        for i in chosen:
+            sequence[i] = newitem
+        return sequence
+    elements = _seq_to_list(sequence)
+    for i in chosen:
+        elements[i] = newitem
+    return _rebuild_sequence(sequence, elements)
 
 
 @_registry.cl_function('NSUBSTITUTE')
 def nsubstitute(newitem, olditem, sequence, **kwargs):
-    """Destructively substitute."""
-    return substitute(newitem, olditem, sequence, **kwargs)  # Non-destructive for now
+    """Destructively substitute (CLHS 17.2.1). See `_apply_nsubstitution`
+    for what "destructively" means for each sequence representation.
+    """
+    elements = _seq_to_list(sequence)
+    start = kwargs.get('start', 0)
+    end = min(kwargs.get('end', len(elements)), len(elements))
+    key = kwargs.get('key', None)
+    test = kwargs.get('test', None)
+    test_not = kwargs.get('test_not', None)
+    from_end = _lisp_truthy(kwargs.get('from_end', None))
+    matcher = _make_matcher(test=test, test_not=test_not, key=key)
+
+    chosen = _matched_positions(
+        start, end, from_end, kwargs.get('count', None),
+        lambda i: matcher(olditem, elements[i]),
+    )
+    return _apply_nsubstitution(sequence, newitem, chosen)
 
 
 @_registry.cl_function('NSUBSTITUTE-IF')
 def nsubstitute_if(newitem, test, sequence, **kwargs):
-    """Destructively substitute using predicate."""
-    return substitute_if(newitem, test, sequence, **kwargs)  # Non-destructive for now
+    """Destructively substitute using predicate (CLHS 17.2.1)."""
+    elements = _seq_to_list(sequence)
+    start = kwargs.get('start', 0)
+    end = min(kwargs.get('end', len(elements)), len(elements))
+    key = _coerce_function_designator(kwargs.get('key', None))
+    test = _coerce_function_designator(test)
+    from_end = _lisp_truthy(kwargs.get('from_end', None))
+
+    chosen = _matched_positions(
+        start, end, from_end, kwargs.get('count', None),
+        lambda i: _lisp_truthy(test(key(elements[i]) if key else elements[i])),
+    )
+    return _apply_nsubstitution(sequence, newitem, chosen)
 
 
 @_registry.cl_function('NSUBSTITUTE-IF-NOT')
 def nsubstitute_if_not(newitem, test, sequence, **kwargs):
-    """Destructively substitute using negated predicate."""
-    return substitute_if_not(newitem, test, sequence, **kwargs)  # Non-destructive for now
+    """Destructively substitute using negated predicate (CLHS 17.2.1)."""
+    elements = _seq_to_list(sequence)
+    start = kwargs.get('start', 0)
+    end = min(kwargs.get('end', len(elements)), len(elements))
+    key = _coerce_function_designator(kwargs.get('key', None))
+    test = _coerce_function_designator(test)
+    from_end = _lisp_truthy(kwargs.get('from_end', None))
+
+    chosen = _matched_positions(
+        start, end, from_end, kwargs.get('count', None),
+        lambda i: not _lisp_truthy(test(key(elements[i]) if key else elements[i])),
+    )
+    return _apply_nsubstitution(sequence, newitem, chosen)
 
 
 @_registry.cl_function('SUBST')
