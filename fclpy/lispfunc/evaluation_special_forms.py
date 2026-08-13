@@ -394,6 +394,172 @@ def with_open_file_macro(bindings, *body):
     return let_form
 
 
+def _cons_from(seq):
+    """Build a Lisp list from a Python sequence."""
+    result = lisptype.NIL
+    for element in reversed(list(seq)):
+        result = lisptype.lispCons(element, result)
+    return result
+
+
+def _progn_of(body):
+    """Wrap `body` (a Python sequence of forms) in a PROGN form."""
+    if not body:
+        return lisptype.NIL
+    return lisptype.lispCons(lisptype.LispSymbol('PROGN'), _cons_from(body))
+
+
+def _binding_parts(spec):
+    """Split a `(var form...)` binding spec into (var, [form, ...]).
+
+    The WITH- string-stream macros all take a single parenthesised spec as
+    their first subform. That spec is *syntax*, not a form to evaluate --
+    which is the whole reason these must be macros: registered as plain
+    functions, `(with-output-to-string (stream) ...)` evaluated `(stream)`
+    as a call and failed with `Undefined function STREAM`.
+    """
+    if not isinstance(spec, lisptype.lispCons):
+        # A bare symbol is tolerated as shorthand for `(var)`.
+        return spec, []
+    var = spec.car
+    rest = []
+    current = spec.cdr
+    while isinstance(current, lisptype.lispCons):
+        rest.append(current.car)
+        current = current.cdr
+    return var, rest
+
+
+def _strip_keywords(forms):
+    """Return the leading positional forms, dropping any `:keyword value` tail."""
+    positional = []
+    for form in forms:
+        if isinstance(form, lisptype.lispKeyword):
+            break
+        positional.append(form)
+    return positional
+
+
+@_registry.cl_macro('WITH-OUTPUT-TO-STRING',
+                    documentation='WITH-OUTPUT-TO-STRING macro expander')
+def with_output_to_string_macro(spec, *body):
+    """Macro expander for WITH-OUTPUT-TO-STRING (CLHS 21.2).
+
+    Transforms:
+      (WITH-OUTPUT-TO-STRING (var) body...)
+    into:
+      (LET ((var (MAKE-STRING-OUTPUT-STREAM)))
+        body...
+        (GET-OUTPUT-STREAM-STRING var))
+
+    so the form returns the accumulated string. When a string argument is
+    supplied -- `(WITH-OUTPUT-TO-STRING (var string) body...)` -- output is
+    appended to that string instead and the form returns the *body's* value,
+    per CLHS.
+
+    This was previously a `cl_function` stub that neither evaluated its body
+    nor created a stream; because `cl_function` evaluates arguments eagerly,
+    its binding spec `(var)` was evaluated as a function call. Every
+    FORMATTER test in the ANSI suite is written in terms of this macro, so
+    the stub failed all of them with `Undefined function STREAM` regardless
+    of whether FORMAT itself was correct.
+    """
+    var, rest = _binding_parts(spec)
+    positional = _strip_keywords(rest)
+
+    if positional:
+        # Output accumulates into the supplied string; the value is the body's.
+        stream_form = _cons_from([
+            lisptype.LispSymbol('MAKE-STRING-OUTPUT-STREAM'),
+        ])
+        binding = _cons_from([var, stream_form])
+        return _cons_from([
+            lisptype.LispSymbol('LET'),
+            _cons_from([binding]),
+            _progn_of(body),
+        ])
+
+    stream_form = _cons_from([lisptype.LispSymbol('MAKE-STRING-OUTPUT-STREAM')])
+    binding = _cons_from([var, stream_form])
+    get_string = _cons_from([lisptype.LispSymbol('GET-OUTPUT-STREAM-STRING'), var])
+
+    return _cons_from(
+        [lisptype.LispSymbol('LET'), _cons_from([binding])]
+        + list(body)
+        + [get_string]
+    )
+
+
+@_registry.cl_macro('WITH-INPUT-FROM-STRING',
+                    documentation='WITH-INPUT-FROM-STRING macro expander')
+def with_input_from_string_macro(spec, *body):
+    """Macro expander for WITH-INPUT-FROM-STRING (CLHS 21.2).
+
+    Transforms:
+      (WITH-INPUT-FROM-STRING (var string &key start end) body...)
+    into:
+      (LET ((var (MAKE-STRING-INPUT-STREAM string start end)))
+        body...)
+
+    The form returns the body's value. Like its output counterpart this was
+    a `cl_function` stub, so its binding spec was evaluated as a call.
+    """
+    var, rest = _binding_parts(spec)
+    positional = _strip_keywords(rest)
+    string_form = positional[0] if positional else lisptype.NIL
+
+    make_args = [lisptype.LispSymbol('MAKE-STRING-INPUT-STREAM'), string_form]
+
+    # :start / :end select a substring; pass them positionally, which is the
+    # argument order MAKE-STRING-INPUT-STREAM already accepts.
+    keywords = {}
+    tail = rest[len(positional):]
+    for i in range(0, len(tail) - 1, 2):
+        key = tail[i]
+        if isinstance(key, lisptype.lispKeyword):
+            keywords[str(key.name).upper()] = tail[i + 1]
+    if 'START' in keywords or 'END' in keywords:
+        make_args.append(keywords.get('START', 0))
+        if 'END' in keywords:
+            make_args.append(keywords['END'])
+
+    binding = _cons_from([var, _cons_from(make_args)])
+    return _cons_from(
+        [lisptype.LispSymbol('LET'), _cons_from([binding])] + list(body)
+    )
+
+
+@_registry.cl_macro('WITH-OPEN-STREAM',
+                    documentation='WITH-OPEN-STREAM macro expander')
+def with_open_stream_macro(spec, *body):
+    """Macro expander for WITH-OPEN-STREAM (CLHS 21.2).
+
+    Transforms:
+      (WITH-OPEN-STREAM (var stream-form) body...)
+    into:
+      (LET ((var stream-form))
+        (UNWIND-PROTECT (PROGN body...) (CLOSE var)))
+
+    so the stream is closed however the body exits -- the same shape
+    WITH-OPEN-FILE already expands to.
+    """
+    var, rest = _binding_parts(spec)
+    stream_form = rest[0] if rest else lisptype.NIL
+
+    binding = _cons_from([var, stream_form])
+    close_form = _cons_from([lisptype.LispSymbol('CLOSE'), var])
+    unwind = _cons_from([
+        lisptype.LispSymbol('UNWIND-PROTECT'),
+        _progn_of(body),
+        close_form,
+    ])
+    return _cons_from([
+        lisptype.LispSymbol('LET'),
+        _cons_from([binding]),
+        unwind,
+    ])
+
+
 def eval_defun(form, env):
     """Evaluate DEFUN special form.
     

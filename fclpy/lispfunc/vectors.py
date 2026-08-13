@@ -219,13 +219,23 @@ def make_array(dimensions, element_type=None, initial_element=None, initial_cont
         return int(val)
     
     def lisp_list_to_python_list(obj):
-        """Convert a Lisp list or sequence to Python list."""
+        """Convert a Lisp list or sequence to Python list.
+
+        A string source contributes CHARACTERs, not the bare length-1
+        Python strings it iterates as -- `(make-array 4 :initial-contents
+        "abcd")` builds an array *of characters*. Storing the raw strings
+        made each element simultaneously a character and a one-element
+        string, which is the conflation AREF and LOOP's `across` also had
+        to stop propagating (CLHS 15.1).
+        """
+        from .sequences_higher import string_element
+
         if obj is None or obj is lisptype.NIL:
             return []
         if isinstance(obj, list):
             return obj
-        if isinstance(obj, str):
-            return list(obj)
+        if isinstance(obj, (str, lisptype.LispString)):
+            return [string_element(obj, c) for c in str(obj)]
         if isinstance(obj, lisptype.lispCons):
             result = []
             current = obj

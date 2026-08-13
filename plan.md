@@ -677,17 +677,32 @@ Milestones now describe *mechanisms*, and map onto the clusters above.
    ranked first to do: `run_ansi.py iteration` fell from a run dominated by
    never-terminating loops to **6 seconds**, so every later measurement is now
    affordable.
-2. **X2 + X3 — designator coercion and `:test` argument order.** Two small,
-   well-localized fixes that plausibly move a large share of C3 (1266) and
-   C5 (598). **Measure before and after rather than assuming** — this is the
-   highest-uncertainty, highest-leverage item on the list.
-3. **C4 — `DEFSTRUCT`.** One macro, the worst pass rate in the suite (12.2%),
-   944 failures, no architectural prerequisites.
-4. **M10's `FORMAT` engine (C2).** The largest cluster at 1623. Bigger than the
-   three above combined, but also the most work — and note it is dimension **B**,
-   which §6 argues has been systematically under-ranked.
-5. **Re-measure, then re-derive this list.** After the first four, the residual
-   distribution will differ enough that ranking further ahead is guesswork.
+2. ~~**X2 + X3 — designator coercion and `:test` argument order.**~~ **Done
+   2026-08-12/13.** `coerce_to_function` exists and the sequence/set operations
+   share `_coerce_function_designator` and `_make_matcher`; `sequences` 1087 →
+   1296 and `cons` 703 → 838. **Finding J's "there is no `coerce_to_function`"
+   is obsolete** — the table in §8 was not updated when the fix landed.
+3. ~~**C4 — `DEFSTRUCT`.**~~ **Largely done.** `structures` measures **680
+   passing of 1645** on `run_ansi.py structures` — 41%, not the 12.2% in §1.
+   The 12.2% was the *static checklist attribution*, which cannot see the
+   `STRUCT-TEST-nn` tests generated at load time; the targeted run is the
+   authority for a file (§3's property 1).
+4. **C13 first, not C2 — the string/character representation.** *(New, and it
+   reorders everything below it.)* `EQUAL`, `EQUALP`, `TYPEP` and `CHARACTERP`
+   all type-tested `isinstance(x, str)`, which is false for the `LispString`
+   the reader produces; `TYPEP` also denied that a string is a `VECTOR`. The
+   ANSI harness compares every result with `equalp-with-case`, which walks
+   vectors element-wise, so **no test with a string-valued expectation could
+   pass regardless of the code under test.** This is the single highest-leverage
+   thing found so far: it is not a cluster of its own, it is a *measurement
+   gate* in front of `printer`, `strings`, `sequences` and every `.ERROR` test
+   that names a message. Partly fixed (see the Changelog); the representation
+   split itself remains M9's.
+5. **M10's `FORMAT` engine (C2).** The largest cluster at 1623. The iteration,
+   escape, justification and padding half is done (Changelog 2026-08-13); `~E`,
+   `~F`, `~R`, `~T` and the pretty-printer's logical blocks are not.
+6. **Re-measure, then re-derive this list.** The residual distribution has
+   already shifted enough that ranking further ahead is guesswork.
 
 **A note on M2.** It remains the architectural spine, and C1/X2 both bottom out
 in it. If fixing C1 and X2 turns into repeated local patches to the environment,
@@ -816,7 +831,8 @@ cluster exists.
 | **G** | NIL has three representations | M1 |
 | **H** | `GET-SETF-EXPANSION` is decoration; there are **five** place protocols | C10 |
 | **I** | One `LispString`/`str` split explains the EQUAL/EQUALP cluster | M9 |
-| **J** | There is no `coerce_to_function` | **C3** |
+| **J** | ~~There is no `coerce_to_function`~~ — **obsolete, fixed 2026-08-12**; it exists in `evaluation_core.py` and the sequence/set operations share it | C3 |
+| **M** | **Python type tests stand in for Lisp type tests.** `isinstance(x, str)` for "is a string", `isinstance(x, (list, tuple))` for "is a list", `callable(x)` for "is a function". Each is false for exactly the Lisp object it is meant to match, so the branch is dead and the code silently takes the wrong path. This is the *same* defect as X2 (designators), X3, `~{`'s cons blindness, and `EQUAL`/`TYPEP`/`CHARACTERP` on strings — **found five times in different subsystems, and it is what a "shared mechanism" audit should grep for first** | X2, C2, C13, C14 |
 | **K** | Non-local exits swallowed by bare `except` — **recurs in a new operator each time it is found** (`funcall`, `IGNORE-ERRORS`, `RestartException`) | C2, C7 |
 | **L** | Duplicate and dead implementations | C6, C15 |
 
@@ -854,6 +870,56 @@ rather than discovering these one crash at a time.
 Condensed from the previous chronological plan. Each entry is a *mechanism*
 landed, not a test count.
 
+- **2026-08-13** — **A string is a vector, and its elements are characters.**
+  Four functions type-tested `isinstance(x, str)`, which is false for every
+  `LispString` the reader makes: `EQUAL`/`EQUALP` (so `(equal "abc" "abc")` was
+  **NIL**), `TYPEP`'s `STRING` branch, and `CHARACTERP` (which also missed the
+  `Character` class *and* returned a raw Python bool, the dangerous direction
+  given `is_truthy(False)` is true). `TYPEP` additionally excluded strings from
+  `VECTOR`/`ARRAY`, contradicting CLHS 15.1.
+  **Why this mattered more than any cluster:** rt.lsp's `equalp-with-case`
+  compares via `(typep x 'vector)` and walks elements; with strings not vectors
+  it fell through to `EQL`, so *every* string-valued test failed no matter what
+  the code under test returned. Fixing `TYPEP` then exposed the second half —
+  `AREF`/`LOOP across`/`MAKE-ARRAY` yielded bare length-1 Python strings, so a
+  "character" was also a one-element string and therefore a one-element vector,
+  and element-wise traversal recursed until the stack died, aborting whole runs.
+  String element access now yields `Character` through one shared
+  `string_element`. **8 `LOOP.5.*` tests that had been passing via the EQL
+  conflation are the proof the old behaviour was wrong, not the fix** — they
+  expect `(#\a ...)`; all are passing again for the right reason.
+  Also landed: **`WITH-OUTPUT-TO-STRING`/`WITH-INPUT-FROM-STRING`/
+  `WITH-OPEN-STREAM` are real macros.** They were `cl_function` stubs that
+  returned their last body form unevaluated — and because `cl_function`
+  evaluates arguments eagerly, the binding spec `(stream)` was evaluated as a
+  call, failing with `Undefined function STREAM`. Every `FORMATTER.*` test in
+  the suite is written in terms of `WITH-OUTPUT-TO-STRING`, so this alone gated
+  the 638 `FORMATTER` failures. **Three registrations of each existed**
+  (`misc_macros.py`, `io_read.py`, `io_write.py`) and the undecorated ones would
+  still auto-register via `register_module` because its dedup is by *Python*
+  name; two deleted (standing rule 3).
+  And **C2's iteration half**: `~{...~}`/`~?` tested `isinstance(arg, (list,
+  tuple))` — false for the cons list the directive exists to iterate — so
+  `(format nil "~{~A ~}" '(1 2 3))` returned `"(1 2 3) "`. `~^` escaped
+  unconditionally instead of testing its CLHS 22.3.9.2 condition, and signalled
+  via an in-band `' '` marker callers had to `str.replace` out; it is now a
+  control transfer carrying its partial output. `~<...~>` processed only its
+  last segment (no justification ever happened); `~A`/`~S` honoured only
+  `mincol` with a hardcoded space; `~n[`/`~#[` ignored the prefix parameter and
+  stole an argument.
+  **Measured, before → after on the same seven files:** `format-a` 0→42/107,
+  `format-brace` 0→55/152, `format-circumflex` 0→198/470, `format-justify`
+  1→22/59, `format-conditional` 3→28/58, `format-question` 0→10/20, `format-s`
+  0→33/87 — **4 → 388 of 953 (0.4% → 40.7%), +384, 0 regressions.**
+  `iteration` 409 → 409 and `cons` 817 → 838, no regressions. `pytest` 1347
+  passed, 1 pre-existing unrelated failure (`STREAM-ELEMENT-TYPE`); 71 new tests
+  across `test_format.py`, `test_equality_strings.py`, `test_string_elements.py`.
+  Tooling: `run_ansi.py` now collects the `compile-and-load*` preamble from
+  *ancestor* directories, without which **no file under `printer/format/` could
+  be targeted at all** (they need `def-format-test` from `printer/load.lsp`, one
+  level up) — 2 tests registered before, 953 after; and it runs on a big-stack
+  thread with a raised recursion limit, since one level of Lisp recursion costs
+  ~15 Python frames and rt.lsp's own list comparison cdr-recurses per element.
 - **2026-08-12 (f)** — **C1: LOOP has one iteration engine.** `eval_loop` held a
   scalar `iteration_type` and nine near-duplicate loops selected by it, so the
   last iteration-control clause parsed decided which one ran and discarded the

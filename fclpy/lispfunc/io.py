@@ -25,7 +25,6 @@ __all__ = [
     'get_macro_character', 'set_macro_character',
     'get_dispatch_macro_character', 'set_dispatch_macro_character',
     'make_dispatch_macro_character', 'set_syntax_from_char',
-    'with_input_from_string',
     # From io_write
     'clear_output', 'output_stream_p', 'open_stream_p',
     'write_char', 'write_string', 'write_line', 'write_byte', 'write',
@@ -54,8 +53,7 @@ __all__ = [
     'simple_condition_format_arguments', 'simple_condition_format_control',
     'end_of_file', 'file_error', 'file_error_pathname',
     'error', 'y_or_n_p', 'yes_or_no_p',
-    'with_open_file', 'with_open_stream', 'with_output_to_string',
-    # Symbol-safe names for operators
+    'with_open_file',    # Symbol-safe names for operators
     '_s_print_',
 ]
 

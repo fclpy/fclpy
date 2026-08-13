@@ -23,31 +23,13 @@ def with_compilation_unit(options, *body):
     return result
 
 
-@_registry.cl_function('WITH-INPUT-FROM-STRING')
-def with_input_from_string(var_string_form, *body):
-    """WITH-INPUT-FROM-STRING macro."""
-    result = None
-    for form in body:
-        result = form
-    return result
-
-
-@_registry.cl_function('WITH-OPEN-STREAM')
-def with_open_stream(var_stream_form, *body):
-    """WITH-OPEN-STREAM macro."""
-    result = None
-    for form in body:
-        result = form
-    return result
-
-
-@_registry.cl_function('WITH-OUTPUT-TO-STRING')
-def with_output_to_string(var_options, *body):
-    """WITH-OUTPUT-TO-STRING macro."""
-    result = None
-    for form in body:
-        result = form
-    return result
+# WITH-INPUT-FROM-STRING, WITH-OUTPUT-TO-STRING and WITH-OPEN-STREAM are
+# implemented as real macro expanders in evaluation_special_forms.py. They
+# used to be `cl_function` stubs here that returned their last body form
+# without evaluating anything; because `cl_function` evaluates arguments
+# eagerly, the binding spec `(stream)` was evaluated as a call to a function
+# named STREAM. Keeping a second registration would silently win or lose
+# depending on module import order (standing rule 3).
 
 
 @_registry.cl_function('WITH-PPRINT-LOGICAL-BLOCK')
@@ -1226,9 +1208,6 @@ __all__ = [
     'assert_fn',
     'with_accessors',
     'with_compilation_unit',
-    'with_input_from_string',
-    'with_open_stream',
-    'with_output_to_string',
     'with_pprint_logical_block',
     'with_slots',
     'with_standard_io_syntax',

@@ -2084,9 +2084,16 @@ def eval_loop(form, env):
             if kind == 'for-across':
                 seq = driver['_seq']
                 idx = driver['_idx']
-                # Return plain characters (strings) for string sequences.
-                # The rest of the system treats characters as single-char strings.
-                _bind_varspec(loop_env, var, seq[idx])
+                # The elements of a string are CHARACTERs (CLHS 15.1), so
+                # `loop for e across "abcd"` must bind characters. Binding
+                # the bare length-1 strings that indexing yields only looked
+                # correct because EQL conflates the two; it made a character
+                # simultaneously a one-element string, and therefore a
+                # one-element vector, which anything walking a sequence
+                # element-wise follows into unbounded recursion. Shared with
+                # AREF so both halves agree on what a character is.
+                from .sequences_higher import string_element
+                _bind_varspec(loop_env, var, string_element(seq, seq[idx]))
                 return
             if kind in ('for-range', 'for-below'):
                 _bind_varspec(loop_env, var, driver['_cur'])

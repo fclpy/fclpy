@@ -5,6 +5,29 @@ from .core import atom, car, cdr, consp
 from fclpy.lispfunc import registry as _registry
 
 
+def _string_characters(obj):
+    """Return a Lisp string's characters as a Python str, else None.
+
+    A Lisp string in fclpy is a `LispString`, which is *not* a `str`
+    subclass, while string literals from some paths and many internal
+    producers are still plain Python `str` (plan.md Finding I). Every site
+    that must decide "is this a string, and what is in it" therefore has to
+    accept both, exactly as `STRINGP` already does.
+
+    `EQUAL`/`EQUALP` tested only `isinstance(obj, str)`, so the branch was
+    dead for every string the reader produces: `(equal "abc" "abc")`
+    returned NIL. That is not a niche bug -- the ANSI harness compares each
+    test's result against its expected value with `EQUAL`, so *every* test
+    whose expected value is a string failed regardless of whether the code
+    under test was correct.
+    """
+    if isinstance(obj, lisptype.LispString):
+        return str(obj)
+    if isinstance(obj, str):
+        return obj
+    return None
+
+
 @_registry.cl_function('EQ')
 def eq(obj1, obj2):
     """Test for object identity."""
@@ -46,10 +69,18 @@ def equal(obj1, obj2):
         cdr_equal = equal(cdr(obj1), cdr(obj2))
         return lisptype.lisp_bool(car_equal == lisptype.T and cdr_equal == lisptype.T)
     
-    # Strings
-    if isinstance(obj1, str) and isinstance(obj2, str):
-        return lisptype.lisp_bool(obj1 == obj2)
-    
+    # Strings - CLHS 5.3: EQUAL compares strings element-wise and is
+    # case-sensitive.
+    s1 = _string_characters(obj1)
+    s2 = _string_characters(obj2)
+    if s1 is not None and s2 is not None:
+        return lisptype.lisp_bool(s1 == s2)
+    # A string is not EQUAL to a non-string, so stop here rather than
+    # letting one fall through to the sequence branch below.
+    if s1 is not None or s2 is not None:
+        return lisptype.NIL
+
+
     # Lists and tuples
     if isinstance(obj1, (list, tuple)) and isinstance(obj2, (list, tuple)):
         if len(obj1) != len(obj2):
@@ -72,14 +103,28 @@ def equalp(obj1, obj2):
     if isinstance(obj1, (int, float, complex)) and isinstance(obj2, (int, float, complex)):
         return lisptype.lisp_bool(obj1 == obj2)
     
-    # Characters - case insensitive
-    if isinstance(obj1, str) and isinstance(obj2, str) and len(obj1) == 1 and len(obj2) == 1:
-        return lisptype.lisp_bool(obj1.upper() == obj2.upper())
-    
-    # Strings - case insensitive
-    if isinstance(obj1, str) and isinstance(obj2, str):
-        return lisptype.lisp_bool(obj1.upper() == obj2.upper())
-    
+    # Characters - CLHS 5.3: EQUALP compares characters with CHAR-EQUAL,
+    # which ignores case. EQUAL/EQL above are case-sensitive, so without
+    # this branch (which the previous code lacked entirely for Character
+    # objects) `(equalp #\a #\A)` was NIL.
+    #
+    # A character and a *string* are never EQUALP: a string is an array and
+    # a character is not, so they are disjoint types even though this
+    # implementation still represents some characters as length-1 Python
+    # strings (plan.md C13).
+    if isinstance(obj1, lisptype.Character) and isinstance(obj2, lisptype.Character):
+        return lisptype.lisp_bool(obj1.char.upper() == obj2.char.upper())
+    if isinstance(obj1, lisptype.Character) or isinstance(obj2, lisptype.Character):
+        return lisptype.NIL
+
+    s1 = _string_characters(obj1)
+    s2 = _string_characters(obj2)
+    if s1 is not None and s2 is not None:
+        return lisptype.lisp_bool(s1.upper() == s2.upper())
+    if s1 is not None or s2 is not None:
+        return lisptype.NIL
+
+
     # Arrays/vectors
     if isinstance(obj1, (list, tuple)) and isinstance(obj2, (list, tuple)):
         if len(obj1) != len(obj2):
@@ -410,8 +455,11 @@ def typep(object, type_specifier):
         return lisptype.lisp_bool(isinstance(object, Fraction))
     elif type_name == 'CHARACTER':
         return lisptype.lisp_bool(isinstance(object, lisptype.Character) or (isinstance(object, str) and len(object) == 1))
-    elif type_name == 'STRING':
-        return lisptype.lisp_bool(isinstance(object, str))
+    elif type_name in ('STRING', 'SIMPLE-STRING', 'BASE-STRING', 'SIMPLE-BASE-STRING'):
+        # Both string representations count, exactly as STRINGP already does
+        # -- testing only `str` made TYPEP disagree with STRINGP about every
+        # string the reader produces (plan.md Finding I).
+        return lisptype.lisp_bool(_string_characters(object) is not None)
     elif type_name == 'SYMBOL':
         # In Common Lisp, NIL is both the empty list AND the symbol NIL
         # So we need to accept both LispSymbol instances and NIL
@@ -422,12 +470,23 @@ def typep(object, type_specifier):
         return lisptype.lisp_bool(callable(object))
     elif type_name == 'STANDARD-OBJECT' or type_name == 'INSTANCE':
         return lisptype.lisp_bool(isinstance(object, classes.LispInstance))
-    elif type_name == 'VECTOR' or type_name == 'SIMPLE-VECTOR':
+    elif type_name == 'SIMPLE-VECTOR':
+        # A simple vector holds elements of type T specifically, so unlike
+        # VECTOR it does *not* include strings (CLHS 15.1.2.2).
         from fclpy.lispfunc.vectors import AdjustableVector
         return lisptype.lisp_bool(isinstance(object, (list, tuple, AdjustableVector)))
-    elif type_name == 'ARRAY':
+    elif type_name in ('VECTOR', 'ARRAY', 'SIMPLE-ARRAY'):
+        # CLHS 15.1: a string *is* a vector, and every vector is an array.
+        # Excluding strings here made `(typep "abc" 'vector)` false, which
+        # is what stopped the ANSI harness's own `equalp-with-case` from
+        # ever comparing two strings element-wise -- it fell through to
+        # EQL, so every string-valued test failed no matter what the code
+        # under test returned.
         from fclpy.lispfunc.vectors import AdjustableVector
-        return lisptype.lisp_bool(isinstance(object, (list, tuple, AdjustableVector)))
+        return lisptype.lisp_bool(
+            isinstance(object, (list, tuple, AdjustableVector))
+            or _string_characters(object) is not None
+        )
     elif type_name == 'HASH-TABLE':
         return lisptype.lisp_bool(isinstance(object, dict))
     elif type_name == 'BOOLEAN':

@@ -244,8 +244,18 @@ def character(designator):
 
 @_registry.cl_function('CHARACTERP')
 def characterp(object):
-    """Test if object is a character."""
-    return isinstance(object, str) and len(object) == 1
+    """Test if object is a character.
+
+    Missed the `Character` class entirely, so it disagreed with both TYPEP's
+    CHARACTER branch and every function that constructs characters. It also
+    returned a raw Python bool rather than T/NIL -- and a Python `False`
+    reaching a Lisp conditional reads as *true* under `is_truthy`, so the
+    negative answer was the dangerous one.
+    """
+    return lisptype.lisp_bool(
+        isinstance(object, lisptype.Character)
+        or (isinstance(object, str) and len(object) == 1)
+    )
 
 
 @_registry.cl_function('CODE-CHAR')

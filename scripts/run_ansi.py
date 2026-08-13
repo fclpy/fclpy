@@ -122,21 +122,45 @@ def aux_preamble_forms(target):
     Only the preamble is taken -- the `(load "...")` lines that follow are the
     directory's other test files, and pulling those in would defeat the point of
     targeting one file.
+
+    Ancestor directories are searched too, outermost first. Some test
+    directories nest: `printer/format/` has its own load.lsp listing the
+    `format-*.lsp` files, but the `compile-and-load*` of `printer-aux.lsp`
+    that defines the `def-format-test` macro they all use lives one level up
+    in `printer/load.lsp`. Looking only at the immediate directory meant no
+    file under `printer/format/` could be targeted at all -- every one of
+    them failed to load with `Undefined function DEF-FORMAT-TEST`, i.e. the
+    exact harness artifact this function exists to prevent.
     """
-    directory = os.path.dirname(target)
-    load_lsp = os.path.join(directory, 'load.lsp')
-    if not os.path.exists(load_lsp) or os.path.basename(target) == 'load.lsp':
+    if os.path.basename(target) == 'load.lsp':
         return []
 
+    # Walk from the target's directory up to the suite root, then apply the
+    # preambles outermost first so a helper defined in a parent directory is
+    # available to the aux files of its children.
+    directories = []
+    directory = os.path.dirname(os.path.abspath(target))
+    root = os.path.abspath(ANSI_ROOT)
+    while directory.startswith(root) and len(directory) >= len(root):
+        directories.append(directory)
+        if directory == root:
+            break
+        directory = os.path.dirname(directory)
+
     forms = []
-    with open(load_lsp, 'r', errors='replace') as handle:
-        for line in handle:
-            stripped = line.strip()
-            if stripped.startswith('(compile-and-load'):
-                forms.append(stripped)
-            elif stripped.startswith('(load '):
-                # Reached the test-file manifest; the preamble is over.
-                break
+    for directory in reversed(directories):
+        load_lsp = os.path.join(directory, 'load.lsp')
+        if not os.path.exists(load_lsp):
+            continue
+        with open(load_lsp, 'r', errors='replace') as handle:
+            for line in handle:
+                stripped = line.strip()
+                if stripped.startswith('(compile-and-load'):
+                    if stripped not in forms:
+                        forms.append(stripped)
+                elif stripped.startswith('(load '):
+                    # Reached the test-file manifest; the preamble is over.
+                    break
     return forms
 
 
@@ -317,5 +341,51 @@ def main():
     return 1 if (failed or missing) else 0
 
 
+def run_with_deep_stack(func):
+    """Run `func` on a thread with a large stack and a raised recursion limit.
+
+    fclpy evaluates by recursive descent, so one level of Lisp recursion
+    costs roughly a dozen Python frames. CPython's default 1000-frame limit
+    therefore caps Lisp recursion at under a hundred levels -- and the ANSI
+    harness itself exceeds that routinely: `equalp-with-case` in rt.lsp
+    compares lists by recursing on the cdr, one level per element, so
+    checking a test whose value is a ~60-element list overflows before the
+    code under test is ever at fault.
+
+    That is a limit of the host, not a defect being hidden: the recursion is
+    bounded by the data, and a `RecursionError` here aborts the whole run
+    rather than failing one test, which destroys the measurement. The larger
+    thread stack is what makes the raised limit safe -- lifting
+    `setrecursionlimit` alone just trades a Python exception for a hard
+    interpreter crash once the real C stack runs out.
+    """
+    sys.setrecursionlimit(60000)
+    # Platform limits on thread stack size vary (Windows rejects sizes it
+    # considers unreasonable outright), so take the largest that is accepted
+    # rather than assuming one works.
+    for megabytes in (512, 256, 128, 64, 32, 16):
+        try:
+            threading.stack_size(megabytes * 1024 * 1024)
+            break
+        except (ValueError, RuntimeError):
+            continue
+
+    result = {}
+
+    def target():
+        try:
+            result['code'] = func()
+        except BaseException as exc:  # re-raised on the main thread below
+            result['error'] = exc
+
+    thread = threading.Thread(target=target)
+    thread.start()
+    thread.join()
+
+    if 'error' in result:
+        raise result['error']
+    return result.get('code', 0)
+
+
 if __name__ == '__main__':
-    sys.exit(main())
+    sys.exit(run_with_deep_stack(main))

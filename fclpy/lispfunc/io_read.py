@@ -290,13 +290,11 @@ def get_readtable_var():
     return get_current_readtable()
 
 
-def with_input_from_string(var_string_options, *body):
-    """Execute with input from string."""
-    # Simplified - just execute body
-    result = None
-    for form in body:
-        result = form
-    return result
+# NOTE: the real macro expander lives in evaluation_special_forms.py.
+# This module-level stub neither evaluated its body nor created a stream,
+# and register_module() would auto-register it as a *function* (its Python
+# name differs from the expander's, so the decorator dedup misses it),
+# clobbering the macro depending on import order -- standing rule 3.
 
 
 __all__ = [
@@ -310,5 +308,4 @@ __all__ = [
     'get_dispatch_macro_character', 'set_dispatch_macro_character',
     'make_dispatch_macro_character', 'set_syntax_from_char',
     'get_readtable_var',
-    'with_input_from_string'
 ]

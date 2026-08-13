@@ -656,6 +656,190 @@ class _FormatCursor:
         return len(self.args) - self.idx
 
 
+class _FormatEscape(Exception):
+    """Raised by `~^` to terminate the enclosing iteration or control string.
+
+    CLHS 22.3.9.2 makes `~^` a *control transfer*, not a character: it
+    abandons the rest of the control string it appears in. The previous
+    implementation returned an in-band `'\\u0000'` marker and let callers
+    `str.replace` it out, which is the same defect class as standing rule 4
+    -- it cannot represent "stop here" distinctly from "emit a NUL", it
+    silently corrupted any output that legitimately contained NUL, and the
+    marker had to be re-detected by every construct that might contain a
+    `~^`.
+
+    `partial` carries the text produced *before* the escape, which CLHS
+    requires be kept: `~{~A~^, ~}` over `(1 2 3)` must emit `1, 2, 3` --
+    the final pass's `1`-equivalent survives, only the trailing `, ` is
+    abandoned. Each `_format_process_cursor` frame prepends its own
+    accumulated output as the exception unwinds, so the text is assembled
+    in the same order it would have been concatenated.
+
+    `terminate_outer` is set by `~:^`, which terminates the iteration one
+    level out rather than the innermost one.
+    """
+
+    def __init__(self, partial='', terminate_outer=False):
+        super().__init__('FORMAT ~^ escape')
+        self.partial = partial
+        self.terminate_outer = terminate_outer
+
+
+def _format_args_list(value):
+    """Coerce a FORMAT argument that is *required to be a list* into a Python list.
+
+    `~{...~}` and `~?` take a list argument and iterate over its elements.
+    Every such site previously tested `isinstance(value, (list, tuple))` and
+    fell through to `[value]`, but a Lisp list reaching FORMAT is a
+    `lispCons`, never a Python list -- so the test was false for exactly the
+    argument shape the directive exists to handle, and the whole list was
+    treated as a single opaque element. `(format nil "~{~A ~}" '(1 2 3))`
+    returned `"(1 2 3) "` instead of `"1 2 3 "`.
+
+    Cons traversal is delegated to the sequence protocol's `_seq_to_list`
+    rather than open-coded a third time (standing rule 3); this function
+    only adds the FORMAT-specific edges: NIL is the empty argument list, and
+    a non-list argument stays wrapped rather than silently becoming empty.
+    """
+    if value is None or value is lisptype.NIL:
+        return []
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    if hasattr(value, 'car') and hasattr(value, 'cdr'):
+        from .sequences_search import _seq_to_list
+        return _seq_to_list(value)
+    return [value]
+
+
+def _lisp_number(value, default=0):
+    """Read a `~^` prefix parameter as an integer.
+
+    A parameter is either a literal from the control string (already an
+    int) or whatever `~V` pulled off the argument list, which may be a Lisp
+    integer object. Anything non-numeric falls back to `default` rather
+    than raising, because `~^`'s parameters only select between "terminate"
+    and "keep going" -- a malformed one must not abort the whole FORMAT.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _pad_params(params):
+    """Read the `mincol,colinc,minpad,padchar` prefix parameters shared by
+    `~A`, `~S` and `~<...~>`, applying each one's CLHS default."""
+    def _param(i, default):
+        if len(params) > i and params[i] is not None:
+            return params[i]
+        return default
+
+    padchar = _param(3, ' ')
+    # A `'x` prefix parameter is parsed as a bare Python character, but a
+    # `~V` parameter supplies whatever argument was passed -- which for a
+    # pad character is a Lisp CHARACTER object, not a str.
+    if isinstance(padchar, lisptype.Character):
+        padchar = padchar.char
+    padchar = str(padchar)[:1] or ' '
+
+    return (
+        _lisp_number(_param(0, 0)),
+        _lisp_number(_param(1, 1)) or 1,
+        _lisp_number(_param(2, 0)),
+        padchar,
+    )
+
+
+def _format_pad(text, params, at_flag):
+    """Apply CLHS 22.3's `mincol,colinc,minpad,padchar` column padding.
+
+    Shared by `~A` and `~S`, which specify identical padding behaviour and
+    previously each honoured only `mincol` with a hardcoded space -- so
+    `~,,2A` (minpad) and `~4,,,'xA` (padchar) were silently ignored rather
+    than being unimplemented loudly.
+
+    The rule: emit at least `minpad` copies of `padchar`, then keep adding
+    `colinc` more until the total width is at least `mincol`. Padding goes
+    on the right, or on the left when the `@` modifier is present.
+    """
+    mincol, colinc, minpad, padchar = _pad_params(params)
+
+    pad = minpad
+    while len(text) + pad < mincol:
+        pad += colinc
+
+    if pad <= 0:
+        return text
+    padding = padchar * pad
+    return padding + text if at_flag else text + padding
+
+
+def _justify(texts, params, colon_flag, at_flag):
+    """Lay out `~mincol,colinc,minpad,padchar<seg~;seg~>` per CLHS 22.3.6.2.
+
+    Padding is inserted at the *gaps between* segments, not around the whole
+    string: `~;` is a padding point. The `:` modifier adds a padding point
+    before the first segment and `@` one after the last, so `~10<abc~>` --
+    one segment, no modifiers -- has its single padding point on the left
+    and therefore right-justifies, which is the common case.
+
+    Total width grows from `minpad` per gap in steps of `colinc` until it
+    reaches `mincol`; the resulting spaces are spread as evenly as possible,
+    with the leftmost gaps taking the remainder.
+    """
+    if not texts:
+        texts = ['']
+
+    mincol, colinc, minpad, padchar = _pad_params(params)
+
+    # Where padding may go: one point per `~;` separator, plus a leading one
+    # for `:` and a trailing one for `@`. A lone segment with neither
+    # modifier still gets its single implicit point, on the left -- which is
+    # what makes `~10<abc~>` right-justify.
+    gaps = len(texts) - 1
+    if colon_flag:
+        gaps += 1
+    if at_flag:
+        gaps += 1
+    if gaps == 0:
+        gaps = 1
+
+    content_width = sum(len(t) for t in texts)
+    total_pad = minpad * gaps
+    while content_width + total_pad < mincol:
+        total_pad += colinc
+
+    base, extra = divmod(total_pad, gaps)
+    widths = [base + (1 if i < extra else 0) for i in range(gaps)]
+
+    out = []
+    gap_index = 0
+    if colon_flag:
+        out.append(padchar * widths[gap_index])
+        gap_index += 1
+    for i, text in enumerate(texts):
+        out.append(text)
+        is_last = (i == len(texts) - 1)
+        if not is_last:
+            out.append(padchar * widths[gap_index])
+            gap_index += 1
+        elif gap_index < len(widths):
+            # Either the trailing @ point, or the implicit leading point of a
+            # lone segment -- which must go *before* the text, not after.
+            if at_flag or len(texts) > 1:
+                out.append(padchar * widths[gap_index])
+            else:
+                out.insert(len(out) - 1, padchar * widths[gap_index])
+            gap_index += 1
+    return ''.join(out)
+
+
 def _capitalize_words(s):
     """~:( ... ~) - capitalize the first letter of each word, force the
     rest of each word to lower case."""
@@ -768,14 +952,8 @@ def _format_directive(control_string, cursor, pos):
             result = val
         else:
             result = lisptype.lisp_str(val)
-        # Apply mincol padding if specified
-        if params:
-            mincol = params[0] if params[0] is not None else 0
-            if len(result) < mincol:
-                padding = ' ' * (mincol - len(result))
-                result = result + padding if not at_flag else padding + result
-        return (result, pos)
-    
+        return (_format_pad(result, params, at_flag), pos)
+
     elif directive == 'S':
         # ~S - Standard (prin1-style, with escapes)
         val = get_arg()
@@ -785,14 +963,9 @@ def _format_directive(control_string, cursor, pos):
             result = "()" if colon_flag else "NIL"
         else:
             result = lisptype.lisp_repr(val)
-        # Apply mincol padding if specified
-        if params:
-            mincol = params[0] if params[0] is not None else 0
-            if len(result) < mincol:
-                padding = ' ' * (mincol - len(result))
-                result = result + padding if not at_flag else padding + result
-        return (result, pos)
-    
+        return (_format_pad(result, params, at_flag), pos)
+
+
     elif directive == 'D':
         # ~D - Decimal integer
         val = get_arg()
@@ -1048,10 +1221,7 @@ def _format_directive(control_string, cursor, pos):
             # ~? without @ takes its own separate argument list - not the
             # outer cursor - so it gets a fresh, independent cursor.
             fmt_args = get_arg()
-            if isinstance(fmt_args, (list, tuple)):
-                sub_cursor = _FormatCursor(fmt_args)
-            else:
-                sub_cursor = _FormatCursor([fmt_args] if fmt_args is not None else [])
+            sub_cursor = _FormatCursor(_format_args_list(fmt_args))
             result = _format_process_cursor(str(fmt_str) if fmt_str else '', sub_cursor)
         return (result, pos)
     
@@ -1063,8 +1233,12 @@ def _format_directive(control_string, cursor, pos):
         nesting = 1
         end_pos = pos
         segments = []
+        # Whether the `~;` that *ended* each segment carried a colon. Only
+        # the first one is meaningful (see the ~:; handling below), but it
+        # is only knowable while scanning, so it is recorded per segment.
+        separator_colons = []
         segment_start = pos
-        
+
         while end_pos < len(control_string) and nesting > 0:
             if control_string[end_pos] == '~':
                 if end_pos + 1 < len(control_string):
@@ -1084,12 +1258,14 @@ def _format_directive(control_string, cursor, pos):
                             if nesting == 0:
                                 # Found the closing ~>
                                 segments.append(control_string[segment_start:end_pos])
+                                separator_colons.append(False)
                                 end_pos = j + 1  # Position after the closing >
                                 break
                             end_pos = j + 1
                         elif next_char == ';' and nesting == 1:
                             # Separator within the justification block
                             segments.append(control_string[segment_start:end_pos])
+                            separator_colons.append(has_colon)
                             segment_start = j + 1
                             end_pos = j + 1
                         else:
@@ -1103,21 +1279,37 @@ def _format_directive(control_string, cursor, pos):
         else:
             # If we exited the loop without finding closing ~>
             segments.append(control_string[segment_start:])
+            separator_colons.append(False)
             end_pos = len(control_string)
-        
-        # For simplified implementation:
-        # - If there are multiple segments separated by ~:;, use the last non-empty one
-        # - Process it with remaining args
-        result = ''
-        if segments:
-            # Look for the last segment (after the final ~:; separator)
-            # This handles the pattern ~<prefix~:;main content~> where we want the main content
-            segment_to_use = segments[-1] if segments else ''
-            # Shares the outer cursor: arguments the segment consumes must
-            # not be re-offered to directives that follow the ~<...~>.
-            result = _format_process_cursor(segment_to_use, cursor)
 
-        return (result, end_pos)
+        # CLHS 22.3.6.2: a first segment terminated by `~:;` is not content
+        # -- it is the prefix emitted only when the block has to be broken
+        # across lines. There is no line-width model here, so the block is
+        # always one line and the prefix is omitted. `has_colon` was already
+        # being computed by the scanner above and then discarded, which is
+        # why `~<pfx~:;body~>` had no defined behaviour either way.
+        if len(segments) > 1 and separator_colons[0]:
+            segments = segments[1:]
+
+        # CLHS 22.3.6.2: *every* segment is output, and padding is
+        # distributed among the gaps between them so the whole reaches
+        # mincol. The previous code processed only `segments[-1]` and
+        # dropped the rest, so `~<~A~;~A~>` printed just its second
+        # argument and no justification ever happened.
+        #
+        # All segments share the outer cursor: arguments consumed inside the
+        # block must not be re-offered to directives that follow the ~>.
+        texts = []
+        for seg in segments:
+            try:
+                texts.append(_format_process_cursor(seg, cursor))
+            except _FormatEscape as esc:
+                # ~^ inside a justification abandons the remaining segments
+                # but keeps what this one produced.
+                texts.append(esc.partial)
+                break
+
+        return (_justify(texts, params, colon_flag, at_flag), end_pos)
 
     elif directive == '>':
         # End of justification - should not be reached directly
@@ -1276,17 +1468,21 @@ def _format_directive(control_string, cursor, pos):
             else:
                 result = ''
         else:
-            # ~[ clause0 ~; clause1 ~; ... ~] - select by index
-            val = get_arg()
-            try:
-                idx = int(val) if val is not None else 0
-                if 0 <= idx < len(clauses):
-                    result = _format_process_cursor(clauses[idx], cursor)
-                elif default_clause is not None and default_clause < len(clauses):
-                    result = _format_process_cursor(clauses[default_clause], cursor)
-                else:
-                    result = ''
-            except (TypeError, ValueError):
+            # ~[ clause0 ~; clause1 ~; ... ~] - select by index.
+            # CLHS 22.3.7.2: `~n[` (and so `~#[`, where the parameter is the
+            # count of remaining arguments) takes the index from the prefix
+            # parameter and consumes *no* argument. Unconditionally calling
+            # get_arg() here both selected the wrong clause and stole an
+            # argument from whatever followed.
+            if params and params[0] is not None:
+                idx = _lisp_number(params[0], -1)
+            else:
+                idx = _lisp_number(get_arg(), -1)
+            if 0 <= idx < len(clauses):
+                result = _format_process_cursor(clauses[idx], cursor)
+            elif default_clause is not None and default_clause < len(clauses):
+                result = _format_process_cursor(clauses[default_clause], cursor)
+            else:
                 result = ''
 
         return (result, end_pos)
@@ -1325,6 +1521,15 @@ def _format_directive(control_string, cursor, pos):
             inner = control_string[pos:i]
             end_pos = i
 
+        # CLHS 22.3.7.4: an empty body means the control string to iterate
+        # with is itself an argument, taken *before* the list argument.
+        if not inner:
+            inner_arg = get_arg()
+            # Same coercion FORMAT itself applies to its control-string
+            # argument (see format_fn), so a LispString behaves identically
+            # whether it arrives literally or through ~{~}.
+            inner = '' if inner_arg is None else str(inner_arg)
+
         if at_flag:
             # ~@{...~} - use the rest of the outer arguments as the items,
             # directly from the outer cursor: they belong to the same
@@ -1337,41 +1542,52 @@ def _format_directive(control_string, cursor, pos):
             # argument itself (already taken by get_arg()) is removed from
             # the outer cursor; what the iteration body does with its
             # elements never touches the outer cursor further.
-            items = get_arg()
-            if items is None or items is lisptype.NIL:
-                items = []
-            elif not isinstance(items, (list, tuple)):
-                items = [items]
+            items = _format_args_list(get_arg())
+
+        # ~n{...~} bounds the number of iterations (CLHS 22.3.7.4); without
+        # a parameter the only bound is the argument list running out.
+        max_iterations = params[0] if params and params[0] is not None else None
 
         result_parts = []
-        # Special marker for iteration escape (from ~^)
-        ESCAPE_MARKER = '\u0000'
+        iterations = 0
 
         if colon_flag:
-            # Each item is a sublist, processed with its own fresh cursor.
+            # ~:{...~} - each item is itself a list, and one pass is made per
+            # item with that sublist standing in as the whole argument stream.
             for item in items:
-                item_list = list(item) if isinstance(item, (list, tuple)) else [item]
-                sub_cursor = _FormatCursor(item_list)
-                part = _format_process_cursor(inner, sub_cursor)
-                part = part.replace(ESCAPE_MARKER, '')
-                result_parts.append(part)
+                if max_iterations is not None and iterations >= max_iterations:
+                    break
+                iterations += 1
+                sub_cursor = _FormatCursor(_format_args_list(item))
+                try:
+                    result_parts.append(_format_process_cursor(inner, sub_cursor))
+                except _FormatEscape as esc:
+                    # CLHS 22.3.9.2: inside ~:{...~}, a plain ~^ ends only
+                    # the current sublist's pass, while ~:^ ends the whole
+                    # iteration. Treating both as "stop everything" silently
+                    # dropped every sublist after the first short one.
+                    result_parts.append(esc.partial)
+                    if esc.terminate_outer:
+                        break
+                    continue
         else:
-            # Items are consumed one at a time from the provided items,
-            # each pass over `inner` getting its own fresh cursor scoped to
-            # the remaining items.
+            # One pass at a time over what is left; each pass gets a fresh
+            # cursor, and however much it consumed is where the next starts.
             item_list = list(items)
             while item_list:
-                sub_cursor = _FormatCursor(item_list)
-                part = _format_process_cursor(inner, sub_cursor)
-                consumed = sub_cursor.idx
-                # If inner indicates escape, stop iteration
-                if '\u0000' in part:
-                    part = part.replace('\u0000', '')
-                    result_parts.append(part)
+                if max_iterations is not None and iterations >= max_iterations:
                     break
-                result_parts.append(part)
+                iterations += 1
+                sub_cursor = _FormatCursor(item_list)
+                try:
+                    result_parts.append(_format_process_cursor(inner, sub_cursor))
+                except _FormatEscape as esc:
+                    result_parts.append(esc.partial)
+                    break
+                consumed = sub_cursor.idx
                 if consumed <= 0:
-                    # Prevent infinite loop; consume one element
+                    # A body consuming nothing would iterate forever; advance
+                    # by one so the loop stays bounded.
                     consumed = 1
                 item_list = item_list[consumed:]
 
@@ -1381,10 +1597,32 @@ def _format_directive(control_string, cursor, pos):
         return ('', pos)
     
     elif directive == '^':
-        # ~^ - Escape from iteration (only in ~{ ~})
-        # Emit a special marker that iteration handling will detect
-        ESCAPE_MARKER = '\u0000'
-        return (ESCAPE_MARKER, pos)
+        # ~^ - CLHS 22.3.9.2: terminate the enclosing ~{...~} iteration, or
+        # the whole control string when not inside one. It is a control
+        # transfer, not a character, so it raises rather than returning an
+        # in-band marker for callers to string-replace out.
+        #
+        # Whether it fires depends on its prefix parameters:
+        #   none    - terminate if no arguments remain
+        #   n       - terminate if n is zero
+        #   n,m     - terminate if n equals m
+        #   n,m,p   - terminate if n <= m <= p
+        supplied = [p for p in params if p is not None]
+        if len(params) >= 3:
+            n, m, p = params[0], params[1], params[2]
+            should_escape = _lisp_number(n) <= _lisp_number(m) <= _lisp_number(p)
+        elif len(supplied) == 2 or (len(params) == 2 and params[0] is not None):
+            should_escape = _lisp_number(params[0]) == _lisp_number(params[1])
+        elif len(params) == 1 and params[0] is not None:
+            should_escape = _lisp_number(params[0]) == 0
+        else:
+            should_escape = cursor.remaining_count() <= 0
+
+        if should_escape:
+            # ~:^ terminates the iteration one level out (CLHS 22.3.9.2),
+            # which is what ~:{...~} bodies use to stop the outer sweep.
+            raise _FormatEscape(terminate_outer=colon_flag)
+        return ('', pos)
 
     elif directive == '\n':
         # ~<newline> - Ignored newline
@@ -1436,7 +1674,15 @@ def _format_process_cursor(control_string, cursor):
         c = control_string[pos]
         if c == '~':
             pos += 1
-            output, pos = _format_directive(control_string, cursor, pos)
+            try:
+                output, pos = _format_directive(control_string, cursor, pos)
+            except _FormatEscape as esc:
+                # `~^` abandons the rest of *this* control string but keeps
+                # what it already produced (CLHS 22.3.9.2). Each frame
+                # prepends its own accumulated output as the escape unwinds,
+                # so the text is assembled in the order it was generated.
+                esc.partial = ''.join(result) + esc.partial
+                raise
             result.append(output)
         else:
             result.append(c)
@@ -1446,14 +1692,20 @@ def _format_process_cursor(control_string, cursor):
 
 def _format_process(control_string, args):
     """Process a format control string with arguments (fresh cursor)."""
-    return _format_process_cursor(control_string, _FormatCursor(args))
+    return _format_process_with_tail(control_string, args)[0]
 
 
 def _format_process_with_tail(control_string, args):
     """Like _format_process but also return the number of arguments consumed
     (i.e. the index of the first remaining argument)."""
     cursor = _FormatCursor(args)
-    result = _format_process_cursor(control_string, cursor)
+    try:
+        result = _format_process_cursor(control_string, cursor)
+    except _FormatEscape as esc:
+        # A `~^` outside any iteration terminates the control string itself;
+        # this is the outermost frame, so the escape stops here rather than
+        # escaping FORMAT as a Python exception (standing rule 2).
+        result = esc.partial
     return result, cursor.idx
 
 
@@ -1935,22 +2187,18 @@ def with_open_file(var_filespec_options, *body):
     return result
 
 
-def with_open_stream(stream_var_stream, *body):
-    """Execute with open stream."""
-    # Simplified - just execute body
-    result = None
-    for form in body:
-        result = form
-    return result
+# NOTE: the real macro expander lives in evaluation_special_forms.py.
+# This module-level stub neither evaluated its body nor created a stream,
+# and register_module() would auto-register it as a *function* (its Python
+# name differs from the expander's, so the decorator dedup misses it),
+# clobbering the macro depending on import order -- standing rule 3.
 
 
-def with_output_to_string(stream_var_options, *body):
-    """Execute with output to string."""
-    # Simplified - just execute body and return empty string
-    result = None
-    for form in body:
-        result = form
-    return ""
+# NOTE: the real macro expander lives in evaluation_special_forms.py.
+# This module-level stub neither evaluated its body nor created a stream,
+# and register_module() would auto-register it as a *function* (its Python
+# name differs from the expander's, so the decorator dedup misses it),
+# clobbering the macro depending on import order -- standing rule 3.
 
 
 __all__ = [
@@ -1994,5 +2242,4 @@ __all__ = [
     # Interactive I/O
     'y_or_n_p', 'yes_or_no_p',
     # WITH- macros
-    'with_open_file', 'with_open_stream', 'with_output_to_string'
-]
+    'with_open_file',]

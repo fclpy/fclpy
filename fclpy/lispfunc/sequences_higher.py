@@ -483,11 +483,44 @@ def simple_bit_vector_p(object):
 
 @_registry.cl_function('AREF')
 def aref(array, *subscripts):
-    """Array reference."""
+    """Array reference.
+
+    An element of a string is a CHARACTER (CLHS 15.1). Both string
+    representations index to a bare length-1 Python `str`, so returning the
+    raw element handed back an object that is simultaneously a character and
+    a string -- two disjoint types (plan.md C13).
+
+    That conflation is not merely untidy: since a string is also a vector,
+    any consumer that walks a vector element-wise sees each character as
+    another one-element vector and recurses without end. The ANSI harness's
+    own `equalp-with-case` does exactly that, so comparing any two strings
+    ran until the stack was exhausted and aborted the whole run.
+    """
     result = array
     for subscript in subscripts:
-        result = result[subscript]
+        container = result
+        result = string_element(container, container[subscript])
     return result
+
+
+def _is_string(value):
+    """True for either representation of a Lisp string."""
+    return isinstance(value, (str, lisptype.LispString))
+
+
+def string_element(container, element):
+    """Normalize an element read out of `container` to a Lisp value.
+
+    The elements of a string are CHARACTERs (CLHS 15.1), but both string
+    representations index to a bare length-1 Python `str`. Anything that
+    walks a string element-wise -- AREF, LOOP's `across`, sequence
+    traversal -- has to apply that conversion, and it must be the *same*
+    conversion everywhere or the two halves disagree about what a character
+    is. Non-string containers are left alone.
+    """
+    if isinstance(element, str) and _is_string(container):
+        return lisptype.Character(element)
+    return element
 
 
 @_registry.cl_function('SVREF')
