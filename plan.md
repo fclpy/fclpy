@@ -541,16 +541,45 @@ shared `:test`/`:key` defect**, not eleven bugs — again X2 and X3. **Owner:** 
 The cluster shape says the array *object model* lacks these properties, rather
 than that many functions are individually wrong. **Owner:** M9.
 
-#### C7. Printer control variables
+#### C7. The printer — **LARGELY DONE (2026-08-14)**
 
-**Evidence.** **442 failures** — `PRINT.INTEGERS.BASE` 84,
-`PRINT.INTEGERS.RADIX.BASE` 77, `PRINT.ARRAY` 47.
+**`run_ansi.py` over the 25 `printer/` object-printing files: 36 → 128 passing
+of 306. +92, zero regressions.** Details in the [Changelog](#changelog).
 
-`*PRINT-BASE*`/`*PRINT-RADIX*` alone account for 161. Known specifics: `#(1 2 3)`
-reads as the cons `(VECTOR 1 2 3)`; `PRIN1` emits C-style escapes; `PRINC` keeps
-the `:` on keywords and `#\` on characters (it must bind `*PRINT-ESCAPE*` to NIL,
-CLHS 22.1.3.2); `*PRINT-CASE*` and `READTABLE-CASE` return Python strings rather
-than keywords. **Owner:** M10.
+**The diagnosis this section carried named symptoms, not the mechanism.** It
+listed "`PRINC` keeps the `:` on keywords", "`PRIN1` emits C-style escapes",
+"`*PRINT-CASE*` returns a Python string" as separate specifics. They are one
+defect: **there was no printer.** `lisptype.lisp_str`/`lisp_repr` are `str()` and
+`repr()`, so the printed representation of every type lived in that type's
+`__str__`/`__repr__` — and a dunder method takes no arguments, so it
+*structurally cannot* consult `*PRINT-BASE*`, `*PRINT-ESCAPE*`, `*PRINT-CASE*`,
+`*PRINT-LEVEL*` or `*PRINT-LENGTH*`. `PRINC` vs `PRIN1` was `__str__` vs
+`__repr__`: two unrelated representations rather than one printer called with
+`*PRINT-ESCAPE*` bound differently (CLHS 22.1.3.2).
+
+**And a measurement gate sat in front of all of it,** the same shape as the
+string/vector gate in [§4](#recommended-order) item 4: every output function
+with no stream argument wrote to Python's `print()` instead of the value of
+`*STANDARD-OUTPUT*`. Every `def-print-test` in `printer/` captures output as
+`(with-output-to-string (*standard-output*) (prin1 form))`, so **all ~440 of them
+saw the empty string no matter what the printer did.** No printer behaviour was
+observable until that was fixed.
+
+The control variables were not variables, either: they were Python globals on an
+`io_write.PrinterSettings` object reached through `@cl_function('*PRINT-BASE*')`
+accessors, which no binding form can assign — and registering a *function* under
+a variable's name is what made `*print-base*` evaluate to a **Python function
+object** (standing rule 2).
+
+**Still open** — the pretty printer (`*PRINT-PRETTY*`, `PPRINT-*`,
+`~<~:>`), `*PRINT-CIRCLE*`, and the array-model items in
+[§5](#5-known-temporary-deviations): a bit vector cannot be told from a general
+vector, and `MAKE-ARRAY` discards `:element-type`, so `#*1011` and
+`(make-array n :element-type 'character)` printing as a string are both blocked
+on M9 — that last one is most of what `print-strings.lsp` and `print-array.lsp`
+still fail. **Owner:** M10. **Verify:** `run_ansi.py printer/print-cons.lsp` etc.
+— note a *whole-directory* printer run cannot complete until the iteration-form
+binding leak in [§5](#5-known-temporary-deviations) is fixed.
 
 #### C8. CLOS — `DEFGENERIC` / `DEFMETHOD` / `DEFCLASS` / `CHANGE-CLASS`
 
@@ -701,7 +730,23 @@ Milestones now describe *mechanisms*, and map onto the clusters above.
 5. **M10's `FORMAT` engine (C2).** The largest cluster at 1623. The iteration,
    escape, justification and padding half is done (Changelog 2026-08-13); `~E`,
    `~F`, `~R`, `~T` and the pretty-printer's logical blocks are not.
-6. **Re-measure, then re-derive this list.** The residual distribution has
+6. ~~**C7 — the printer.**~~ **Largely done 2026-08-14.** One printer, control
+   variables that are actually variables, and output that goes to
+   `*STANDARD-OUTPUT*`. The last of those was a measurement gate in front of
+   ~440 `def-print-test`s, so this was item 4's shape a second time.
+7. **M2's binding model — now the top item, and it is blocking measurement.**
+   All eight iteration forms assign to an enclosing variable rather than binding
+   their own ([§5](#5-known-temporary-deviations)). It is a wrong answer in its
+   own right, and because `DO-ALL-SYMBOLS`/`LOOP` clobber rt.lsp's report stream
+   parameter `s`, **`run_ansi.py printer` cannot run to completion at all.** The
+   fix is to extract the special-vs-lexical binding decision out of `eval_let`
+   and `eval_letstar` — where it already exists twice — into one binder shared by
+   LET, LET*, and the eight iteration forms. That is exactly the M2 slice this
+   document has said to do properly rather than one binding form at a time, and
+   there is now a concrete, measured reason to do it: the one-word local fix
+   moves `iteration` 410 → 408 by breaking the four tests that bind the variable
+   specially.
+8. **Re-measure, then re-derive this list.** The residual distribution has
    already shifted enough that ranking further ahead is guesswork.
 
 **A note on M2.** It remains the architectural spine, and C1/X2 both bottom out
@@ -729,11 +774,17 @@ Anything knowingly non-ANSI, with the milestone that removes it. Empty means
 | ~90 standard macros implemented as special forms | predates the macro system | M4 |
 | Five parallel place protocols; `GET-SETF-EXPANSION` a stub | predates the setf protocol | M5 |
 | Six copy-pasted lambda-list binders | never factored | M3 |
-| Two CLOS implementations, two readers, two readtables, dead `printer.py`, dead `reader.py`/`tokenizer.py` fork | historical forks | M9 / M10 |
+| Two CLOS implementations, two readers, two readtables, dead `reader.py`/`tokenizer.py` fork | historical forks | M9 / M10 |
+| Pretty printer absent: `*PRINT-PRETTY*`, `PPRINT-*`, `~<~:>` logical blocks | the printer prints only the non-pretty style | C2 / M10 |
+| `*PRINT-CIRCLE*` unimplemented; the printer instead cuts off at depth 256 | needs a labelling pass over the object graph | M10 |
+| A bit vector prints as `#(1 0 1 1)`, not `#*1011` | a bit vector and a general vector are both a Python `list` with no recorded element type, so the distinction cannot be recovered at print time | C6 / M9 |
+| `(format <string-with-fill-pointer> ...)` works for a `LispString` but signals for the `AdjustableVector` that `(make-array n :element-type 'character :fill-pointer 0)` returns | `MAKE-ARRAY` discards `:element-type`, so a character array is indistinguishable from a general vector; appending characters to one anyway would be a guess | C6 / M9 |
+| `~&` sees only the column within its own control string, so a `~&` opening a control string cannot tell the stream is mid-line; `FRESH-LINE` is correct | FORMAT builds its whole output as a string before writing, and the column is not threaded through the eleven nested `_format_process_cursor` call sites | C2 |
 | `SUBTYPEP` string-pair table | no type lattice | M9 |
 | `LispString` vs. Python `str` split | two string representations | M9 (blocks EQUAL/EQUALP) |
 | Name-based block/tag/catch matching | no block identity objects | M7 |
 | `is_truthy(False)` is `True` | unaudited boundary | M2 |
+| **All eight iteration forms (DO, DO*, DOLIST, DOTIMES, LOOP, DO-SYMBOLS, DO-EXTERNAL-SYMBOLS, DO-ALL-SYMBOLS) assign to an enclosing variable of the same name instead of binding their own** — `(let ((x 99)) (dolist (x '(1 2 3))) x)` is NIL. `(do-all-symbols (s) ...)` therefore clobbers rt.lsp's report stream parameter `s`, and LOOP's `for s = ...` at `print-strings.lsp:149` does the same, which **makes a whole-directory `run_ansi.py printer` run unable to complete** | the one-word fix (`add_variable` for the establishing call) regresses DO.14/DO*.14/DOTIMES.18/.18A, which bind the variable *specially*; needs the special-vs-lexical decision extracted from `eval_let`/`eval_letstar` and shared. Diagnosed, measured (`iteration` 410→408), reverted, and pinned by 13 `xfail`s in `tests/test_iteration_variable_binding.py` | **M2 — next task** |
 
 ---
 
@@ -870,6 +921,57 @@ rather than discovering these one crash at a time.
 Condensed from the previous chronological plan. Each entry is a *mechanism*
 landed, not a test count.
 
+- **2026-08-14** — **C7: there is one printer, and output goes where the
+  language says.** `fclpy/printer.py` — previously a complete printer that
+  *nothing under `fclpy/` imported* — is now the only one, and every Lisp-visible
+  printed representation comes from it: `PRIN1`, `PRINC`, `PRINT`, `WRITE`, the
+  three `*-TO-STRING`s, and FORMAT's `~A`/`~S`. Deleted: `PrinterSettings` and
+  its `@cl_function('*PRINT-...*')` accessors, the unreachable
+  `_print_with_limits`, the `@cl_function('*STANDARD-OUTPUT*')`-style accessors
+  returning raw `sys.stdout`, and `_write_stream_output` (a strictly worse
+  duplicate of the new single `write_text` funnel). Three printers → one
+  (standing rule 3).
+  **The gate mattered more than the printer.** Every output function with no
+  stream argument wrote to Python's `print()` rather than to the value of
+  `*STANDARD-OUTPUT*`, and every `def-print-test` in `printer/` captures via
+  `(with-output-to-string (*standard-output*) (prin1 form))` — so ~440 tests read
+  the empty string regardless of the code under test, exactly as the
+  string-is-a-vector gate did in the 2026-08-13 entry. `(format t ...)` was the
+  same bug with a twist: FORMAT's `t` means `*STANDARD-OUTPUT*` (CLHS 22.3.1),
+  not `*TERMINAL-IO*` as it would for a stream designator.
+  Landed with it: the control variables are real variables with the ANSI initial
+  values from one table (`printer.PRINTER_VARIABLES`, so bootstrap and printer
+  cannot disagree — `*PRINT-RIGHT-MARGIN*` and `*PRINT-MISER-WIDTH*` are NIL, not
+  80 and 40); `*PRINT-BASE*` 2–36 with upper-case digits and the radix prefix
+  before the sign (`#b-1`, `#3r-11`, `10.`); `*PRINT-LEVEL*` applied to
+  aggregates only, at `>=`, so an atom is never `#`; ratios as `n/d` and
+  complexes as `#C(r i)` instead of Python's `Fraction(1, 2)` and `(1+2j)`;
+  vectors as `#(...)` (a Python `list` is a *vector* here, and `str()` printed it
+  as a list, so every vector read back as a cons) and arrays as `#2A((0 0) (0 0))`
+  instead of `#(ARRAY (2, 2))` — a Python tuple's repr inside claimed Lisp
+  syntax; the full CLHS 22.1.3.3.2 `READTABLE-CASE` × `*PRINT-CASE*` matrix;
+  WRITE's keyword arguments, which were collected into `**kwargs` and dropped,
+  plus `:allow-other-keys`; `PRINT` as newline-object-space rather than the
+  reverse; and `FRESH-LINE`/`~&` as actual fresh lines — both had emitted
+  unconditionally, `~&` with the comment "we don't track column".
+  **Measured: the 25 `printer/` object-printing files 36 → 128 passing of 306,
+  +92, 0 newly failing.** `iteration` 409 → 410, no regressions. `pytest` 1457
+  passed, 1 pre-existing unrelated failure (`STREAM-ELEMENT-TYPE`), 16 xfailed;
+  115 new tests in `tests/test_printer_ansi.py`, and `tests/test_printer.py`'s 7
+  non-ANSI assertions corrected with citations (it asserted `PRINC` = `PRIN1` for
+  keywords and characters, which pinned the two-representations bug, and `\n`
+  escaping inside strings, which CLHS 2.4.5 forbids). Deleted
+  `tests/test_printer_control.py`, 273 lines certifying the dead
+  `PrinterSettings`/`_print_with_limits` pair — the same pathology as the dead
+  `reader.py`'s 177 tests.
+  **Discovered, diagnosed, and deliberately not fixed here:** all eight iteration
+  forms *assign to* an enclosing variable of the same name instead of binding
+  their own, so `(let ((x 99)) (dolist (x '(1 2 3))) x)` is NIL and
+  `(do-all-symbols (s) ...)`/`(loop for s = ...)` clobber rt.lsp's own report
+  stream parameter — which is why a whole-directory printer run cannot complete.
+  See [§5](#5-known-temporary-deviations) and the 13 `xfail`s in
+  `tests/test_iteration_variable_binding.py`; it is M2's, and the one-word fix
+  regresses the four tests that bind the variable *specially*.
 - **2026-08-13** — **A string is a vector, and its elements are characters.**
   Four functions type-tested `isinstance(x, str)`, which is false for every
   `LispString` the reader makes: `EQUAL`/`EQUALP` (so `(equal "abc" "abc")` was

@@ -5,12 +5,26 @@ Tests that objects are printed in proper format and can be read back.
 """
 
 import pytest
-from fclpy.printer import prin1, princ, print_object, _print_string, _print_symbol
+from fclpy import lispenv
+from fclpy.printer import prin1, princ, print_object
 from fclpy.reader import read
 from fclpy.lisptype import (
-    LispSymbol, lispKeyword, Character, lispCons, NIL, 
+    LispSymbol, lispKeyword, Character, lispCons, NIL,
     COMMON_LISP_USER_PACKAGE, intern_symbol, intern_keyword
 )
+
+
+@pytest.fixture(autouse=True)
+def standard_packages():
+    """Bootstrap the standard environment before each test in this file.
+
+    Whether a symbol prints with a package prefix depends on package state
+    (CLHS 22.1.3.3): `QUOTE` prints bare only because it is external in
+    COMMON-LISP and COMMON-LISP-USER uses it. Those exports are established by
+    `setup_standard_environment`, so without this the expected output depends on
+    whether some earlier test in the session happened to bootstrap first.
+    """
+    lispenv.setup_standard_environment()
 
 
 class TestPrintIntegers:
@@ -68,14 +82,21 @@ class TestPrintStrings:
         assert result == '"say \\"hi\\""'
     
     def test_print_string_with_newline(self):
-        """Test printing string with newline."""
+        r"""A newline in a string prints as a newline, not as `\n`.
+
+        CLHS 22.1.3.4 escapes only `"` and `\` inside a string, because CLHS
+        2.4.5 makes backslash a *single escape* character that is included
+        without interpretation. Emitting `\n` would read back as the two
+        characters `\` and `n`, so this test previously asserted a
+        representation that does not round-trip.
+        """
         result = prin1("line1\nline2")
-        assert result == '"line1\\nline2"'
-    
+        assert result == '"line1\nline2"'
+
     def test_print_string_with_tab(self):
-        """Test printing string with tab."""
+        r"""A tab prints as a tab, for the same reason as the newline above."""
         result = prin1("col1\tcol2")
-        assert result == '"col1\\tcol2"'
+        assert result == '"col1\tcol2"'
     
     def test_princ_string_no_quotes(self):
         """Test that princ doesn't quote strings."""
@@ -113,10 +134,15 @@ class TestPrintSymbols:
         assert prin1(sym) == "FOO42"
     
     def test_print_symbol_needs_quoting(self):
-        """Test that symbols with special chars are quoted."""
+        """A name containing a space is printed inside `|...|`.
+
+        `LispSymbol(...)` constructs an *uninterned* symbol, so the printed
+        representation also carries the `#:` prefix `*PRINT-GENSYM*` calls for
+        (CLHS 22.1.3.3).
+        """
         sym = LispSymbol("FOO BAR")  # Create directly with space
         result = prin1(sym)
-        assert result == "|FOO BAR|"
+        assert result == "#:|FOO BAR|"
     
     def test_prin1_princ_same_for_symbols(self):
         """Test that prin1 and princ are same for symbols."""
@@ -137,10 +163,18 @@ class TestPrintKeywords:
         kw = intern_keyword("my-key")
         assert prin1(kw) == ":MY-KEY"
     
-    def test_prin1_princ_same_for_keywords(self):
-        """Test that prin1 and princ are same for keywords."""
-        kw = intern_keyword("test")
-        assert prin1(kw) == princ(kw)
+    def test_princ_drops_the_keyword_colon(self):
+        """PRINC prints a keyword without its package marker.
+
+        The colon is part of the *escaped* representation, so PRIN1 keeps it and
+        PRINC does not (CLHS 22.1.3.3). This test used to assert the two were
+        equal, which pinned the bug that PRINC and PRIN1 were two unrelated
+        representations rather than one printer with `*PRINT-ESCAPE*` bound
+        differently.
+        """
+        kw = intern_keyword("TEST")
+        assert prin1(kw) == ":TEST"
+        assert princ(kw) == "TEST"
 
 
 class TestPrintCharacters:
@@ -170,10 +204,16 @@ class TestPrintCharacters:
         result = prin1(char)
         assert result == "#\\Tab"
     
-    def test_prin1_princ_same_for_characters(self):
-        """Test that prin1 and princ are same for characters."""
+    def test_princ_prints_a_character_without_the_reader_macro(self):
+        r"""PRINC prints the character itself, PRIN1 prints `#\X`.
+
+        CLHS 22.1.3.2. `Character.__str__` also produced `#\X`, which is what
+        made `(princ #\X)` print escaped; this test asserted that equality and
+        so pinned it.
+        """
         char = Character("X")
-        assert prin1(char) == princ(char)
+        assert prin1(char) == "#\\X"
+        assert princ(char) == "X"
 
 
 class TestPrintLists:
@@ -346,17 +386,19 @@ class TestEdgeCases:
     """Test edge cases and special situations."""
     
     def test_print_empty_symbol(self):
-        """Test printing empty symbol (edge case)."""
-        sym = LispSymbol("")  # Create directly
+        """An empty name needs `|...|`; uninterned adds `#:` (CLHS 22.1.3.3)."""
+        sym = LispSymbol("")  # Create directly, so it has no home package
         result = prin1(sym)
-        assert result == "||"  # Empty symbol needs quoting
+        assert result == "#:||"
     
     def test_print_symbol_that_looks_like_number(self):
         """Test printing symbol that looks like a number."""
         sym = LispSymbol("123ABC")  # Starts with number
         result = prin1(sym)
-        # Should be quoted because it could be confused with number
-        assert "|" in result or result == "123ABC"  # Depends on impl
+        # "123ABC" is not a number in base 10, so no `|...|` is needed -- only a
+        # name that would actually *read* as a number has to be escaped. The
+        # `#:` is because the symbol is uninterned.
+        assert result == "#:123ABC"  # Depends on impl
     
     def test_print_string_with_backslash(self):
         """Test printing string with backslash."""

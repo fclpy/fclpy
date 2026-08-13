@@ -5,81 +5,24 @@ from . import registry as _registry
 from .streams import open_file as open_fn, close_stream as close_fn
 
 
-# === Printer Control Variables ===
-# These control how objects are printed by PRINT, PRIN1, PRINC, FORMAT, etc.
-
-class PrinterSettings:
-    """Container for printer control variables.
-    
-    This class manages the printer control variables that affect
-    how Lisp objects are printed. Variables can be dynamically bound
-    for local control of printing behavior.
-    """
-    
-    def __init__(self):
-        # *PRINT-LEVEL* - Maximum depth to print nested structures
-        # NIL means no limit
-        self.print_level = None
-        
-        # *PRINT-LENGTH* - Maximum number of elements to print in a list/vector
-        # NIL means no limit
-        self.print_length = None
-        
-        # *PRINT-CASE* - Case to use when printing symbols
-        # :UPCASE (default), :DOWNCASE, :CAPITALIZE
-        self.print_case = 'UPCASE'
-        
-        # *PRINT-CIRCLE* - Whether to detect and print circular structures
-        self.print_circle = False
-        
-        # *PRINT-GENSYM* - Whether to print #: prefix for uninterned symbols
-        self.print_gensym = True
-        
-        # *PRINT-ARRAY* - Whether to print arrays readably
-        self.print_array = True
-        
-        # *PRINT-READABLY* - Whether to print in a readable format
-        self.print_readably = False
-        
-        # *PRINT-ESCAPE* - Whether to print escape characters (for PRIN1 vs PRINC)
-        self.print_escape = True
-        
-        # *PRINT-BASE* - Radix for printing integers (default 10)
-        self.print_base = 10
-        
-        # *PRINT-RADIX* - Whether to print radix prefix
-        self.print_radix = False
-        
-        # *PRINT-PRETTY* - Whether to use pretty printing
-        self.print_pretty = False
-        
-        # *PRINT-LINES* - Max lines for pretty printing (NIL = no limit)
-        self.print_lines = None
-        
-        # *PRINT-MISER-WIDTH* - Column at which miser style kicks in
-        self.print_miser_width = 40
-        
-        # *PRINT-RIGHT-MARGIN* - Right margin for pretty printing
-        self.print_right_margin = 80
-    
-    def copy(self):
-        """Create a copy of current settings."""
-        new = PrinterSettings()
-        new.print_level = self.print_level
-        new.print_length = self.print_length
-        new.print_case = self.print_case
-        new.print_circle = self.print_circle
-        new.print_gensym = self.print_gensym
-        new.print_array = self.print_array
-        new.print_readably = self.print_readably
-        new.print_escape = self.print_escape
-        new.print_base = self.print_base
-        new.print_radix = self.print_radix
-        new.print_pretty = self.print_pretty
-        new.print_lines = self.print_lines
-        new.print_miser_width = self.print_miser_width
-        new.print_right_margin = self.print_right_margin
-        return new
+# === The printer, and where output goes ===
+#
+# The Lisp printer lives in `fclpy/printer.py` -- one implementation, reading
+# the printer control variables from the live dynamic environment.
+#
+# What used to be here was a `PrinterSettings` object holding those variables as
+# Python globals, a set of `@cl_function('*PRINT-...*')` accessors onto it, and
+# a `_print_with_limits` printer that honoured them. None of it was reachable.
+# No binding form can assign a Python global, so `(let ((*print-base* 2)) ...)`
+# could not affect the settings object; nothing called `_print_with_limits`, so
+# every CL entry point below printed via `lisptype.lisp_str`/`lisp_repr`, which
+# are `str()`/`repr()`; and registering a *function* named `*PRINT-BASE*` is
+# what made a reference to `*print-base*` evaluate to a Python function object,
+# since the function registry is where the evaluator looks after failing to
+# find a variable. The variables are now bound with their ANSI initial values
+# in `lispenv.setup_standard_environment`, from `printer.PRINTER_VARIABLES`.
+from fclpy import printer as _printer
+from fclpy.printer import write_object as _write_object
 
 
 def stream_element_type(stream):
@@ -92,197 +35,80 @@ def stream_external_format(stream):
     return 'UTF-8'
 
 
-# Global printer settings (corresponds to *PRINT-...* variables)
-_printer_settings = PrinterSettings()
+def resolve_output_stream(designator):
+    """Resolve an output stream designator (CLHS 21.1.3).
 
+    NIL -- which is what a missing optional stream argument is -- designates the
+    current value of `*STANDARD-OUTPUT*`, and T designates `*TERMINAL-IO*`.
 
-def get_printer_settings():
-    """Get the current printer settings object."""
-    return _printer_settings
-
-
-def set_printer_setting(name, value):
-    """Set a printer control variable.
-    
-    Args:
-        name: Variable name (e.g., 'PRINT-LEVEL', 'PRINT-LENGTH')
-        value: New value
+    Every output function has to come through here. They used to default to
+    Python's `print()`, so output went to the process's stdout regardless of
+    what `*STANDARD-OUTPUT*` was bound to. That one defect is why the printer
+    was unmeasurable: `(with-output-to-string (*standard-output*) (prin1 x))` is
+    the shape every `def-print-test` in `printer/` uses to capture output, and
+    it returned the empty string for all of them no matter what the printer did.
     """
-    settings = _printer_settings
-    name_lower = name.lower().replace('-', '_').replace('*', '')
-    if hasattr(settings, name_lower):
-        setattr(settings, name_lower, value)
+    import fclpy.state as state
+
+    if designator is True or designator is lisptype.T:
+        name = '*TERMINAL-IO*'
+    elif designator is None or designator is lisptype.NIL:
+        name = '*STANDARD-OUTPUT*'
     else:
-        raise lisptype.LispError(f"Unknown printer variable: {name}")
+        return designator
+
+    env = getattr(state, 'current_environment', None)
+    symbol = lisptype.COMMON_LISP_PACKAGE.intern_symbol(name)
+    if env is not None and env.has_variable(symbol):
+        return env.find_variable(symbol)
+    return getattr(symbol, 'value', None)
 
 
-def get_printer_setting(name):
-    """Get a printer control variable.
-    
-    Args:
-        name: Variable name (e.g., 'PRINT-LEVEL', 'PRINT-LENGTH')
-    
-    Returns:
-        Current value of the variable
+def write_text(text, stream=None):
+    """Write `text` to an output stream designator -- the one place text is written.
+
+    `PRIN1` and `PRINC` each carried their own four-branch copy of this
+    dispatch (stdout / fclpy `Stream` / Python file-like / bare `except`), which
+    is how they drifted apart from each other and from FORMAT about where
+    unspecified output goes.
     """
-    settings = _printer_settings
-    name_lower = name.lower().replace('-', '_').replace('*', '')
-    if hasattr(settings, name_lower):
-        return getattr(settings, name_lower)
+    target = resolve_output_stream(stream)
+    if target is None:
+        # Reachable only before the standard environment exists, i.e. during
+        # bootstrap. A real gap rather than the normal path, so it is not
+        # quietly equivalent to writing to a stream.
+        import sys
+        sys.stdout.write(text)
+        return
+    from .streams import Stream
+    if isinstance(target, Stream):
+        target.write_sequence(text)
+    elif isinstance(target, lisptype.LispString):
+        # FORMAT accepts a string with a fill pointer as its destination and
+        # appends to it (CLHS 22.3.1). Reaching here used to raise an
+        # AttributeError that a bare `except` turned into printing at stdout,
+        # so the output silently went somewhere other than the string.
+        if target.fill_pointer is None:
+            raise lisptype.LispTypeError(
+                "FORMAT to a string requires a fill pointer: "
+                f"{_write_object(target, escape=True)}")
+        target._data[target.fill_pointer:] = list(text)
+        target.fill_pointer += len(text)
     else:
-        raise lisptype.LispError(f"Unknown printer variable: {name}")
-
-
-# === Registered Printer Control Variable Accessors ===
-# These provide Lisp-level access to *PRINT-...* variables
-
-@_registry.cl_function('*PRINT-LEVEL*')
-def get_print_level():
-    """Get the value of *PRINT-LEVEL*."""
-    v = _printer_settings.print_level
-    return lisptype.NIL if v is None else v
-
-
-@_registry.cl_function('*PRINT-LENGTH*')
-def get_print_length():
-    """Get the value of *PRINT-LENGTH*."""
-    v = _printer_settings.print_length
-    return lisptype.NIL if v is None else v
-
-
-@_registry.cl_function('*PRINT-BASE*')
-def get_print_base():
-    """Get the value of *PRINT-BASE*."""
-    return _printer_settings.print_base
-
-
-@_registry.cl_function('*PRINT-RADIX*')
-def get_print_radix():
-    """Get the value of *PRINT-RADIX*."""
-    return lisptype.T if _printer_settings.print_radix else lisptype.NIL
-
-
-@_registry.cl_function('*PRINT-CASE*')
-def get_print_case():
-    """Get the value of *PRINT-CASE*."""
-    case_val = _printer_settings.print_case
-    from .core import intern_keyword
-    return intern_keyword(case_val)
-
-
-@_registry.cl_function('*PRINT-CIRCLE*')
-def get_print_circle():
-    """Get the value of *PRINT-CIRCLE*."""
-    return lisptype.T if _printer_settings.print_circle else lisptype.NIL
-
-
-@_registry.cl_function('*PRINT-GENSYM*')
-def get_print_gensym():
-    """Get the value of *PRINT-GENSYM*."""
-    return lisptype.T if _printer_settings.print_gensym else lisptype.NIL
-
-
-@_registry.cl_function('*PRINT-ARRAY*')
-def get_print_array():
-    """Get the value of *PRINT-ARRAY*."""
-    return lisptype.T if _printer_settings.print_array else lisptype.NIL
-
-
-@_registry.cl_function('*PRINT-READABLY*')
-def get_print_readably():
-    """Get the value of *PRINT-READABLY*."""
-    return lisptype.T if _printer_settings.print_readably else lisptype.NIL
-
-
-@_registry.cl_function('*PRINT-ESCAPE*')
-def get_print_escape():
-    """Get the value of *PRINT-ESCAPE*."""
-    return lisptype.T if _printer_settings.print_escape else lisptype.NIL
-
-
-@_registry.cl_function('*PRINT-PRETTY*')
-def get_print_pretty():
-    """Get the value of *PRINT-PRETTY*."""
-    return lisptype.T if _printer_settings.print_pretty else lisptype.NIL
-
-
-def _print_with_limits(obj, current_level=0, current_length_tracker=None):
-    """Print object respecting *PRINT-LEVEL* and *PRINT-LENGTH*.
-    
-    Args:
-        obj: Object to print
-        current_level: Current nesting depth
-        current_length_tracker: Dict tracking element counts per level
-    
-    Returns:
-        String representation of object
-    """
-    settings = _printer_settings
-    
-    # Check level limit
-    if settings.print_level is not None:
-        if current_level >= settings.print_level:
-            return '#'
-    
-    if isinstance(obj, (list, tuple)):
-        if current_length_tracker is None:
-            current_length_tracker = {}
-        
-        parts = []
-        length_key = current_level
-        count = 0
-        
-        for item in obj:
-            if settings.print_length is not None and count >= settings.print_length:
-                parts.append('...')
-                break
-            parts.append(_print_with_limits(item, current_level + 1, current_length_tracker))
-            count += 1
-        
-        return '(' + ' '.join(parts) + ')'
-    
-    # Check T and NIL before general LispSymbol check
-    elif obj is lisptype.T:
-        return 'T'
-    
-    elif obj is None or obj is lisptype.NIL:
-        return 'NIL'
-    
-    elif isinstance(obj, lisptype.LispSymbol):
-        name = obj.name
-        if settings.print_case == 'DOWNCASE':
-            name = name.lower()
-        elif settings.print_case == 'CAPITALIZE':
-            name = name.capitalize()
-        # UPCASE is default, name already uppercase
-        
-        # Handle uninterned symbols
-        if settings.print_gensym and obj.package is None:
-            return '#:' + name
-        return name
-    
-    elif isinstance(obj, str):
-        if settings.print_escape:
-            # Escape quotes and backslashes
-            escaped = obj.replace('\\', '\\\\').replace('"', '\\"')
-            return '"' + escaped + '"'
-        else:
-            return obj
-    
-    elif isinstance(obj, int):
-        if settings.print_radix:
-            if settings.print_base == 16:
-                return '#x' + hex(obj)[2:].upper()
-            elif settings.print_base == 8:
-                return '#o' + oct(obj)[2:]
-            elif settings.print_base == 2:
-                return '#b' + bin(obj)[2:]
-            elif settings.print_base != 10:
-                return f'#.R{settings.print_base} ' + str(obj)
-        return str(obj)
-    
-    else:
-        return lisptype.lisp_str(obj)
+        writer = getattr(target, 'write', None)
+        if writer is None:
+            raise lisptype.LispTypeError(f"Not an output stream: {target!r}")
+        writer(text)
+    if text:
+        # Record the column for FRESH-LINE. Only a non-empty write moves it.
+        try:
+            setattr(target, _AT_LINE_START, text.endswith('\n'))
+        except AttributeError:
+            # A stream that refuses attributes (e.g. a raw file object with
+            # __slots__) simply has no recorded column; `_at_line_start` then
+            # reports "at a line start", so FRESH-LINE emits nothing rather
+            # than a spurious newline.
+            pass
 
 
 # Re-export pathname functions from pathnames module for backward compatibility
@@ -339,24 +165,29 @@ def open_stream_p(stream):
 # I/O write operations
 @_registry.cl_function('WRITE-CHAR')
 def write_char(character, stream=None):
-    """Write character to stream."""
-    print(character, end='')
+    """Write a character to a stream (CLHS 21.2)."""
+    text = character.char if isinstance(character, lisptype.Character) else str(character)
+    write_text(text, stream)
     return character
 
 
 @_registry.cl_function('WRITE-STRING')
 def write_string(string, stream=None, start=0, end=None):
-    """Write string to stream."""
-    if end is None:
-        end = len(string)
-    print(string[start:end], end='')
+    """Write a string's characters to a stream, without escapes (CLHS 21.2)."""
+    text = str(string)
+    if end is None or end is lisptype.NIL:
+        end = len(text)
+    write_text(text[start:end], stream)
     return string
 
 
 @_registry.cl_function('WRITE-LINE')
-def write_line(string, stream=None):
-    """Write line to stream."""
-    print(string)
+def write_line(string, stream=None, start=0, end=None):
+    """WRITE-STRING followed by a newline (CLHS 21.2)."""
+    text = str(string)
+    if end is None or end is lisptype.NIL:
+        end = len(text)
+    write_text(text[start:end] + '\n', stream)
     return string
 
 
@@ -367,108 +198,144 @@ def write_byte(byte, stream):
     return byte
 
 
+def _print_keywords(kwargs):
+    """Translate WRITE's keyword arguments into printer overrides.
+
+    WRITE and WRITE-TO-STRING accept a keyword for each printer control
+    variable (CLHS 22.3.1), each overriding that variable for the call. They
+    used to be collected into `**kwargs` and dropped on the floor, so
+    `(write-to-string x :base 2)` ignored the base and `(write-to-string '(a)
+    :escape nil)` still escaped. `printer.WRITE_KEYWORD_VARIABLES` is the one
+    table of which keyword maps to which variable.
+    """
+    normalized = {key.lower().replace('-', '_'): value
+                  for key, value in kwargs.items()}
+    # `:allow-other-keys` is accepted by every function that takes keyword
+    # arguments, and a true value makes unrecognized keywords legal to pass and
+    # ignore (CLHS 3.4.1.4) -- `(write 5 :allow-other-keys t :foo 'bar)` prints
+    # "5" rather than signalling.
+    permissive = _printer._true(normalized.pop('allow_other_keys', None))
+
+    overrides = {}
+    for name, value in normalized.items():
+        if name not in _printer.WRITE_KEYWORD_VARIABLES:
+            if permissive:
+                continue
+            raise lisptype.LispProgramError(
+                f"WRITE: unknown keyword argument :{name.upper().replace('_', '-')}")
+        overrides[name] = value
+    return overrides
+
+
 @_registry.cl_function('WRITE')
 def write(object, stream=None, **kwargs):
-    """Write object to stream."""
-    print(lisptype.lisp_str(object), end='')
+    """Print an object to a stream, honouring the printer keyword arguments.
+
+    CLHS 22.3.1. WRITE is the general entry point: `PRIN1` and `PRINC` are it
+    with `*PRINT-ESCAPE*` forced true and false respectively.
+    """
+    write_text(_write_object(object, **_print_keywords(kwargs)), stream)
     return object
 
 
 @_registry.cl_function('PRIN1-TO-STRING')
 def prin1_to_string(object):
-    """Print object to string (readable)."""
-    return lisptype.lisp_repr(object)
+    """The escaped printed representation, as a string (CLHS 22.3.1)."""
+    return lisptype.LispString(_printer.prin1_to_string(object))
 
 
 @_registry.cl_function('PRINC-TO-STRING')
 def princ_to_string(object):
-    """Print object to string (not readable)."""
-    return lisptype.lisp_str(object)
+    """The unescaped printed representation, as a string (CLHS 22.3.1)."""
+    return lisptype.LispString(_printer.princ_to_string(object))
 
 
 @_registry.cl_function('WRITE-TO-STRING')
 def write_to_string(object, **kwargs):
-    """Write object to string."""
-    return lisptype.lisp_str(object)
+    """WRITE to a string instead of a stream (CLHS 22.3.1).
+
+    Defaults to escaped output like `PRIN1`, not to `PRINC` -- it is WRITE, and
+    WRITE honours `*PRINT-ESCAPE*`, whose initial value is true.
+    """
+    return lisptype.LispString(_write_object(object, **_print_keywords(kwargs)))
 
 
 @_registry.cl_function('PRINT')
 def print_fn(object, stream=None):
-    """Print object."""
-    print(lisptype.lisp_str(object))
+    """Newline, then the object escaped, then a space (CLHS 22.3.1).
+
+    The order matters and was reversed: PRINT is defined as a `TERPRI`, then a
+    `PRIN1`, then a space -- not `PRIN1` followed by a newline.
+    """
+    write_text('\n' + _printer.prin1_to_string(object) + ' ', stream)
     return object
 
 
 @_registry.cl_function('PRIN1')
 def prin1(object, stream=None):
-    """Print object readably."""
-    # If a stream object is provided, write to it; otherwise default to stdout
-    if stream is None:
-        print(lisptype.lisp_repr(object))
-        return object
-
-    # Lazy import to avoid cycles
-    from .streams import Stream
-    if isinstance(stream, Stream):
-        stream.write_sequence(lisptype.lisp_repr(object))
-        return object
-
-    # Fallback: attempt to write via Python file-like object
-    try:
-        stream.write(lisptype.lisp_repr(object))
-        return object
-    except Exception:
-        print(lisptype.lisp_repr(object))
-        return object
+    """Print an object escaped, with no surrounding whitespace (CLHS 22.3.1)."""
+    write_text(_printer.prin1_to_string(object), stream)
     return object
 
 
 @_registry.cl_function('PRINC')
 def princ(object, stream=None):
-    """Print object for humans."""
-    if stream is None:
-        print(lisptype.lisp_str(object), end='')
-        return object
+    """Print an object with escaping off (CLHS 22.3.1).
 
-    from .streams import Stream
-    if isinstance(stream, Stream):
-        stream.write_sequence(lisptype.lisp_str(object))
-        return object
-
-    try:
-        stream.write(lisptype.lisp_str(object))
-        return object
-    except Exception:
-        print(lisptype.lisp_str(object), end='')
-        return object
+    Not a separate representation from `PRIN1`: the same printer with
+    `*PRINT-ESCAPE*` bound to NIL (CLHS 22.1.3.2).
+    """
+    write_text(_printer.princ_to_string(object), stream)
+    return object
 
 
 @_registry.cl_function('TERPRI')
 def terpri(stream=None):
-    """Output newline."""
-    if stream is None:
-        print()
-        return None
-
-    from .streams import Stream
-    if isinstance(stream, Stream):
-        stream.write_line('')
-        return None
-
-    try:
-        stream.write('\n')
-        return None
-    except Exception:
-        print()
-        return None
+    """Output a newline (CLHS 21.2)."""
+    write_text('\n', stream)
+    return lisptype.NIL
 
 
 @_registry.cl_function('FRESH-LINE')
 def fresh_line(stream=None):
-    """Start fresh line if needed."""
-    print()
-    return None
+    """Output a newline only if not already at the start of a line (CLHS 21.2).
 
+    Returns T if it output one, NIL otherwise. It used to output one
+    unconditionally and return NIL, so `~&` could not be distinguished from
+    `~%`. Column tracking is per stream, so a stream that does not report its
+    position is assumed to need the newline.
+    """
+    target = resolve_output_stream(stream)
+    if _at_line_start(target):
+        return lisptype.NIL
+    write_text('\n', stream)
+    return lisptype.T
+
+
+#: Attribute `write_text` stamps on a stream to record whether its last write
+#: ended a line. FRESH-LINE needs to know the column, and neither fclpy's
+#: `Stream` nor a Python file object reports one; tracking it at the single
+#: point where text is written is cheaper and more accurate than trying to
+#: recover it afterwards, and it works for file streams too, not just the
+#: string streams whose buffer can be re-read.
+_AT_LINE_START = '_fclpy_at_line_start'
+
+
+def _at_line_start(target):
+    """True when `target`'s next character would begin a line.
+
+    A string output stream's buffer is authoritative and is preferred, since
+    text can reach it by paths other than `write_text`. Otherwise the flag
+    `write_text` recorded is used. A stream that has never been written to is at
+    the start of a line.
+    """
+    if target is None:
+        return False
+    from .streams import StringOutputStream
+    if isinstance(target, StringOutputStream):
+        text = target.peek_string()
+        return text == '' or text.endswith('\n')
+    return getattr(target, _AT_LINE_START, True)
 
 @_registry.cl_function('FINISH-OUTPUT')
 def finish_output(stream=None):
@@ -945,11 +812,7 @@ def _format_A_fallback(val):
     """CLHS 22.3.2: if the argument to `~D`/`~X`/`~O`/`~B`/`~R` is not an
     integer, it is printed as if by `~A` -- a fresh, unmodified `~A`, not
     this directive's own colon/at flags reinterpreted."""
-    if val is None or val is lisptype.NIL:
-        return "NIL"
-    if isinstance(val, str):
-        return val
-    return lisptype.lisp_str(val)
+    return _printer.princ_to_string(val)
 
 
 def _format_integer_directive(val, radix, params, colon_flag, at_flag):
@@ -1089,11 +952,15 @@ def _roman_numeral(n, table):
     return ''.join(parts)
 
 
-def _format_directive(control_string, cursor, pos):
+def _format_directive(control_string, cursor, pos, emitted=None):
     """Process a single format directive starting at pos (after ~).
 
     Consumes arguments from `cursor` (a _FormatCursor), mutating it in
     place. Returns (output_string, new_pos).
+
+    `emitted` is the list of output chunks produced so far in this control
+    string, which `~&` needs in order to know whether it is already at the
+    start of a line.
     """
     if pos >= len(control_string):
         return ('~', pos)
@@ -1156,27 +1023,22 @@ def _format_directive(control_string, cursor, pos):
 
     # Process directives
     if directive == 'A':
-        # ~A - Aesthetic (princ-style, no escapes)
+        # ~A - Aesthetic: print as PRINC does, i.e. with *PRINT-ESCAPE* nil.
+        # `~:A` prints NIL as "()" rather than "NIL" (CLHS 22.3.4.1).
         val = get_arg()
-        if val is None:
-            result = "()" if colon_flag else "NIL"
-        elif val is lisptype.NIL:
-            result = "()" if colon_flag else "NIL"
-        elif isinstance(val, str):
-            result = val
+        if colon_flag and (val is None or val is lisptype.NIL):
+            result = "()"
         else:
-            result = lisptype.lisp_str(val)
+            result = _printer.princ_to_string(val)
         return (_format_pad(result, params, at_flag), pos)
 
     elif directive == 'S':
-        # ~S - Standard (prin1-style, with escapes)
+        # ~S - Standard: print as PRIN1 does, i.e. with *PRINT-ESCAPE* true.
         val = get_arg()
-        if val is None:
-            result = "()" if colon_flag else "NIL"
-        elif val is lisptype.NIL:
-            result = "()" if colon_flag else "NIL"
+        if colon_flag and (val is None or val is lisptype.NIL):
+            result = "()"
         else:
-            result = lisptype.lisp_repr(val)
+            result = _printer.prin1_to_string(val)
         return (_format_pad(result, params, at_flag), pos)
 
 
@@ -1292,10 +1154,19 @@ def _format_directive(control_string, cursor, pos):
         return ('\n' * count, pos)
 
     elif directive == '&':
-        # ~& - Fresh line (newline only if not at start of line)
-        count = params[0] if params and params[0] else 1
-        # We don't track column, so just emit newline
-        return ('\n' * count, pos)
+        # ~n& - a fresh line, then n-1 further newlines (CLHS 22.3.1.3).
+        #
+        # It used to emit n newlines unconditionally, with the comment "we
+        # don't track column". The column within this control string is exactly
+        # what has been emitted so far, so `~&` is a fresh line for the same
+        # reason FRESH-LINE is: emit one only if the output does not already
+        # end at a line boundary. `~0&` emits nothing at all.
+        count = 1 if not params or params[0] is None else params[0]
+        if count <= 0:
+            return ('', pos)
+        preceding = ''.join(emitted) if emitted else ''
+        needs_fresh_line = preceding != '' and not preceding.endswith('\n')
+        return ('\n' * (count - 1 + int(needs_fresh_line)), pos)
 
     elif directive == '~':
         # ~~ - Literal tilde
@@ -1797,7 +1668,8 @@ def _format_process_cursor(control_string, cursor):
         if c == '~':
             pos += 1
             try:
-                output, pos = _format_directive(control_string, cursor, pos)
+                output, pos = _format_directive(control_string, cursor, pos,
+                                               emitted=result)
             except _FormatEscape as esc:
                 # `~^` abandons the rest of *this* control string but keeps
                 # what it already produced (CLHS 22.3.9.2). Each frame
@@ -1895,36 +1767,18 @@ def format_fn(destination, control_string, *args):
     formatted = _format_process(control_string, args)
 
     if destination is True or destination is lisptype.T:
-        print(formatted, end='')
+        # FORMAT's `destination` is not a plain stream designator: `t` means
+        # `*STANDARD-OUTPUT*` here (CLHS 22.3.1), whereas for a stream
+        # designator `t` means `*TERMINAL-IO*` (CLHS 21.1.3). Printing to the
+        # process's stdout instead meant `(format t ...)` escaped any
+        # `(with-output-to-string (*standard-output*) ...)` around it.
+        write_text(formatted, lisptype.NIL)
         return lisptype.NIL
     elif destination is None or destination is lisptype.NIL:
         return formatted
     else:
-        _write_stream_output(destination, formatted)
+        write_text(formatted, destination)
         return lisptype.NIL
-
-
-def _write_stream_output(destination, text):
-    """Write `text` to a FORMAT/FORMATTER stream destination.
-
-    Mirrors the isinstance(stream, Stream) -> write_sequence(...) convention
-    PRIN1/PRINC/TERPRI already use (see above) -- fclpy's Stream classes
-    expose write_sequence/write_char, not Python's file-like .write(), so
-    checking hasattr(destination, 'write') is never true for them and used
-    to silently fall through to printing at stdout regardless of which
-    stream was actually requested.
-    """
-    if destination is True or destination is lisptype.T:
-        print(text, end='')
-        return
-    from .streams import Stream
-    if isinstance(destination, Stream):
-        destination.write_sequence(text)
-        return
-    try:
-        destination.write(text)
-    except Exception:
-        print(text, end='')
 
 
 @_registry.cl_function('FORMATTER')
@@ -1941,7 +1795,7 @@ def formatter(control_string):
     def format_func(stream, *args):
         # Use internal processor to obtain remaining-args index (tail)
         formatted, consumed = _format_process_with_tail(control_string_str, args)
-        _write_stream_output(stream, formatted)
+        write_text(formatted, stream)
         # Return the tail (remaining args) as a proper Lisp list -- a bare
         # Python list here is a second, incompatible list representation
         # (finding M), so `(equal (funcall fn stream ... 'a) '(a))` was

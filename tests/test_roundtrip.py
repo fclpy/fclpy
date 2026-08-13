@@ -6,12 +6,19 @@ equivalent results (at least semantically, if not syntactically identical).
 """
 
 import pytest
+from fclpy import lispenv
 from fclpy.reader import read, read_all
 from fclpy.printer import prin1, princ, print_object
 from fclpy.lisptype import (
     LispSymbol, lispKeyword, Character, lispCons, NIL,
     COMMON_LISP_USER_PACKAGE, lispNull
 )
+
+
+@pytest.fixture(autouse=True)
+def standard_packages():
+    """Bootstrap the standard environment -- see test_printer.py's copy."""
+    lispenv.setup_standard_environment()
 
 
 class RoundTripTestCase:

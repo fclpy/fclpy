@@ -8,37 +8,16 @@ from . import registry as _registry
 
 
 # === Standard Stream Variables ===
-# These provide Lisp-level access to standard I/O streams
-
-@_registry.cl_function('*STANDARD-INPUT*')
-def get_standard_input():
-    """Get the value of *STANDARD-INPUT*."""
-    return sys.stdin
-
-
-@_registry.cl_function('*STANDARD-OUTPUT*')
-def get_standard_output():
-    """Get the value of *STANDARD-OUTPUT*."""
-    return sys.stdout
-
-
-@_registry.cl_function('*ERROR-OUTPUT*')
-def get_error_output():
-    """Get the value of *ERROR-OUTPUT*."""
-    return sys.stderr
-
-
-@_registry.cl_function('*TERMINAL-IO*')
-def get_terminal_io():
-    """Get the value of *TERMINAL-IO* (combined terminal stream)."""
-    # Return stdout as a simple approximation
-    return sys.stdout
-
-
-@_registry.cl_function('*QUERY-IO*')
-def get_query_io():
-    """Get the value of *QUERY-IO* (query/response stream)."""
-    return sys.stdout
+#
+# The standard streams are *variables*, bound to `Stream` objects in
+# `lispenv.setup_standard_environment`. There used to be
+# `@cl_function('*STANDARD-OUTPUT*')`-style accessors here returning raw
+# `sys.stdout`; they are gone for the same two reasons the printer control
+# variable accessors are. Registering a function under a variable's name is
+# what the evaluator falls back to when a symbol has no value, so the accessor
+# turns "this variable is unbound" into "this variable's value is a Python
+# function"; and returning `sys.stdout` puts a Python file object into Lisp as
+# a stream, which every stream operation then has to special-case.
 
 
 class Stream:

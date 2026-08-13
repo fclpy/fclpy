@@ -190,7 +190,29 @@ def setup_standard_environment():
     if state.current_environment.find_variable(terminal_io_sym) is None:
         state.current_environment.add_variable(terminal_io_sym, stdout_stream)
         
-    # Printer/reader control variables
+    # The printer control variables (CLHS Figure 22-1), with their ANSI
+    # initial values. These must be real variables with real values: the
+    # printer reads them from this environment, and until they were bound here
+    # a reference to `*print-base*` fell through the evaluator's variable
+    # lookup into the *function* registry and evaluated to a Python function
+    # object. `printer.PRINTER_VARIABLES` is the single table of defaults so
+    # the bootstrap and the printer cannot disagree about them.
+    from fclpy.printer import PRINTER_VARIABLES
+    for print_var_name, print_var_default in PRINTER_VARIABLES.items():
+        print_var_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol(print_var_name)
+        fclpy.lisptype.COMMON_LISP_PACKAGE.export_symbol(print_var_sym)
+        if state.current_environment.find_variable(print_var_sym) is None:
+            if print_var_default is True:
+                initial = fclpy.lisptype.T
+            elif print_var_default is False or print_var_default is None:
+                initial = fclpy.lisptype.NIL
+            elif print_var_name == '*PRINT-CASE*':
+                initial = fclpy.lisptype.intern_keyword(print_var_default)
+            else:
+                initial = print_var_default
+            state.current_environment.add_variable(print_var_sym, initial)
+
+    # Reader/loader control variables
     # *LOAD-VERBOSE* - whether LOAD should print messages
     load_verbose_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*LOAD-VERBOSE*')
     if state.current_environment.find_variable(load_verbose_sym) is None:
