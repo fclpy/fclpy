@@ -14,11 +14,37 @@ from fclpy.lisptype_basic import (
 
 class Environment(lispT):
     """An execution environment for symbol bindings.
-    
+
     Common Lisp environments contain bindings for variables and functions.
     This implementation supports lexical variable bindings and function definitions.
+
+    **The global environment holds no lexical variable bindings.** CLHS 3.1.1.1:
+    the global environment's variable bindings are the dynamic ones, and Common
+    Lisp has no such thing as a global lexical variable. So for the parentless
+    environment at the root of every chain, a variable's one and only home is
+    the symbol's value cell -- the same cell ``SYMBOL-VALUE``, ``BOUNDP``,
+    ``SET``, ``MAKUNBOUND``, ``PROGV`` and every dynamic binding read and write.
+
+    It used to have its own binding list as well, and that second home is what
+    plan.md's 2026-08-15 changelog entry describes as "a special variable has
+    two homes": ``DEFVAR``/``DEFPARAMETER`` and the bootstrap wrote the global
+    *lexical* binding, `SETQ` maintained it, and every dynamic-binding operator
+    wrote the value cell -- so ``(defvar *x* 1)`` left ``(boundp '*x*)`` NIL and
+    ``(let ((*x* 2)) *x*)`` read 1, because the global lexical binding shadowed
+    the dynamic binding the binding form had correctly established. Deleting
+    the home Common Lisp does not have is what reconciles them: a dynamic
+    binding now writes the only cell a reference can reach.
     """
-    
+
+    @property
+    def is_global(self):
+        """True for the environment at the root of the chain.
+
+        Its variables live in their symbols' value cells rather than in a
+        binding list of its own -- see the class docstring.
+        """
+        return self.parent is None
+
     def __init__(self, parent=None):
         """Initialize an Environment.
         
@@ -58,7 +84,13 @@ class Environment(lispT):
         """
         if not isinstance(symbol, LispSymbol):
             raise TypeError(f"bind: {symbol} is not a symbol")
-        
+
+        if self.is_global:
+            # The global environment has no lexical variables; its one home
+            # for a variable is the symbol's value cell.
+            symbol.value = value
+            return value
+
         # Create new binding that shadows previous bindings
         self.bindings = Binding(symbol, value, self.bindings, env=self)
         # Keep legacy name-based variable lookup fast.
@@ -79,7 +111,10 @@ class Environment(lispT):
         """
         if not isinstance(symbol, LispSymbol):
             raise TypeError(f"lookup: {symbol} is not a symbol")
-        
+
+        if self.is_global:
+            return symbol.value
+
         # Check local bindings
         current_binding = self.bindings
         while current_binding is not None:
@@ -198,13 +233,25 @@ class Environment(lispT):
         if not isinstance(symbol, LispSymbol):
             raise TypeError(f"add_variable: {symbol} is not a symbol, has type {type(symbol)}")
 
+        if self.is_global:
+            # No lexical binding list here, and no `_variable_map` entry
+            # either -- a cached copy of a value that lives in the symbol
+            # would be the two-homes defect over again, one indirection down.
+            symbol.value = value
+            return
+
         self.variable_bindings = Binding(symbol, value, self.variable_bindings, self)
         self._variable_map[symbol.name] = value
-        
+
 
     
     def has_variable(self, sym: LispSymbol):
         """Check if a variable binding exists (distinguishes unbound from bound-to-None)."""
+        if self.is_global:
+            # Python None is the "unbound" marker in a value cell; NIL is a
+            # distinct object, so a variable bound to NIL reads as bound.
+            return getattr(sym, 'value', None) is not None
+
         # Fast-path: name-based map populated by bind/add_variable
         try:
             if sym.name in self._variable_map:
@@ -233,6 +280,9 @@ class Environment(lispT):
     
     def find_variable(self, sym):
         """Legacy: find a variable by symbol name."""
+        if self.is_global:
+            return getattr(sym, 'value', None)
+
         # Prefer walking the variable_bindings linked list to find the
         # most-recent binding value. Only use the name-based cache as a
         # fallback to avoid returning stale cached values from a different
@@ -260,6 +310,14 @@ class Environment(lispT):
     
     def set_variable(self, sym, value):
         """Legacy: set a variable value."""
+        if self.is_global:
+            # SETQ of a name with no lexical binding assigns the value cell,
+            # which is where the global environment keeps its variables. This
+            # is also the end of the chain, so it is where every unshadowed
+            # assignment lands.
+            sym.value = value
+            return value
+
         b = self.variable_bindings
         while b is not None:
             if b.symbol.name == sym.name:

@@ -11,6 +11,30 @@ if state.current_environment is None:
 current_environment = state.current_environment
 
 
+# CLHS Figure 25-1, the standard variables. Every one of these is proclaimed
+# special, which is what makes a binding form bind it in the symbol's value
+# cell -- the one home a global variable has (see `Environment`) and the only
+# one the Python-side readers in printer.py / readtable.py / streams.py can
+# reach. This is the authoritative list rather than a record of which
+# variables the bootstrap below happens to give a value to: proclaiming a
+# variable special does not require it to be bound, so the two cannot drift.
+STANDARD_SPECIAL_VARIABLES = (
+    '*BREAK-ON-SIGNALS*', '*COMPILE-FILE-PATHNAME*', '*COMPILE-FILE-TRUENAME*',
+    '*COMPILE-PRINT*', '*COMPILE-VERBOSE*', '*DEBUG-IO*', '*DEBUGGER-HOOK*',
+    '*DEFAULT-PATHNAME-DEFAULTS*', '*ERROR-OUTPUT*', '*FEATURES*',
+    '*GENSYM-COUNTER*', '*LOAD-PATHNAME*', '*LOAD-PRINT*', '*LOAD-TRUENAME*',
+    '*LOAD-VERBOSE*', '*MACROEXPAND-HOOK*', '*MODULES*', '*PACKAGE*',
+    '*PRINT-ARRAY*', '*PRINT-BASE*', '*PRINT-CASE*', '*PRINT-CIRCLE*',
+    '*PRINT-ESCAPE*', '*PRINT-GENSYM*', '*PRINT-LENGTH*', '*PRINT-LEVEL*',
+    '*PRINT-LINES*', '*PRINT-MISER-WIDTH*', '*PRINT-PPRINT-DISPATCH*',
+    '*PRINT-PRETTY*', '*PRINT-RADIX*', '*PRINT-READABLY*',
+    '*PRINT-RIGHT-MARGIN*', '*QUERY-IO*', '*RANDOM-STATE*', '*READ-BASE*',
+    '*READ-DEFAULT-FLOAT-FORMAT*', '*READ-EVAL*', '*READ-SUPPRESS*',
+    '*READTABLE*', '*STANDARD-INPUT*', '*STANDARD-OUTPUT*', '*TERMINAL-IO*',
+    '*TRACE-OUTPUT*',
+)
+
+
 def setup_standard_environment():
     """Initialize or return the standard Lisp environment.
 
@@ -42,6 +66,20 @@ def setup_standard_environment():
     for _cl_name in CL_SYMBOL_NAMES:
         _cl_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol(_cl_name)
         fclpy.lisptype.COMMON_LISP_PACKAGE.export_symbol(_cl_sym)
+
+    # The standard variables are *special*, and saying so is what makes a
+    # binding form bind them dynamically. Without the proclamation,
+    # `(let ((*print-base* 2)) ...)` puts a lexical binding in the LET's own
+    # environment, which neither SYMBOL-VALUE nor a function called from the
+    # body can see -- the printer, the reader and the stream functions all read
+    # these from Python, through the global environment, and would go on seeing
+    # the old value. A proclamation needs no value, so this is independent of
+    # the initial values assigned further down.
+    from fclpy.lispfunc.binding import proclaim_special
+    for _special_name in STANDARD_SPECIAL_VARIABLES:
+        proclaim_special(
+            fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol(_special_name),
+            state.current_environment)
 
     import fclpy.lispfunc as lispfunc  # local import to avoid circulars
     try:
@@ -148,48 +186,39 @@ def setup_standard_environment():
                         fclpy.lisptype.lispCons(ansi_cl_feature, fclpy.lisptype.NIL)))
         state.current_environment.add_variable(features_sym, features_list)
         
-    # Standard I/O stream variables
+    # Standard I/O stream variables.
+    #
+    # These are (re)initialized unconditionally, because reaching this point
+    # *is* start-up: the early return above means a call that finds the
+    # environment already built never gets here. The streams wrap Python's
+    # `sys.stdin`/`stdout`/`stderr` objects as they are *now*, and a caller
+    # that asks for a fresh environment (`state.functions_loaded = False`)
+    # is asking for streams onto the current ones -- with an `is None` guard
+    # they would instead keep wrapping whatever `sys.stdout` was the first
+    # time this ran, since a variable's value now lives in the symbol's value
+    # cell and outlives any one environment object.
+    #
+    # It also removes a latent `UnboundLocalError`: `stdout_stream` used to be
+    # created inside `*STANDARD-OUTPUT*`'s guard, yet the four variables below
+    # it referenced that name whether or not the guard had run.
     import sys
     from fclpy.lispfunc.streams import Stream
-        
-    # *STANDARD-INPUT* - The stream from which input is read by default
-    standard_input_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*STANDARD-INPUT*')
-    if state.current_environment.find_variable(standard_input_sym) is None:
-        stdin_stream = Stream('*STANDARD-INPUT*', sys.stdin, 'input')
-        state.current_environment.add_variable(standard_input_sym, stdin_stream)
-        
-    # *STANDARD-OUTPUT* - The stream to which output is sent by default
-    standard_output_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*STANDARD-OUTPUT*')
-    if state.current_environment.find_variable(standard_output_sym) is None:
-        stdout_stream = Stream('*STANDARD-OUTPUT*', sys.stdout, 'output')
-        state.current_environment.add_variable(standard_output_sym, stdout_stream)
-        
-    # *ERROR-OUTPUT* - The stream for error output
-    error_output_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*ERROR-OUTPUT*')
-    if state.current_environment.find_variable(error_output_sym) is None:
-        stderr_stream = Stream('*ERROR-OUTPUT*', sys.stderr, 'output')
-        state.current_environment.add_variable(error_output_sym, stderr_stream)
-        
-    # *TRACE-OUTPUT* - The stream for trace output
-    trace_output_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*TRACE-OUTPUT*')
-    if state.current_environment.find_variable(trace_output_sym) is None:
-        state.current_environment.add_variable(trace_output_sym, stdout_stream)
-        
-    # *DEBUG-IO* - The stream for interactive debugging
-    debug_io_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*DEBUG-IO*')
-    if state.current_environment.find_variable(debug_io_sym) is None:
-        state.current_environment.add_variable(debug_io_sym, stdout_stream)
-        
-    # *QUERY-IO* - The stream for user queries
-    query_io_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*QUERY-IO*')
-    if state.current_environment.find_variable(query_io_sym) is None:
-        state.current_environment.add_variable(query_io_sym, stdout_stream)
-        
-    # *TERMINAL-IO* - The stream connected to the user's terminal
-    terminal_io_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*TERMINAL-IO*')
-    if state.current_environment.find_variable(terminal_io_sym) is None:
-        state.current_environment.add_variable(terminal_io_sym, stdout_stream)
-        
+
+    stdin_stream = Stream('*STANDARD-INPUT*', sys.stdin, 'input')
+    stdout_stream = Stream('*STANDARD-OUTPUT*', sys.stdout, 'output')
+    stderr_stream = Stream('*ERROR-OUTPUT*', sys.stderr, 'output')
+    for stream_var, stream in (
+            ('*STANDARD-INPUT*', stdin_stream),
+            ('*STANDARD-OUTPUT*', stdout_stream),
+            ('*ERROR-OUTPUT*', stderr_stream),
+            ('*TRACE-OUTPUT*', stdout_stream),
+            ('*DEBUG-IO*', stdout_stream),
+            ('*QUERY-IO*', stdout_stream),
+            ('*TERMINAL-IO*', stdout_stream)):
+        state.current_environment.add_variable(
+            fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol(stream_var), stream)
+
+
     # The printer control variables (CLHS Figure 22-1), with their ANSI
     # initial values. These must be real variables with real values: the
     # printer reads them from this environment, and until they were bound here

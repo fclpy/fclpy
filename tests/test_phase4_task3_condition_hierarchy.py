@@ -214,15 +214,38 @@ class TestConditionWithEnvironment:
         return setup_standard_environment()
     
     def test_condition_in_lisp_env(self, env):
-        """Test that Python condition objects can be used in Lisp environment."""
+        """Test that Python condition objects can be used in Lisp environment.
+
+        The symbol is *interned*, and the same object is used to store and to
+        retrieve. This used to write with one fresh `LispSymbol('*ERROR*')` and
+        read back with a second one, which worked only because the global
+        environment's bindings were keyed by symbol *name*. They are now the
+        symbol's own value cell, so two uninterned symbols that merely share a
+        name are two different variables -- which is what CLHS requires:
+        `(eq (make-symbol "X") (make-symbol "X"))` is false, and each has its
+        own value cell.
+        """
+        import fclpy.lisptype as lisptype
+
         # Create a condition and store it in environment
         err = TypeError(datum=42, expected_type='STRING')
-        env.add_variable(__import__('fclpy.lisptype', fromlist=['LispSymbol']).LispSymbol('*ERROR*'), err)
-        
+        error_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*ERROR*')
+        env.add_variable(error_sym, err)
+
         # Retrieve it
-        retrieved = env.find_variable(__import__('fclpy.lisptype', fromlist=['LispSymbol']).LispSymbol('*ERROR*'))
+        retrieved = env.find_variable(error_sym)
         assert retrieved == err
         assert isinstance(retrieved, TypeError)
+
+    def test_two_uninterned_symbols_of_one_name_are_two_variables(self, env):
+        """The property the rewrite above depends on, asserted directly."""
+        import fclpy.lisptype as lisptype
+
+        first = lisptype.LispSymbol('*NOT-INTERNED*')
+        second = lisptype.LispSymbol('*NOT-INTERNED*')
+        env.add_variable(first, 1)
+        assert env.find_variable(first) == 1
+        assert env.find_variable(second) is None
 
 
 class TestMultipleConditionSlots:

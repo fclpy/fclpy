@@ -696,7 +696,7 @@ Milestones now describe *mechanisms*, and map onto the clusters above.
 |---|---|---|---|
 | **M0** | Trustworthy measurement | **DONE** — `COMPLETENESS: OK`, 22036/22036 accounted. Remaining: `expected-failures/` wiring | — |
 | **M1** | Symbol, NIL, package identity | canonical CL symbol table **done**; package model outstanding | C10, C18, C19 |
-| **M2** | Environment model | **binding forms done** — one `BindingFrame` decides lexical vs. dynamic for LET, LET* and all eight iteration forms. Outstanding: the global value cell vs. the global lexical binding ([§5](#5-known-temporary-deviations)), `eval`'s lexical-before-dynamic lookup order, `is_truthy(False)` | C1, X2 |
+| **M2** | Environment model | **binding forms done**, and **the global environment done (2026-08-15)** — one `BindingFrame` decides lexical vs. dynamic for LET, LET* and all eight iteration forms, and a global variable has one home, the symbol's value cell. Outstanding: `is_truthy(False)`, and the lambda-list binders, which are M3's | C1, X2 |
 | **M3** | One lambda-list engine | not started — six copy-pasted binders | C17, X2 |
 | **M4** | A real macro system | not started — ~90 standard macros are special forms. **Most ecosystem-critical** | — |
 | **M5** | `GET-SETF-EXPANSION` / places | not started — deletes ~600 lines of ladder code | C16 |
@@ -745,17 +745,22 @@ Milestones now describe *mechanisms*, and map onto the clusters above.
    an iteration form binds its own variable instead of assigning to an
    enclosing one. `iteration` **410 → 423**; the measurement gate it was
    blocking is gone. Details in the [Changelog](#changelog).
-8. **M2's remaining slice — the global value cell.** Now the top item, and it
-   is the same shape as the one just closed: a special variable has *two*
-   homes, a lexical binding in the global environment written by
-   `DEFVAR`/`SETQ` and the value cell read by `SYMBOL-VALUE`/`BOUNDP`/`PROGV`
-   and every dynamic binding, and `eval` consults the lexical chain first — so
-   `(let ((*x* 2)) *x*)` reads the old value ([§5](#5-known-temporary-deviations)).
-   Consolidating the binder is what made this visible and is what isolates it:
-   the dynamic bindings are now provably correct through `SYMBOL-VALUE`, so
-   every remaining wrong answer here belongs to the global lexical binding.
+8. ~~**M2's remaining slice — the global value cell.**~~ **Done 2026-08-15.**
+   A global variable has one home, the symbol's value cell, because the global
+   environment no longer has the lexical bindings Common Lisp does not give it
+   (CLHS 3.1.1.1). **The predicted fix was wrong in an instructive way:** this
+   item said it "has to move `SETQ` and the lookup order with it", and it moved
+   neither. Delete the home that should not exist and `SETQ` is already right
+   (its walk ends at the value cell) and "lexical chain, then value cell" is
+   already right (the value cell *is* the end of the chain). +23 with 0
+   regressions, 20 of them untargeted. Details in the [Changelog](#changelog).
 9. **Re-measure, then re-derive this list.** The residual distribution has
-   already shifted enough that ranking further ahead is guesswork.
+   already shifted enough that ranking further ahead is guesswork. On the
+   current evidence the next-largest unblocked mechanism is
+   [C2](#c2-format--formatter--largest-cluster-in-the-suite)'s remaining
+   `FORMAT` directives (`~E`, `~F`, `~R`, `~T`), with M3's lambda-list engine
+   close behind now that it owns the last binding form that does not go
+   through `BindingFrame` ([§5](#5-known-temporary-deviations)).
 
 **A note on M2.** It remains the architectural spine, and C1/X2 both bottom out
 in it. If fixing C1 and X2 turns into repeated local patches to the environment,
@@ -792,8 +797,8 @@ Anything knowingly non-ANSI, with the milestone that removes it. Empty means
 | `LispString` vs. Python `str` split | two string representations | M9 (blocks EQUAL/EQUALP) |
 | Name-based block/tag/catch matching | no block identity objects | M7 |
 | `is_truthy(False)` is `True` | unaudited boundary | M2 |
-| **A special variable has two homes that never reconcile.** `DEFVAR`/`DEFPARAMETER` call `global_env.add_variable`, creating a *lexical* binding in the global environment, and never write the symbol's value cell; `SETQ` maintains that lexical binding. `SYMBOL-VALUE`/`BOUNDP`/`SET`/`PROGV` and every dynamic binding use the value cell, and `eval`'s symbol path checks the lexical chain **first**. So `(defvar *x* 1)` leaves `(boundp '*x*)` NIL and `(symbol-value '*x*)` unbound, while `*x*` reads 1; and `(let ((*x* 2)) *x*)` reads **1**, because the global lexical binding shadows the dynamic one the binding form correctly established | found while consolidating the binder, which is what made it visible: the frame's dynamic bindings are correct and provably reach `SYMBOL-VALUE`, so the remaining wrong answer is entirely the global lexical binding's. Fixing it moves `SETQ` and `eval`'s lookup order too, so it wants its own measured change rather than a rider. Pinned by 4 `xfail`s in `tests/test_iteration_variable_binding.py::TestTheGlobalValueCellDefect` | **M2 — next task** |
-| A variable bound *dynamically* by a form is invisible to that form's body if an **enclosing lexical** binding of the same name exists — `eval` checks the lexical chain before the value cell | no ANSI test in `iteration/` needs it: DOTIMES.18/.18A and DO.14/DO*.14 all have the enclosing binding declared special too, so there is no lexical shadow. The general fix is the same lookup-order change the row above needs | M2 |
+| A variable bound *dynamically* by a form is invisible to that form's body if an **enclosing lexical** binding of the same name exists — `eval` checks the lexical chain before the value cell | narrowed but not gone. It no longer applies to a *globally special* variable, which has no lexical binding anywhere to shadow it (2026-08-15), nor to a local `(declare (special x))`, which redirects through `%SPECIAL-REF`. What remains is a lexical binding shadowing a `PROGV` of the same undeclared name, which no ANSI test in the measured groups needs | M2 |
+| A function's lambda list binds a *proclaimed special* parameter lexically | the six copy-pasted binders do not go through `BindingFrame`, so `(defvar *x* 1) (defun f (*x*) ...)` binds `*x*` lexically instead of dynamically. Consolidating them onto the shared frame is M3's whole point, and doing it per-binder now would be the seventh mechanism §4 warns about | M3 |
 
 ---
 
@@ -930,6 +935,83 @@ rather than discovering these one crash at a time.
 Condensed from the previous chronological plan. Each entry is a *mechanism*
 landed, not a test count.
 
+- **2026-08-15** — **M2: a global variable has one home.** The global
+  environment no longer has lexical variable bindings, because Common Lisp
+  does not have them: CLHS 3.1.1.1 makes the global environment's variable
+  bindings the *dynamic* ones. `Environment.is_global` is true for the
+  parentless environment at the root of every chain, and its `add_variable`/
+  `find_variable`/`has_variable`/`set_variable` read and write the symbol's
+  value cell — the cell `SYMBOL-VALUE`/`BOUNDP`/`SET`/`MAKUNBOUND`/`PROGV` and
+  every dynamic binding already used. So `(defvar *x* 1)` now leaves
+  `(boundp '*x*)` T, `(let ((*x* 2)) *x*)` reads **2**, and `(set '*x* 4)` is
+  visible to a plain reference.
+  **The predicted fix was wrong, and how it was wrong is the point.** [§4](#recommended-order)
+  item 8 said the fix "has to move `SETQ` and `eval`'s lookup order with it".
+  It moved neither, and neither needed moving: once the global lexical binding
+  is gone, `SETQ`'s chain walk already ends at the value cell, and "lexical
+  chain, then value cell" already resolves to the innermost binding **because
+  the value cell is the end of the chain**. The defect was never that the
+  lookup order was wrong; it was that there was a home for it to find first.
+  Two homes → one, by deleting the one that should not exist.
+  Landed with it: `binding.proclaim_special` is the single writer of the
+  proclamation table `is_proclaimed_special` reads, replacing three inline
+  copies in `eval_defvar`, `eval_defparameter` and `_store_special_declaration`;
+  the **standard variables are proclaimed special at bootstrap**
+  (`lispenv.STANDARD_SPECIAL_VARIABLES`, CLHS Figure 25-1), without which
+  `(let ((*print-base* 2)) ...)` binds lexically and the printer — which reads
+  the variable from Python through the *global* environment — never sees it;
+  `(defvar *x*)` with no initial-value form no longer binds the variable to NIL,
+  per CLHS, and `DEFVAR`'s "already bound?" test asks the value cell rather than
+  whatever lexical binding surrounds the form; and the standard stream
+  variables are re-initialized on a full bootstrap rather than guarded by
+  `if find_variable(...) is None`, which also removes a latent
+  `UnboundLocalError` where four of them referenced a `stdout_stream` created
+  inside another's guard.
+  **Measured, before → after on the same targets, same runner both sides
+  (each `before` run in a stash of the same working tree, so like-for-like):**
+  | target | before | after |
+  |---|---|---|
+  | `data-and-control-flow` | 1023 of 1428 | **1037** |
+  | `packages` | 140 of 500 | **147** |
+  | `eval-and-compile` | 234 of 318 | **236** |
+  | `iteration`, `symbols`, `conditions`, `cons`, `environment`, `hash-tables`, `types-and-classes` | — | unchanged, 0 regressions |
+  **+23, 0 regressions, and only 3 of the 23 were targeted** — `DEFVAR.3`,
+  `DEFPARAMETER.3`, `DEFCONSTANT.1`. The other 20 moved because the mechanism
+  moved: `LET.3`, `LET*.3`, `PROGV.6A`, `SETQ.5`, `PSETQ.8`/`.9`, `SETF.5`,
+  `MULTIPLE-VALUE-BIND.7`, `FLET.40`, `FLET.69`, `LAMBDA-LIST-KEYWORDS.1`,
+  `DEFINE-COMPILER-MACRO.7`/`.8`, and **all seven `IN-PACKAGE.7`–`.13`**, which
+  move because `*PACKAGE*` is now genuinely special rather than a global
+  lexical binding with a Python-side mirror. `pytest` 1518 passed (from 1494),
+  same 1 pre-existing unrelated failure (`test_all_expected_functions_are_registered`);
+  the 4 `xfail`s in `TestTheGlobalValueCellDefect` are now 12 passing tests in
+  `TestAGlobalVariableHasOneHome`, plus a new `TestTheStandardVariablesAreSpecial`.
+  **Two unit tests asserted the defect and were corrected with citations**
+  (§7: when `pytest` and `ansi-test` disagree, the unit test is wrong).
+  `TestLetStar` probed "LET* left nothing behind" with `(boundp '*bv*)` **=> NIL**,
+  which only read NIL *because* `DEFVAR` was broken; it now asserts the value is
+  restored to the DEFVAR value. `test_condition_in_lisp_env` stored with one
+  freshly built `LispSymbol('*ERROR*')` and read back with a *second* one,
+  which worked only because global bindings were keyed by symbol **name** —
+  they are the symbol's own value cell now, so two uninterned symbols sharing a
+  name are two variables, as CLHS requires.
+  **Fixed en route, in the measurement instrument itself:** `scripts/run_ansi.py`
+  never established `(in-package :cl-test)`. `gclload2.lsp` — the file the
+  targeted runner stands in for — opens with it, and `gclload1.lsp`'s own
+  in-package does not carry over because `LOAD` binds `*PACKAGE*` for the extent
+  of a file (CLHS 24.1), just as in a conforming Lisp. So every aux preamble was
+  read in `CL-USER`, and `auxiliary/types-aux.lsp`'s `*subtype-table*` became a
+  *different symbol* from the `CL-TEST::*SUBTYPE-TABLE*` that `ansi-aux.lsp`
+  binds. The old name-keyed global environment had been silently conflating the
+  two; identity-keyed value cells surfaced it as TYPES.9/TYPES.9A failing, which
+  is how it was found. **A targeted run now reproduces the full-suite package
+  context it is supposed to**, and TYPES.9/.9A pass for the right reason.
+  **Discovered, diagnosed and deliberately not fixed here:** a lambda list binds
+  a *proclaimed special* parameter lexically — `(defvar *sv* 1)` then
+  `(defun f (*sv*) (g))` leaves `g` seeing 1, not the argument. Verified
+  directly. The six copy-pasted binders are exactly what M3 exists to
+  consolidate onto `BindingFrame`, and repairing them one at a time here is the
+  "seventh incompatible mechanism" [§4](#recommended-order) warns about. See
+  [§5](#5-known-temporary-deviations).
 - **2026-08-14 (b)** — **M2: one binder decides lexical vs. dynamic.**
   `fclpy/lispfunc/binding.py`'s `BindingFrame` is now the only place that
   answers "is this variable special here", and LET, LET* and all eight

@@ -241,15 +241,15 @@ class TestLetStar:
     def test_a_special_binding_is_dynamic_and_scoped(self):
         assert evs("(progn (defvar *bv* 1) (let* ((*bv* 2)) "
                    "(symbol-value '*bv*)))") == '2'
-        # ...and is gone again afterwards, rather than left in the global
-        # environment as a lexical binding of 2.
+        # ...and the DEFVAR value is back afterwards, rather than the LET*'s 2
+        # being left behind in the global environment.
         assert evs("(progn (defvar *bv* 1) (let* ((*bv* 2)) *bv*) "
-                   "(boundp '*bv*))") == 'NIL'
+                   "(list *bv* (symbol-value '*bv*)))") == '(1 1)'
 
     def test_a_special_binding_is_undone_on_a_non_local_exit(self):
         assert evs("(progn (defvar *bv3* 1) "
                    "(block out (let* ((*bv3* 2)) (return-from out nil))) "
-                   "(boundp '*bv3*))") == 'NIL'
+                   "(symbol-value '*bv3*))") == '1'
 
     def test_a_bare_symbol_binds_to_nil(self):
         """CLHS 3.1.2.1.1. LET* skipped bare symbols, leaving them unbound."""
@@ -289,44 +289,112 @@ class TestThePackageMirror:
         assert evs("(symbol-package 'some-fresh-symbol)") != evs('(find-package "KEYWORD")')
 
 
-class TestTheGlobalValueCellDefect:
-    """A special variable has two homes and they never reconcile. **Not this
-    change's defect** -- it is `eval_defvar`'s, and it is why the assertions
-    above have to go through BOUNDP rather than a plain reference.
+class TestAGlobalVariableHasOneHome:
+    """A special variable used to have two homes that never reconciled.
 
-    `DEFVAR`/`DEFPARAMETER` call `global_env.add_variable`, which creates a
-    *lexical* binding in the global environment, and never write the symbol's
-    value cell. `SETQ` then maintains that lexical binding. But `SYMBOL-VALUE`,
-    `BOUNDP`, `SET`, `PROGV` and every dynamic binding -- including the one the
-    shared `BindingFrame` establishes -- use the value cell, and
-    `eval`'s symbol path checks the lexical chain *first*. So a plain reference
-    to a defvar'd variable reads the global lexical binding and cannot see the
-    dynamic binding that shadows it.
+    `DEFVAR`/`DEFPARAMETER` and the bootstrap called `global_env.add_variable`,
+    which created a *lexical* binding in the global environment and never wrote
+    the symbol's value cell; `SETQ` maintained that lexical binding. But
+    `SYMBOL-VALUE`, `BOUNDP`, `SET`, `MAKUNBOUND`, `PROGV` and every dynamic
+    binding -- including the one `BindingFrame` establishes -- use the value
+    cell, and `eval`'s symbol path checks the lexical chain *first*. So
+    `(defvar *x* 1)` left `(boundp '*x*)` NIL, and `(let ((*x* 2)) *x*)` read
+    **1**, because the global lexical binding shadowed the dynamic binding the
+    binding form had correctly established.
 
-    Diagnosed while consolidating the binder; recorded in plan.md section 5 as
-    M2's, and left for its own measured change because the fix has to move
-    `SETQ` and the `eval` lookup order with it.
+    **The fix was to delete the home Common Lisp does not have.** CLHS 3.1.1.1:
+    the global environment's variable bindings are the dynamic ones, and there
+    is no such thing as a global lexical variable. `Environment.is_global` is
+    now true for the parentless environment at the root of every chain, and its
+    `add_variable`/`find_variable`/`has_variable`/`set_variable` read and write
+    the symbol's value cell. plan.md expected this to need `eval`'s lookup order
+    changed as well; it does not, and that is the point -- with no global
+    lexical binding to be consulted first, "lexical chain, then value cell"
+    already resolves a reference to the innermost binding, because the value
+    cell *is* the end of the chain.
     """
 
-    _TWO_HOMES = pytest.mark.xfail(strict=True, reason=(
-        "DEFVAR creates a lexical binding in the global environment instead of "
-        "writing the symbol's value cell, and eval checks the lexical chain "
-        "first -- so a plain reference cannot see a dynamic binding. M2; see "
-        "this class's docstring and plan.md section 5."))
-
-    @_TWO_HOMES
     def test_defvar_makes_the_variable_boundp(self):
         assert evs("(progn (defvar *th1* 1) (boundp '*th1*))") == 'T'
 
-    @_TWO_HOMES
     def test_defvar_is_visible_to_symbol_value(self):
         assert evs("(progn (defvar *th2* 1) (symbol-value '*th2*))") == '1'
 
-    @_TWO_HOMES
     def test_a_plain_reference_sees_a_dynamic_binding(self):
         assert evs("(progn (defvar *th3* 1) (let ((*th3* 2)) *th3*))") == '2'
 
-    @_TWO_HOMES
+    def test_a_reference_and_symbol_value_agree_inside_the_binding(self):
+        """The two homes disagreeing is the defect; agreeing is the fix."""
+        assert evs("(progn (defvar *th3b* 1) (let ((*th3b* 2)) "
+                   "(list *th3b* (symbol-value '*th3b*))))") == '(2 2)'
+
     def test_setq_of_a_global_special_reaches_the_value_cell(self):
         assert evs("(progn (defvar *th4* 1) (setq *th4* 3) "
                    "(symbol-value '*th4*))") == '3'
+
+    def test_set_is_visible_to_a_plain_reference(self):
+        """The same disagreement from the other side: SET writes the cell."""
+        assert evs("(progn (defvar *th5* 1) (set '*th5* 4) *th5*)") == '4'
+
+    def test_makunbound_unbinds_a_defvar(self):
+        assert evs("(progn (defvar *th6* 1) (makunbound '*th6*) "
+                   "(boundp '*th6*))") == 'NIL'
+
+    def test_defvar_with_no_value_form_does_not_bind(self):
+        """CLHS DEFVAR: with no initial-value form the value cell is left
+        undisturbed, so the variable is proclaimed special but stays unbound.
+        It used to be bound to NIL."""
+        assert evs("(progn (defvar *th7*) (boundp '*th7*))") == 'NIL'
+
+    def test_defvar_does_not_overwrite_an_existing_value(self):
+        assert evs("(progn (defvar *th8* 1) (defvar *th8* 2) *th8*)") == '1'
+
+    def test_defparameter_does_overwrite(self):
+        assert evs("(progn (defparameter *th9* 1) (defparameter *th9* 2) "
+                   "*th9*)") == '2'
+
+    def test_a_lexical_variable_is_still_lexical(self):
+        """The global environment losing its lexical bindings must not make
+        every variable dynamic."""
+        assert evs("(progn (let ((th10 1)) th10))") == '1'
+        assert evs("(let ((th11 1)) (setq th11 2) th11)") == '2'
+        assert evs("(progn (let ((th12 1)) th12) (boundp 'th12))") == 'NIL'
+
+    def test_a_proclaimed_variable_binds_dynamically_without_defvar(self):
+        """PROCLAIM/DECLAIM share DEFVAR's one proclamation table, so a
+        variable made special that way binds dynamically too."""
+        assert evs("(progn (declaim (special *th13*)) (setq *th13* 1) "
+                   "(let ((*th13* 2)) (symbol-value '*th13*)))") == '2'
+
+
+class TestTheStandardVariablesAreSpecial:
+    """The standard variables are proclaimed special at bootstrap.
+
+    Without the proclamation a binding form binds them lexically, in its own
+    environment -- where `SYMBOL-VALUE` cannot see them, and neither can the
+    Python-side readers in printer.py / readtable.py / streams.py, which reach
+    the global environment rather than the binding form's. The printer reading
+    a `*print-base*` that Lisp code has bound is the case that matters.
+    """
+
+    @pytest.mark.parametrize('name', ['*PRINT-BASE*', '*PRINT-CASE*',
+                                      '*PACKAGE*', '*READTABLE*',
+                                      '*STANDARD-OUTPUT*', '*GENSYM-COUNTER*'])
+    def test_binding_a_standard_variable_is_dynamic(self, name):
+        from fclpy.lispfunc.binding import is_proclaimed_special
+        import fclpy.state as state
+        import fclpy.lisptype as lisptype
+        symbol = lisptype.COMMON_LISP_PACKAGE.intern_symbol(name)
+        assert is_proclaimed_special(symbol, state.current_environment)
+
+    def test_the_printer_sees_a_bound_print_base(self):
+        """The symptom the proclamation exists for.
+
+        `prin1-to-string` runs in Python and reads `*PRINT-BASE*` through the
+        *global* environment, not through the LET's own. Bound lexically the
+        LET would be invisible to it and this would print "5"; bound
+        dynamically -- which is what the proclamation buys -- it reads 2.
+        (`evs` returns the value princ'd, so the string shows without quotes.)
+        """
+        assert evs("(let ((*print-base* 2)) (prin1-to-string 5))") == '101'
+        assert evs("(prin1-to-string 5)") == '5'

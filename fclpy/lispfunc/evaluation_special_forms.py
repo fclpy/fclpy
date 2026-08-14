@@ -9,6 +9,7 @@ DEFSTRUCT: Accept keywords as structure names (v2).
 import fclpy.lisptype as lisptype
 import fclpy.state as state
 from fclpy.lispfunc.core import car, cdr, _consp_internal, cons
+from .binding import proclaim_special, root_environment
 from . import registry as _registry
 import logging
 import sys
@@ -1878,68 +1879,63 @@ def _store_optimization_declaration(env, spec):
 
 
 def _store_special_declaration(env, spec):
-    """Helper to store SPECIAL declaration on environment."""
+    """Record a global ``(SPECIAL var ...)`` proclamation from DECLAIM/PROCLAIM."""
     # SPECIAL spec format: (SPECIAL var1 var2 ...)
     vars_to_declare = cdr(spec)  # Skip 'SPECIAL' keyword
-    
-    if not hasattr(env, '_special_variables'):
-        env._special_variables = {}
-    
+
     while _consp_internal(vars_to_declare):
         var = car(vars_to_declare)
         if isinstance(var, lisptype.LispSymbol):
-            env._special_variables[var.name] = True
+            proclaim_special(var, env)
         vars_to_declare = cdr(vars_to_declare)
 
 
 def eval_defvar(form, env):
     """Evaluate DEFVAR special form.
-    
-    (DEFVAR name)           - declares special variable, binds to NIL if unbound
-    (DEFVAR name value)     - declares and initializes if unbound
+
+    (DEFVAR name)           - proclaims special, leaves the value alone
+    (DEFVAR name value)     - proclaims special and initializes if unbound
     (DEFVAR name value doc) - with documentation string
-    
-    DEFVAR only sets the initial value if the variable is not already bound.
-    This is in contrast to DEFPARAMETER which always sets the value.
-    
-    DEFVAR defines variables in the GLOBAL environment, not the local one.
-    This is standard Common Lisp behavior.
-    
+
+    CLHS 3.1.2.1.1 / the DEFVAR page: the proclamation is unconditional, and
+    the *value* is assigned only when an initial-value form is supplied and
+    the variable is not already bound. With no initial-value form DEFVAR
+    leaves the value cell undisturbed, so ``(defvar *x*)`` proclaims `*x*`
+    special and leaves ``(boundp '*x*)`` NIL -- it does not bind it to NIL.
+
+    The variable is global, so its home is the symbol's value cell, which is
+    what the global environment's `add_variable` writes (CLHS 3.1.1.1; see
+    `Environment`). It used to write a global *lexical* binding instead, which
+    `SYMBOL-VALUE`/`BOUNDP`/`PROGV` could not see and which shadowed every
+    dynamic binding a later LET established.
+
     Returns the symbol name.
     """
     from .evaluation_core import eval as lisp_eval
-    
+
     args = cdr(form)
     if not _consp_internal(args):
         raise lisptype.LispNotImplementedError("DEFVAR requires at least a variable name")
-    
+
     name = car(args)
     if not isinstance(name, lisptype.LispSymbol):
         raise lisptype.LispNotImplementedError("DEFVAR: first argument must be a symbol")
-    
-    # Find the global/root environment for defining the variable
-    global_env = env
-    while global_env.parent is not None:
-        global_env = global_env.parent
-    
-    # Check if variable is already bound (in any environment)
-    current_value = env.find_variable(name)
-    is_already_bound = current_value is not None
-    
-    # Get the value form if present
+
+    # The proclamation is what makes every later binding of this name dynamic,
+    # so it must happen before the initial-value form is evaluated -- that form
+    # may itself bind the variable.
+    global_env = root_environment(env)
+    proclaim_special(name, global_env)
+
+    # "Already bound" is a question about the value cell, not about whatever
+    # lexical binding happens to surround this DEFVAR.
     rest_args = cdr(args)
     has_value_form = _consp_internal(rest_args)
-    
-    if has_value_form and not is_already_bound:
-        # Has initial value and not already bound - evaluate and bind globally
+
+    if has_value_form and not global_env.has_variable(name):
         value_form = car(rest_args)
-        value = lisp_eval(value_form, env)
-        global_env.add_variable(name, value)
-    elif not is_already_bound:
-        # No value form and not bound - bind to NIL globally
-        global_env.add_variable(name, lisptype.NIL)
-    # If already bound, do nothing to the value
-    
+        global_env.add_variable(name, lisp_eval(value_form, env))
+
     # Handle documentation string if present (third argument)
     if has_value_form:
         doc_args = cdr(rest_args)
@@ -1951,43 +1947,35 @@ def eval_defvar(form, env):
                     name.plist = {}
                 name.plist['DOCUMENTATION'] = docstring
                 name.plist['VARIABLE-DOCUMENTATION'] = docstring
-    
-    # Mark as special variable in global environment
-    if not hasattr(global_env, '_special_variables'):
-        global_env._special_variables = {}
-    global_env._special_variables[name.name] = True
-    
+
     return name
 
 
 def eval_defparameter(form, env):
     """Evaluate DEFPARAMETER special form.
     
-    (DEFPARAMETER name value)     - declares and always sets value
+    (DEFPARAMETER name value)     - proclaims special and always sets value
     (DEFPARAMETER name value doc) - with documentation string
-    
+
     Unlike DEFVAR, DEFPARAMETER always sets the value, even if already bound.
-    
-    DEFPARAMETER defines variables in the GLOBAL environment, not the local one.
-    This is standard Common Lisp behavior.
-    
+    Like DEFVAR, the variable is global, so the value goes in the symbol's
+    value cell -- see `eval_defvar`.
+
     Returns the symbol name.
     """
     from .evaluation_core import eval as lisp_eval
-    
+
     args = cdr(form)
     if not _consp_internal(args):
         raise lisptype.LispNotImplementedError("DEFPARAMETER requires a variable name")
-    
+
     name = car(args)
     if not isinstance(name, lisptype.LispSymbol):
         raise lisptype.LispNotImplementedError("DEFPARAMETER: first argument must be a symbol")
-    
-    # Find the global/root environment for defining the variable
-    global_env = env
-    while global_env.parent is not None:
-        global_env = global_env.parent
-    
+
+    global_env = root_environment(env)
+    proclaim_special(name, global_env)
+
     # Get the value form (required for DEFPARAMETER)
     rest_args = cdr(args)
     if not _consp_internal(rest_args):
@@ -2007,12 +1995,7 @@ def eval_defparameter(form, env):
                 name.plist = {}
             name.plist['DOCUMENTATION'] = docstring
             name.plist['VARIABLE-DOCUMENTATION'] = docstring
-    
-    # Mark as special variable in global environment
-    if not hasattr(global_env, '_special_variables'):
-        global_env._special_variables = {}
-    global_env._special_variables[name.name] = True
-    
+
     return name
 
 

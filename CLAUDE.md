@@ -155,16 +155,28 @@ improvising. Summary:
   `state.current_package`. Anything that binds it (`LET`, `LET*`, `IN-PACKAGE`)
   must update both or symbol interning silently goes to the wrong package. For
   binding forms this now lives in one place, `BindingFrame._mirror_package`.
-- **A special variable currently has two homes that never reconcile.**
-  `DEFVAR`/`DEFPARAMETER` call `global_env.add_variable`, creating a *lexical*
-  binding in the global environment, and never write the symbol's value cell;
-  `SETQ` maintains that lexical binding. But `SYMBOL-VALUE`/`BOUNDP`/`SET`/
-  `PROGV` and every dynamic binding use the value cell, and `eval`'s symbol
-  path checks the lexical chain *first*. So `(defvar *x* 1)` leaves
-  `(boundp '*x*)` NIL, and `(let ((*x* 2)) *x*)` reads 1. Diagnosed, pinned by
-  4 `xfail`s in `tests/test_iteration_variable_binding.py`, and recorded in
-  plan.md §5 — it is M2's next slice and the fix has to move `SETQ` and the
-  lookup order with it.
+- **The global environment has no lexical variables** (CLHS 3.1.1.1), and that
+  is now enforced: `Environment.is_global` is true for the parentless
+  environment at the root of every chain, and its `add_variable`/
+  `find_variable`/`has_variable`/`set_variable` read and write the symbol's
+  **value cell** — the same cell `SYMBOL-VALUE`/`BOUNDP`/`SET`/`MAKUNBOUND`/
+  `PROGV` and every dynamic binding use. A global variable therefore has
+  exactly one home. It used to have two: `DEFVAR`/`DEFPARAMETER` and the
+  bootstrap wrote a *lexical* binding in the global environment which shadowed
+  every dynamic binding, so `(boundp '*x*)` was NIL after `(defvar *x* 1)` and
+  `(let ((*x* 2)) *x*)` read 1. **A consequence worth knowing:** global lookup
+  is by symbol *identity*, not by name, so two same-named symbols from
+  different packages are two variables — code doing
+  `env.find_variable(LispSymbol('*FOO*'))` with a freshly built symbol will no
+  longer find an interned one.
+- **What makes a variable special is one table**, written only by
+  `binding.proclaim_special` (from `DEFVAR`/`DEFPARAMETER`, `DECLAIM`/
+  `PROCLAIM`'s `(SPECIAL ...)`, and the bootstrap's
+  `lispenv.STANDARD_SPECIAL_VARIABLES`) and read only by
+  `binding.is_proclaimed_special`. The proclamation is what makes a binding
+  form bind in the value cell rather than its own environment — without it,
+  `(let ((*print-base* 2)) ...)` binds lexically and the printer, which reads
+  the variable from Python through the *global* environment, never sees it.
 - `DEFSTRUCT`/`DEFUN`-style forms must define their functions in the *global*
   environment (walk the environment's parent chain to the root), not the lexical
   environment they were evaluated in — otherwise they vanish once the defining

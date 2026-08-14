@@ -261,6 +261,21 @@ def main():
         runtime.load_and_evaluate_file(
             os.path.join(ANSI_ROOT, 'gclload1.lsp'), env, verbose=False)
 
+        # gclload2.lsp -- the file this runner stands in for -- opens with
+        # (in-package :cl-test) and only then loads each directory's load.lsp,
+        # so every target is read with CL-TEST current. gclload1.lsp's own
+        # in-package does not carry over: LOAD binds *PACKAGE* for the extent
+        # of the file (CLHS 24.1), exactly as it does in a conforming Lisp.
+        #
+        # Without this the aux files are read in CL-USER, and a preamble file
+        # is *not* interchangeable with one read in CL-TEST: several of them
+        # reference variables that ansi-aux.lsp defines in CL-TEST, so the two
+        # end up as different symbols with the same name. That made
+        # types-and-classes' TYPES.9/9A read a CL-USER::*SUBTYPE-TABLE* that
+        # nothing ever bound, and it would silently make any targeted run
+        # disagree with the full-suite path it is supposed to reproduce.
+        eval_string("(in-package :cl-test)", env)
+
         for target in targets:
             rel = os.path.relpath(target, ANSI_ROOT).replace('\\', '/')
             for form in aux_preamble_forms(target):
