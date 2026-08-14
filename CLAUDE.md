@@ -5,10 +5,11 @@ Lisp compliance**, measured by running the real ANSI test suite (`ansi-test/`, a
 sibling directory one level above this repo) to completion without crashing, and
 passing as many of its tests as possible.
 
-> **Current status (2026-08-12).** The suite **runs to completion**: the first
-> full run in the project's history landed on 2026-08-12 with
-> `COMPLETENESS: OK`, 22036/22036 accounted, 0 missing, 8960 passing (40.7%),
-> ~7.5 hours. Crashes are no longer the constraint; **semantics are**.
+> **Current status (2026-08-15).** The suite runs to completion and is **past
+> half passing**: `COMPLETENESS: OK`, 22113/22113 accounted, 0 missing,
+> **11548 passing (52.2%)**, ~67 minutes. Crashes are no longer the constraint;
+> **semantics are**. (The first complete run was 2026-08-12: 8960 of 22036,
+> 40.7%, ~7.5 hours.)
 >
 > **[plan.md](plan.md) is the roadmap**, organised around the mechanism at fault
 > rather than test counts, and **`docs/ansi_checklist.md` is the authority for
@@ -39,7 +40,12 @@ passing as many of its tests as possible.
   90 seconds by itself, so even a single isolated test via `run_do_test.py` takes
   ~90s+ before it prints a result — don't assume a run has hung just because
   nothing has printed yet; give it at least 2 minutes. The full ANSI suite via
-  `run_all_tests.py` takes about 20 minutes end to end.
+  `run_all_tests.py` takes **about 67 minutes** end to end (measured 2026-08-15;
+  it was ~7.5 hours before LOOP got one iteration engine, and the "20 minutes"
+  this file used to claim was never right). A single `scripts/run_ansi.py`
+  *group* is usually 2–30s, but a few are far slower because one form in them
+  never terminates and burns the 600s LOOP cap — `characters` takes ~9 minutes
+  for 259 tests for that reason.
 
 ## Architecture map
 

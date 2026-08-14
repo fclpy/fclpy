@@ -26,78 +26,94 @@ history is preserved in condensed form in [Changelog](#changelog).
 
 ## 1. Status
 
-**First complete run in the project's history: 2026-08-12.**
+**Latest full run: 2026-08-15. The suite is past half passing.**
 
 ```
-COMPLETENESS: total=22036 passed=8960 failed=13076 accounted=22036 missing=0 extra=0
+COMPLETENESS: total=22113 passed=11548 failed=10565 accounted=22113 missing=0 extra=0
 COMPLETENESS: OK
 ```
 
-| | value |
-|---|---|
-| Registered tests | 22036 |
-| Executed (`accounted`) | **22036 (100%)** |
-| Passed | **8960 (40.7%)** |
-| Failed | 13076 |
-| Never executed | **0** |
-| Wall time | ~7.5 hours |
+| | value | previous full run (2026-08-12) |
+|---|---|---|
+| Registered tests | 22113 | 22036 |
+| Executed (`accounted`) | **22113 (100%)** | 22036 (100%) |
+| Passed | **11548 (52.2%)** | 8960 (40.7%) |
+| Failed | 10565 | 13076 |
+| Never executed | **0** | 0 |
+| Wall time | **~67 minutes** (3999s) | ~7.5 hours |
+
+**+2588 passing across three landed mechanisms** — the printer (08-14), the
+shared binder (08-14 b) and the global value cell (08-15). No single change owns
+that number; each one's own measured contribution is in its
+[Changelog](#changelog) entry.
+
+**Wall time fell from ~7.5 hours to ~67 minutes**, which is C1's dividend
+arriving in full: the 2026-08-12 run spent ~3h18m in loops that never terminate.
+Exactly one such loop survived into this run — `integer-binary-search`
+(`auxiliary/numbers-aux.lsp:46`), burning its full 600s cap after 1.3M
+iterations, 15% of the run by itself — and **it was fixed the same day**
+(see the [Changelog](#changelog)): it was not a loop defect at all but
+`CEILING` losing precision above 2**53. **No loop in the suite now hits the
+watchdog**, so the next full run should come in around 57 minutes.
+CLAUDE.md's "about 20 minutes" and this document's former "4+ HOURS" were both
+wrong; 67 minutes is measured.
 
 **These numbers are the last full run and move only on a full run.** The
 *checklist* is kept current between full runs by merging targeted runs into it
 (see [below](#keeping-the-checklist-current-without-a-full-run)); its header
 lists which runs it has been amended with. Do not copy an amended count here.
 
-**This is the first trustworthy scoreboard.** Every previous version of this
-document ranked work using a sample of roughly a third of the suite, and said so.
-That constraint is now gone — and the complete data **reordered the priorities
-substantially**, exactly as the sampling-artifact warning in [§6](#6-the-two-dimensions)
-predicted it would.
+**Registered tests rose 22036 → 22113 (+77).** As in the 08-12 run, a rise here
+is not new work appearing from nowhere: tests generated at load time only
+register once the code that generates them runs, so fixing a load-time failure
+*adds* tests. Treat `total` as an outcome, not a constant.
 
-**What the completion changed.** Comparing against the last truncated run
-(`accounted=8971 passed=4514`): passed nearly doubled to 8960, and the failure
-count rose to 13076 because **13065 tests that had never executed now run**. That
-rise is not a regression — those tests had no prior status to regress from. It is
-previously-invisible failure becoming visible, which is what M0 existed to
-achieve.
-
-**The single biggest surprise:** `FORMAT`/`FORMATTER` is now the **largest
-failing cluster in the suite at 1623 failures** — 3.6× LOOP, which the truncated
-data had ranked first. It was invisible in every prior run because `printer/`
-never executed.
+**`FORMAT`/`FORMATTER` remains the largest failing cluster**, and `printer/` has
+moved 137 → 386 passing (17.4% → 49.0%) without its directive engine being
+finished — [C2](#c2-format--formatter--largest-cluster-in-the-suite) is still
+the largest single body of failures.
 
 ### Per-directory scoreboard (complete)
 
-| directory | passed | failed | total | pass rate |
-|---|---|---|---|---|
-| (programmatically generated) | 1075 | **3908** | 4983 | 21.6% |
-| sequences | 990 | **2168** | 3158 | 31.3% |
-| cons | 580 | **1058** | 1638 | 35.4% |
-| arrays | 520 | 725 | 1245 | 41.8% |
-| printer | 137 | 651 | 788 | **17.4%** |
-| objects | 215 | 610 | 825 | 26.1% |
-| numbers | 872 | 566 | 1438 | 60.6% |
-| iteration | 366 | 472 | 838 | 43.7% |
-| data-and-control-flow | 1007 | 413 | 1420 | 70.9% |
-| strings | 113 | 388 | 501 | 22.6% |
-| streams | 161 | 382 | 543 | 29.7% |
-| types-and-classes | 283 | 262 | 545 | 51.9% |
-| packages | 108 | 232 | 340 | 31.8% |
-| conditions | 116 | 187 | 303 | 38.3% |
-| pathnames | 79 | 136 | 215 | 36.7% |
-| reader | 29 | 136 | 165 | **17.6%** |
-| environment | 67 | 125 | 192 | 34.9% |
-| misc | 618 | 122 | 740 | 83.5% |
-| characters | 156 | 103 | 259 | 60.2% |
-| structures | 14 | 101 | 115 | **12.2%** |
-| eval-and-compile | 224 | 94 | 318 | 70.4% |
-| hash-tables | 89 | 69 | 158 | 56.3% |
-| files | 23 | 64 | 87 | 26.4% |
-| system-construction | 11 | 64 | 75 | **14.7%** |
-| symbols | 1105 | 40 | 1145 | **96.5%** |
+Ordered by failures. `Δ passed` is against the 2026-08-12 full run.
 
-The spread is the useful signal: `symbols` at 96.5% and `misc` at 83.5% against
-`structures` at 12.2%, `system-construction` at 14.7%, `printer` at 17.4%, and
-`reader` at 17.6%. **The four worst are all subsystems where one absent mechanism
+| directory | passed | failed | total | pass rate | Δ passed |
+|---|---|---|---|---|---|
+| (programmatically generated) | 2238 | **2822** | 5060 | 44.2% | +1163 |
+| sequences | 1674 | **1484** | 3158 | 53.0% | +684 |
+| cons | 692 | **946** | 1638 | 42.2% | +112 |
+| arrays | 533 | 712 | 1245 | 42.8% | +13 |
+| objects | 217 | 608 | 825 | 26.3% | +2 |
+| numbers | 935 | 503 | 1438 | 65.0% | +63 |
+| iteration | 420 | 418 | 838 | 50.1% | +54 |
+| printer | 386 | 402 | 788 | 49.0% | **+249** |
+| data-and-control-flow | 1027 | 393 | 1420 | 72.3% | +20 |
+| streams | 223 | 320 | 543 | 41.1% | +62 |
+| strings | 199 | 302 | 501 | 39.7% | +86 |
+| types-and-classes | 285 | 260 | 545 | 52.3% | +2 |
+| packages | 112 | 228 | 340 | 32.9% | +4 |
+| conditions | 119 | 184 | 303 | 39.3% | +3 |
+| pathnames | 79 | 136 | 215 | 36.7% | 0 |
+| reader | 38 | 127 | 165 | **23.0%** | +9 |
+| misc | 622 | 118 | 740 | 84.1% | +4 |
+| characters | 149 | 110 | 259 | 57.5% | **−7** |
+| structures | 14 | 101 | 115 | **12.2%** | 0 |
+| eval-and-compile | 236 | 82 | 318 | 74.2% | +12 |
+| environment | 112 | 80 | 192 | 58.3% | +45 |
+| hash-tables | 89 | 69 | 158 | 56.3% | 0 |
+| files | 23 | 64 | 87 | 26.4% | 0 |
+| system-construction | 11 | 64 | 75 | **14.7%** | 0 |
+| symbols | 1113 | 32 | 1145 | **97.2%** | +8 |
+
+**`characters` is the one directory that went backwards**, 156 → 149, and it is
+tracked in [preventing regression](#preventing-regression) rather than absorbed
+into the total. Six directories did not move at all — `pathnames`, `structures`,
+`hash-tables`, `files`, `system-construction` and (net) `objects` — and those are
+the ones where the absent mechanism is still absent.
+
+The spread is still the useful signal: `symbols` at 97.2% and `misc` at 84.1%
+against `structures` at 12.2%, `system-construction` at 14.7%, `reader` at 23.0%
+and `objects` at 26.3%. **The worst are all subsystems where one absent mechanism
 fails everything downstream of it** — which is what makes them the cheapest wins,
 not the hardest problems.
 
@@ -124,7 +140,7 @@ whereas prose in this document ages.
    ```
    This is not optional bookkeeping. `docs/ansi_checklist.md` is declared *the
    authority for what is failing*, and an authority that is only refreshed by a
-   4+ hour run is stale the moment anyone fixes anything — at which point every
+   ~1 hour run is stale the moment anyone fixes anything — at which point every
    later decision is made against numbers that are quietly wrong.
 7. **Diff against the baseline** to classify the fix:
    ```powershell
@@ -141,7 +157,7 @@ The checklist diff is the instrument that tells you which one you just did.
 ### Keeping the checklist current without a full run
 
 `ansi_results/*.txt` is written by the full runner, so on its own the checklist
-could only ever be regenerated from a 4+ hour run. `run_ansi.py` closes that gap:
+could only ever be regenerated from a full ~1 hour run. `run_ansi.py` closes that gap:
 
 ```powershell
 # run a target and amend the checklist with its outcome in one step
@@ -182,7 +198,7 @@ pipenv run pytest -q                                              # ~15s
 pipenv run python scripts/run_ansi.py --list                      # available groups
 pipenv run python scripts/run_ansi.py iteration                   # one group
 pipenv run python scripts/run_ansi.py numbers/sqrt.lsp            # one file
-pipenv run python run_all_tests.py > run_all_tests.log 2> run_all_tests.err   # 4+ HOURS
+pipenv run python run_all_tests.py > run_all_tests.log 2> run_all_tests.err   # ~67 MINUTES
 ```
 
 **Do not use the full suite to check a fix.** `scripts/run_ansi.py` loads
@@ -871,6 +887,30 @@ ecosystem," and **nothing in the ANSI suite tests it.**
   one (a targeted run has no data for the files it did not load).
 - CI runs the full suite; **any increase in failures is a build failure.** Commit
   the scoreboard so deltas are reviewable.
+
+#### Open regressions carried by the 2026-08-15 full run
+
+The 08-15 run is **+2588 overall but worse in 19 files** against the 08-12
+baseline. They are listed here rather than absorbed into the total, because
+refreshing the baseline is what makes a regression invisible — do not refresh
+`docs/ansi_checklist_baseline.json` until these are attributed or accepted in
+writing.
+
+| files | Δ failures | note |
+|---|---|---|
+| `characters/char-compare.lsp` +4, `characters/character.lsp` +3 | +7 | the only **directory**-level regression, `characters` 156 → 149. **Not the value cell's**: measured 149 of 259 both at HEAD and at HEAD with only the value-cell change reverted, so it belongs to the 08-13 `Character` representation or the 08-14 printer. Still open |
+| ~~`numbers/` rounding family — `round`, `truncate`, `floor`, `ceiling`, `fceiling`, `ffloor`, `ftruncate`, `fround` (+2 each)~~ | ~~+16~~ | **Resolved 2026-08-15 (b).** The uniform +2 across eight operators was one shared defect, as the shape suggested: those eight files are now **16 → 103 of 138**, well past the baseline |
+| `numbers/log.lsp`, `numbers/lcm.lsp` (+2), `numbers/asin.lsp`, `numbers/acos.lsp`, `numbers/rationalize.lsp` (+1) | +8 | still open |
+| `cons/sublis.lsp` +2, `data-and-control-flow/every.lsp` +1, `notevery.lsp` +1, `streams/write-line.lsp` +2 | +6 | isolated |
+
+**Attribution is not yet possible for most of these**, and the reason is worth
+recording as a process lesson: the baseline predates *three* landed changes
+(printer 08-14, binder 08-14 b, value cell 08-15), and the tree between them was
+never a self-consistent commit — `fclpy/lispfunc/binding.py` stayed untracked
+across two commits, so `ea24491` cannot even be checked out and run. **A
+mechanism change should be measured against the commit before it, which requires
+that commit to be runnable.** The value-cell change was measured this way over
+ten directories (0 regressions); `characters` was not one of them.
 - `pytest` is the fast inner loop; **`ansi-test` is the authority.** When they
   disagree, the unit test is wrong — see the non-ANSI assertions in §3.
 - Add a targeted regression test only if `ansi-test` does not already cover it.
@@ -925,7 +965,7 @@ rather than discovering these one crash at a time.
 | `ansi_results/failed.txt` | raw RT output — the checklist's input, not a work list |
 | `ansi_results/targeted-last.json` | the last targeted run's outcomes, written by every `run_ansi.py` run so it can be merged later |
 | `ansi_results/merges.log` | which targeted runs the current checklist has been amended with; cleared by a full run |
-| `run_all_tests.py` | full suite (4+ hours) — authority, not inner loop |
+| `run_all_tests.py` | full suite (~67 min) — authority, not inner loop |
 | `REPAIR.md` | crash-repair SOP — historical; crashes are no longer the constraint |
 
 ---
@@ -935,6 +975,52 @@ rather than discovering these one crash at a time.
 Condensed from the previous chronological plan. Each entry is a *mechanism*
 landed, not a test count.
 
+- **2026-08-15 (b)** — **The divide-then-round family is exact, and returns two
+  values.** All eight of FLOOR/CEILING/TRUNCATE/ROUND and their F- variants
+  computed `x / divisor` — Python **float** division — before rounding, so every
+  one of them silently lost precision above 2**53:
+  `(ceiling (+ (expt 2 62) (1+ (expt 2 62))) 2)` was one *less* than the true
+  midpoint. `_exact_quotient` routes rationals through `Fraction`, on which
+  `math.floor`/`math.ceil`/`int`/`round` are all exact — including `round`'s
+  half-to-even, which is the rule CLHS gives ROUND.
+  **The bug presented as a hang, not a wrong answer, and that is why it had
+  survived.** `integer-binary-search` (`auxiliary/numbers-aux.lsp:46`) steps
+  with `(ceiling (+ lo hi) 2)`, so once `lo` passed 2**53 the midpoint rounded
+  back to `lo` itself, `(setq lo mid)` became a no-op and the search ran until
+  the 600s watchdog killed it — 1,335,702 iterations, **15% of the whole ANSI
+  run's wall time in one form**, reached from `numbers/sqrt.lsp`'s
+  `(find-largest-exactly-floatable-integer most-positive-fixnum)`. This is the
+  last of the never-terminating loops [C1](#c1-loop-clause-composition--done-2026-08-12-f)
+  catalogued on 08-12 (SQRT.12–.17, DEPOSIT-FIELD.1–.5, DPB.2), and **it was
+  never a LOOP defect** — the 08-12 diagnosis attributed it to the wrong
+  subsystem. `run_ansi.py numbers/sqrt.lsp` went from a 600s abort to **1.8s**.
+  **Landed with it**, because the same eight functions were failing their whole
+  files for a second, unrelated reason: they returned the quotient **alone**
+  where CLHS 12.2 requires *quotient and remainder*, and every ansi-test helper
+  for them opens with `(eql (length vals) 2)` — so nothing in those files could
+  pass whatever the quotient was. And `REM` was Python's `%`, which is
+  floor-based: right for MOD, wrong for REM whenever the operands differ in sign
+  (`(rem -7 2)` gave 1, ANSI requires -1). REM and MOD are now the remainders of
+  TRUNCATE and FLOOR rather than a third implementation of "remainder"
+  (standing rule 3).
+  **Measured, before → after on the same eight files:**
+  | file | before | after | | file | before | after |
+  |---|---|---|---|---|---|---|
+  | `round.lsp` | 2 of 23 | **10** | | `fceiling.lsp` | 2 of 13 | **12** |
+  | `truncate.lsp` | 2 of 21 | **15** | | `ffloor.lsp` | 2 of 13 | **12** |
+  | `floor.lsp` | 2 of 21 | **15** | | `ftruncate.lsp` | 2 of 13 | **12** |
+  | `ceiling.lsp` | 2 of 21 | **15** | | `fround.lsp` | 2 of 13 | **12** |
+
+  **16 → 103 of 138, +87.** `pytest` 1518 passed, same 1 pre-existing unrelated
+  failure, plus 34 new tests in `tests/test_math_rounding.py` — which exist
+  *because* the precision defect manifested as a hang: ansi-test covers the
+  two-values contract cleanly, but a watchdog kill is not a failure signal, so
+  the exactness property and the loop-termination property are pinned where
+  they fail fast and say why.
+  **Discovered, not fixed:** a `MultipleValues` reaching the printer renders as
+  `#<MULTIPLEVALUES 0x...>` (standing rule 2). It does not affect RT, which
+  compares through `multiple-value-list`, but a top-level multiple-value return
+  should print as its values.
 - **2026-08-15** — **M2: a global variable has one home.** The global
   environment no longer has lexical variable bindings, because Common Lisp
   does not have them: CLHS 3.1.1.1 makes the global environment's variable

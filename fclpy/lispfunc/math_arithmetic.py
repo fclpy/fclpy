@@ -2,6 +2,7 @@
 
 import math
 import functools
+from fractions import Fraction
 import fclpy.lisptype as lisptype
 from . import registry as _registry
 
@@ -116,62 +117,123 @@ def minusp(x):
 
 @_registry.cl_function('MOD')
 def mod(number, divisor):
-    """Modulo operation."""
-    return number % divisor
+    """FLOOR's remainder (CLHS 12.2): the sign follows the *divisor*."""
+    return number - _rounded_quotient(number, divisor, math.floor) * divisor
 
 
 @_registry.cl_function('REM')
 def rem(number, divisor):
-    """Remainder operation."""
-    return number % divisor
+    """TRUNCATE's remainder (CLHS 12.2): the sign follows the *dividend*.
+
+    Both used to be Python's ``%``, which is floor-based -- right for MOD and
+    wrong for REM whenever the operands differ in sign: ``(rem -7 2)`` gave 1
+    where ANSI requires -1. Defining each as the remainder of the corresponding
+    rounding operation is what keeps them consistent with the second value of
+    FLOOR and TRUNCATE instead of being a third implementation of "remainder".
+    """
+    return number - _rounded_quotient(number, divisor, int) * divisor
+
+
+def _exact_quotient(x, divisor):
+    """``x/divisor`` as an exact `Fraction`, or None if either is a float.
+
+    CLHS 12.1.3.3: an operation on two rationals is exact. Python's ``/`` is
+    *float* division, so every one of the eight divide-then-round operators
+    below used to convert its arguments to double before rounding them, and
+    silently lost precision above 2**53::
+
+        (ceiling (+ (expt 2 62) (1+ (expt 2 62))) 2)
+        ;; 4611686018427387904, one less than the true 4611686018427387905
+
+    That is not a rounding curiosity. `integer-binary-search`
+    (ansi-test `auxiliary/numbers-aux.lsp:46`) steps with
+    ``(ceiling (+ lo hi) 2)``, so once ``lo`` passed 2**53 the midpoint rounded
+    back to ``lo`` itself, ``(setq lo mid)`` became a no-op, and the search ran
+    forever -- 1,335,702 iterations into the 600s LOOP cap, 15% of the whole
+    ANSI run's wall time, reached from `numbers/sqrt.lsp`'s
+    ``(find-largest-exactly-floatable-integer most-positive-fixnum)``.
+
+    `Fraction` keeps the division exact, and `math.floor`/`math.ceil`/`int`/
+    `round` are all exact on a `Fraction` -- including `round`'s round-half-to-
+    even, which is the rule CLHS gives ROUND.
+    """
+    if isinstance(x, float) or isinstance(divisor, float) or \
+            isinstance(x, complex) or isinstance(divisor, complex):
+        return None
+    return Fraction(x) / Fraction(divisor)
+
+
+def _rounded_quotient(x, divisor, rounder, as_float=False):
+    """``x/divisor`` rounded by `rounder`, exactly when both are rational."""
+    exact = _exact_quotient(x, divisor)
+    quotient = rounder(exact if exact is not None else x / divisor)
+    return float(quotient) if as_float else quotient
+
+
+def _divide_and_round(x, divisor, rounder, as_float=False):
+    """The two values CLHS 12.2 requires of the divide-then-round family.
+
+    All eight of FLOOR/CEILING/TRUNCATE/ROUND and their F- variants return
+    **quotient and remainder**, where ``remainder = number - quotient*divisor``
+    and the F- variants differ only in returning the quotient as a float. They
+    used to return the quotient alone, which is why the ansi-test helpers --
+    every one of which opens with ``(eql (length vals) 2)`` on
+    ``(multiple-value-list (floor n d))`` -- could not pass whatever the
+    quotient was.
+
+    `rounder` is the exact rounding operation to apply to the quotient;
+    `_exact_quotient` keeps that division exact for rationals.
+    """
+    quotient = _rounded_quotient(x, divisor, rounder, as_float)
+    return lisptype.MultipleValues(quotient, x - quotient * divisor)
 
 
 @_registry.cl_function('ROUND')
 def round_fn(x, divisor=1):
-    """Round to nearest integer."""
-    return round(x / divisor)
+    """Round to nearest, half to even; quotient and remainder (CLHS 12.2)."""
+    return _divide_and_round(x, divisor, round)
 
 
 @_registry.cl_function('TRUNCATE')
 def truncate(x, divisor=1):
-    """Truncate to integer."""
-    return int(x / divisor)
+    """Truncate toward zero; quotient and remainder."""
+    return _divide_and_round(x, divisor, int)
 
 
 @_registry.cl_function('CEILING')
 def ceiling(x, divisor=1):
-    """Return ceiling as integer."""
-    return math.ceil(x / divisor)
+    """Round toward positive infinity; quotient and remainder."""
+    return _divide_and_round(x, divisor, math.ceil)
 
 
 @_registry.cl_function('FLOOR')
 def floor(x, divisor=1):
-    """Return floor as integer."""
-    return math.floor(x / divisor)
+    """Round toward negative infinity; quotient and remainder."""
+    return _divide_and_round(x, divisor, math.floor)
 
 
 @_registry.cl_function('FCEILING')
 def fceiling(x, divisor=1):
-    """Return ceiling as float."""
-    return float(math.ceil(x / divisor))
+    """CEILING with the quotient as a float."""
+    return _divide_and_round(x, divisor, math.ceil, as_float=True)
 
 
 @_registry.cl_function('FFLOOR')
 def ffloor(x, divisor=1):
-    """Return floor as float."""
-    return float(math.floor(x / divisor))
+    """FLOOR with the quotient as a float."""
+    return _divide_and_round(x, divisor, math.floor, as_float=True)
 
 
 @_registry.cl_function('FROUND')
 def fround(x, divisor=1):
-    """Round to nearest float."""
-    return float(round(x / divisor))
+    """ROUND with the quotient as a float."""
+    return _divide_and_round(x, divisor, round, as_float=True)
 
 
 @_registry.cl_function('FTRUNCATE')
 def ftruncate(x, divisor=1):
-    """Truncate to float."""
-    return float(int(x / divisor))
+    """TRUNCATE with the quotient as a float."""
+    return _divide_and_round(x, divisor, int, as_float=True)
 
 
 @_registry.cl_function('NUMERATOR')
