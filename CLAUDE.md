@@ -66,6 +66,19 @@ passing as many of its tests as possible.
     design. It exists so the registry knows the symbol is a special operator, not
     a function. Adding a new special form to the language means registering it
     here *and* implementing it in `evaluation_core.py`/`evaluation_special_forms.py`.
+  - `binding.py` — **the variable-binding model: the one place that decides
+    lexical vs. dynamic.** `BindingFrame` is used by `LET`, `LET*` and all eight
+    iteration forms (`DO`, `DO*`, `DOLIST`, `DOTIMES`, `LOOP`, `DO-SYMBOLS`,
+    `DO-EXTERNAL-SYMBOLS`, `DO-ALL-SYMBOLS`). Establish a binding with
+    `frame.bind(var, value)` and call it again to step it — the first call
+    decides where the binding lives, later calls assign to that same binding.
+    **Never use `Environment.set_variable` to establish a binding**: it walks
+    the environment chain and mutates the first binding of that name it finds,
+    which is how every iteration form used to assign to an enclosing variable
+    instead of binding its own. A local `(declare (special x))` is *not* the
+    same as a `DEFVAR` proclamation — only the latter makes a nested binding
+    form bind dynamically, and `DOTIMES.17` vs `.18` is exactly that
+    distinction, so `is_proclaimed_special` consults the root environment only.
   - `evaluation_loops_conditionals.py` — `LET`/`LET*`/`DO`/`DOLIST`/`DOTIMES`/`LOOP`/`COND`.
     **`LOOP` has exactly one iteration engine.** Every iteration-control clause
     (`FOR`/`AS`, and `REPEAT`) becomes a driver in `iteration_drivers`, and the
@@ -140,7 +153,18 @@ improvising. Summary:
 
 - `*PACKAGE*` is a dynamic special variable but its value is mirrored in
   `state.current_package`. Anything that binds it (`LET`, `LET*`, `IN-PACKAGE`)
-  must update both or symbol interning silently goes to the wrong package.
+  must update both or symbol interning silently goes to the wrong package. For
+  binding forms this now lives in one place, `BindingFrame._mirror_package`.
+- **A special variable currently has two homes that never reconcile.**
+  `DEFVAR`/`DEFPARAMETER` call `global_env.add_variable`, creating a *lexical*
+  binding in the global environment, and never write the symbol's value cell;
+  `SETQ` maintains that lexical binding. But `SYMBOL-VALUE`/`BOUNDP`/`SET`/
+  `PROGV` and every dynamic binding use the value cell, and `eval`'s symbol
+  path checks the lexical chain *first*. So `(defvar *x* 1)` leaves
+  `(boundp '*x*)` NIL, and `(let ((*x* 2)) *x*)` reads 1. Diagnosed, pinned by
+  4 `xfail`s in `tests/test_iteration_variable_binding.py`, and recorded in
+  plan.md §5 — it is M2's next slice and the fix has to move `SETQ` and the
+  lookup order with it.
 - `DEFSTRUCT`/`DEFUN`-style forms must define their functions in the *global*
   environment (walk the environment's parent chain to the root), not the lexical
   environment they were evaluated in — otherwise they vanish once the defining

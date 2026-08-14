@@ -454,6 +454,12 @@ it — but each is a *clause*, so none of them justifies a second engine.
   forbids incompatible types here, so the fix is to *detect and signal* it.
 - **`WITH`, `NEVER`, `MAXIMIZE`/`MINIMIZE`, `OF-TYPE`, `AND`-joined parallel
   clauses.** Unimplemented; their tokens are dropped.
+- **`IT` (CLHS 6.1.2.1.4).** Unimplemented — `(loop for x in l when x collect
+  it)` signals `Unbound variable: IT`. It *appeared* to work in a whole-file
+  run only because the iteration-variable leak left an earlier test's `it`
+  bound at the root; LOOP.14.38/39 were passing off that constant. Doing it
+  properly means the conditional clause supplying its test value to its own
+  body, so it belongs with the clause-order item above rather than beside it.
 - **The last silent path.** An unrecognized loop keyword is still discarded once
   a driver has been parsed (standing rule 4). It was left alone deliberately —
   turning it loud converts a large number of currently-wrong answers into
@@ -690,7 +696,7 @@ Milestones now describe *mechanisms*, and map onto the clusters above.
 |---|---|---|---|
 | **M0** | Trustworthy measurement | **DONE** — `COMPLETENESS: OK`, 22036/22036 accounted. Remaining: `expected-failures/` wiring | — |
 | **M1** | Symbol, NIL, package identity | canonical CL symbol table **done**; package model outstanding | C10, C18, C19 |
-| **M2** | Environment model | **not started** — the spine. Do not fix specials one binding form at a time; that produces a seventh mechanism | C1, X2 |
+| **M2** | Environment model | **binding forms done** — one `BindingFrame` decides lexical vs. dynamic for LET, LET* and all eight iteration forms. Outstanding: the global value cell vs. the global lexical binding ([§5](#5-known-temporary-deviations)), `eval`'s lexical-before-dynamic lookup order, `is_truthy(False)` | C1, X2 |
 | **M3** | One lambda-list engine | not started — six copy-pasted binders | C17, X2 |
 | **M4** | A real macro system | not started — ~90 standard macros are special forms. **Most ecosystem-critical** | — |
 | **M5** | `GET-SETF-EXPANSION` / places | not started — deletes ~600 lines of ladder code | C16 |
@@ -734,19 +740,21 @@ Milestones now describe *mechanisms*, and map onto the clusters above.
    variables that are actually variables, and output that goes to
    `*STANDARD-OUTPUT*`. The last of those was a measurement gate in front of
    ~440 `def-print-test`s, so this was item 4's shape a second time.
-7. **M2's binding model — now the top item, and it is blocking measurement.**
-   All eight iteration forms assign to an enclosing variable rather than binding
-   their own ([§5](#5-known-temporary-deviations)). It is a wrong answer in its
-   own right, and because `DO-ALL-SYMBOLS`/`LOOP` clobber rt.lsp's report stream
-   parameter `s`, **`run_ansi.py printer` cannot run to completion at all.** The
-   fix is to extract the special-vs-lexical binding decision out of `eval_let`
-   and `eval_letstar` — where it already exists twice — into one binder shared by
-   LET, LET*, and the eight iteration forms. That is exactly the M2 slice this
-   document has said to do properly rather than one binding form at a time, and
-   there is now a concrete, measured reason to do it: the one-word local fix
-   moves `iteration` 410 → 408 by breaking the four tests that bind the variable
-   specially.
-8. **Re-measure, then re-derive this list.** The residual distribution has
+7. ~~**M2's binding model.**~~ **Done 2026-08-14 (b).** One `BindingFrame`
+   decides lexical vs. dynamic for LET, LET* and all eight iteration forms, so
+   an iteration form binds its own variable instead of assigning to an
+   enclosing one. `iteration` **410 → 423**; the measurement gate it was
+   blocking is gone. Details in the [Changelog](#changelog).
+8. **M2's remaining slice — the global value cell.** Now the top item, and it
+   is the same shape as the one just closed: a special variable has *two*
+   homes, a lexical binding in the global environment written by
+   `DEFVAR`/`SETQ` and the value cell read by `SYMBOL-VALUE`/`BOUNDP`/`PROGV`
+   and every dynamic binding, and `eval` consults the lexical chain first — so
+   `(let ((*x* 2)) *x*)` reads the old value ([§5](#5-known-temporary-deviations)).
+   Consolidating the binder is what made this visible and is what isolates it:
+   the dynamic bindings are now provably correct through `SYMBOL-VALUE`, so
+   every remaining wrong answer here belongs to the global lexical binding.
+9. **Re-measure, then re-derive this list.** The residual distribution has
    already shifted enough that ranking further ahead is guesswork.
 
 **A note on M2.** It remains the architectural spine, and C1/X2 both bottom out
@@ -784,7 +792,8 @@ Anything knowingly non-ANSI, with the milestone that removes it. Empty means
 | `LispString` vs. Python `str` split | two string representations | M9 (blocks EQUAL/EQUALP) |
 | Name-based block/tag/catch matching | no block identity objects | M7 |
 | `is_truthy(False)` is `True` | unaudited boundary | M2 |
-| **All eight iteration forms (DO, DO*, DOLIST, DOTIMES, LOOP, DO-SYMBOLS, DO-EXTERNAL-SYMBOLS, DO-ALL-SYMBOLS) assign to an enclosing variable of the same name instead of binding their own** — `(let ((x 99)) (dolist (x '(1 2 3))) x)` is NIL. `(do-all-symbols (s) ...)` therefore clobbers rt.lsp's report stream parameter `s`, and LOOP's `for s = ...` at `print-strings.lsp:149` does the same, which **makes a whole-directory `run_ansi.py printer` run unable to complete** | the one-word fix (`add_variable` for the establishing call) regresses DO.14/DO*.14/DOTIMES.18/.18A, which bind the variable *specially*; needs the special-vs-lexical decision extracted from `eval_let`/`eval_letstar` and shared. Diagnosed, measured (`iteration` 410→408), reverted, and pinned by 13 `xfail`s in `tests/test_iteration_variable_binding.py` | **M2 — next task** |
+| **A special variable has two homes that never reconcile.** `DEFVAR`/`DEFPARAMETER` call `global_env.add_variable`, creating a *lexical* binding in the global environment, and never write the symbol's value cell; `SETQ` maintains that lexical binding. `SYMBOL-VALUE`/`BOUNDP`/`SET`/`PROGV` and every dynamic binding use the value cell, and `eval`'s symbol path checks the lexical chain **first**. So `(defvar *x* 1)` leaves `(boundp '*x*)` NIL and `(symbol-value '*x*)` unbound, while `*x*` reads 1; and `(let ((*x* 2)) *x*)` reads **1**, because the global lexical binding shadows the dynamic one the binding form correctly established | found while consolidating the binder, which is what made it visible: the frame's dynamic bindings are correct and provably reach `SYMBOL-VALUE`, so the remaining wrong answer is entirely the global lexical binding's. Fixing it moves `SETQ` and `eval`'s lookup order too, so it wants its own measured change rather than a rider. Pinned by 4 `xfail`s in `tests/test_iteration_variable_binding.py::TestTheGlobalValueCellDefect` | **M2 — next task** |
+| A variable bound *dynamically* by a form is invisible to that form's body if an **enclosing lexical** binding of the same name exists — `eval` checks the lexical chain before the value cell | no ANSI test in `iteration/` needs it: DOTIMES.18/.18A and DO.14/DO*.14 all have the enclosing binding declared special too, so there is no lexical shadow. The general fix is the same lookup-order change the row above needs | M2 |
 
 ---
 
@@ -921,6 +930,107 @@ rather than discovering these one crash at a time.
 Condensed from the previous chronological plan. Each entry is a *mechanism*
 landed, not a test count.
 
+- **2026-08-14 (b)** — **M2: one binder decides lexical vs. dynamic.**
+  `fclpy/lispfunc/binding.py`'s `BindingFrame` is now the only place that
+  answers "is this variable special here", and LET, LET* and all eight
+  iteration forms (DO, DO*, DOLIST, DOTIMES, LOOP, DO-SYMBOLS,
+  DO-EXTERNAL-SYMBOLS, DO-ALL-SYMBOLS) go through it. Establishing a binding
+  and stepping it are one operation, `frame.bind`: the first call decides where
+  the binding lives, later calls assign to that same binding — which is also
+  what makes successive iterations share one binding (DO.15).
+  **The defect was not "the iteration variable is mis-bound", it was that the
+  clause establishing it never bound anything.** All eight forms established
+  their variable with `Environment.set_variable`, which *walks the environment
+  chain and mutates the first binding of that name it finds*; since
+  `Environment.__init__` hands a child its parent's `variable_bindings` list,
+  that walk always reached an enclosing binding. So `(let ((x 99)) (dolist (x
+  '(1 2 3))) x)` was NIL, and — because rt.lsp's failure reporter takes its
+  output stream in a parameter named `s` — a `(do-all-symbols (s) ...)` or
+  `(loop for s = ...)` in the suite overwrote RT's own stream with a symbol.
+  **That was a measurement gate, the third of this shape after the
+  string-is-a-vector gate (08-13) and the `*STANDARD-OUTPUT*` gate (08-14):
+  `run_ansi.py printer` could not run to completion at all.**
+  **Why the one-word fix was wrong.** `add_variable` for the establishing call
+  fixes all eight leaks and measured `iteration` 410 → 408: it gains DOLIST.14
+  and DOTIMES.16 and loses DO.14, DO*.14, DOTIMES.18 and .18A, which declare
+  the iteration variable special in the body and so must be bound *dynamically*
+  — the rule that lived in `eval_let` and, copy-pasted, in `eval_letstar`.
+  **LET*'s copy was not merely duplicated, it was wrong**: for a special
+  variable it called `global_env.add_variable`, putting a *lexical* binding in
+  the global environment that outlived the LET* and was invisible to
+  `SYMBOL-VALUE`. Two copies and eight absences → one.
+  **The distinction the shared binder had to get right** is declaration vs.
+  proclamation: a local `(declare (special x))` governs the form it heads and
+  free references within it, but must *not* make a nested binding form bind
+  dynamically, while a `DEFVAR` proclamation must. DOTIMES.17 and .18 differ
+  only in whether the loop body declares the variable, and expect `(0 0 0 0)`
+  and `(3 2 1 0)` respectively — so `is_proclaimed_special` consults the root
+  environment only, and walking the chain (the obvious "more correct" reading)
+  collapses the pair. Landed with it: a binding form's *free* special
+  declarations now redirect through the same `%SPECIAL-REF` symbol macro
+  LOCALLY already used (`special_reference`), which is what DOLIST.17 and DO.17
+  need for a result form and a step form respectively; `eval_locally` reuses
+  the shared declaration parser instead of its own inline copy; declarations
+  are stripped from an iteration body before it runs as a TAGBODY, where a
+  declaration is not a statement; and a bare symbol in LET*'s binding list
+  binds to NIL (CLHS 3.1.2.1.1) instead of being skipped and left unbound.
+  **Landed with it, and it turned out to matter more than the binder: the
+  `*PACKAGE*` mirror was never restored.** The restore was guarded by
+  `if old_package is not None`, which conflates "nothing was saved" with "None
+  *is* the saved value" — and None is `state.current_package`'s normal state
+  until something binds `*PACKAGE*`, because a plain reference falls back to a
+  default. So the **first** `(let ((*package* p)) ...)` of a session never
+  restored, and every symbol read afterwards interned into `p`. Found by a
+  smoke test whose every later form came back with keywords where it had
+  written symbols; it is why `packages` could not complete.
+  **Measured, before → after on the same targets** (each run in a worktree at
+  the previous commit, so these are like-for-like and not full-run numbers):
+  | target | before | after |
+  |---|---|---|
+  | `iteration` | 410 of 843 | **424** of 843 |
+  | `data-and-control-flow` | 1022 of 1428 | **1023** of 1428 |
+  | `cons` | 868 of 1882 | 868 — unchanged |
+  | `conditions` | 159 of 664 | 159 — unchanged |
+  | `packages` | **crashes** — `ConditionException: Not an output stream: #\f` | **140 of 500, completes** |
+  | `printer/print-strings.lsp` | registers 16, **no result** | **8 of 16, completes** |
+  | `printer/print-symbols.lsp` | registers 31, **no result** | **7 of 31, completes** |
+  The bottom three are RT's own report stream being overwritten by a loop
+  variable and then printed to; **that they now complete is the untargeted
+  movement that says this was a mechanism** and not a repair to `iteration`.
+  A whole-directory `run_ansi.py printer` run still does **not** complete, but
+  it now reaches `printer/format/` (FORMAT.S.7) instead of dying in
+  `print-strings.lsp`, on an unrelated defect — `ValueError: I/O operation on
+  closed file` leaking as a Lisp value ([X1](#x1-python-exceptions-leaking-as-lisp-values))
+  and then an abrupt exit with no traceback. **That is the next thing in front
+  of the printer directory, and it is not this one.**
+  **Per-test diff on `iteration`: 16 fixed, 2 lost — and both losses are false
+  passes the leak was manufacturing.** Fixed: DO.17/.18/.19, DO*.17/.18/.19,
+  DOLIST.6/.14/.17, DOTIMES.16/.17/.17A/.23/.23A, LOOP.2.17, LOOP.3.17 — only
+  five of which were targeted. Lost: LOOP.14.38 and LOOP.14.39, which are
+  `(loop for x in '(1 2 nil 3 4 nil 5 nil) when x count it)`. **LOOP's `IT` is
+  not implemented at all** — `(loop ... count it)` signals `Unbound variable:
+  IT` in isolation both before and after this change. They passed only because
+  `iteration/loop14.lsp:260` runs `(loop for it on '(a b c d) ...)` earlier in
+  the same file and the old leak left `it` bound at the root to a truthy value,
+  so `count it` counted a leaked constant once per iteration where `when x`
+  held, arriving at 5 by coincidence. Standing rule: a test that passes for the
+  wrong reason is not progress, so these were not preserved; `IT` is now a
+  visible [C1 follow-up](#c1-follow-ups-still-open) instead of an invisible one.
+  `pytest` 1494 passed (from 1457), same 1 pre-existing unrelated failure
+  (`test_all_expected_functions_are_registered`); the 13 `xfail`s in
+  `tests/test_iteration_variable_binding.py` are now passing tests, and the
+  module grew coverage for the special-vs-lexical decision, unwinding on a
+  non-local exit, the `*PACKAGE*` mirror, and LET*'s two repairs.
+  **Discovered, diagnosed and deliberately not fixed here:** a special variable
+  has **two homes that never reconcile** — `DEFVAR`/`SETQ` maintain a lexical
+  binding in the global environment, `SYMBOL-VALUE`/`BOUNDP`/`PROGV` and every
+  dynamic binding use the value cell, and `eval` checks the lexical chain first,
+  so `(defvar *x* 1)` leaves `(boundp '*x*)` NIL and `(let ((*x* 2)) *x*)` reads
+  1. Consolidating the binder is what isolated it: the frame's dynamic bindings
+  are provably correct through `SYMBOL-VALUE`, so the residual wrong answer is
+  entirely the global lexical binding's. See [§5](#5-known-temporary-deviations)
+  and the 4 `xfail`s in `TestTheGlobalValueCellDefect`; it is M2's next slice,
+  and the fix has to move `SETQ` and `eval`'s lookup order with it.
 - **2026-08-14** — **C7: there is one printer, and output goes where the
   language says.** `fclpy/printer.py` — previously a complete printer that
   *nothing under `fclpy/` imported* — is now the only one, and every Lisp-visible

@@ -3,6 +3,7 @@
 import fclpy.lisptype as lisptype
 from .core import car, cdr, _consp_internal, cons
 from . import registry as _registry
+from .binding import BindingFrame, body_specials, special_reference
 import time
 import sys
 
@@ -642,52 +643,19 @@ def eval_locally(form, env):
     var*) declaration, however, changes semantics: within this LOCALLY's
     body, references to `var` must go through its global/dynamic value cell
     (the same cell SYMBOL-VALUE/BOUNDP/SET/PROGV use) instead of any
-    lexical binding. We implement that by installing a symbol-macro that
-    expands `var` to `(SYMBOL-VALUE 'var)` in a child environment, scoped
-    to this LOCALLY's body only.
+    lexical binding. Since LOCALLY binds nothing, *every* special declaration
+    here is a free one, which is the same case `BindingFrame` handles for a
+    binding form's free declarations -- so both use `special_reference`.
     """
     from .evaluation_core import eval
 
-    args = cdr(form)
+    special_vars, args = body_specials(cdr(form))
     result = lisptype.NIL
-    special_vars = []
-
-    # Process DECLARE forms at the start
-    while _consp_internal(args):
-        first = car(args)
-        # Check if this is a DECLARE form
-        if (_consp_internal(first) and
-            isinstance(car(first), lisptype.LispSymbol) and
-            car(first).name == 'DECLARE'):
-            decl_specs = cdr(first)
-            while _consp_internal(decl_specs):
-                spec = car(decl_specs)
-                if (_consp_internal(spec) and isinstance(car(spec), lisptype.LispSymbol)
-                        and car(spec).name == 'SPECIAL'):
-                    names = cdr(spec)
-                    while _consp_internal(names):
-                        var = car(names)
-                        if isinstance(var, lisptype.LispSymbol):
-                            special_vars.append(var)
-                        names = cdr(names)
-                decl_specs = cdr(decl_specs)
-            # Skip this declaration
-            args = cdr(args)
-        else:
-            # Not a declaration, start evaluating body
-            break
 
     if special_vars:
         body_env = lisptype.Environment(parent=env)
         for var in special_vars:
-            # %SPECIAL-REF reads the symbol's dynamic value cell if one has
-            # been established (e.g. by PROGV), falling back to a normal
-            # lexical lookup of `var` otherwise -- so this doesn't break
-            # variables that are only ever bound lexically (e.g. a DO/LET
-            # loop variable that also happens to be declared special for
-            # its own binding form, which isn't dynamically bound here).
-            special_ref_form = cons(lisptype.LispSymbol('%SPECIAL-REF'), cons(var, lisptype.NIL))
-            body_env.add_symbol_macro(var, special_ref_form)
+            body_env.add_symbol_macro(var, special_reference(var))
     else:
         body_env = env
 
@@ -738,61 +706,15 @@ def eval_let(form, env):
         bindings_list.append((var, value))
         current = cdr(current)
     
-    # Now bind all variables in new environment
-    # Track special variables that need special handling
+    # Now bind all variables in the new environment. Whether each one is bound
+    # lexically or dynamically is `BindingFrame`'s decision, shared with LET*
+    # and all eight iteration forms -- see fclpy/lispfunc/binding.py.
     import fclpy.state as state
-    old_package = None
-    has_package_binding = False
-    # Determine the global/root environment for special-variable checks
-    global_env = env
-    while global_env.parent is not None:
-        global_env = global_env.parent
-
-    # Collect any local DECLARE (SPECIAL ...) entries at start of body
-    local_specials = set()
-    decl_cursor = body
-    while _consp_internal(decl_cursor):
-        first = car(decl_cursor)
-        if (_consp_internal(first) and isinstance(car(first), lisptype.LispSymbol) and car(first).name == 'DECLARE'):
-            # iterate over declaration specs inside this DECLARE
-            specs = cdr(first)
-            while _consp_internal(specs):
-                spec = car(specs)
-                if (_consp_internal(spec) and isinstance(car(spec), lisptype.LispSymbol) and car(spec).name == 'SPECIAL'):
-                    # add all symbols in (SPECIAL ...)
-                    s = cdr(spec)
-                    while _consp_internal(s):
-                        sym = car(s)
-                        if isinstance(sym, lisptype.LispSymbol):
-                            local_specials.add(sym.name)
-                        s = cdr(s)
-                specs = cdr(specs)
-            # move to next top-level form (in case multiple DECLAREs present)
-            decl_cursor = cdr(decl_cursor)
-        else:
-            break
-
-    # (symbol, had_value, old_value) for each dynamically (specially) bound
-    # variable, so its value cell can be restored when LET exits -- the same
-    # cell SYMBOL-VALUE/BOUNDP/SET/PROGV use, so a SET inside this LET's
-    # extent is visible to plain references to the variable and vice versa.
-    dynamic_saves = []
+    frame = BindingFrame(let_env, body=body,
+                         bound_vars=[var for var, _ in bindings_list])
     for var, value in bindings_list:
         if isinstance(var, lisptype.LispSymbol):
-            # If this symbol has been declared SPECIAL locally or globally,
-            # bind its dynamic value cell. Otherwise bind lexically in let_env.
-            if var.name in local_specials or (hasattr(global_env, '_special_variables') and var.name in global_env._special_variables):
-                had_value = getattr(var, 'value', None) is not None
-                dynamic_saves.append((var, had_value, getattr(var, 'value', None)))
-                var.value = value
-            else:
-                let_env.add_variable(var, value)
-
-            # Handle *PACKAGE* special variable - update state.current_package
-            if var.name == '*PACKAGE*' and isinstance(value, lisptype.Package):
-                old_package = getattr(state, 'current_package', None)
-                state.current_package = value
-                has_package_binding = True
+            frame.bind(var, value)
 
     # Update state.current_environment for functions that need it (like LOAD)
     old_env = state.current_environment
@@ -810,12 +732,7 @@ def eval_let(form, env):
     finally:
         # Restore the previous environment
         state.current_environment = old_env
-        # Restore *PACKAGE* if it was dynamically bound
-        if has_package_binding and old_package is not None:
-            state.current_package = old_package
-        # Restore any dynamically (specially) bound variables' value cells
-        for sym, had_value, old_value in dynamic_saves:
-            sym.value = old_value if had_value else None
+        frame.unwind()
 
 
 def eval_letstar(form, env):
@@ -837,32 +754,22 @@ def eval_letstar(form, env):
     
     # Create new environment for LET* scope
     letstar_env = lisptype.Environment(env)
-    
-    # Track special variables that need special handling
+
     import fclpy.state as state
-    old_package = getattr(state, 'current_package', None)
-    has_package_binding = False
-    
-    # Collect any local DECLARE (SPECIAL ...) entries at start of body
-    local_specials = set()
-    decl_cursor = body
-    while _consp_internal(decl_cursor):
-        first = car(decl_cursor)
-        if (_consp_internal(first) and isinstance(car(first), lisptype.LispSymbol) and car(first).name == 'DECLARE'):
-            specs = cdr(first)
-            while _consp_internal(specs):
-                spec = car(specs)
-                if (_consp_internal(spec) and isinstance(car(spec), lisptype.LispSymbol) and car(spec).name == 'SPECIAL'):
-                    s = cdr(spec)
-                    while _consp_internal(s):
-                        sym = car(s)
-                        if isinstance(sym, lisptype.LispSymbol):
-                            local_specials.add(sym.name)
-                        s = cdr(s)
-                specs = cdr(specs)
-            decl_cursor = cdr(decl_cursor)
-        else:
-            break
+
+    # LET*'s copy of the special-vs-lexical decision was not merely duplicated,
+    # it was wrong: a special variable was bound with
+    # `global_env.add_variable`, which puts a *lexical* binding in the global
+    # environment and never removes it, so the binding outlived the LET* and
+    # was invisible to SYMBOL-VALUE. One shared `BindingFrame` now decides for
+    # LET, LET* and the eight iteration forms alike.
+    bound_vars = []
+    current = bindings_form
+    while _consp_internal(current):
+        binding = car(current)
+        bound_vars.append(car(binding) if _consp_internal(binding) else binding)
+        current = cdr(current)
+    frame = BindingFrame(letstar_env, body=body, bound_vars=bound_vars)
 
     # Process bindings sequentially - each can see previous ones
     current = bindings_form
@@ -873,28 +780,19 @@ def eval_letstar(form, env):
             init_form = car(cdr(binding))
             # Evaluate init in CURRENT environment (with previous bindings)
             value = eval(init_form, letstar_env)
-            if isinstance(var, lisptype.LispSymbol):
-                # If declared SPECIAL globally, bind into the global environment
-                # to provide dynamic semantics; otherwise bind lexically.
-                global_env = env
-                while global_env.parent is not None:
-                    global_env = global_env.parent
-                if var.name in local_specials or (hasattr(global_env, '_special_variables') and var.name in global_env._special_variables):
-                    global_env.add_variable(var, value)
-                else:
-                    letstar_env.add_variable(var, value)
-                # Handle *PACKAGE* special variable - update state.current_package
-                if var.name == '*PACKAGE*' and isinstance(value, lisptype.Package):
-                    if not has_package_binding:
-                        old_package = getattr(state, 'current_package', None)
-                        has_package_binding = True
-                    state.current_package = value
+        else:
+            # A bare symbol binds to NIL (CLHS 3.1.2.1.1), as it does in LET.
+            # LET* skipped these entirely, so the variable was left unbound.
+            var = binding
+            value = lisptype.NIL
+        if isinstance(var, lisptype.LispSymbol):
+            frame.bind(var, value)
         current = cdr(current)
-    
+
     # Update state.current_environment for functions that need it (like LOAD)
     old_env = state.current_environment
     state.current_environment = letstar_env
-    
+
     try:
         # Evaluate body in environment with all bindings
         result = None
@@ -902,14 +800,12 @@ def eval_letstar(form, env):
         while _consp_internal(current):
             result = eval(car(current), letstar_env)
             current = cdr(current)
-        
+
         return result
     finally:
         # Restore the previous environment
         state.current_environment = old_env
-        # Restore *PACKAGE* if it was dynamically bound
-        if has_package_binding:
-            state.current_package = old_package
+        frame.unwind()
 
 
 def eval_flet(form, env):
@@ -1426,11 +1322,18 @@ def eval_loop(form, env):
         """Get uppercase symbol name or None."""
         return x.name.upper() if isinstance(x, lisptype.LispSymbol) else None
 
-    def _bind_varspec(loop_env, varspec, value):
-        """Bind a LOOP var spec (symbol or simple destructuring pattern)."""
+    def _bind_varspec(frame, varspec, value):
+        """Bind a LOOP var spec (symbol or simple destructuring pattern).
+
+        Goes through the loop's `BindingFrame`, which *establishes* the variable
+        on the first iteration and assigns to that same binding afterwards. It
+        used to call `set_variable`, which walks out to an enclosing binding of
+        the same name and mutates it -- so `(loop for s = ...)` overwrote a
+        caller's `s`, rt.lsp's report stream among them.
+        """
         # Common case: single symbol
         if isinstance(varspec, lisptype.LispSymbol):
-            loop_env.set_variable(varspec, value)
+            frame.bind(varspec, value)
             return
 
         # Destructuring patterns used by ANSI tests (e.g., (KEY . VAL))
@@ -1440,11 +1343,11 @@ def eval_loop(form, env):
             right = cdr(varspec)
             if isinstance(left, lisptype.LispSymbol) and isinstance(right, lisptype.LispSymbol) and not _consp_internal(right):
                 if _consp_internal(value):
-                    loop_env.set_variable(left, car(value))
-                    loop_env.set_variable(right, cdr(value))
+                    frame.bind(left, car(value))
+                    frame.bind(right, cdr(value))
                 else:
-                    loop_env.set_variable(left, lisptype.NIL)
-                    loop_env.set_variable(right, lisptype.NIL)
+                    frame.bind(left, lisptype.NIL)
+                    frame.bind(right, lisptype.NIL)
                 return
 
             # Proper list pattern: (A B C)
@@ -1454,10 +1357,10 @@ def eval_loop(form, env):
                 pitem = car(pat)
                 if isinstance(pitem, lisptype.LispSymbol):
                     if _consp_internal(cur_val):
-                        loop_env.set_variable(pitem, car(cur_val))
+                        frame.bind(pitem, car(cur_val))
                         cur_val = cdr(cur_val)
                     else:
-                        loop_env.set_variable(pitem, lisptype.NIL)
+                        frame.bind(pitem, lisptype.NIL)
                 pat = cdr(pat)
             return
 
@@ -1878,7 +1781,10 @@ def eval_loop(form, env):
                     return_triggered = True
 
             if clause['into'] is not None:
-                loop_env.set_variable(clause['into'], _accumulated_value(key))
+                # Through the frame that established it, for the same reason the
+                # establishing bind goes through the frame: `set_variable` would
+                # walk out to an enclosing binding of the same name.
+                loop_frame[0].bind(clause['into'], _accumulated_value(key))
 
             if return_triggered:
                 return
@@ -1889,6 +1795,11 @@ def eval_loop(form, env):
                  f"drivers: {[(d['kind'], d['var']) for d in iteration_drivers]}",
                  f"termination_tests: {termination_tests}"],
         hard_cap=LOOP_TIMEOUT_ERROR)
+
+    # `loop_env` and its frame are created inside _run_loop_and_finalize, but the
+    # frame has to be unwound from outside it so a dynamic binding is undone on
+    # a non-local exit too.
+    loop_frame = []
 
     def _run_loop_and_finalize():
         """Run the loop's iteration/FINALLY/result logic under the loop's own
@@ -2072,14 +1983,15 @@ def eval_loop(form, env):
                 return _consp_internal(driver.get('_cur'))
             return False
 
-        def _bind_driver(loop_env, driver):
+        def _bind_driver(frame, driver):
+            loop_env = frame.env
             kind = driver['kind']
             var = driver['var']
             if kind == 'for-in':
-                _bind_varspec(loop_env, var, car(driver['_cur']))
+                _bind_varspec(frame, var, car(driver['_cur']))
                 return
             if kind == 'for-on':
-                _bind_varspec(loop_env, var, driver['_cur'])
+                _bind_varspec(frame, var, driver['_cur'])
                 return
             if kind == 'for-across':
                 seq = driver['_seq']
@@ -2093,13 +2005,13 @@ def eval_loop(form, env):
                 # element-wise follows into unbounded recursion. Shared with
                 # AREF so both halves agree on what a character is.
                 from .sequences_higher import string_element
-                _bind_varspec(loop_env, var, string_element(seq, seq[idx]))
+                _bind_varspec(frame, var, string_element(seq, seq[idx]))
                 return
             if kind in ('for-range', 'for-below'):
-                _bind_varspec(loop_env, var, driver['_cur'])
+                _bind_varspec(frame, var, driver['_cur'])
                 return
             if kind == 'for-from':
-                _bind_varspec(loop_env, var, driver['_cur'])
+                _bind_varspec(frame, var, driver['_cur'])
                 return
             if kind == 'for-equals':
                 if driver['_first']:
@@ -2109,12 +2021,12 @@ def eval_loop(form, env):
                     # No THEN form means the init form supplies every value.
                     step_form = driver.get('step')
                     value_form = driver.get('start') if step_form is None else step_form
-                _bind_varspec(loop_env, var, eval(value_form, loop_env))
+                _bind_varspec(frame, var, eval(value_form, loop_env))
                 return
             if kind == 'repeat':
                 return
             if kind == 'for-being-symbols':
-                _bind_varspec(loop_env, var, car(driver['_cur']))
+                _bind_varspec(frame, var, car(driver['_cur']))
                 return
 
         def _step_driver(loop_env, driver):
@@ -2161,15 +2073,20 @@ def eval_loop(form, env):
         # gone rather than fixed.
         # ------------------------------------------------------------------
         loop_env = lisptype.Environment(env)
+        # LOOP takes no declarations, so its variables are lexical unless the
+        # symbol has been *proclaimed* special -- which is `BindingFrame`'s
+        # decision, the same one LET and the DO family now make.
+        frame = BindingFrame(loop_env)
+        loop_frame.append(frame)
         for d in iteration_drivers:
             _init_driver(loop_env, d)
 
-        # INTO names a variable local to the loop (CLHS 6.1.3), so bind it here
-        # -- add_variable, not set_variable, or the accumulation would assign
-        # through to an outer binding of the same name and clobber it.
+        # INTO names a variable local to the loop (CLHS 6.1.3), so bind it
+        # through the frame: the accumulation must not assign through to an
+        # outer binding of the same name and clobber it.
         for clause in accumulations:
             if clause['into'] is not None:
-                loop_env.add_variable(clause['into'], _accumulated_value(_acc_key(clause)))
+                frame.bind(clause['into'], _accumulated_value(_acc_key(clause)))
 
         # The prologue runs once, after the iteration variables exist and
         # before the first termination test (CLHS 6.1.7.1).
@@ -2188,7 +2105,7 @@ def eval_loop(form, env):
                 # while (< x 20) ...) -- so testing first sees either an unbound
                 # variable on the first iteration or a stale one thereafter.
                 for d in iteration_drivers:
-                    _bind_driver(loop_env, d)
+                    _bind_driver(frame, d)
 
                 if _termination_break(loop_env, after_body=False):
                     break
@@ -2235,8 +2152,12 @@ def eval_loop(form, env):
     
         return result
 
-    with loop_watchdog:
-        return _run_with_nil_block(_run_loop_and_finalize, loop_block_name)
+    try:
+        with loop_watchdog:
+            return _run_with_nil_block(_run_loop_and_finalize, loop_block_name)
+    finally:
+        for frame in loop_frame:
+            frame.unwind()
 
 
 def _run_with_nil_block(thunk, block_name=None):
@@ -2328,13 +2249,20 @@ def eval_do(form, env):
             var_specs.append((var, init_form, step_form))
         current = cdr(current)
     
-    # Evaluate all init forms first (parallel binding like LET)
+    # Evaluate all init forms first (parallel binding like LET), in the
+    # *enclosing* environment -- DO.16 pins that, since its init form refers to
+    # a variable the body then declares special.
     init_values = [eval(init_form, env) for var, init_form, _ in var_specs]
-    
-    # Bind variables
+
+    # One shared binder decides lexical vs. dynamic for each variable and
+    # undoes any dynamic binding on the way out, however this form exits.
+    frame = BindingFrame(loop_env, body=body,
+                         bound_vars=[var for var, _, _ in var_specs])
+    _, body = body_specials(body)
+
     for (var, _, _), value in zip(var_specs, init_values):
-        loop_env.set_variable(var, value)
-    
+        frame.bind(var, value)
+
     # Main loop, watched for runaway iteration.
     watchdog = LoopWatchdog(
         'DO',
@@ -2364,9 +2292,9 @@ def eval_do(form, env):
                     new_values.append((var, eval(step_form, loop_env)))
 
             for var, value in new_values:
-                loop_env.set_variable(var, value)
+                frame.bind(var, value)
 
-    with watchdog:
+    with frame, watchdog:
         return _run_with_nil_block(_loop)
 
 
@@ -2406,13 +2334,29 @@ def eval_do_star(form, env):
     # Create new environment
     loop_env = lisptype.Environment(env)
     
+    # The variables this DO* is about to bind, needed before the first bind so
+    # the binder can tell a declaration *of* a variable it binds from a free
+    # one (DO*.17).
+    declared_vars = []
+    current = var_list
+    while _consp_internal(current):
+        spec = car(current)
+        declared_vars.append(car(spec) if _consp_internal(spec) else spec)
+        current = cdr(current)
+    # DO* evaluates each init form in `loop_env`, so a free special declaration
+    # must not be installed until the inits are done -- see DO*.16 and
+    # `install_free_declarations`.
+    frame = BindingFrame(loop_env, body=body, bound_vars=declared_vars,
+                         defer_free_declarations=True)
+    _, body = body_specials(body)
+
     # Parse var specs and evaluate init forms SEQUENTIALLY (like LET*)
     var_specs = []
     current = var_list
     while _consp_internal(current):
         spec = car(current)
         if isinstance(spec, lisptype.LispSymbol):
-            loop_env.set_variable(spec, lisptype.NIL)
+            frame.bind(spec, lisptype.NIL)
             var_specs.append((spec, None))
         elif _consp_internal(spec):
             var = car(spec)
@@ -2420,10 +2364,14 @@ def eval_do_star(form, env):
             step_form = car(cdr(cdr(spec))) if _consp_internal(cdr(cdr(spec))) else None
             # Evaluate in current loop_env (sequential)
             init_value = eval(init_form, loop_env)
-            loop_env.set_variable(var, init_value)
+            frame.bind(var, init_value)
             var_specs.append((var, step_form))
         current = cdr(current)
-    
+
+    # The inits are done; the body, the step forms and the result forms *are*
+    # in the scope of the body's declarations (DO*.17).
+    frame.install_free_declarations()
+
     # Main loop with timeout warning
     watchdog = LoopWatchdog(
         'DO*',
@@ -2450,9 +2398,9 @@ def eval_do_star(form, env):
             for var, step_form in var_specs:
                 if step_form is not None:
                     new_value = eval(step_form, loop_env)
-                    loop_env.set_variable(var, new_value)
+                    frame.bind(var, new_value)
 
-    with watchdog:
+    with frame, watchdog:
         return _run_with_nil_block(_loop)
 
 
@@ -2483,13 +2431,15 @@ def eval_dolist(form, env):
     
     # Create loop environment
     loop_env = lisptype.Environment(env)
-    loop_env.set_variable(var, lisptype.NIL)
+    frame = BindingFrame(loop_env, body=body, bound_vars=[var])
+    _, body = body_specials(body)
+    frame.bind(var, lisptype.NIL)
 
     def _loop():
         # Iterate over list
         current_list = lst
         while _consp_internal(current_list):
-            loop_env.set_variable(var, car(current_list))
+            frame.bind(var, car(current_list))
 
             # Execute body
             _exec_iteration_body(body, loop_env)
@@ -2497,12 +2447,13 @@ def eval_dolist(form, env):
             current_list = cdr(current_list)
 
         # Set var to NIL for result form
-        loop_env.set_variable(var, lisptype.NIL)
+        frame.bind(var, lisptype.NIL)
 
         # Evaluate and return result form
         return eval(result_form, loop_env)
 
-    return _run_with_nil_block(_loop)
+    with frame:
+        return _run_with_nil_block(_loop)
 
 
 def eval_dotimes(form, env):
@@ -2535,22 +2486,25 @@ def eval_dotimes(form, env):
     
     # Create loop environment
     loop_env = lisptype.Environment(env)
+    frame = BindingFrame(loop_env, body=body, bound_vars=[var])
+    _, body = body_specials(body)
 
     def _loop():
         # Iterate count times
         for i in range(count):
-            loop_env.set_variable(var, i)
+            frame.bind(var, i)
 
             # Execute body
             _exec_iteration_body(body, loop_env)
 
         # Set var to count for result form
-        loop_env.set_variable(var, count)
+        frame.bind(var, count)
 
         # Evaluate and return result form
         return eval(result_form, loop_env)
 
-    return _run_with_nil_block(_loop)
+    with frame:
+        return _run_with_nil_block(_loop)
 
 
 def eval_do_symbols(form, env):
@@ -2593,12 +2547,14 @@ def eval_do_symbols(form, env):
     
     # Create loop environment
     loop_env = lisptype.Environment(env)
-    loop_env.set_variable(var, lisptype.NIL)
+    frame = BindingFrame(loop_env, body=body, bound_vars=[var])
+    _, body = body_specials(body)
+    frame.bind(var, lisptype.NIL)
 
     def _loop():
         # Iterate over all symbols in package (internal + external)
         for name, sym in list(pkg.symbols.items()):
-            loop_env.set_variable(var, sym)
+            frame.bind(var, sym)
             _exec_iteration_body(body, loop_env)
 
         # Also iterate over inherited symbols from used packages
@@ -2612,14 +2568,15 @@ def eval_do_symbols(form, env):
                     else:
                         sym = used_pkg.symbols.get(item)
                     if sym is not None:
-                        loop_env.set_variable(var, sym)
+                        frame.bind(var, sym)
                         _exec_iteration_body(body, loop_env)
 
         # Set var to NIL for result form
-        loop_env.set_variable(var, lisptype.NIL)
+        frame.bind(var, lisptype.NIL)
         return eval(result_form, loop_env)
 
-    return _run_with_nil_block(_loop)
+    with frame:
+        return _run_with_nil_block(_loop)
 
 
 def eval_do_external_symbols(form, env):
@@ -2662,7 +2619,9 @@ def eval_do_external_symbols(form, env):
     
     # Create loop environment
     loop_env = lisptype.Environment(env)
-    loop_env.set_variable(var, lisptype.NIL)
+    frame = BindingFrame(loop_env, body=body, bound_vars=[var])
+    _, body = body_specials(body)
+    frame.bind(var, lisptype.NIL)
 
     def _loop():
         # Iterate over external symbols only
@@ -2676,14 +2635,15 @@ def eval_do_external_symbols(form, env):
                 # It's a string name, look up the symbol
                 sym = pkg.symbols.get(item)
             if sym is not None:
-                loop_env.set_variable(var, sym)
+                frame.bind(var, sym)
                 _exec_iteration_body(body, loop_env)
 
         # Set var to NIL for result form
-        loop_env.set_variable(var, lisptype.NIL)
+        frame.bind(var, lisptype.NIL)
         return eval(result_form, loop_env)
 
-    return _run_with_nil_block(_loop)
+    with frame:
+        return _run_with_nil_block(_loop)
 
 
 def eval_do_all_symbols(form, env):
@@ -2712,7 +2672,9 @@ def eval_do_all_symbols(form, env):
     
     # Create loop environment
     loop_env = lisptype.Environment(env)
-    loop_env.set_variable(var, lisptype.NIL)
+    frame = BindingFrame(loop_env, body=body, bound_vars=[var])
+    _, body = body_specials(body)
+    frame.bind(var, lisptype.NIL)
 
     def _loop():
         # Get all unique packages
@@ -2721,14 +2683,15 @@ def eval_do_all_symbols(form, env):
         # Iterate over all symbols in all packages
         for pkg in unique_packages.values():
             for name, sym in list(pkg.symbols.items()):
-                loop_env.set_variable(var, sym)
+                frame.bind(var, sym)
                 _exec_iteration_body(body, loop_env)
 
         # Set var to NIL for result form
-        loop_env.set_variable(var, lisptype.NIL)
+        frame.bind(var, lisptype.NIL)
         return eval(result_form, loop_env)
 
-    return _run_with_nil_block(_loop)
+    with frame:
+        return _run_with_nil_block(_loop)
 
 
 __all__ = [
