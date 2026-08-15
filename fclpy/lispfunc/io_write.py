@@ -582,10 +582,14 @@ def _lisp_number(value, default=0):
     """Read a `~^` prefix parameter as an integer.
 
     A parameter is either a literal from the control string (already an
-    int) or whatever `~V` pulled off the argument list, which may be a Lisp
-    integer object. Anything non-numeric falls back to `default` rather
-    than raising, because `~^`'s parameters only select between "terminate"
-    and "keep going" -- a malformed one must not abort the whole FORMAT.
+    int), a `'c` character literal, or whatever `~V` pulled off the argument
+    list, which may be a Lisp integer or character object. A character
+    parameter (CLHS 22.3.3's `'c` syntax) compares by its code, the same way
+    `EQL` would -- not as 0, which would make every `'c`-parameterised `~^`
+    fire unconditionally. Anything else non-numeric falls back to `default`
+    rather than raising, because `~^`'s parameters only select between
+    "terminate" and "keep going" -- a malformed one must not abort the whole
+    FORMAT.
     """
     if value is None:
         return default
@@ -593,6 +597,10 @@ def _lisp_number(value, default=0):
         return int(value)
     if isinstance(value, int):
         return value
+    if isinstance(value, lisptype.Character):
+        return ord(value.char)
+    if isinstance(value, str) and len(value) == 1:
+        return ord(value)
     try:
         return int(value)
     except (TypeError, ValueError):
@@ -1526,9 +1534,14 @@ def _format_directive(control_string, cursor, pos, emitted=None):
         if at_flag:
             # ~@{...~} - use the rest of the outer arguments as the items,
             # directly from the outer cursor: they belong to the same
-            # argument stream, not a separate list argument.
+            # argument stream, not a separate list argument (CLHS 22.3.7.3).
+            # Whatever the iteration below does *not* consume -- because a
+            # `~n@{`, an internal `~^`, or the arguments simply not dividing
+            # evenly among passes stops it early -- must stay visible to
+            # directives that follow `~@{...~}` in the outer control string,
+            # so the outer cursor is only advanced by `outer_consumed`,
+            # computed after the loop runs, not slurped up front.
             items = cursor.remaining()
-            cursor.idx = len(cursor.args)
         else:
             # ~{...~} / ~:{...~} - the next argument is the list of items,
             # a scope of its own (per CLHS 22.3.7): only the single "list"
@@ -1563,6 +1576,10 @@ def _format_directive(control_string, cursor, pos, emitted=None):
                     if esc.terminate_outer:
                         break
                     continue
+            # Every pass counted in `iterations` took exactly one item off
+            # the outer stream, whether it ran to completion or a `~^`
+            # ended it partway through.
+            outer_consumed = iterations
         else:
             # One pass at a time over what is left; each pass gets a fresh
             # cursor, and however much it consumed is where the next starts.
@@ -1576,6 +1593,10 @@ def _format_directive(control_string, cursor, pos, emitted=None):
                     result_parts.append(_format_process_cursor(inner, sub_cursor))
                 except _FormatEscape as esc:
                     result_parts.append(esc.partial)
+                    # The escaping pass may have consumed some items before
+                    # ~^ fired (e.g. ~A~^); reflect that in item_list so the
+                    # outer-consumption count below is exact, not "all of it".
+                    item_list = item_list[sub_cursor.idx:]
                     break
                 consumed = sub_cursor.idx
                 if consumed <= 0:
@@ -1583,6 +1604,10 @@ def _format_directive(control_string, cursor, pos, emitted=None):
                     # by one so the loop stays bounded.
                     consumed = 1
                 item_list = item_list[consumed:]
+            outer_consumed = len(items) - len(item_list)
+
+        if at_flag:
+            cursor.idx += outer_consumed
 
         return (''.join(result_parts), end_pos)
     
@@ -1595,19 +1620,24 @@ def _format_directive(control_string, cursor, pos, emitted=None):
         # transfer, not a character, so it raises rather than returning an
         # in-band marker for callers to string-replace out.
         #
-        # Whether it fires depends on its prefix parameters:
+        # Whether it fires depends on how many prefix parameters are
+        # *actually supplied* (CLHS 22.3.9.2):
         #   none    - terminate if no arguments remain
         #   n       - terminate if n is zero
         #   n,m     - terminate if n equals m
         #   n,m,p   - terminate if n <= m <= p
-        supplied = [p for p in params if p is not None]
-        if len(params) >= 3:
-            n, m, p = params[0], params[1], params[2]
+        # A `~V`-sourced parameter that evaluates to NIL counts as omitted
+        # (CLHS 22.3.3), so arity is decided by `_is_unspecified`, not by
+        # position in `params` -- a blank/NIL leading parameter must shift
+        # the remaining ones down rather than being read as a literal 0.
+        supplied = [p for p in params if not _is_unspecified(p)]
+        if len(supplied) >= 3:
+            n, m, p = supplied[0], supplied[1], supplied[2]
             should_escape = _lisp_number(n) <= _lisp_number(m) <= _lisp_number(p)
-        elif len(supplied) == 2 or (len(params) == 2 and params[0] is not None):
-            should_escape = _lisp_number(params[0]) == _lisp_number(params[1])
-        elif len(params) == 1 and params[0] is not None:
-            should_escape = _lisp_number(params[0]) == 0
+        elif len(supplied) == 2:
+            should_escape = _lisp_number(supplied[0]) == _lisp_number(supplied[1])
+        elif len(supplied) == 1:
+            should_escape = _lisp_number(supplied[0]) == 0
         else:
             should_escape = cursor.remaining_count() <= 0
 
