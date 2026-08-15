@@ -297,6 +297,14 @@ def parse_lambda_list(lambda_list):
 
         current = cdr(current)
 
+    # A destructuring lambda list may end in a dotted pair whose tail is a
+    # single variable (CLHS 3.4.4), e.g. `(a b . rest)`, instead of an
+    # explicit &REST/&BODY keyword. A proper list ends this loop with NIL
+    # (however NIL is represented); anything else left in `current` is that
+    # dotted-tail variable.
+    if rest is None and isinstance(current, lisptype.LispSymbol) and current.name.upper() != 'NIL':
+        rest = current
+
     # Include whole and environment in returned structure so macro handling can bind them
     return {
         'required': required,
@@ -307,6 +315,124 @@ def parse_lambda_list(lambda_list):
         'whole': whole,
         'environment': environment
     }
+
+
+def bind_destructuring_pattern(pattern, value, env):
+    """Bind a Common Lisp *destructuring lambda list* pattern against a value.
+
+    CLHS 3.4.4/3.4.5: a destructuring pattern is a symbol (bound directly to
+    the whole value), NIL (nothing bound), or a list which may itself contain
+    any of the lambda-list-keyword sections (&WHOLE/&OPTIONAL/&REST/&BODY/
+    &KEY/&AUX) or end in a dotted tail -- and any variable name occupying any
+    of those sections may itself be a nested pattern of the same shape. One
+    recursive walk handles every level by reusing parse_lambda_list, so a
+    nested pattern is parsed exactly like a top-level one instead of a second,
+    partial copy that only understands the shapes its author had in mind.
+
+    Shared by DEFMACRO/MACROLET's parameter binding and DESTRUCTURING-BIND,
+    which destructure the same grammar (CLHS 3.4.4) into two different
+    environments -- callers pass whichever `env` the bindings belong in.
+    """
+    if isinstance(pattern, lisptype.LispSymbol) and pattern.name.upper() != 'NIL':
+        env.add_variable(pattern, value if value is not None else lisptype.NIL)
+        return
+    if not _consp_internal(pattern):
+        return
+
+    parsed = parse_lambda_list(pattern)
+
+    whole = parsed.get('whole')
+    if whole is not None:
+        bind_destructuring_pattern(whole, value, env)
+
+    cur = value
+    for p in parsed.get('required', []):
+        if _consp_internal(cur):
+            v = car(cur)
+            cur = cdr(cur)
+        else:
+            v = lisptype.NIL
+        bind_destructuring_pattern(p, v, env)
+
+    for opt in parsed.get('optional', []):
+        if isinstance(opt, lisptype.LispSymbol):
+            name, default_form, supplied_p = opt, None, None
+        elif _consp_internal(opt):
+            name = car(opt)
+            rest_spec = cdr(opt)
+            default_form = car(rest_spec) if _consp_internal(rest_spec) else None
+            rest_spec2 = cdr(rest_spec) if _consp_internal(rest_spec) else None
+            supplied_p = car(rest_spec2) if _consp_internal(rest_spec2) else None
+        else:
+            continue
+
+        if _consp_internal(cur):
+            v = car(cur)
+            cur = cdr(cur)
+            bind_destructuring_pattern(name, v, env)
+            if supplied_p is not None:
+                env.add_variable(supplied_p, lisptype.T)
+        else:
+            default_value = eval(default_form, env) if default_form is not None else lisptype.NIL
+            bind_destructuring_pattern(name, default_value, env)
+            if supplied_p is not None:
+                env.add_variable(supplied_p, lisptype.NIL)
+
+    rest_param = parsed.get('rest')
+    if rest_param is not None:
+        bind_destructuring_pattern(rest_param, cur, env)
+
+    for kw in parsed.get('keyword', []):
+        if _consp_internal(kw):
+            key_name_spec = car(kw)
+            rest_spec = cdr(kw)
+            default_form = car(rest_spec) if _consp_internal(rest_spec) else None
+            rest_spec2 = cdr(rest_spec) if _consp_internal(rest_spec) else None
+            supplied_p = car(rest_spec2) if _consp_internal(rest_spec2) else None
+        else:
+            key_name_spec = kw
+            default_form = None
+            supplied_p = None
+
+        if isinstance(key_name_spec, lisptype.LispSymbol):
+            kw_name = key_name_spec.name.upper()
+            var_pattern = key_name_spec
+        elif _consp_internal(key_name_spec):
+            kw_sym = car(key_name_spec)
+            tail = cdr(key_name_spec)
+            var_pattern = car(tail) if _consp_internal(tail) else None
+            kw_name = kw_sym.name.upper() if isinstance(kw_sym, (lisptype.LispSymbol, lisptype.lispKeyword)) else None
+        else:
+            continue
+
+        found = False
+        tmpk = cur
+        while _consp_internal(tmpk):
+            k = car(tmpk)
+            rest_k = cdr(tmpk)
+            v = car(rest_k) if _consp_internal(rest_k) else lisptype.NIL
+            if isinstance(k, lisptype.lispKeyword) and k.name.upper() == kw_name:
+                bind_destructuring_pattern(var_pattern, v, env)
+                if supplied_p is not None:
+                    env.add_variable(supplied_p, lisptype.T)
+                found = True
+                break
+            tmpk = cdr(rest_k) if _consp_internal(rest_k) else lisptype.NIL
+        if not found:
+            default_value = eval(default_form, env) if default_form is not None else lisptype.NIL
+            bind_destructuring_pattern(var_pattern, default_value, env)
+            if supplied_p is not None:
+                env.add_variable(supplied_p, lisptype.NIL)
+
+    for aux in parsed.get('aux', []):
+        if isinstance(aux, lisptype.LispSymbol):
+            env.add_variable(aux, lisptype.NIL)
+        elif _consp_internal(aux):
+            aux_name = car(aux)
+            rest_spec = cdr(aux)
+            init_form = car(rest_spec) if _consp_internal(rest_spec) else None
+            init_value = eval(init_form, env) if init_form is not None else lisptype.NIL
+            bind_destructuring_pattern(aux_name, init_value, env)
 
 
 @_registry.cl_function('EVAL')

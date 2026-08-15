@@ -846,7 +846,7 @@ def _create_macro_function(macro_name, lambda_list, body, env):
     Returns:
         A callable with __is_macro__ = True
     """
-    from .evaluation_core import eval, parse_lambda_list
+    from .evaluation_core import eval, parse_lambda_list, bind_destructuring_pattern
 
     # Extract docstring if present (first form in body can be a string)
     docstring = None
@@ -909,162 +909,21 @@ def _create_macro_function(macro_name, lambda_list, body, env):
         if environment_param is not None:
             macro_env.add_variable(environment_param, expansion_env)
         
-        # Bind required parameters
+        # Bind required parameters. A required parameter spec may be a plain
+        # symbol or an arbitrary nested destructuring pattern (CLHS 3.4.4,
+        # e.g. `(arg1 (&whole w arg2))` or `(&rest vars)`); either shape is
+        # handled by the one shared destructuring binder rather than a second
+        # case here for every lambda-list-keyword combination that can appear
+        # nested.
         for param in required_params:
-            # Support destructuring parameter specs (e.g., (arg1 (&whole w arg2)))
-            if isinstance(param, lisptype.lispCons):
-                # The actual argument value (may be a list)
-                val = call_args[arg_idx] if arg_idx < len(call_args) else lisptype.NIL
-                # Detect nested destructuring patterns
-                # Case 1: (&WHOLE w ...)
-                whole_sym = None
-                destruct_syms = []
-                inner = param if _consp_internal(param) else None
-                if _consp_internal(inner) and isinstance(car(inner), lisptype.LispSymbol) and car(inner).name.upper() == '&WHOLE':
-                    # (&WHOLE w a b ...)
-                    nxt = car(cdr(inner)) if _consp_internal(cdr(inner)) else None
-                    if isinstance(nxt, lisptype.LispSymbol):
-                        whole_sym = nxt
-                        tmp = cdr(cdr(inner)) if _consp_internal(cdr(inner)) else lisptype.NIL
-                        while _consp_internal(tmp):
-                            s = car(tmp)
-                            if isinstance(s, lisptype.LispSymbol):
-                                destruct_syms.append(s)
-                            tmp = cdr(tmp)
+            val = call_args[arg_idx] if arg_idx < len(call_args) else lisptype.NIL
+            bind_destructuring_pattern(param, val, macro_env)
+            arg_idx += 1
 
-                # Case 2: ((&KEY foo bar)) or similar key-destructuring
-                key_syms = None
-                if _consp_internal(inner) and isinstance(car(inner), lisptype.LispSymbol) and car(inner).name.upper() == '&KEY':
-                    # inner is (&KEY foo (bar default) (baz default supplied-p) ...)
-                    # Preserve the full spec element (symbol or list) so defaults
-                    # and supplied-p parameter names are available for binding.
-                    key_syms = []
-                    tmpk = cdr(inner)
-                    while _consp_internal(tmpk):
-                        s = car(tmpk)
-                        # Keep either the symbol or the full spec list
-                        if isinstance(s, lisptype.LispSymbol) or _consp_internal(s):
-                            key_syms.append(s)
-                        tmpk = cdr(tmpk)
-
-                # Bind whole symbol if present
-                if whole_sym is not None:
-                    macro_env.add_variable(whole_sym, val)
-                    # Also bind the remaining destructuring symbols
-                    curv = val
-                    for ds in destruct_syms:
-                        if _consp_internal(curv):
-                            macro_env.add_variable(ds, car(curv))
-                            curv = cdr(curv)
-                        else:
-                            macro_env.add_variable(ds, lisptype.NIL)
-
-                # Handle key destructuring: look up keywords in val list
-                if key_syms is not None:
-                    # val expected to be a list of keyword pairs or NIL
-                    # initialize all keys to their defaults (if provided) and
-                    # initialize any supplied-p variables to NIL.
-                    for ks in key_syms:
-                        if isinstance(ks, lisptype.LispSymbol):
-                            macro_env.add_variable(ks, lisptype.NIL)
-                        elif _consp_internal(ks):
-                            key_name = car(ks)
-                            default_form = car(cdr(ks)) if _consp_internal(cdr(ks)) else None
-                            rest2 = cdr(cdr(ks)) if _consp_internal(cdr(ks)) else None
-                            supplied_p = car(rest2) if _consp_internal(rest2) else None
-                            if default_form is not None:
-                                default_value = eval(default_form, macro_env)
-                                macro_env.add_variable(key_name, default_value)
-                            else:
-                                macro_env.add_variable(key_name, lisptype.NIL)
-                            if supplied_p is not None:
-                                macro_env.add_variable(supplied_p, lisptype.NIL)
-                    # Process keyword-value pairs if val is a cons
-                    # Track which keys have been seen (CL uses first occurrence for duplicates)
-                    seen_keys = set()
-                    if isinstance(val, lisptype.lispCons):
-                        curv = val
-                        while _consp_internal(curv):
-                            k = car(curv)
-                            v = car(cdr(curv)) if _consp_internal(cdr(curv)) else lisptype.NIL
-                            # Match keyword to parameter symbol
-                            if isinstance(k, lisptype.lispKeyword):
-                                name = k.name.upper()
-                                # Only bind if this key hasn't been seen before (first occurrence wins)
-                                if name not in seen_keys:
-                                    for ks in key_syms:
-                                        # ks may be a bare symbol or a spec list
-                                        if isinstance(ks, lisptype.LispSymbol):
-                                            if ks.name.upper() == name:
-                                                macro_env.add_variable(ks, v)
-                                                seen_keys.add(name)
-                                                break
-                                        elif _consp_internal(ks):
-                                            key_name_sym = car(ks)
-                                            if isinstance(key_name_sym, lisptype.LispSymbol) and key_name_sym.name.upper() == name:
-                                                # bind the provided value
-                                                macro_env.add_variable(key_name_sym, v)
-                                                # set supplied-p to T if requested
-                                                rest2 = cdr(cdr(ks)) if _consp_internal(cdr(ks)) else None
-                                                supplied_p = car(rest2) if _consp_internal(rest2) else None
-                                                if supplied_p is not None:
-                                                    macro_env.add_variable(supplied_p, lisptype.T)
-                                                seen_keys.add(name)
-                                                break
-                            # advance by two if well-formed, otherwise break
-                            if _consp_internal(cdr(curv)):
-                                curv = cdr(cdr(curv))
-                            else:
-                                break
-                    arg_idx += 1
-                    continue
-                arg_idx += 1
-                continue
-
-            if arg_idx < len(call_args):
-                macro_env.add_variable(param, call_args[arg_idx])
-                arg_idx += 1
-            else:
-                macro_env.add_variable(param, lisptype.NIL)
-
-        # If a parameter name is a destructuring pattern (a cons) rather than
-        # a plain symbol, bind its elements against the value instead of
-        # attempting to add the cons itself as a variable.
+        # A destructuring-pattern parameter name (in &OPTIONAL/&KEY position)
+        # is bound the same way a required one is.
         def _bind_pattern(pat, val):
-            # Bind a symbol directly
-            if isinstance(pat, lisptype.LispSymbol):
-                macro_env.add_variable(pat, val if val is not None else lisptype.NIL)
-                return
-
-            if not _consp_internal(pat):
-                return
-
-            # Collect pattern elements and detect dotted-tail
-            pats = []
-            cur = pat
-            while _consp_internal(cur):
-                pats.append(car(cur))
-                cur = cdr(cur)
-
-            dotted_tail = None
-            if isinstance(cur, lisptype.LispSymbol):
-                dotted_tail = cur
-
-            # Walk value as list and bind elements
-            cur_val = val
-            for p in pats:
-                if _consp_internal(cur_val):
-                    v = car(cur_val)
-                    if isinstance(p, lisptype.LispSymbol):
-                        macro_env.add_variable(p, v)
-                    cur_val = cdr(cur_val)
-                else:
-                    if isinstance(p, lisptype.LispSymbol):
-                        macro_env.add_variable(p, lisptype.NIL)
-
-            # Bind dotted tail to remaining list
-            if dotted_tail is not None:
-                macro_env.add_variable(dotted_tail, cur_val if cur_val is not None else lisptype.NIL)
+            bind_destructuring_pattern(pat, val, macro_env)
 
         def _kw_parts(param):
             """Split a &key parameter name into (keyword-name, var-pattern).
@@ -1448,7 +1307,7 @@ def eval_destructuring_bind(form, env):
     This binds variables according to the lambda-list by destructuring the
     evaluated expression, then evaluates the body forms with those bindings.
     """
-    from .evaluation_core import eval
+    from .evaluation_core import eval, bind_destructuring_pattern
 
     args = cdr(form)
     if not _consp_internal(args) or not _consp_internal(cdr(args)):
@@ -1464,42 +1323,10 @@ def eval_destructuring_bind(form, env):
     # Create a new environment for the bindings
     bind_env = lisptype.Environment(parent=env)
 
-    def _bind(pat, val):
-        # Bind a symbol directly
-        if isinstance(pat, lisptype.LispSymbol):
-            bind_env.add_variable(pat, val if val is not None else lisptype.NIL)
-            return
-
-        # If pattern is not a cons, nothing to bind
-        if not _consp_internal(pat):
-            return
-
-        # Collect pattern elements and detect dotted-tail
-        pats = []
-        cur = pat
-        while _consp_internal(cur):
-            pats.append(car(cur))
-            cur = cdr(cur)
-
-        dotted_tail = None
-        if isinstance(cur, lisptype.LispSymbol):
-            dotted_tail = cur
-
-        # Walk value as list and bind elements
-        cur_val = val
-        for i, p in enumerate(pats):
-            if _consp_internal(cur_val):
-                v = car(cur_val)
-                _bind(p, v)
-                cur_val = cdr(cur_val)
-            else:
-                _bind(p, lisptype.NIL)
-
-        # Bind dotted tail to remaining list
-        if dotted_tail is not None:
-            bind_env.add_variable(dotted_tail, cur_val if cur_val is not None else lisptype.NIL)
-
-    _bind(pattern, expr_val)
+    # DESTRUCTURING-BIND's pattern is the same destructuring-lambda-list
+    # grammar DEFMACRO/MACROLET parameters use (CLHS 3.4.4), so it shares
+    # the one recursive binder with them instead of a second, partial copy.
+    bind_destructuring_pattern(pattern, expr_val, bind_env)
 
     # Evaluate body forms in bind_env
     result = lisptype.NIL
