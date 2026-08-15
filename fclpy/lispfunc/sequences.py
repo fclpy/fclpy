@@ -11,8 +11,9 @@ from .sequences_search import *
 from .sequences_modify import *
 from .sequences_compose import *
 from .sequences_higher import *
-# Import make_array from vectors since sequences_higher no longer has it
-from .vectors import make_array
+# MAKE-ARRAY belongs to the array model (arrays.py), not to the sequence
+# functions; re-exported here for the callers that import it from `sequences`.
+from .arrays import make_array
 
 # Comprehensive exports for backward compatibility
 __all__ = [
@@ -47,10 +48,7 @@ __all__ = [
     'intersection', 'union', 'nunion', 'set_difference', 'nset_difference',
     'set_exclusive_or', 'nset_exclusive_or', 'subsetp', 'nintersection',
     'pop_fn', 'push_fn', 'pushnew',
-    'make_array', 'array_dimensions', 'arrayp', 'array_in_bounds_p',
-    'array_displacement', 'array_dimension', 'adjust_array',
-    'vectorp', 'simple_vector_p', 'bit_vector_p', 'simple_bit_vector_p',
-    'aref', 'svref', 'vector_fn', 'vector_pop', 'vector_push', 'vector_push_extend',
+    'make_array',
     # Symbol-safe names
     'list_s_star_',
 ]

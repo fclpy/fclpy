@@ -19,6 +19,7 @@ from fclpy import classes
 
 # Register special operator handlers into the builtin registry
 from . import registry as _registry
+from . import arrays as _arrays
 import fclpy.lispfunc as lispfunc
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,22 @@ def _get_func_signature_info(func_id: int, func):
         return (use_kwargs, frozenset(kwarg_param_names), num_required_positionals)
     except (ValueError, TypeError):
         return (False, frozenset(), 0)
+
+
+
+def _eval_args(args, env):
+    """Evaluate a place's argument forms, left to right, into a Python list.
+
+    A place's subforms are evaluated once, in order (CLHS 5.1.1.1); the copies
+    this replaced each evaluated exactly the first *two* of them, which is why
+    an array place could only ever take one subscript.
+    """
+    values = []
+    current = args
+    while _consp_internal(current):
+        values.append(eval(car(current), env))
+        current = cdr(current)
+    return values
 
 
 def get_func_signature_info(func):
@@ -533,29 +550,10 @@ def eval(form, env=None):
                                     cdr(target).car = result
                                 else:
                                     raise lisptype.LispError("SETF CADR: invalid structure")
-                            elif op_name in ('AREF', 'SVREF'):
-                                # (SETF (AREF arr i) val), etc.
-                                arr = eval(car(place_args), env)
-                                idx = eval(car(cdr(place_args)), env)
-                                try:
-                                    arr[idx] = result
-                                except IndexError:
-                                    # Defensive: if underlying representation is a Python
-                                    # list used as a vector, allow growth to accommodate
-                                    # the assignment rather than raising an uncaught
-                                    # IndexError which aborts the test runner. This
-                                    # approximates adjustable-vector behavior for the
-                                    # test-suite and prevents crashes; if arr is not
-                                    # a list, fall through to the generic LispError.
-                                    if isinstance(arr, list) and isinstance(idx, int) and idx >= 0:
-                                        # Extend with canonical NIL values
-                                        needed = idx + 1 - len(arr)
-                                        arr.extend([lisptype.NIL] * needed)
-                                        arr[idx] = result
-                                    else:
-                                        raise lisptype.LispError(f"SETF {op_name}: list assignment index out of range")
-                                except TypeError as e:
-                                    raise lisptype.LispError(f"SETF {op_name}: {e}")
+                            elif _arrays.is_array_place(op_name):
+                                # (SETF (AREF arr i j) val), (SETF (FILL-POINTER v) n), ...
+                                _arrays.array_place_write(
+                                    op_name, _eval_args(place_args, env), result)
                             elif op_name in ('CHAR', 'SCHAR'):
                                 # (SETF (CHAR str i) val) - now works with LispString
                                 seq = eval(car(place_args), env)
@@ -890,18 +888,9 @@ def eval(form, env=None):
                                     target.cdr = value_result
                                 else:
                                     raise lisptype.LispError("PSETF CDR: target is not a cons")
-                            elif op_name == 'AREF' or op_name == 'SVREF':
-                                arr = eval(car(place_args), env)
-                                idx = eval(car(cdr(place_args)), env)
-                                try:
-                                    arr[idx] = value_result
-                                except (TypeError, IndexError):
-                                    if isinstance(arr, list) and isinstance(idx, int) and idx >= 0:
-                                        needed = idx + 1 - len(arr)
-                                        arr.extend([lisptype.NIL] * needed)
-                                        arr[idx] = value_result
-                                    else:
-                                        raise lisptype.LispError(f"PSETF {op_name}: index out of range")
+                            elif _arrays.is_array_place(op_name):
+                                _arrays.array_place_write(
+                                    op_name, _eval_args(place_args, env), value_result)
                             elif op_name == 'SYMBOL-FUNCTION':
                                 sym = eval(car(place_args), env)
                                 if isinstance(sym, lisptype.LispSymbol):
@@ -1682,10 +1671,23 @@ def eval(form, env=None):
                     current = cdr(current)
                     if _consp_internal(current):
                         key_val = eval(car(current), env)
-                        kwargs[py_key] = key_val
+                        # CLHS 3.4.1.4.1: when a keyword appears more than
+                        # once, the *leftmost* pair is the one used. Plain
+                        # assignment kept the rightmost, so
+                        # `:allow-other-keys t :allow-other-keys nil` --
+                        # which ansi-test uses precisely to check this rule
+                        # -- took the NIL.
+                        if py_key not in kwargs:
+                            kwargs[py_key] = key_val
                     else:
-                        # Keyword at end with no value - pass as positional
-                        eval_args.append(arg_val)
+                        # CLHS 3.5.1.6: an odd number of keyword arguments is
+                        # a PROGRAM-ERROR. Passing the dangling keyword on as
+                        # a positional argument instead produced a Python
+                        # TypeError from the callee -- a Python exception as
+                        # the value of the form (standing rule 2).
+                        raise lisptype.LispProgramError(
+                            f"odd number of keyword arguments: {arg_val.name} "
+                            f"has no value")
                 else:
                     # Keyword doesn't match a param, pass as positional value
                     eval_args.append(arg_val)

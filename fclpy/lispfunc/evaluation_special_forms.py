@@ -11,6 +11,7 @@ import fclpy.state as state
 from fclpy.lispfunc.core import car, cdr, _consp_internal, cons
 from .binding import proclaim_special, root_environment
 from . import registry as _registry
+from . import arrays as _arrays
 import logging
 import sys
 
@@ -204,42 +205,26 @@ def eval_incf(form, env):
         env.set_variable(place, new_value)
         return new_value
 
-    # Support INCF on simple AREF/SVREF places (e.g., (INCF (AREF arr idx)))
+    # An array place: one shared reader/writer pair (arrays.py), so INCF
+    # reaches every subscript of a multi-dimensional array rather than the
+    # first one, and an out-of-range index is an error rather than a silent
+    # extension of the underlying Python list.
     if _consp_internal(place):
         place_op = car(place)
         place_args = cdr(place)
-        if isinstance(place_op, lisptype.LispSymbol):
+        if isinstance(place_op, lisptype.LispSymbol) and _arrays.is_array_place(place_op.name):
+            from .evaluation_core import _eval_args
             op_name = place_op.name
-            if op_name in ('AREF', 'SVREF'):
-                # Evaluate target and index
-                arr = eval(car(place_args), env)
-                idx = eval(car(cdr(place_args)), env)
-                try:
-                    current_value = arr[idx]
-                except IndexError:
-                    if isinstance(arr, list) and isinstance(idx, int) and idx >= 0:
-                        # Treat missing elements as NIL
-                        current_value = lisptype.NIL
-                    else:
-                        raise lisptype.LispError(f"INCF {op_name}: index out of range")
-
-                # Compute new value (assume numeric increment semantics)
-                try:
-                    new_value = current_value + delta
-                except Exception:
-                    raise lisptype.LispTypeError(actual_value=current_value, expected_type='number', message="INCF: cannot add delta to place value")
-
-                # Perform assignment using same safe behavior as SETF AREF
-                try:
-                    arr[idx] = new_value
-                except IndexError:
-                    if isinstance(arr, list) and isinstance(idx, int) and idx >= 0:
-                        needed = idx + 1 - len(arr)
-                        arr.extend([lisptype.NIL] * needed)
-                        arr[idx] = new_value
-                    else:
-                        raise lisptype.LispError(f"INCF {op_name}: list assignment index out of range")
-                return new_value
+            values = _eval_args(place_args, env)
+            current_value = _arrays.array_place_read(op_name, values)
+            try:
+                new_value = current_value + delta
+            except Exception:
+                raise lisptype.LispTypeError(
+                    actual_value=current_value, expected_type='number',
+                    message="INCF: cannot add delta to place value")
+            _arrays.array_place_write(op_name, values, new_value)
+            return new_value
 
     raise lisptype.LispNotImplementedError(f"INCF: complex places not yet supported: {place}")
 
@@ -278,38 +263,26 @@ def eval_decf(form, env):
         env.set_variable(place, new_value)
         return new_value
 
-    # Support DECF on simple AREF/SVREF places (e.g., (DECF (AREF arr idx)))
+    # An array place: one shared reader/writer pair (arrays.py), so DECF
+    # reaches every subscript of a multi-dimensional array rather than the
+    # first one, and an out-of-range index is an error rather than a silent
+    # extension of the underlying Python list.
     if _consp_internal(place):
         place_op = car(place)
         place_args = cdr(place)
-        if isinstance(place_op, lisptype.LispSymbol):
+        if isinstance(place_op, lisptype.LispSymbol) and _arrays.is_array_place(place_op.name):
+            from .evaluation_core import _eval_args
             op_name = place_op.name
-            if op_name in ('AREF', 'SVREF'):
-                arr = eval(car(place_args), env)
-                idx = eval(car(cdr(place_args)), env)
-                try:
-                    current_value = arr[idx]
-                except IndexError:
-                    if isinstance(arr, list) and isinstance(idx, int) and idx >= 0:
-                        current_value = lisptype.NIL
-                    else:
-                        raise lisptype.LispError(f"DECF {op_name}: index out of range")
-
-                try:
-                    new_value = current_value - delta
-                except Exception:
-                    raise lisptype.LispTypeError(actual_value=current_value, expected_type='number', message="DECF: cannot subtract delta from place value")
-
-                try:
-                    arr[idx] = new_value
-                except IndexError:
-                    if isinstance(arr, list) and isinstance(idx, int) and idx >= 0:
-                        needed = idx + 1 - len(arr)
-                        arr.extend([lisptype.NIL] * needed)
-                        arr[idx] = new_value
-                    else:
-                        raise lisptype.LispError(f"DECF {op_name}: list assignment index out of range")
-                return new_value
+            values = _eval_args(place_args, env)
+            current_value = _arrays.array_place_read(op_name, values)
+            try:
+                new_value = current_value - delta
+            except Exception:
+                raise lisptype.LispTypeError(
+                    actual_value=current_value, expected_type='number',
+                    message="DECF: cannot subtract delta from place value")
+            _arrays.array_place_write(op_name, values, new_value)
+            return new_value
 
     raise lisptype.LispNotImplementedError(f"DECF: complex places not yet supported: {place}")
 
@@ -2461,10 +2434,11 @@ def _place_accessor(place_form, env):
             cell = target.cdr
             return (lambda: cell.car, lambda v: setattr(cell, 'car', v))
 
-        if op_name in ('AREF', 'SVREF') and _consp_internal(place_args) and _consp_internal(cdr(place_args)):
-            arr = eval(car(place_args), env)
-            idx = eval(car(cdr(place_args)), env)
-            return (lambda: arr[idx], lambda v: arr.__setitem__(idx, v))
+        if _arrays.is_array_place(op_name) and _consp_internal(place_args):
+            from .evaluation_core import _eval_args
+            values = _eval_args(place_args, env)
+            return (lambda: _arrays.array_place_read(op_name, values),
+                    lambda v: _arrays.array_place_write(op_name, values, v))
 
     raise lisptype.LispNotImplementedError(f"place not supported: {place_form}")
 

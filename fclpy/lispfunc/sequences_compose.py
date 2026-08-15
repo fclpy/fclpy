@@ -3,7 +3,7 @@
 import functools
 from .core import cons, car, cdr, atom, _consp_internal
 from . import registry as _registry
-from .vectors import AdjustableVector
+from .arrays import LispArray
 from .sequence_protocol import (
     seq_elements, seq_length, bounding_indices, make_lisp_list, rebuild_like,
     build_sequence, seq_set,
@@ -153,7 +153,7 @@ def _sort(sequence, predicate, key, what):
     tests wrap a correct LOOP result in SORT.
     """
     ordered = _sort_elements(seq_elements(sequence, what), predicate, key, what)
-    if isinstance(sequence, (list, lisptype.LispString, AdjustableVector)):
+    if isinstance(sequence, (list, lisptype.LispString, LispArray)):
         # A vector or string is sorted in place, which is what "destructive"
         # means for these operators; the argument and the result are then EQ.
         for index, item in enumerate(ordered):

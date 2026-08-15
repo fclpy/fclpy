@@ -35,11 +35,15 @@ Representation note: a **vector** is a Python `list` here, a **list** is a
 `lispCons` chain terminated by NIL, and a **string** is a `lisptype.LispString`.
 Building a vector therefore returns a plain `list`, which is why `LIST` and
 `VECTOR` results must never be conflated -- they are distinct Lisp types that
-happen to share a Python spelling for one of them.
+happen to share a Python spelling for one of them. A vector that has an
+element type, a fill pointer, adjustability or displacement to record is an
+`arrays.LispArray`; `arrays.py` owns that model and this module asks it rather
+than testing for the class, so the two cannot disagree about what a vector is.
 """
 
 import fclpy.lisptype as lisptype
-from .vectors import AdjustableVector, Array
+from . import arrays as _arrays
+from .arrays import LispArray
 
 
 # ===== READING =====
@@ -56,22 +60,22 @@ def is_sequence(value):
     """
     if value is None or value is lisptype.NIL:
         return True
-    return isinstance(value, (
-        lisptype.lispCons, list, tuple, str, lisptype.LispString, AdjustableVector,
-    ))
+    if isinstance(value, lisptype.lispCons):
+        return True
+    return is_vector(value)
 
 
 def is_vector(value):
     """True if `value` is a Lisp vector -- a one-dimensional array.
 
-    There are two vector representations here (a Python `list`, and the
-    `AdjustableVector` the reader builds for a `#(...)` literal) plus two
-    string representations, and code that tests only `isinstance(x, list)`
-    silently answers "not a vector" for half of them. EQUALP did exactly
-    that, so a vector built by one path was never EQUALP to the same vector
-    built by the other.
+    A vector has several representations here (a Python `list`, a
+    `LispString`, and the `LispArray` that carries an element type or a fill
+    pointer), and code that tests only `isinstance(x, list)` silently answers
+    "not a vector" for most of them. EQUALP did exactly that, so a vector
+    built by one path was never EQUALP to the same vector built by another.
+    Deferred to the array model so that "is this a vector" has one answer.
     """
-    return isinstance(value, (list, tuple, AdjustableVector, str, lisptype.LispString))
+    return _arrays.is_vector(value)
 
 
 def seq_elements(sequence, what='sequence function'):
@@ -80,8 +84,8 @@ def seq_elements(sequence, what='sequence function'):
     This is the *only* element-access path. It accepts every representation a
     Lisp sequence has here -- `lispCons` chains (including a dotted tail, whose
     final atom is included so callers can detect it), NIL, Python `list`/`tuple`
-    vectors, `AdjustableVector` (respecting its fill pointer, via its own
-    `__iter__`), `str` and `LispString`.
+    vectors, `LispArray` (respecting its fill pointer, via its own `__iter__`),
+    `str` and `LispString`.
 
     A non-sequence raises a Lisp `LispTypeError` rather than a Python
     `TypeError`: the old `iterate()` raised the latter and it surfaced as the
@@ -101,7 +105,16 @@ def seq_elements(sequence, what='sequence function'):
         return result
     if isinstance(sequence, (list, tuple)):
         return list(sequence)
-    if isinstance(sequence, (str, lisptype.LispString, AdjustableVector)):
+    if isinstance(sequence, (str, lisptype.LispString)):
+        return list(sequence)
+    if isinstance(sequence, LispArray):
+        # Only a *vector* is a sequence: an array of any other rank is an
+        # array but not a sequence (CLHS 14.1), so it must be refused here
+        # rather than flattened into its row-major elements.
+        if sequence.rank != 1:
+            raise lisptype.LispTypeError(
+                f"{what}: an array of rank {sequence.rank} is not a sequence",
+                expected_type="SEQUENCE", actual_value=sequence)
         return list(sequence)
     raise lisptype.LispTypeError(
         f"{what}: {type(sequence).__name__} is not a sequence",
@@ -112,7 +125,9 @@ def seq_length(sequence, what='sequence function'):
     """Length of any Lisp sequence, respecting a vector's fill pointer."""
     if sequence is None or sequence is lisptype.NIL:
         return 0
-    if isinstance(sequence, (list, tuple, str, lisptype.LispString, AdjustableVector)):
+    if isinstance(sequence, (list, tuple, str, lisptype.LispString)):
+        return len(sequence)
+    if isinstance(sequence, LispArray) and sequence.rank == 1:
         return len(sequence)
     if isinstance(sequence, lisptype.lispCons):
         return len(seq_elements(sequence, what))
@@ -180,6 +195,18 @@ def make_vector(elements):
     return list(elements)
 
 
+def make_bit_vector(elements):
+    """Build a Lisp bit vector.
+
+    A bit vector is not "a vector holding zeroes and ones" -- it is a vector
+    whose *element type* is BIT, which is what makes it print as `#*1011` and
+    answer T to `BIT-VECTOR-P`. Building one as a general vector is why
+    `(concatenate 'bit-vector ...)` used to answer something that was EQUALP
+    to a bit vector but was not one.
+    """
+    return _arrays.make_bit_vector(elements)
+
+
 def rebuild_like(original, elements):
     """Build a result of the *same sequence type* as `original` (CLHS 17.1).
 
@@ -195,6 +222,15 @@ def rebuild_like(original, elements):
         return make_string(elements)
     if isinstance(original, tuple):
         return tuple(elements)
+    if isinstance(original, LispArray):
+        # "Of the same type" means the same *element type* (CLHS 17.1): the
+        # result of REMOVE on a bit vector is a bit vector. It is a simple
+        # array either way -- these operators never propagate a fill pointer,
+        # adjustability or displacement.
+        if original.element_type is _arrays.BIT_TYPE:
+            return make_bit_vector(elements)
+        if original.element_type is _arrays.CHARACTER_TYPE:
+            return make_string(elements)
     return make_vector(elements)
 
 
@@ -326,6 +362,8 @@ def build_sequence(result_type, elements, what='sequence function'):
         return make_lisp_list(elements)
     if kind == 'STRING':
         return make_string(elements)
+    if kind == 'BIT-VECTOR':
+        return make_bit_vector(elements)
     return make_vector(elements)
 
 
@@ -350,7 +388,7 @@ def seq_set(sequence, index, value, what='sequence function'):
                     expected_type="index within the sequence", actual_value=index)
         current.car = value
         return
-    if isinstance(sequence, (lisptype.LispString, list, AdjustableVector)):
+    if isinstance(sequence, (lisptype.LispString, list, LispArray)):
         sequence[index] = value
         return
     raise lisptype.LispTypeError(
@@ -360,6 +398,6 @@ def seq_set(sequence, index, value, what='sequence function'):
 
 __all__ = [
     'is_sequence', 'is_vector', 'seq_elements', 'seq_length', 'bounding_indices',
-    'make_lisp_list', 'make_string', 'make_vector', 'rebuild_like',
+    'make_lisp_list', 'make_string', 'make_vector', 'make_bit_vector', 'rebuild_like',
     'parse_sequence_type', 'build_sequence', 'seq_set',
 ]

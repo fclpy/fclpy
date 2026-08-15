@@ -13,7 +13,7 @@ import pytest
 
 from fclpy import lisptype
 from fclpy.lispfunc.comparison import equal, eql, typep
-from fclpy.lispfunc.sequences_higher import aref, string_element
+from fclpy.lispfunc.arrays import aref, string_element
 from fclpy.lispfunc.characters import characterp
 
 T, NIL = lisptype.T, lisptype.NIL
@@ -100,7 +100,7 @@ class TestMakeArrayFromString:
     CHARACTERs, not of length-1 strings (CLHS 15.1)."""
 
     def test_initial_contents_from_string_yields_characters(self):
-        from fclpy.lispfunc.vectors import make_array
+        from fclpy.lispfunc.arrays import make_array
         arr = make_array(4, initial_contents=LispString("abcd"))
         assert all(isinstance(e, Character) for e in arr)
         assert eql(arr[0], Character('a')) is T

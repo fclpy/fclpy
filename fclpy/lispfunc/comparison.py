@@ -2,6 +2,7 @@
 
 import fclpy.lisptype as lisptype
 from .core import atom, car, cdr, consp
+from . import arrays as _arrays
 from fclpy.lispfunc import registry as _registry
 
 
@@ -80,6 +81,17 @@ def equal(obj1, obj2):
     if s1 is not None or s2 is not None:
         return lisptype.NIL
 
+
+    # Bit vectors -- CLHS 5.3: EQUAL descends into conses, strings, bit
+    # vectors and pathnames, and into nothing else. Only the active elements
+    # count, so a fill pointer bounds the comparison. A bit vector is not
+    # EQUAL to anything that is not one, general vectors included.
+    bv1, bv2 = _arrays.is_bit_array(obj1), _arrays.is_bit_array(obj2)
+    if bv1 or bv2:
+        if not (bv1 and bv2) or obj1.rank != 1 or obj2.rank != 1:
+            return lisptype.NIL
+        return lisptype.lisp_bool(
+            _arrays.array_elements(obj1) == _arrays.array_elements(obj2))
 
     # Lists and tuples
     if isinstance(obj1, (list, tuple)) and isinstance(obj2, (list, tuple)):
@@ -335,34 +347,17 @@ def typep(object, type_specifier):
                 limit = 2 ** (n - 1)
                 return lisptype.lisp_bool(-limit <= object < limit)
         
-        elif compound_type == 'SIMPLE-BIT-VECTOR':
-            # (SIMPLE-BIT-VECTOR [size]) - for now, treat as vector check
-            from fclpy.lispfunc.vectors import AdjustableVector
-            return lisptype.lisp_bool(isinstance(object, (list, tuple, AdjustableVector)))
-        
-        elif compound_type in ('VECTOR', 'SIMPLE-VECTOR', 'ARRAY', 'SIMPLE-ARRAY'):
-            # (VECTOR element-type [size]) etc.
-            from fclpy.lispfunc.vectors import AdjustableVector
-            if not isinstance(object, (list, tuple, AdjustableVector)):
-                return lisptype.NIL
-            # Check size if specified (second element in rest, first is element-type)
-            if len(rest) >= 2:
-                size = rest[1]
-                if isinstance(size, int):
-                    if len(object) != size:
-                        return lisptype.NIL
-            return lisptype.T
-        
-        elif compound_type == 'STRING' or compound_type == 'SIMPLE-STRING' or compound_type == 'BASE-STRING' or compound_type == 'SIMPLE-BASE-STRING':
-            # (STRING [size]) - string with optional size
-            if not isinstance(object, str):
-                return lisptype.NIL
-            if len(rest) > 0:
-                size = rest[0]
-                if isinstance(size, int) and len(object) != size:
-                    return lisptype.NIL
-            return lisptype.T
-        
+        elif _arrays.is_array_type_name(compound_type):
+            # Every compound array specifier -- (array et dims), (vector et
+            # size), (string size), (simple-bit-vector size) -- is one
+            # question about the object's element type and dimensions, and
+            # the array model is what can answer it. The branches this
+            # replaced ignored both: they tested only that the object was one
+            # of two Python container types, so `(typep #(1 2) 'bit-vector)`
+            # and `(typep #(1 2) '(array t (5)))` were T.
+            return lisptype.lisp_bool(
+                _arrays.array_type_matches(object, compound_type, rest))
+
         elif compound_type == 'CONS':
             # (CONS [car-type [cdr-type]]) - cons with specific types
             if not _consp_internal(object):
@@ -472,11 +467,6 @@ def typep(object, type_specifier):
         return lisptype.lisp_bool(isinstance(object, Fraction))
     elif type_name == 'CHARACTER':
         return lisptype.lisp_bool(isinstance(object, lisptype.Character) or (isinstance(object, str) and len(object) == 1))
-    elif type_name in ('STRING', 'SIMPLE-STRING', 'BASE-STRING', 'SIMPLE-BASE-STRING'):
-        # Both string representations count, exactly as STRINGP already does
-        # -- testing only `str` made TYPEP disagree with STRINGP about every
-        # string the reader produces (plan.md Finding I).
-        return lisptype.lisp_bool(_string_characters(object) is not None)
     elif type_name == 'SYMBOL':
         # In Common Lisp, NIL is both the empty list AND the symbol NIL
         # So we need to accept both LispSymbol instances and NIL
@@ -496,23 +486,15 @@ def typep(object, type_specifier):
             or (callable(object) and getattr(object, '_condition_reader_generic', False)))
     elif type_name == 'STANDARD-OBJECT' or type_name == 'INSTANCE':
         return lisptype.lisp_bool(isinstance(object, classes.LispInstance))
-    elif type_name == 'SIMPLE-VECTOR':
-        # A simple vector holds elements of type T specifically, so unlike
-        # VECTOR it does *not* include strings (CLHS 15.1.2.2).
-        from fclpy.lispfunc.vectors import AdjustableVector
-        return lisptype.lisp_bool(isinstance(object, (list, tuple, AdjustableVector)))
-    elif type_name in ('VECTOR', 'ARRAY', 'SIMPLE-ARRAY'):
-        # CLHS 15.1: a string *is* a vector, and every vector is an array.
-        # Excluding strings here made `(typep "abc" 'vector)` false, which
-        # is what stopped the ANSI harness's own `equalp-with-case` from
-        # ever comparing two strings element-wise -- it fell through to
-        # EQL, so every string-valued test failed no matter what the code
-        # under test returned.
-        from fclpy.lispfunc.vectors import AdjustableVector
-        return lisptype.lisp_bool(
-            isinstance(object, (list, tuple, AdjustableVector))
-            or _string_characters(object) is not None
-        )
+    elif _arrays.is_array_type_name(type_name):
+        # CLHS 15.1: a string *is* a vector and every vector is an array, so
+        # these cannot be separate `isinstance` tests; they are one question
+        # about the object's rank, element type and simplicity, which the
+        # array model answers. (Excluding strings from VECTOR is what once
+        # stopped the ANSI harness's own `equalp-with-case` from comparing
+        # two strings element-wise, so every string-valued test failed no
+        # matter what the code under test returned.)
+        return lisptype.lisp_bool(_arrays.array_type_matches(object, type_name))
     elif type_name == 'SEQUENCE':
         # CLHS 4.2: SEQUENCE is the union of LIST and VECTOR. TYPEP had no
         # branch for it at all, so `(typep '(1 2) 'sequence)` was NIL -- and
@@ -548,15 +530,28 @@ def typep(object, type_specifier):
 def type_of(object):
     """Return type of object."""
     from fclpy import classes
-    from fclpy.lispfunc.vectors import AdjustableVector
-    
+
     # Check for user-defined instances first
     if isinstance(object, classes.LispInstance):
         return object.lisp_class.name
-    
-    # Check for vectors (AdjustableVector must come before list/tuple check)
-    if isinstance(object, AdjustableVector):
-        return lisptype.LispSymbol('SIMPLE-VECTOR')
+
+    # An array that records an element type, a rank or a fill pointer has a
+    # *compound* type (CLHS 4.2.3): `(simple-array bit (5))`, not the bare
+    # symbol SIMPLE-VECTOR that every array shape used to answer.
+    if isinstance(object, _arrays.LispArray):
+        from .sequence_protocol import make_lisp_list
+        simple = _arrays.is_simple_array(object)
+        dimensions = _arrays.array_dimensions_of(object)
+        # The type name must be the *interned* CL symbol: a fresh LispSymbol
+        # of the same name is a different object, prints as `#:SIMPLE-ARRAY`
+        # and is not EQ to the symbol a caller compares against.
+        intern = lisptype.COMMON_LISP_PACKAGE.intern
+        if object.element_type is _arrays.BIT_TYPE and object.rank == 1:
+            name = 'SIMPLE-BIT-VECTOR' if simple else 'BIT-VECTOR'
+            return make_lisp_list([intern(name), dimensions[0]])
+        name = 'SIMPLE-ARRAY' if simple else 'ARRAY'
+        return make_lisp_list([intern(name), object.element_type,
+                               make_lisp_list(dimensions)])
     
     # null() and consp() return Lisp T/NIL objects, compare against lisptype.T
     if null(object) == lisptype.T:

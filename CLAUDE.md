@@ -138,7 +138,7 @@ passing as many of its tests as possible.
 - **Sequences**: `lispfunc/sequence_protocol.py` — **the one place that answers
   both halves of CLHS 17.1**: `seq_elements` (what are the elements of this Lisp
   sequence — `lispCons`, Python `list`/`tuple` vector, `LispString`, `str`,
-  `AdjustableVector`), and the constructors, `rebuild_like` (a result of the
+  `LispArray`), and the constructors, `rebuild_like` (a result of the
   argument's own type, for REMOVE/SORT/REVERSE/SUBSEQ/…), `build_sequence`
   (a result of the type a `result-type` designator names, for
   MAP/CONCATENATE/MERGE/MAKE-SEQUENCE/COERCE), plus `bounding_indices`
@@ -152,6 +152,24 @@ passing as many of its tests as possible.
   vector that printed convincingly as a list. If you are about to write
   `isinstance(x, list)` to mean "is a Lisp list", or to build a result with
   `[...]`, that is the defect (plan.md Finding M).
+- **Arrays**: `lispfunc/arrays.py` — **the one array object model**, and the one
+  home of every array operator. CLHS 15.1 gives an array five properties
+  (dimensions, element type, adjustability, fill pointer, displacement) and
+  this module owns all five. There are **three representations, one protocol**:
+  a Python `list` is a *simple general vector*, a `LispString` is a character
+  vector, and `LispArray` is everything else — any other rank, any specialized
+  element type, any fill pointer, adjustability or displacement. `_new_array`
+  is the only place that decides which. Ask `array_rank_of` /
+  `array_dimensions_of` / `element_type_of` / `fill_pointer_of` /
+  `row_major_get` rather than testing `isinstance`, or you will be right about
+  one representation and wrong about the other two. `TYPEP`'s array
+  specifiers, the printer's `#*`/`#2A`, the reader's `#*`/`#nA` and
+  `sequence_protocol`'s bit-vector results all go through it. It replaced
+  `vectors.py`'s `AdjustableVector`/`Array` **plus** competing copies of the
+  same operators in `sequences_higher.py`, `misc_hashtables.py`,
+  `math_arithmetic.py` and `core.py`, where import order decided which ran.
+  **`ADJUSTABLE-ARRAY-P`, `FILL-POINTER` and friends signal for a non-array
+  argument** — answering NIL conflated "no fill pointer" with "not an array".
 - **State**: `state.py` holds the few intentional cross-module globals
   (`packages`, `current_package`, `current_environment`, `restart_stack`,
   `handler_stack`). Don't add new ad-hoc globals elsewhere — put them here.

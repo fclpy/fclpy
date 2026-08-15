@@ -698,18 +698,15 @@ def _write_cons(value, ctx, depth):
 def _vector_elements(value):
     """The live elements of any of this implementation's vector shapes.
 
-    A Lisp vector is a Python ``list`` (from ``MAKE-ARRAY``/``VECTOR``) or an
-    ``AdjustableVector`` (what the reader returns for ``#(...)``) -- two
-    representations of one type, which is why ``#(1 2 3)`` and ``(vector 1 2 3)``
-    used to print differently. A fill pointer bounds the printed elements.
+    A Lisp vector is a Python ``list`` (a simple general vector) or a
+    ``LispArray`` (one that records an element type, a fill pointer,
+    adjustability or displacement) -- representations of one type, which is
+    why ``#(1 2 3)`` and ``(vector 1 2 3)`` used to print differently. A fill
+    pointer bounds the printed elements, and the array model applies it.
     """
-    from fclpy.lispfunc.vectors import AdjustableVector
+    from fclpy.lispfunc.arrays import array_elements
 
-    if isinstance(value, AdjustableVector):
-        limit = value.fill_pointer
-        data = list(value.data)
-        return data if limit is None else data[:limit]
-    return list(value)
+    return array_elements(value)
 
 
 def _write_vector(value, ctx, depth):
@@ -730,6 +727,23 @@ def _write_vector(value, ctx, depth):
             break
         parts.append(_write(element, ctx, depth + 1))
     return '#(' + ' '.join(parts) + ')'
+
+
+def _write_bit_vector(value, ctx):
+    """Print a bit vector as ``#*1011`` (CLHS 22.1.3.7).
+
+    A bit vector printed as ``#(1 0 1 1)`` reads back as a *general* vector,
+    which is a different type -- the distinction only became printable once
+    the array model recorded an element type.
+    """
+    if not ctx.array:
+        return _unreadable(value, 'BIT-VECTOR')
+    from fclpy.lispfunc.arrays import array_elements
+
+    bits = array_elements(value)
+    if ctx.length is not None and len(bits) > ctx.length:
+        return '#*' + ''.join(str(b) for b in bits[:ctx.length]) + '...'
+    return '#*' + ''.join(str(b) for b in bits)
 
 
 def _write_array(value, ctx, depth):
@@ -873,10 +887,14 @@ def _write(value, ctx, depth):
     if hasattr(value, '_struct_type') and hasattr(value, '_slots'):
         return _write_structure(value, ctx, depth)
 
-    from fclpy.lispfunc.vectors import AdjustableVector, Array
-    if isinstance(value, Array):
+    from fclpy.lispfunc.arrays import LispArray, BIT_TYPE
+    if isinstance(value, LispArray):
+        if value.element_type is BIT_TYPE and value.rank == 1:
+            return _write_bit_vector(value, ctx)
+        if value.rank == 1:
+            return _write_vector(value, ctx, depth)
         return _write_array(value, ctx, depth)
-    if isinstance(value, (AdjustableVector, list, tuple)):
+    if isinstance(value, (list, tuple)):
         return _write_vector(value, ctx, depth)
 
     if isinstance(value, dict):

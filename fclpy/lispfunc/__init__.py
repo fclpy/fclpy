@@ -18,7 +18,7 @@ All functions are re-exported from this module for compatibility.
 from .core import *
 from .math import *
 from .sequences import *
-from .vectors import *
+from .arrays import *
 from .streams import *
 from .pathnames import *
 from .hashtables import *
@@ -58,13 +58,15 @@ from ..readtable import get_macro_character, set_macro_character, set_dispatch_m
 
 # Register functions into the builtin registry so lispenv can populate from it.
 from . import registry as _registry
-from . import core as _core_mod, math as _math_mod, sequences as _sequences_mod, vectors as _vectors_mod, evaluation as _evaluation_mod, comparison as _comparison_mod, characters as _characters_mod, io as _io_mod, utilities as _utilities_mod
+from . import core as _core_mod, math as _math_mod, sequences as _sequences_mod, evaluation as _evaluation_mod, comparison as _comparison_mod, characters as _characters_mod, io as _io_mod, utilities as _utilities_mod
 
 # Register modules (this will not overwrite explicit decorator registrations)
 _registry.register_module(_core_mod)
 _registry.register_module(_math_mod)
 _registry.register_module(_sequences_mod)
-_registry.register_module(_vectors_mod)
+# arrays.py is deliberately *not* auto-registered: every operator in it is
+# registered by an explicit `@cl_function`, and `register_module` would also
+# bind its model helpers (`row_major_get`, `is_array`, ...) as Lisp functions.
 _registry.register_module(_evaluation_mod)
 _registry.register_module(_comparison_mod)
 _registry.register_module(_characters_mod)
@@ -72,37 +74,9 @@ _registry.register_module(_io_mod)
 _registry.register_module(_utilities_mod)
 
 # Additional functions that need to be implemented
-def adjust_array(*args):
-    """Adjust array dimensions."""
-    raise NotImplementedError("ADJUST-ARRAY")
-
-def adjustable_array_p(array):
-    """Test if array is adjustable."""
-    raise NotImplementedError("ADJUSTABLE-ARRAY-P")
-
 def allocate_instance(class_obj, **kwargs):
-    """Allocate instance of class.""" 
+    """Allocate instance of class."""
     raise NotImplementedError("ALLOCATE-INSTANCE")
-
-def aref(array, *subscripts):
-    """Access array element."""
-    from .vectors import aref as real_aref
-    return real_aref(array, *subscripts)
-
-def svref(simple_vector, index):
-    """Access simple vector element."""
-    try:
-        return simple_vector[index]
-    except (IndexError, TypeError):
-        return None
-
-def vector(*objects):
-    """Create vector from objects."""
-    return list(objects)
-
-def vectorp(obj):
-    """Test if object is a vector."""
-    return hasattr(obj, '__getitem__') and hasattr(obj, '__len__')
 
 def arithmetic_error_operands(condition):
     """Get operands from arithmetic error."""
@@ -111,14 +85,6 @@ def arithmetic_error_operands(condition):
 def arithmetic_error_operation(condition):
     """Get operation from arithmetic error."""
     raise NotImplementedError("ARITHMETIC-ERROR-OPERATION")
-
-def array_dimension(array, axis_number):
-    """Get array dimension."""
-    raise NotImplementedError("ARRAY-DIMENSION")
-
-def arrayp(object):
-    """Test if object is array."""
-    raise NotImplementedError("ARRAYP")
 
 # Export commonly used functions for easier access
 __all__ = [

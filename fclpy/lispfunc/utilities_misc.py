@@ -20,11 +20,7 @@ from .misc_hashtables import (
     hash_table_test,
     hash_table_rehash_size,
     hash_table_rehash_threshold,
-    array_row_major_index,
-    upgraded_array_element_type,
     upgraded_complex_part_type,
-    adjustable_array_p,
-    row_major_aref,
     echo_stream_input_stream,
     echo_stream_output_stream,
     broadcast_stream_streams,
@@ -101,7 +97,13 @@ from .misc_packages import (
 
 from .classes import defclass
 
-from .vectors import fill_pointer
+from .arrays import (
+    fill_pointer,
+    array_row_major_index,
+    upgraded_array_element_type,
+    adjustable_array_p,
+    row_major_aref,
+)
 
 from .misc_macros import (
     with_accessors,

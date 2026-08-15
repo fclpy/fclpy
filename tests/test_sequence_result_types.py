@@ -6,7 +6,7 @@ individual bugs: a sequence function's result must be a sequence of the right
 argument actually has. Before the shared protocol, results came back as Python
 `list`s -- which is this implementation's *vector* -- so `(union '(1 2) '(2 3))`
 and `(sort (list 3 1 2) #'<)` both answered a vector that printed convincingly
-as a list, and FIND/COUNT over a `LispString` or an `AdjustableVector` raised a
+as a list, and FIND/COUNT over a `LispString` or a `LispArray` raised a
 Python `TypeError` that surfaced as the value of the form.
 
 They are grouped by the property rather than by operator on purpose: the same
@@ -20,7 +20,7 @@ from fclpy.lispfunc import sequences as seq
 from fclpy.lispfunc.sequence_protocol import (
     build_sequence, parse_sequence_type, rebuild_like, seq_elements,
 )
-from fclpy.lispfunc.vectors import AdjustableVector
+from fclpy.lispfunc.arrays import LispArray, make_array
 
 
 def lisp_list(*items):
@@ -50,7 +50,7 @@ class TestElementAccess:
         assert seq_elements(sequence) == expected
 
     def test_reads_an_adjustable_vector_up_to_its_fill_pointer(self):
-        vector = AdjustableVector(capacity=5, initial_element=0, fill_pointer=2)
+        vector = make_array(5, initial_element=0, fill_pointer=2)
         assert seq_elements(vector) == [0, 0]
 
     def test_a_dotted_tail_is_not_dropped(self):
@@ -176,7 +176,7 @@ class TestScanningHonoursTheProtocol:
     """FIND/POSITION/COUNT read any sequence and share one scan."""
 
     def test_find_and_count_work_over_a_vector_literal(self):
-        vector = AdjustableVector(capacity=3, initial_element=1)
+        vector = make_array(3, initial_element=1, adjustable=lisptype.T)
         assert seq.find(1, vector) == 1
         assert seq.count(1, vector) == 3
 
@@ -220,7 +220,7 @@ class TestHigherOrderOperators:
                              from_end=lisptype.T) == [1, [2, 3]]
 
     def test_every_over_a_vector(self):
-        vector = AdjustableVector(capacity=2, initial_element=1)
+        vector = make_array(2, initial_element=1, adjustable=lisptype.T)
         assert seq.every(lambda x: lisptype.T, vector) is lisptype.T
 
     def test_some_returns_the_predicate_value(self):

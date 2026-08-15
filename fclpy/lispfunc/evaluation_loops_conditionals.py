@@ -385,21 +385,30 @@ def eval_cond(form, env):
     while _consp_internal(clauses):
         clause = car(clauses)
         if _consp_internal(clause):
-            test = car(clause)
-            
-            # Special case for T
-            if (isinstance(test, lisptype.LispSymbol) and test.name == 'T') or eval(test, env):
-                # Execute forms in clause
-                result = test if not _consp_internal(cdr(clause)) else None
+            test_value = eval(car(clause), env)
+            if lisptype.is_truthy(test_value):
                 forms = cdr(clause)
+                if not _consp_internal(forms):
+                    # CLHS 5.3 COND: a clause with no forms answers the
+                    # *value* of its test. It used to answer the test's
+                    # unevaluated **form** -- `(cond ((+ 1 2)))` was the list
+                    # `(+ 1 2)`, not 3 -- which is a Lisp form appearing as a
+                    # Lisp value. ansi-test's own `make-array-with-checks`
+                    # (and every aux helper written as one long `cond` of
+                    # test-only clauses) returns exactly that shape, so the
+                    # harness reported the check's source text where a result
+                    # was expected and no test using one could pass.
+                    return _primary_value(test_value)
+                result = lisptype.NIL
                 while _consp_internal(forms):
                     result = eval(car(forms), env)
                     forms = cdr(forms)
                 return result
-        
+
         clauses = cdr(clauses)
-    
-    return None
+
+    # No clause was selected: COND answers NIL (CLHS 5.3), not Python None.
+    return lisptype.NIL
 
 
 def _primary_value(value):
@@ -2212,7 +2221,7 @@ def eval_loop(form, env):
                 # one-element vector, which anything walking a sequence
                 # element-wise follows into unbounded recursion. Shared with
                 # AREF so both halves agree on what a character is.
-                from .sequences_higher import string_element
+                from .arrays import string_element
                 _bind_varspec(frame, var, string_element(seq, seq[idx]))
                 return
             if kind in ('for-range', 'for-below'):

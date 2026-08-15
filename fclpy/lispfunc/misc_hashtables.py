@@ -109,34 +109,12 @@ def hash_table_rehash_threshold(table):
 
 
 # --- Array operations ---
-@_registry.cl_function('ARRAY-ROW-MAJOR-INDEX')
-def array_row_major_index(array, *subscripts):
-    """Compute row-major index for array."""
-    return 0
-
-
-@_registry.cl_function('UPGRADED-ARRAY-ELEMENT-TYPE')
-def upgraded_array_element_type(typespec, environment=None):
-    """Get upgraded array element type."""
-    return 'T'
 
 
 @_registry.cl_function('UPGRADED-COMPLEX-PART-TYPE')
 def upgraded_complex_part_type(typespec, environment=None):
     """Get upgraded complex part type."""
     return 'REAL'
-
-
-@_registry.cl_function('ADJUSTABLE-ARRAY-P')
-def adjustable_array_p(array):
-    """Test if array is adjustable."""
-    return lisptype.NIL
-
-
-@_registry.cl_function('ROW-MAJOR-AREF')
-def row_major_aref(array, index):
-    """Get array element by row-major index."""
-    return None
 
 
 # --- Stream operations ---
@@ -194,11 +172,7 @@ __all__ = [
     'hash_table_test',
     'hash_table_rehash_size',
     'hash_table_rehash_threshold',
-    'array_row_major_index',
-    'upgraded_array_element_type',
     'upgraded_complex_part_type',
-    'adjustable_array_p',
-    'row_major_aref',
     'echo_stream_input_stream',
     'echo_stream_output_stream',
     'broadcast_stream_streams',

@@ -119,17 +119,6 @@ def make_package_fn(name, nicknames=None, use_list=None):
     return lisptype.make_package(name, nicknames or [], use_list or [])
 
 
-@_registry.cl_function('ARRAY-HAS-FILL-POINTER-P')
-def array_has_fill_pointer_p(*args):
-    """Test if array has a fill pointer."""
-    if len(args) != 1:
-        raise lisptype.LispProgramError(
-            f"ARRAY-HAS-FILL-POINTER-P: wrong number of arguments (got {len(args)}, expected 1)"
-        )
-    array = args[0]
-    return lisptype.lisp_bool(hasattr(array, '_fill_pointer'))
-
-
 def copy_tree(tree):
     """Create a copy of a tree structure."""
     if atom(tree):
@@ -674,44 +663,6 @@ def boole_xor():
 def internal_time_units_per_second():
     """Internal time units per second."""
     return 1000
-
-
-@_registry.cl_function('ARRAY-ELEMENT-TYPE')
-def array_element_type(*args):
-    """Get array element type."""
-    if len(args) != 1:
-        raise lisptype.LispProgramError(
-            f"ARRAY-ELEMENT-TYPE: wrong number of arguments (got {len(args)}, expected 1)"
-        )
-    return 'T'
-
-
-@_registry.cl_function('ARRAY-RANK')
-def array_rank(*args):
-    """Get array rank."""
-    if len(args) != 1:
-        raise lisptype.LispProgramError(
-            f"ARRAY-RANK: wrong number of arguments (got {len(args)}, expected 1)"
-        )
-    array = args[0]
-    try:
-        return len(array.shape)
-    except:
-        return 1
-
-
-@_registry.cl_function('ARRAY-TOTAL-SIZE')
-def array_total_size(*args):
-    """Get array total size."""
-    if len(args) != 1:
-        raise lisptype.LispProgramError(
-            f"ARRAY-TOTAL-SIZE: wrong number of arguments (got {len(args)}, expected 1)"
-        )
-    array = args[0]
-    try:
-        return array.size
-    except:
-        return len(array) if hasattr(array, '__len__') else 1
 
 
 @_registry.cl_function('DECODE-UNIVERSAL-TIME')

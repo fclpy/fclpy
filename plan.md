@@ -559,16 +559,28 @@ which is exactly why the pass rate is 12%. **Owner:** M9.
 Eleven operators failing in near-identical proportion is the signature of **one
 shared `:test`/`:key` defect**, not eleven bugs — again X2 and X3. **Owner:** M6.
 
-#### C6. Arrays — fill pointers, adjustability, displacement
+#### C6. Arrays — **LARGELY DONE (2026-08-15 d)**
 
-**Evidence.** **574 failures**; `arrays/` is 520 passing of 1245 (41.8%).
-`MAKE-ARRAY` 47, `SIMPLE-ARRAY` 44, `ARRAY` 41, `VECTOR-PUSH-EXTEND` 39,
-`ADJUST-ARRAY` 39, `SIMPLE-ARRAY-T` 34, `ARRAY-T` 34, `MAKE-ARRAY.DISPLACED` 31,
-`VECTOR-PUSH` 29, `ADJUST-ARRAY.STRING` 22, `ADJUST-ARRAY.BIT-VECTOR` 22. Also
-`IndexError: Expected 2 indices, got 1` in the leak table.
+**`run_ansi.py arrays`: 518 → 1233 passing of 1356. +715, and the failures fell
+838 → 123.** Details in the [Changelog](#changelog).
 
-The cluster shape says the array *object model* lacks these properties, rather
-than that many functions are individually wrong. **Owner:** M9.
+**The cluster shape was right and the owner was wrong.** This section read the
+574 failures as "the array *object model* lacks these properties" and assigned
+them to M9 (types/CLOS). The model was indeed absent — but it was absent in a
+specific way that made it its own milestone-sized item rather than a corollary
+of the type system: there were **three unrelated Python shapes** for an array
+(`AdjustableVector`, `Array`, a bare `list`), none of which recorded an element
+type, *and* the operators were **duplicated across five modules**, with import
+order deciding which copy ran. Building one object model with one home for the
+operators moved the type-system work (`TYPEP` on `(array et dims)`) along with
+it, because the type predicates could finally ask the object.
+
+**Still open** (123 failures): `SUBTYPEP` has no lattice, so
+`UPGRADED-ARRAY-ELEMENT-TYPE.8`'s consistency check cannot pass ([C14](#tier-2--subsystem-gaps));
+`(upgraded-array-element-type nil)`; argument-evaluation order for `(setf
+(svref ...))`; and the residual of `make-array.lsp`, which is now blocked on a
+*macro-lambda-list* defect rather than on arrays — see
+[Discovered issues](#discovered-2026-08-15-d).
 
 #### C7. The printer — **LARGELY DONE (2026-08-14)**
 
@@ -702,7 +714,6 @@ Verified by execution:
 | `(gethash 1.0 h)`, key `1` | `ONE` | `NIL` — `(eql 1 1.0)` is false | `test_phase5_task7_hashtables.py:136` |
 | `(hash-table-test h)` | `"<FUNCTION EQUAL AT 0x…>"` | the **symbol** `EQUAL` | `:249` |
 | `(find 3 '(1 2 3 4 5) :test #'>)` | `4` | `1` — called as `(funcall test item element)` | `test_phase5_task2_sequence_functions.py:50` |
-| `(array-dimension <fill-pointer 5, size 10> 0)` | `1` | `10` | `test_phase5_task3_vectors.py:249` |
 
 Also: **`lisptype.is_truthy(False)` is `True`** — any Python `False` reaching a
 Lisp conditional is silently *true*. A live landmine. And tests that cannot fail
@@ -792,7 +803,21 @@ Milestones now describe *mechanisms*, and map onto the clusters above.
    discipline (C3/M6) rather than in SORT alone — MERGE, REMOVE, SUBSTITUTE and
    CONCATENATE owe the same guarantee, and `sequences/merge.lsp` at 81/124 is
    the next-largest file in the directory.
-11. **Re-measure, then re-derive this list.** The residual distribution has
+11. ~~**C6 — the array object model.**~~ **Largely done 2026-08-15 (d).**
+   `arrays` **518 → 1233 of 1356**, and it was mis-owned: [C6](#c6-arrays--largely-done-2026-08-15-d)
+   ranked it under M9 as a corollary of the type system, but the model was
+   three unrelated Python shapes plus five competing copies of the operators,
+   and building it *supplied* the type-system half rather than depending on it.
+12. **The next task, on this run's evidence: a nested destructuring pattern in
+   a `defmacro` lambda list (M3/M4).** `(defmacro m ((&rest vars) form &body
+   body) ...)` does not bind `vars`, and ansi-aux defines
+   `multiple-value-bind*` exactly that way — so every harness check that uses
+   it fails inside the *harness*, not in the code under test. It is 90 of the
+   118 tests still failing in `arrays/make-array.lsp` by itself, the pattern is
+   idiomatic throughout `auxiliary/`, and it is the same class of
+   measurement gate as items 4 and 6. Confirm the blast radius first with
+   `grep -rn "multiple-value-bind\*" ../ansi-test | wc -l`.
+13. **Re-measure, then re-derive this list.** The residual distribution has
    already shifted enough that ranking further ahead is guesswork. On the
    current evidence the next-largest unblocked mechanism is
    [C2](#c2-format--formatter--largest-cluster-in-the-suite)'s remaining
@@ -829,10 +854,10 @@ Anything knowingly non-ANSI, with the milestone that removes it. Empty means
 | Two CLOS implementations, two readers, two readtables, dead `reader.py`/`tokenizer.py` fork | historical forks | M9 / M10 |
 | Pretty printer absent: `*PRINT-PRETTY*`, `PPRINT-*`, `~<~:>` logical blocks | the printer prints only the non-pretty style | C2 / M10 |
 | `*PRINT-CIRCLE*` unimplemented; the printer instead cuts off at depth 256 | needs a labelling pass over the object graph | M10 |
-| A bit vector prints as `#(1 0 1 1)`, not `#*1011` | a bit vector and a general vector are both a Python `list` with no recorded element type, so the distinction cannot be recovered at print time | C6 / M9 |
-| `(format <string-with-fill-pointer> ...)` works for a `LispString` but signals for the `AdjustableVector` that `(make-array n :element-type 'character :fill-pointer 0)` returns | `MAKE-ARRAY` discards `:element-type`, so a character array is indistinguishable from a general vector; appending characters to one anyway would be a guess | C6 / M9 |
 | `~&` sees only the column within its own control string, so a `~&` opening a control string cannot tell the stream is mid-line; `FRESH-LINE` is correct | FORMAT builds its whole output as a string before writing, and the column is not threaded through the eleven nested `_format_process_cursor` call sites | C2 |
 | `SUBTYPEP` string-pair table | no type lattice | M9 |
+| `EQUAL` descends a *general* vector element-wise | CLHS 5.3 descends only conses, strings, bit vectors and pathnames, so `(equal #(1 2) #(1 2))` must be NIL. Conses, strings and bit vectors are now right; the general-vector branch predates them and turning it off changes the answer for a heavily-used predicate, which should be its own measured change | M6 |
+| A *displaced* character vector is a `LispArray`, not a `LispString`, so the STRING-specific operators do not accept it | `LispString` stores its characters directly, and threading displacement through it means a second indirection in every string access; every other character array (fill-pointered and adjustable included) is a `LispString` | M9 |
 | `LispString` vs. Python `str` split | two string representations | M9 (blocks EQUAL/EQUALP) |
 | Name-based block/tag/catch matching | no block identity objects | M7 |
 | `is_truthy(False)` is `True` | unaudited boundary | M2 |
@@ -998,6 +1023,111 @@ rather than discovering these one crash at a time.
 Condensed from the previous chronological plan. Each entry is a *mechanism*
 landed, not a test count.
 
+- **2026-08-15 (d)** — **One array object model.** CLHS 15.1 gives an array five
+  properties — dimensions, element type, adjustability, fill pointer,
+  displacement — and fclpy had a representation for none of them. There were
+  *three* unrelated Python shapes: `vectors.AdjustableVector` (a 1-D vector with
+  a fill pointer, which is also what the reader built for a `#(...)` literal, so
+  every **simple** vector claimed to be adjustable), `vectors.Array` (a separate
+  multi-dimensional class that was not even `ARRAYP`), and a bare Python `list`
+  for everything else. None recorded an element type, so `MAKE-ARRAY` discarded
+  `:element-type` outright — `(make-array 5 :element-type 'bit)` was a vector of
+  NIL — `:displaced-to` was accepted and ignored, and `ARRAY-ELEMENT-TYPE`
+  returned the Python string `'T'` (standing rule 2).
+  **The operators were duplicated across five modules and import order picked
+  the winner** (standing rule 3, Finding L): `vectors.py`'s fill-pointer-aware
+  `AREF`, `VECTOR-PUSH`, `ARRAY-DIMENSION(S)` and `ADJUSTABLE-ARRAY-P` all
+  *lost* to copies in `sequences_higher.py` / `misc_hashtables.py` /
+  `math_arithmetic.py` / `core.py` that knew nothing about any of it — the live
+  `VECTOR-PUSH` was `vector.append(...)`, which an array object does not have,
+  so it leaked an `AttributeError` as the value of the form, and the live
+  `AREF` indexed one subscript at a time, so a 2-D reference raised
+  `IndexError: Expected 2 indices, got 1` (both are rows in [X1](#x1-python-exceptions-leaking-as-lisp-values)'s
+  leak table). `ADJUSTABLE-ARRAY-P` was a stub returning NIL; `ARRAY-ROW-MAJOR-INDEX`
+  returned 0; `ROW-MAJOR-AREF` returned None.
+  **`lispfunc/arrays.py` is now the one model and the one home for every array
+  operator**, with the same shape as `sequence_protocol.py`: **three
+  representations, one protocol.** A Python `list` is a *simple general vector*,
+  a `LispString` is a character vector, and `LispArray` is everything else — any
+  other rank, any specialized element type, any fill pointer, adjustability or
+  displacement. `_new_array` is the only place that decides which, and nothing
+  asks `isinstance` (Finding M) — `array_rank_of` / `array_dimensions_of` /
+  `element_type_of` / `fill_pointer_of` / `row_major_get` answer for all three.
+  Displaced arrays forward every access to their target rather than copying, so
+  writes are visible through both.
+  **Measured, same runner both sides:** `run_ansi.py arrays` **518 → 1233 of
+  1356** — **+715**, failures 838 → 123, `arrays/` 42.8% → **90.1%** in the
+  checklist. `pytest` 1642 passed with the same 1 pre-existing unrelated
+  failure (`STREAM-ELEMENT-TYPE`), plus 43 new tests in
+  `tests/test_array_model.py`. Those replaced
+  `test_phase5_task3_vectors.py`/`test_phase5_task4_arrays.py` (648 lines),
+  which certified the `vectors.py` classes — i.e. the copies that had *lost* the
+  registry, so no Lisp form could reach the code they tested. One of them
+  asserted `(array-dimension <fill-pointer 5, size 10> 0)` = 1, a row in
+  [§3's non-ANSI assertion table](#known-non-ansi-assertions-in-the-unit-suite)
+  that is now gone.
+  **Three mechanisms outside `arrays/` moved with it, and each was found by the
+  array work rather than aimed at.** (1) **`COND` answered the unevaluated
+  *form* of a body-less clause**: `(cond ((+ 1 2)))` was the list `(+ 1 2)`,
+  not 3 (CLHS 5.3 says the value of the test). ansi-test's own
+  `make-array-with-checks` — and every aux helper written as one long `cond` of
+  test-only clauses — returns exactly that shape, so the harness compared the
+  check's *source text* against the expected value and **no test using one
+  could pass whatever the implementation did**. That is the measurement-gate
+  shape of [§4](#recommended-order) items 4 and 6, a third time. (2) **A
+  keyword argument repeated in a call took the *rightmost* pair**, where CLHS
+  3.4.1.4.1 takes the leftmost — which ansi-test checks directly with
+  `:allow-other-keys t :allow-other-keys nil` — and **an odd number of keyword
+  arguments passed the dangling keyword on as a positional argument**, so the
+  callee raised a Python `TypeError` where CLHS 3.5.1.6 requires a
+  PROGRAM-ERROR. Both are in the one argument-passing site in
+  `evaluation_core.py`. (3) **`EQUAL` now descends bit vectors** (CLHS 5.3), so
+  `(equal #*101 #*101)` is T.
+  **And one shared place accessor.** `SETF`, `PSETF`, `INCF`, `DECF` and
+  `ROTATEF` each open-coded the `AREF` place, and **every copy read exactly one
+  subscript** — `(setf (aref a i j) v)` silently wrote element `i` — and every
+  copy "helpfully" extended a Python list when the index was out of range,
+  turning an error into a longer vector (standing rule 4). One reader/writer
+  pair in `arrays.py` now serves all five, and it covers `SVREF`, `BIT`,
+  `SBIT`, `ROW-MAJOR-AREF` and `FILL-POINTER` as well. This is *not* M5: the
+  place ladder is untouched, only its array rung.
+
+  **Not yet measured — do this first on the next run.** Only `arrays` was run
+  to completion after the last three changes, and the checklist was amended
+  with it. The **cross-group regression sweep was started and stopped**, so the
+  COND fix, the keyword-argument rules and `EQUAL` on bit vectors have *no*
+  measured blast radius yet. All three are shared mechanisms with wide reach,
+  and the COND one in particular changes what a great many ansi-aux helpers
+  return, so it should move numbers well outside `arrays/` — in which
+  direction is unverified. Run
+  `run_ansi.py sequences printer strings types-and-classes cons misc iteration
+  data-and-control-flow --update-checklist`, then diff against
+  `docs/ansi_checklist_baseline.json` per [the development loop](#the-development-loop)
+  step 7, before treating any of it as landed.
+
+  <a id="discovered-2026-08-15-d"></a>
+  **Discovered, diagnosed, not fixed:**
+  - **A nested destructuring pattern in a `defmacro` lambda list does not
+    bind.** `(defmacro multiple-value-bind* ((&rest vars) form &body body) ...)`
+    — ansi-aux's own helper — signals `Unbound variable: VARS` when expanded, so
+    every ansi-test check that goes through `multiple-value-bind*` (including
+    `subtypep-or-unknown`, which `make-array-with-checks` calls for *every*
+    array) fails there. **This is now the whole residual of
+    `arrays/make-array.lsp`**, 90 of its 118 tests, and it is M3/M4's, not
+    arrays'. It is a cheap, well-localized target with a large blast radius:
+    the pattern is idiomatic in the harness.
+  - **`TYPE-OF` returns uninterned symbols** on most of its branches
+    (`lisptype.LispSymbol('VECTOR')` rather than the `CL` symbol), so its
+    result prints as `#:VECTOR` and is not `EQ` to the symbol a caller wrote.
+    The array branches were fixed here; the rest were left alone as their own
+    change.
+  - **`numbers/number-comparison.lsp` fails to load** with
+    `bad operand type for abs(): 'lispNull'` — a load-time failure, so the 145
+    tests in it never register. Not investigated; noticed while running a
+    multi-group target.
+  - `SUBTYPEP` still has no lattice ([C14](#tier-2--subsystem-gaps)), which is
+    what `UPGRADED-ARRAY-ELEMENT-TYPE.8` measures, and it also makes
+    `make-array-with-checks`' element-type checks vacuous rather than failing.
 - **2026-08-15 (c)** — **LOOP's clause vocabulary, in the one engine.** C1 gave
   LOOP a single iteration engine over composing drivers; what it did not give
   it was the *clauses*. Nine keywords — `WITH`, `MAXIMIZE`/`MAXIMIZING`,

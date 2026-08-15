@@ -3,8 +3,7 @@
 from .core import cons, car, cdr, atom
 from . import registry as _registry
 import fclpy.lisptype as lisptype
-# Import make_array from vectors to avoid circular dependency
-from .vectors import make_array
+from .arrays import make_array
 from .sequences_search import (
     _make_matcher, _coerce_function_designator, _lisp_truthy,
 )
@@ -428,179 +427,13 @@ def pushnew(item, place, **kwargs):
     return [item]
 
 
-# Array operations
-    # make_array is now properly implemented in vectors.py
-
-@_registry.cl_function('ARRAY-DIMENSIONS')
-def array_dimensions(array):
-    """Get array dimensions."""
-    if isinstance(array, list):
-        dims = [len(array)]
-        if array and isinstance(array[0], list):
-            dims.extend(array_dimensions(array[0]))
-        return dims
-    return [1]
-
-
-@_registry.cl_function('ARRAYP')
-def arrayp(object):
-    """Test if object is array."""
-    return lisptype.lisp_bool(isinstance(object, list))
-
-
-@_registry.cl_function('ARRAY-IN-BOUNDS-P')
-def array_in_bounds_p(array, *subscripts):
-    """Test if subscripts are valid for array."""
-    try:
-        dims = array_dimensions(array)
-        if len(subscripts) != len(dims):
-            return lisptype.NIL
-        for i, sub in enumerate(subscripts):
-            if sub < 0 or sub >= dims[i]:
-                return lisptype.NIL
-        return lisptype.T
-    except:
-        return lisptype.NIL
-
-
-@_registry.cl_function('ARRAY-DISPLACEMENT')
-def array_displacement(array):
-    """Return array displacement info."""
-    # In Python, arrays are not displaced, so return None and 0
-    return None, 0
-
-
-@_registry.cl_function('ARRAY-DIMENSION')
-def array_dimension(array, axis_number):
-    """Get specific array dimension."""
-    try:
-        dimensions = array_dimensions(array)
-        if axis_number < 0 or axis_number >= len(dimensions):
-            raise IndexError("Invalid axis number")
-        return dimensions[axis_number]
-    except:
-        return 1
-
-
-@_registry.cl_function('ADJUST-ARRAY')
-def adjust_array(array, new_dimensions, **kwargs):
-    """Adjust array to new dimensions."""
-    # Helper to convert dimensions to int
-    def to_int(val):
-        if hasattr(val, '__iter__') and not isinstance(val, (str, bytes)):
-            return int(val[0]) if val else 0
-        return int(val) if val else 0
-    
-    # Simple implementation - create new array with new dimensions
-    # This is a simplified version
-    if isinstance(new_dimensions, int):
-        return [None] * new_dimensions
-    elif hasattr(new_dimensions, '__iter__') and not isinstance(new_dimensions, (str, bytes)):
-        # It's a list - extract first dimension
-        dim = to_int(new_dimensions[0] if len(new_dimensions) > 0 else 0)
-        return [None] * dim
-    # For multi-dimensional arrays, delegate to make_array
-    return make_array(new_dimensions, **kwargs)
-
-
-@_registry.cl_function('VECTORP')
-def vectorp(object):
-    """Test if object is vector."""
-    return lisptype.lisp_bool(isinstance(object, list))
-
-
-@_registry.cl_function('SIMPLE-VECTOR-P')
-def simple_vector_p(object):
-    """Test if object is simple vector."""
-    return lisptype.lisp_bool(isinstance(object, list))
-
-
-@_registry.cl_function('BIT-VECTOR-P')
-def bit_vector_p(object):
-    """Test if object is bit vector."""
-    return lisptype.lisp_bool(isinstance(object, list) and all(x in (0, 1) for x in object))
-
-
-@_registry.cl_function('SIMPLE-BIT-VECTOR-P')
-def simple_bit_vector_p(object):
-    """Test if object is simple bit vector."""
-    return bit_vector_p(object)
-
-
-@_registry.cl_function('AREF')
-def aref(array, *subscripts):
-    """Array reference.
-
-    An element of a string is a CHARACTER (CLHS 15.1). Both string
-    representations index to a bare length-1 Python `str`, so returning the
-    raw element handed back an object that is simultaneously a character and
-    a string -- two disjoint types (plan.md C13).
-
-    That conflation is not merely untidy: since a string is also a vector,
-    any consumer that walks a vector element-wise sees each character as
-    another one-element vector and recurses without end. The ANSI harness's
-    own `equalp-with-case` does exactly that, so comparing any two strings
-    ran until the stack was exhausted and aborted the whole run.
-    """
-    result = array
-    for subscript in subscripts:
-        container = result
-        result = string_element(container, container[subscript])
-    return result
-
-
-def _is_string(value):
-    """True for either representation of a Lisp string."""
-    return isinstance(value, (str, lisptype.LispString))
-
-
-def string_element(container, element):
-    """Normalize an element read out of `container` to a Lisp value.
-
-    The elements of a string are CHARACTERs (CLHS 15.1), but both string
-    representations index to a bare length-1 Python `str`. Anything that
-    walks a string element-wise -- AREF, LOOP's `across`, sequence
-    traversal -- has to apply that conversion, and it must be the *same*
-    conversion everywhere or the two halves disagree about what a character
-    is. Non-string containers are left alone.
-    """
-    if isinstance(element, str) and _is_string(container):
-        return lisptype.Character(element)
-    return element
-
-
-@_registry.cl_function('SVREF')
-def svref(vector, index):
-    """Simple vector reference."""
-    return vector[index]
-
-
-@_registry.cl_function('VECTOR')
-def vector_fn(*elements):
-    """Create vector from elements."""
-    return list(elements)
-
-
-@_registry.cl_function('VECTOR-POP')
-def vector_pop(vector):
-    """Pop from end of vector."""
-    if vector:
-        return vector.pop()
-    return None
-
-
-@_registry.cl_function('VECTOR-PUSH')
-def vector_push(new_element, vector):
-    """Push to end of vector."""
-    vector.append(new_element)
-    return len(vector) - 1
-
-
-@_registry.cl_function('VECTOR-PUSH-EXTEND')
-def vector_push_extend(new_element, vector, extension=None):
-    """Push with possible extension."""
-    vector.append(new_element)
-    return len(vector) - 1
+# The array operators that used to live here -- AREF, SVREF, VECTOR, VECTORP,
+# ARRAYP, ARRAY-DIMENSION(S), ARRAY-IN-BOUNDS-P, ARRAY-DISPLACEMENT,
+# ADJUST-ARRAY, SIMPLE-VECTOR-P, BIT-VECTOR-P, VECTOR-PUSH/-EXTEND/-POP --
+# were a second implementation of the array model, competing with vectors.py
+# for the same registry names; import order decided which one ran, and this
+# one won while knowing nothing about fill pointers, ranks or element types.
+# They live in arrays.py now, once (standing rule 3).
 
 
 # Lisp symbol for LIST*
@@ -627,11 +460,6 @@ __all__ = [
     'set_exclusive_or', 'nset_exclusive_or', 'subsetp', 'nintersection',
     # Stack operations
     'pop_fn', 'push_fn', 'pushnew',
-    # Array operations (make_array is in vectors.py)
-    'array_dimensions', 'arrayp', 'array_in_bounds_p',
-    'array_displacement', 'array_dimension', 'adjust_array',
-    'vectorp', 'simple_vector_p', 'bit_vector_p', 'simple_bit_vector_p',
-    'aref', 'svref', 'vector_fn', 'vector_pop', 'vector_push', 'vector_push_extend',
     # Symbol-safe names
     'list_s_star_',
 ]

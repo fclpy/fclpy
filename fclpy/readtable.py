@@ -539,8 +539,14 @@ class Readtable:
                     # Reader reference: #n#
                     return None  # Placeholder
                 elif c == 'A' or c == 'a':
-                    # Array: #nA(...)
-                    return self._read_item(stream)  # Return nested structure
+                    # Array: #nA(nested sequences) -- CLHS 2.4.8.12. It used
+                    # to return the nested *list* structure verbatim, so
+                    # `#2a((1 2) (3 4))` read as a list of lists rather than
+                    # as a rank-2 array.
+                    return self._read_array(stream, int(num))
+                elif c == '(':
+                    # `#n(...)`: a vector of exactly n elements.
+                    return self._read_vector(stream, size=int(num))
                 elif c == 'R' or c == 'r':
                     # Radix literal: #nR -> integer read in base n (CLHS 2.4.8.7),
                     # e.g. #3r1021101. Previously unhandled: the digit branch
@@ -629,10 +635,14 @@ class Readtable:
         else:
             return character.Character(c)
     
-    def _read_vector(self, stream):
-        """Read a vector literal #(...)."""
-        from fclpy.lispfunc.vectors import AdjustableVector
-        
+    def _read_vector(self, stream, size=None):
+        """Read a vector literal ``#(...)`` or ``#n(...)``.
+
+        A ``#(...)`` literal is a *simple* vector (CLHS 2.4.8.3), so it reads
+        as this implementation's simple-vector representation, a Python list.
+        It used to read as an `AdjustableVector`, which made every literal
+        vector claim to be adjustable and to have a fill pointer.
+        """
         result = []
         while True:
             # Skip whitespace
@@ -649,11 +659,17 @@ class Readtable:
                 if item is not None:
                     result.append(item)
         
-        # Create an AdjustableVector with the right capacity and fill it
-        vec = AdjustableVector(capacity=len(result), fill_pointer=len(result))
-        for i, elem in enumerate(result):
-            vec.data[i] = elem
-        return vec
+        if size is not None:
+            # `#n(...)` is a vector of length n; a shorter element list is
+            # padded with its last element (CLHS 2.4.8.3).
+            if len(result) > size:
+                raise ValueError(
+                    f"#{size}(...) given {len(result)} elements")
+            if len(result) < size:
+                if not result:
+                    raise ValueError(f"#{size}() has no element to replicate")
+                result.extend([result[-1]] * (size - len(result)))
+        return result
     
     def _check_feature(self, feature):
         """Check if a feature expression is satisfied.
@@ -919,6 +935,21 @@ class Readtable:
         
         return complex(real_part, imag_part)
 
+    def _read_array(self, stream, rank):
+        """Read a ``#nA(...)`` array literal (CLHS 2.4.8.12).
+
+        The dimensions are those of the nested sequences that follow, which
+        is why this cannot simply hand the nested structure back: an array of
+        rank 2 and a list of lists are different objects.
+        """
+        contents = self._read_item(stream)
+        from fclpy.lispfunc.arrays import make_array
+
+        if rank == 0:
+            return make_array(None, initial_contents=contents)
+        dimensions = _nested_dimensions(contents, rank)
+        return make_array(dimensions, initial_contents=contents)
+
     def _read_bit_vector(self, stream):
         """Read a bit vector literal #*101.
         
@@ -951,9 +982,26 @@ class Readtable:
                 stream.unread_char(c)
                 break
         
-        # Return as a list of integers (proper bit-vector type could be added later)
-        # For ANSI compatibility, we just need this to not throw an error
-        return bits
+        # A bit vector is an array whose *element type* is BIT (CLHS 15.1.2.2),
+        # not a general vector that happens to hold zeroes and ones: the
+        # latter is a different type, prints as `#(1 0 1)`, and answers NIL to
+        # BIT-VECTOR-P. Returning a bare list conflated the two.
+        from fclpy.lispfunc.arrays import make_bit_vector
+
+        return make_bit_vector(bits)
+
+
+def _nested_dimensions(contents, rank):
+    """The dimensions a `#nA` literal's nested sequences describe."""
+    dimensions = []
+    current = contents
+    for _ in range(rank):
+        from fclpy.lispfunc.sequence_protocol import seq_elements
+
+        items = seq_elements(current, '#nA')
+        dimensions.append(len(items))
+        current = items[0] if items else None
+    return dimensions
 
 
 def get_current_readtable() -> Readtable:
