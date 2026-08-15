@@ -8,13 +8,25 @@ from . import registry as _registry
 
 
 def _ensure_number(x, func_name):
-    """Ensure argument is a number, raise error if not."""
-    if isinstance(x, (int, float, complex)):
+    """Ensure argument is a number, raise error if not.
+
+    `Fraction` is a Lisp RATIO, and RATIO is a subtype of RATIONAL/REAL/NUMBER
+    (CLHS 12.1) -- omitting it rejected every exact ratio. `(rational
+    most-negative-short-float)` produces one, so `numbers/number-comparison.lsp`
+    failed to *load* with "<=: Argument is not a REAL", taking its whole file
+    out of the run.
+    """
+    if isinstance(x, (int, float, complex, Fraction)):
         return x
     if x is lisptype.NIL or isinstance(x, lisptype.lispNull):
         raise lisptype.LispTypeError(f"{func_name}: Argument is not a NUMBER: NIL",
                                     expected_type="NUMBER", actual_value=x)
-    if isinstance(x, lisptype.Symbol):
+    # `lisptype.Symbol` does not exist -- the class is `LispSymbol` -- so this
+    # branch raised AttributeError instead of the TYPE-ERROR it was written to
+    # signal, turning "not a number" into a Python error leaking out as the
+    # value of the form (standing rule 2). It stayed invisible because nothing
+    # reached it until ABS started using this helper.
+    if isinstance(x, lisptype.LispSymbol):
         raise lisptype.LispTypeError(f"{func_name}: Argument is not a NUMBER: {x.name}",
                                     expected_type="NUMBER", actual_value=x)
     raise lisptype.LispTypeError(f"{func_name}: Argument is not a NUMBER: {x}",
@@ -22,8 +34,11 @@ def _ensure_number(x, func_name):
 
 
 def _ensure_real(x, func_name):
-    """Ensure argument is a real number, raise error if not."""
-    if isinstance(x, (int, float)):
+    """Ensure argument is a real number, raise error if not.
+
+    Includes `Fraction`: a RATIO is a REAL (CLHS 12.1). See `_ensure_number`.
+    """
+    if isinstance(x, (int, float, Fraction)):
         return x
     if isinstance(x, complex):
         raise lisptype.LispTypeError(f"{func_name}: Argument is not a REAL: {x}",
@@ -31,7 +46,7 @@ def _ensure_real(x, func_name):
     if x is lisptype.NIL or isinstance(x, lisptype.lispNull):
         raise lisptype.LispTypeError(f"{func_name}: Argument is not a REAL: NIL",
                                     expected_type="REAL", actual_value=x)
-    if isinstance(x, lisptype.Symbol):
+    if isinstance(x, lisptype.LispSymbol):
         raise lisptype.LispTypeError(f"{func_name}: Argument is not a REAL: {x.name}",
                                     expected_type="REAL", actual_value=x)
     raise lisptype.LispTypeError(f"{func_name}: Argument is not a REAL: {x}",
@@ -40,8 +55,16 @@ def _ensure_real(x, func_name):
 
 @_registry.cl_function('ABS')
 def abs_fn(x):
-    """Absolute value."""
-    return abs(x)
+    """Absolute value (CLHS 12.2): signals a TYPE-ERROR for a non-number.
+
+    This called Python's `abs` on whatever it was handed, so `(abs nil)`
+    raised `TypeError: bad operand type for abs(): 'lispNull'` -- a Python
+    exception as the value of a Lisp form (standing rule 2), and one that
+    aborted a whole *file* load rather than one test. `_ensure_number` is
+    the shared check the rest of this module already uses; ABS simply was
+    not going through it.
+    """
+    return abs(_ensure_number(x, 'ABS'))
 
 
 @_registry.cl_function('GCD')

@@ -1,8 +1,22 @@
 #!/usr/bin/env python3
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from fclpy import runtime
+from fclpy import runtime, watchdog
 from fclpy.lispfunc import setup_environment, eval_string
+
+# This runner had no hang detection of any kind, so a form that never
+# returned wedged the whole ~67-minute run silently and forever -- no
+# warning, no traceback, no exit. scripts/run_ansi.py grew a watchdog and
+# this file never did. See fclpy/watchdog.py for why LoopWatchdog cannot
+# cover this case.
+watchdog.watch_output()
+# The hard stop must sit *above* LOOP_TIMEOUT_ERROR (600s), not at it. A loop
+# that hits its own in-evaluator cap runs ~600s without printing anything,
+# then aborts that one test and the run continues -- `characters` does exactly
+# this. Killing the process at 600s would race that and turn a recoverable
+# test failure into a dead run. The 120s warning still fires meanwhile, so a
+# slow patch is visible in the log either way.
+watchdog.arm(warn_after=120, kill_after=900)
 
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 
@@ -82,8 +96,10 @@ doit_lsp = os.path.join(base, 'ansi-test', 'doit.lsp')
 
 if os.path.exists(doit_lsp):
     print('Loading doit.lsp...')
+    watchdog.set_label('running doit.lsp')
     res = runtime.load_and_evaluate_file(doit_lsp, env, verbose=False)
     print('Result: %s' % str(res))
+    watchdog.set_label('checking completeness')
     complete = check_completeness(env)
     if not complete:
         sys.exit(1)

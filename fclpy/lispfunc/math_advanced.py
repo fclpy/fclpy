@@ -118,18 +118,27 @@ def atanh(x):
 # Float decoding and encoding
 @_registry.cl_function('DECODE-FLOAT')
 def decode_float(float_num):
-    """Decode float into significand, exponent, sign."""
-    import struct
+    """Decode float into significand, exponent, sign (CLHS 12.2).
+
+    Returns three *Lisp* values. This returned a Python tuple, which is a
+    single value -- and a Python container standing in for multiple values is
+    standing rule 2, the same defect its sibling INTEGER-DECODE-FLOAT below
+    does not have. The visible consequence was that `(nth-value 1
+    (decode-float x))` was NIL, so ansi-aux's `float-exponent` answered NIL
+    and `numbers/number-comparison.lsp` died at *load* time with
+    `bad operand type for abs(): 'lispNull'` -- taking all 145 of its tests
+    out of the run rather than failing any one of them.
+    """
     if float_num == 0.0:
-        return 0.0, 0, 1.0
-    
+        return lisptype.MultipleValues([0.0, 0, 1.0])
+
     sign = 1.0 if float_num >= 0 else -1.0
     abs_float = abs(float_num)
-    
+
     # Use frexp to get mantissa and exponent
     mantissa, exponent = math.frexp(abs_float)
-    
-    return mantissa, exponent, sign
+
+    return lisptype.MultipleValues([mantissa, exponent, sign])
 
 
 @_registry.cl_function('INTEGER-DECODE-FLOAT')

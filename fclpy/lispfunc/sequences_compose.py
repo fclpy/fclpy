@@ -3,13 +3,32 @@
 import functools
 from .core import cons, car, cdr, atom, _consp_internal
 from . import registry as _registry
-from .arrays import LispArray
+from .arrays import LispArray, nonnegative_integer as _nonnegative_integer
 from .sequence_protocol import (
     seq_elements, seq_length, bounding_indices, make_lisp_list, rebuild_like,
     build_sequence, seq_set,
 )
 from .sequences_search import _coerce_function_designator, _lisp_truthy
 import fclpy.lisptype as lisptype
+
+
+# A sequence longer than this cannot be built on any machine this runs on, so
+# attempting it is a STORAGE-CONDITION, not a computation. CLHS 4.4 lets an
+# implementation refuse a size above ARRAY-DIMENSION-LIMIT, and refusing is the
+# only option that stays honest: `(make-list 10000000000000000000000)` -- a
+# legitimate `unsigned-byte`, so no type check rejects it -- otherwise builds
+# cons cells one at a time until the machine dies. That is exactly how the
+# 2026-08-15 full run wedged at 27GB with no diagnostic, and no in-evaluator
+# loop watchdog can see it because it is a single call, not an iteration.
+CONSTRUCTIBLE_LIMIT = 1 << 30
+
+
+def _check_constructible(size, what):
+    """Signal rather than attempt an allocation that cannot complete."""
+    if size > CONSTRUCTIBLE_LIMIT:
+        raise lisptype.LispError(
+            f"{what}: cannot build a sequence of {size} elements "
+            f"(exceeds this implementation's limit of {CONSTRUCTIBLE_LIMIT})")
 
 
 def endp(x):
@@ -370,7 +389,11 @@ def make_list(size, initial_element=None):
     """
     if isinstance(size, lisptype.lispCons):
         size = size.car
-    size = int(size)
+    # CLHS: size is an `unsigned-byte`. `int(size)` accepted a float and then
+    # tried to build the list, so `(make-list 1.0e18)` allocated until the
+    # process died -- see arrays.nonnegative_integer.
+    size = _nonnegative_integer(size, 'MAKE-LIST')
+    _check_constructible(size, 'MAKE-LIST')
     element = initial_element if initial_element is not None else lisptype.NIL
     result = lisptype.NIL
     for _ in range(size):
@@ -388,7 +411,10 @@ def make_sequence(sequence_type, size, **kwargs):
     """
     if isinstance(size, lisptype.lispCons):
         size = size.car
-    size = int(size)
+    # Same defect as MAKE-LIST: `[x] * int(size)` is an unbounded allocation
+    # for any size that is not an `unsigned-byte`.
+    size = _nonnegative_integer(size, 'MAKE-SEQUENCE')
+    _check_constructible(size, 'MAKE-SEQUENCE')
     from .sequence_protocol import parse_sequence_type
     kind, _size, _element_type = parse_sequence_type(sequence_type, 'MAKE-SEQUENCE')
     initial_element = kwargs.get('initial_element', None)

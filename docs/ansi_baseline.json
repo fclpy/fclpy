@@ -1,15 +1,15 @@
 {
-  "failed": 10565,
-  "passed": 11548,
+  "failed": 7341,
+  "passed": 14772,
   "per_directory": {
     "(unmapped: programmatically generated)": {
-      "failed": 2822,
-      "passed": 2238,
+      "failed": 2259,
+      "passed": 2801,
       "total": 5060
     },
     "arrays": {
-      "failed": 712,
-      "passed": 533,
+      "failed": 101,
+      "passed": 1144,
       "total": 1245
     },
     "auxiliary": {
@@ -18,98 +18,98 @@
       "total": 2
     },
     "characters": {
-      "failed": 110,
-      "passed": 149,
+      "failed": 108,
+      "passed": 151,
       "total": 259
     },
     "conditions": {
-      "failed": 184,
-      "passed": 119,
+      "failed": 130,
+      "passed": 173,
       "total": 303
     },
     "cons": {
-      "failed": 946,
-      "passed": 692,
+      "failed": 647,
+      "passed": 991,
       "total": 1638
     },
     "data-and-control-flow": {
-      "failed": 393,
-      "passed": 1027,
+      "failed": 305,
+      "passed": 1115,
       "total": 1420
     },
     "environment": {
-      "failed": 80,
-      "passed": 112,
+      "failed": 83,
+      "passed": 109,
       "total": 192
     },
     "eval-and-compile": {
-      "failed": 82,
-      "passed": 236,
+      "failed": 70,
+      "passed": 248,
       "total": 318
     },
     "files": {
-      "failed": 64,
-      "passed": 23,
+      "failed": 62,
+      "passed": 25,
       "total": 87
     },
     "hash-tables": {
-      "failed": 69,
-      "passed": 89,
+      "failed": 73,
+      "passed": 85,
       "total": 158
     },
     "iteration": {
-      "failed": 418,
-      "passed": 420,
+      "failed": 160,
+      "passed": 678,
       "total": 838
     },
     "misc": {
-      "failed": 118,
-      "passed": 622,
+      "failed": 70,
+      "passed": 670,
       "total": 740
     },
     "numbers": {
-      "failed": 503,
-      "passed": 935,
+      "failed": 400,
+      "passed": 1038,
       "total": 1438
     },
     "objects": {
-      "failed": 608,
-      "passed": 217,
+      "failed": 594,
+      "passed": 231,
       "total": 825
     },
     "packages": {
-      "failed": 228,
-      "passed": 112,
+      "failed": 202,
+      "passed": 138,
       "total": 340
     },
     "pathnames": {
-      "failed": 136,
-      "passed": 79,
+      "failed": 140,
+      "passed": 75,
       "total": 215
     },
     "printer": {
-      "failed": 402,
-      "passed": 386,
+      "failed": 377,
+      "passed": 411,
       "total": 788
     },
     "reader": {
-      "failed": 127,
-      "passed": 38,
+      "failed": 129,
+      "passed": 36,
       "total": 165
     },
     "sequences": {
-      "failed": 1484,
-      "passed": 1674,
+      "failed": 352,
+      "passed": 2806,
       "total": 3158
     },
     "streams": {
-      "failed": 320,
-      "passed": 223,
+      "failed": 334,
+      "passed": 209,
       "total": 543
     },
     "strings": {
-      "failed": 302,
-      "passed": 199,
+      "failed": 203,
+      "passed": 298,
       "total": 501
     },
     "structures": {
@@ -118,8 +118,8 @@
       "total": 115
     },
     "symbols": {
-      "failed": 32,
-      "passed": 1113,
+      "failed": 40,
+      "passed": 1105,
       "total": 1145
     },
     "system-construction": {
@@ -128,8 +128,8 @@
       "total": 75
     },
     "types-and-classes": {
-      "failed": 260,
-      "passed": 285,
+      "failed": 337,
+      "passed": 208,
       "total": 545
     }
   },

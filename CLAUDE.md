@@ -5,11 +5,22 @@ Lisp compliance**, measured by running the real ANSI test suite (`ansi-test/`, a
 sibling directory one level above this repo) to completion without crashing, and
 passing as many of its tests as possible.
 
-> **Current status (2026-08-15).** The suite runs to completion and is **past
-> half passing**: `COMPLETENESS: OK`, 22113/22113 accounted, 0 missing,
-> **11548 passing (52.2%)**, ~67 minutes. Crashes are no longer the constraint;
-> **semantics are**. (The first complete run was 2026-08-12: 8960 of 22036,
-> 40.7%, ~7.5 hours.)
+> **Current status (2026-08-16).** The suite runs to completion and is **two
+> thirds passing**: `COMPLETENESS: OK`, 22113/22113 accounted, 0 missing,
+> **14772 passing (66.8%)**, ~113 minutes. Crashes are no longer the constraint;
+> **semantics are**. (08-15: 11548, 52.2%. First complete run 2026-08-12: 8960
+> of 22036, 40.7%, ~7.5 hours.)
+>
+> **Hang detection now lives in `fclpy/watchdog.py`, not in the loop forms.**
+> `LoopWatchdog` evaluates its 120s warning and 600s cap inside `tick()`, once
+> per *iteration*, so it cannot see a loop wedged **inside** one iteration —
+> which is how the 08-15 tree sat at 27GB for half an hour with no diagnostic.
+> `watchdog.arm()` measures *time without progress* instead, warns at 120s and
+> hard-stops at 900s (above LOOP's own 600s cap, so a capped loop fails one
+> test rather than killing the run), dumping every thread's traceback. Both
+> runners arm it; `run_all_tests.py` previously had **no** hang detection at
+> all. Runner output is line-buffered — block buffering once left the log ~30
+> minutes behind the form actually executing.
 >
 > **[plan.md](plan.md) is the roadmap**, organised around the mechanism at fault
 > rather than test counts, and **`docs/ansi_checklist.md` is the authority for
@@ -40,12 +51,16 @@ passing as many of its tests as possible.
   90 seconds by itself, so even a single isolated test via `run_do_test.py` takes
   ~90s+ before it prints a result — don't assume a run has hung just because
   nothing has printed yet; give it at least 2 minutes. The full ANSI suite via
-  `run_all_tests.py` takes **about 67 minutes** end to end (measured 2026-08-15;
-  it was ~7.5 hours before LOOP got one iteration engine, and the "20 minutes"
-  this file used to claim was never right). A single `scripts/run_ansi.py`
-  *group* is usually 2–30s, but a few are far slower because one form in them
-  never terminates and burns the 600s LOOP cap — `characters` takes ~9 minutes
-  for 259 tests for that reason.
+  `run_all_tests.py` takes **about 113 minutes** end to end (measured
+  2026-08-16; it was ~67 minutes at 08-15 and ~7.5 hours before LOOP got one
+  iteration engine). **The rise is expected, not a regression:** fixing LOOP's
+  `unless` clause means `check-type-error` now actually calls the function
+  under test, so a large amount of work that used to be skipped is really run.
+  A single `scripts/run_ansi.py` *group* is usually 2–30s, but a few are far
+  slower because one form in them burns the 600s LOOP cap. **Do not conclude a
+  run has hung from silence alone** — `fclpy/watchdog.py` warns to stderr after
+  120s without progress and dumps every thread's traceback, so a genuine wedge
+  says so and a slow-but-live run does not.
 
 ## Architecture map
 

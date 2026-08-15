@@ -65,8 +65,20 @@ def load_and_evaluate_file(filename, environment=None, verbose=False, timing=Fal
         if verbose or timing:
             print(f"[{time.time() - start_time:.3f}s] Loading file: {filename}")
         
-        # Ensure there's a known current package while reading the file so
-        # reader conditionals and IN-PACKAGE forms behave deterministically.
+        # CLHS 24.1: LOAD *binds* *PACKAGE* for the extent of the file, so an
+        # IN-PACKAGE inside the file is undone when the file finishes.
+        #
+        # This used to restore the package only when it had been None on entry,
+        # which meant a *nested* load leaked its IN-PACKAGE into the rest of the
+        # enclosing file. `init.lsp` is exactly that shape: its second top-level
+        # form loads gclload1.lsp, whose `(in-package :cl-test)` then stayed
+        # current, so init.lsp's *third* form was read in CL-TEST and
+        # `*ROOT-PATH*` interned as a different symbol from the CL-USER one its
+        # own DEFVAR had bound -- "Unbound variable: *ROOT-PATH*", which aborts
+        # the rest of init.lsp. Global lookup is by symbol *identity*, not name
+        # (CLAUDE.md), so two same-named symbols in two packages are two
+        # variables and the failure looks impossible until you notice the
+        # package changed underneath the reader.
         import fclpy.state as state
         old_pkg = getattr(state, 'current_package', None)
         # Default to COMMON-LISP-USER while loading a file when no package set
@@ -155,14 +167,6 @@ def load_and_evaluate_file(filename, environment=None, verbose=False, timing=Fal
                 # Print a traceback when explicitly requested (or in verbose mode).
                 if verbose or os.environ.get('FCLPY_LOAD_TRACEBACK') == '1':
                     traceback.print_exc()
-        # After loading, restore previous package if we changed it
-        try:
-            if old_pkg is None:
-                # Reset to previous (None) to preserve caller state
-                import fclpy.state as state
-                state.current_package = None
-        except Exception:
-            pass
         # Final timing report
         if verbose or timing:
             elapsed = time.time() - start_time
@@ -188,6 +192,21 @@ def load_and_evaluate_file(filename, environment=None, verbose=False, timing=Fal
             environment.set_variable(load_pathname_sym, old_pathname)
         else:
             environment.set_variable(load_pathname_sym, lisptype.NIL)
+
+        # Unbind *PACKAGE* back to what the caller had (CLHS 24.1). In the
+        # `finally` because a file that dies partway must not leave its
+        # IN-PACKAGE current either -- that would silently redirect interning
+        # for everything loaded afterwards. Both homes are written: the value
+        # cell and `state.current_package`, which the reader consults (see
+        # binding.BindingFrame._mirror_package).
+        try:
+            import fclpy.state as state
+            state.current_package = old_pkg
+            if isinstance(old_pkg, lisptype.Package):
+                package_sym = lisptype.COMMON_LISP_PACKAGE.intern_symbol('*PACKAGE*')
+                environment.set_variable(package_sym, old_pkg)
+        except Exception:
+            pass
         # Don't return here - let the try block's return value propagate
 
 class FclpyREPL:

@@ -617,12 +617,32 @@ def _dimensions_argument(dimensions, what='MAKE-ARRAY'):
         expected_type="a dimension or list of dimensions", actual_value=dimensions)
 
 
-def _dimension(value, what):
+def nonnegative_integer(value, what, expected="non-negative integer"):
+    """Validate a CLHS `unsigned-byte` argument -- a size, count or dimension.
+
+    This is the check that `int(value)` is *not*. `int()` accepts a float, a
+    Decimal, a numeric string and anything with `__int__`, so a Lisp form
+    whose argument is out of type silently gets a plausible number instead of
+    the TYPE-ERROR ANSI requires -- and if that number is large, the caller
+    then tries to build it. `(make-list 1.0e18)` reached `range(10**18)` and
+    allocated cons cells until the process held 27GB, which is how the
+    2026-08-15 full run wedged: `cons/make-list.lsp`'s MAKE-LIST.ERROR.1
+    calls `(make-list x)` over `*universe*` precisely to check that every
+    non-`unsigned-byte` x signals.
+
+    `bool` is excluded explicitly because it is an `int` subclass in Python,
+    so T/NIL would otherwise pass as 1/0 (plan.md Finding M: a Python type
+    test standing in for a Lisp one).
+    """
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise lisptype.LispTypeError(
-            f"{what}: {value!r} is not a valid array dimension",
-            expected_type="non-negative integer", actual_value=value)
+            f"{what}: {value!r} is not a {expected}",
+            expected_type=expected, actual_value=value)
     return value
+
+
+def _dimension(value, what):
+    return nonnegative_integer(value, what, expected="valid array dimension")
 
 
 def _contents_elements(contents, dimensions, element_type, axis=0):

@@ -336,15 +336,26 @@ def typep(object, type_specifier):
             # (MOD n) = (INTEGER 0 (n)), (UNSIGNED-BYTE n) = integers 0 to 2^n-1
             if not isinstance(object, int):
                 return lisptype.NIL
+            # A size of `*`, or none at all, means unbounded (CLHS 12.1.2):
+            # `(unsigned-byte)` and `(unsigned-byte *)` are both the atomic
+            # `unsigned-byte`. Defaulting to 8 instead made
+            # `(typep 300 '(unsigned-byte))` false, and `2 ** <the * symbol>`
+            # raised a Python TypeError as the value of the form.
+            size = rest[0] if len(rest) > 0 else None
+            if size is not None and hasattr(size, 'name') and size.name == '*':
+                size = None
             if compound_type == 'MOD':
-                n = rest[0] if len(rest) > 0 else 1
+                # (MOD n) requires its n; `*` is not permitted here.
+                n = size if size is not None else 1
                 return lisptype.lisp_bool(0 <= object < n)
             elif compound_type == 'UNSIGNED-BYTE':
-                n = rest[0] if len(rest) > 0 else 8
-                return lisptype.lisp_bool(0 <= object < (2 ** n))
+                if size is None:
+                    return lisptype.lisp_bool(object >= 0)
+                return lisptype.lisp_bool(0 <= object < (2 ** size))
             elif compound_type == 'SIGNED-BYTE':
-                n = rest[0] if len(rest) > 0 else 8
-                limit = 2 ** (n - 1)
+                if size is None:
+                    return lisptype.T
+                limit = 2 ** (size - 1)
                 return lisptype.lisp_bool(-limit <= object < limit)
         
         elif _arrays.is_array_type_name(compound_type):
@@ -449,6 +460,26 @@ def typep(object, type_specifier):
         return lisptype.lisp_bool(isinstance(object, int))
     elif type_name == 'BIT':
         return lisptype.lisp_bool(isinstance(object, int) and object in (0, 1))
+    elif type_name == 'UNSIGNED-BYTE':
+        # CLHS 12.1.2/4.4: the *atomic* specifier `unsigned-byte` is
+        # `(integer 0 *)` -- any non-negative integer -- and `signed-byte` is
+        # `integer`. Only the compound `(unsigned-byte n)` had a branch (see
+        # below), so the bare symbol fell through to NIL: `(typep 5
+        # 'unsigned-byte)` was false.
+        #
+        # That is not a cosmetic gap. ansi-test's `check-type-error` takes a
+        # *guard* predicate and calls the function under test on every element
+        # of `*mini-universe*` the guard rejects, expecting a TYPE-ERROR. With
+        # this guard answering NIL for everything, MAKE-LIST.ERROR.1 handed
+        # `(make-list 10000000000000000000000)` to a MAKE-LIST that builds its
+        # result one cons at a time -- 27GB and a wedged full run.
+        # `bool` is excluded because it is an `int` subclass in Python, so a
+        # stray Python True would otherwise type as the integer 1.
+        return lisptype.lisp_bool(
+            isinstance(object, int) and not isinstance(object, bool) and object >= 0)
+    elif type_name == 'SIGNED-BYTE':
+        return lisptype.lisp_bool(
+            isinstance(object, int) and not isinstance(object, bool))
     elif type_name == 'FIXNUM':
         # Fixnum: integers within machine word range
         return lisptype.lisp_bool(isinstance(object, int) and FIXNUM_MIN <= object <= FIXNUM_MAX)

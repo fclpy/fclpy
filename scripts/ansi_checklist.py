@@ -6,7 +6,7 @@ Why this exists
 ---------------
 `ansi_results/failed.txt` is 13076 bare test *names*. It is not actionable: it
 does not say which `.lsp` file a test lives in, so it cannot tell you what to
-run to re-check one. A full suite run costs ~7.5 hours, so "just run it again"
+run to re-check one. A full suite run costs ~113 minutes, so "just run it again"
 is not an answer either.
 
 This turns that flat list into a checklist grouped by **directory -> file**, with
@@ -26,7 +26,7 @@ than no checklist.
 Keeping it current without a full run
 -------------------------------------
 `ansi_results/*.txt` is written by the full runner, so without help the
-checklist could only be refreshed by a 4+ hour run -- which in practice means it
+checklist could only be refreshed by a ~2 hour run -- which in practice means it
 goes stale the moment anyone fixes anything, and a stale checklist is worse than
 none (it is supposed to be *the authority for what is failing*).
 
@@ -233,7 +233,7 @@ def render(per_file, per_dir, unmapped_failures, detail, baseline):
     w('pipenv run python scripts/ansi_checklist.py              # regenerate this')
     w('```')
     w('')
-    w('A full-suite run takes ~7.5 hours and is **not** required to verify a fix.')
+    w('A full-suite run takes ~113 minutes and is **not** required to verify a fix.')
     w('Run it to move the official scoreboard or close a milestone.')
     w('')
 

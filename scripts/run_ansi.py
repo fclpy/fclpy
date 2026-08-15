@@ -4,9 +4,9 @@
 Why this exists
 ---------------
 `run_all_tests.py` loads `doit.lsp`, which loads every test file in the suite and
-runs all 22036 tests. That run now takes **over four hours**, which makes it
-useless as a development loop: you cannot iterate on a fix if verifying it costs
-half a day. The full suite is still the authority for the scoreboard, but it is
+runs all 22113 tests. That run takes **~113 minutes** (measured 2026-08-16),
+which makes it a poor development loop: you cannot iterate on a fix if verifying
+it costs two hours. The full suite is still the authority for the scoreboard, but it is
 the wrong tool for "did my change fix DEPOSIT-FIELD.1 without breaking SORT?".
 
 The ansi-test harness splits cleanly at exactly the seam this needs:
@@ -42,21 +42,25 @@ than guessed at here.
 Keeping the checklist current
 ----------------------------
 `docs/ansi_checklist.md` is generated from `ansi_results/*.txt`, which only the
-full runner writes -- so without help it could only ever be refreshed by a 4+
-hour run. Every run here writes its outcomes to `ansi_results/targeted-last.json`,
+full runner writes -- so without help it could only ever be refreshed by a
+~2 hour run. Every run here writes its outcomes to `ansi_results/targeted-last.json`,
 and `--update-checklist` folds them straight back in, updating the status of
 exactly the tests that ran. See plan.md, "Keeping the checklist current without a
 full run".
 
 Timeouts
 --------
-LOOP's in-evaluator hard cap applies to every path, but a form can still fail to
-terminate for reasons of its own (a predicate that never converges, an
-unimplemented clause). `--timeout` installs a process-level watchdog thread that
-reports what was running and hard-exits, so an unattended targeted run cannot
-wedge. `--loop-cap` additionally lowers LOOP's own in-evaluator cap so a runaway
-is charged to the individual test as a failure instead of costing the default
-600 seconds.
+LOOP's in-evaluator hard cap only catches a loop that is *going around* too many
+times: it is evaluated in `LoopWatchdog.tick()`, once per iteration. A loop
+wedged *inside* one iteration never reaches it, which is how MAKE-LIST.ERROR.1
+held a run at 27GB for half an hour without producing a single diagnostic.
+
+`--timeout` therefore installs `fclpy.watchdog`, a process-level detector of
+*time without progress* (default 900s here, 600s for the full runner), which
+warns at 120s and hard-exits at the timeout, dumping every thread's traceback
+both times so a wedged run says where it is stuck. `--loop-cap` still lowers
+LOOP's own in-evaluator cap, which remains the cheaper way to charge a runaway
+*iteration count* to the individual test as a failure.
 """
 
 import argparse
@@ -70,6 +74,8 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ANSI_ROOT = os.path.abspath(os.path.join(REPO_ROOT, '..', 'ansi-test'))
 
 sys.path.insert(0, REPO_ROOT)
+
+from fclpy import watchdog
 
 
 def _lisp_list_to_str_list(value):
@@ -179,27 +185,30 @@ def list_directories():
 
 
 def start_watchdog(seconds, state):
-    """Hard-exit the process if a targeted run overruns.
+    """Start hang detection for a targeted run.
 
-    A daemon thread rather than signal.alarm: SIGALRM does not exist on Windows.
-    os._exit is deliberate -- a runaway is stuck inside the evaluator, so a
-    normal exception would just be caught by RT and the process would keep
-    spinning.
+    This used to be a private daemon thread here that slept for the whole
+    timeout and then `os._exit`ed. Two things were wrong with it, and both
+    are why the 2026-08-15 `run_ansi.py cons` run sat wedged at 35GB for 35
+    minutes against a 900s timeout without ever exiting:
+
+      * it measured *total runtime*, not time without progress, so the
+        timeout had to be set high enough for the slowest legitimate run --
+        which makes it useless as a hang detector; and
+      * it depended on an ordinary Python thread being scheduled and
+        re-acquiring the GIL. On a process that has ballooned into swap that
+        is not something to rely on for the *last-resort* escape.
+
+    `fclpy.watchdog` replaces it with one shared, progress-based mechanism
+    (the same one `run_all_tests.py` now uses -- it previously had none at
+    all), whose hard stop is `faulthandler`'s C-level timer rather than a
+    Python thread, and which dumps every thread's traceback so a killed run
+    says *where* it died.
     """
     if seconds <= 0:
         return
-
-    def _watch():
-        time.sleep(seconds)
-        print("\n*** TIMEOUT after %ds -- last phase: %s ***"
-              % (seconds, state.get('phase', 'unknown')), file=sys.stderr)
-        print("*** the run did not finish; a LOOP driver runaway is the usual cause ***",
-              file=sys.stderr)
-        sys.stderr.flush()
-        sys.stdout.flush()
-        os._exit(2)
-
-    threading.Thread(target=_watch, daemon=True).start()
+    watchdog.watch_output()
+    watchdog.arm(warn_after=min(watchdog.WARN_AFTER, seconds), kill_after=seconds)
 
 
 def main():
@@ -222,7 +231,7 @@ def main():
     parser.add_argument('--update-checklist', action='store_true',
                         help="merge this run's results into ansi_results/*.txt and "
                              "regenerate docs/ansi_checklist.md -- the way to keep the "
-                             "checklist current without a 4+ hour full run")
+                             "checklist current without a ~2 hour full run")
     args = parser.parse_args()
 
     if args.list:
@@ -257,6 +266,7 @@ def main():
     os.chdir(ANSI_ROOT)
     try:
         state['phase'] = 'loading harness (gclload1.lsp)'
+        watchdog.set_label(state['phase'])
         print("Loading harness: gclload1.lsp")
         runtime.load_and_evaluate_file(
             os.path.join(ANSI_ROOT, 'gclload1.lsp'), env, verbose=False)
@@ -282,6 +292,7 @@ def main():
                 print("Loading aux:    %s" % form)
                 eval_string(form, env)
             state['phase'] = 'loading %s' % rel
+            watchdog.set_label(state['phase'])
             print("Loading tests:  %s" % rel)
             runtime.load_and_evaluate_file(target, env, verbose=False)
 
@@ -291,6 +302,8 @@ def main():
         print("Registered %d tests" % len(registered))
 
         state['phase'] = 'running tests'
+
+        watchdog.set_label(state['phase'])
         started = time.perf_counter()
         eval_string("(regression-test:do-tests)", env)
         elapsed = time.perf_counter() - started
@@ -298,6 +311,8 @@ def main():
         os.chdir(original_cwd)
 
     state['phase'] = 'reporting'
+
+    watchdog.set_label(state['phase'])
     passed = _lisp_list_to_str_list(eval_string(
         "(mapcar #'string regression-test:*passed-tests*)", env))
     failed = _lisp_list_to_str_list(eval_string(
