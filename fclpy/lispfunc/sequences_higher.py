@@ -5,29 +5,20 @@ from . import registry as _registry
 import fclpy.lisptype as lisptype
 # Import make_array from vectors to avoid circular dependency
 from .vectors import make_array
-from .sequences_search import _make_matcher
+from .sequences_search import (
+    _make_matcher, _coerce_function_designator, _lisp_truthy,
+)
+from .sequence_protocol import (
+    seq_elements as _cons_to_list, bounding_indices, make_lisp_list, build_sequence,
+    seq_set, seq_length,
+)
 
-
-def _cons_to_list(seq):
-    """Convert a Lisp cons list to a Python list.
-    
-    If seq is already a Python list/tuple, return it as-is.
-    If seq is NIL, return empty list.
-    If seq is a cons list, convert to Python list.
-    """
-    if isinstance(seq, (list, tuple)):
-        return list(seq)
-    if seq is None or seq == lisptype.NIL:
-        return []
-    if isinstance(seq, lisptype.lispCons):
-        result = []
-        cur = seq
-        while cur is not None and cur != lisptype.NIL and isinstance(cur, lisptype.lispCons):
-            result.append(cur.car)
-            cur = cur.cdr
-        return result
-    # Single element - wrap in list
-    return [seq]
+# `_cons_to_list` is the protocol's element access under this module's old
+# name. The copy it replaced ended in `return [seq]`, so an unrecognized
+# sequence -- an `AdjustableVector`, a `LispString` -- became a one-element
+# list of itself instead of its elements: REDUCE over a vector "reduced" to
+# the vector, and EVERY over a vector tested the vector as a single element
+# (plan.md Finding M).
 
 
 def _matcher_contains(matcher, item, seq):
@@ -51,145 +42,204 @@ def adjoin(x, seq, test=None, test_not=None, key=None, **kwargs):
 
 @_registry.cl_function('PAIRLIS')
 def pairlis(keys, data, alist=None):
-    """Create alist from keys and data."""
-    result = []
-    for key, datum in zip(keys, data):
-        result.append((key, datum))
-    if alist:
-        result.extend(alist)
+    """Create an alist from keys and data (CLHS 14.2).
+
+    An association is a *cons*, not a Python tuple, and the alist is a Lisp
+    list -- the pairs used to be tuples inside a Python list, so the result
+    printed as `#(#(A 1))` and no ASSOC could look anything up in it.
+    """
+    result = alist if alist is not None else lisptype.NIL
+    pairs = list(zip(_cons_to_list(keys, 'PAIRLIS'), _cons_to_list(data, 'PAIRLIS')))
+    for key, datum in reversed(pairs):
+        result = lisptype.lispCons(lisptype.lispCons(key, datum), result)
     return result
 
 
 @_registry.cl_function('ACONS')
 def acons(key, datum, alist):
-    """Add key-datum pair to alist."""
-    return [(key, datum)] + list(alist) if alist else [(key, datum)]
+    """Add a key/datum association to the front of an alist (CLHS 14.2)."""
+    return lisptype.lispCons(lisptype.lispCons(key, datum),
+                             alist if alist is not None else lisptype.NIL)
+
+
+def _parallel_elements(sequences, what):
+    """Element lists for the `&rest sequences` of a parallel-mapping operator,
+    truncated to the shortest, per CLHS 17.2."""
+    columns = [_cons_to_list(seq, what) for seq in sequences]
+    if not columns:
+        return []
+    limit = min(len(column) for column in columns)
+    return [[column[i] for column in columns] for i in range(limit)]
 
 
 # Predicate tests on sequences
 @_registry.cl_function('EVERY')
 def every(predicate, *sequences):
-    """Test if predicate is true for every element."""
-    if not sequences:
-        return lisptype.T
-    # Convert all sequences to Python lists to handle lispCons
-    py_seqs = [_cons_to_list(seq) for seq in sequences]
-    if not py_seqs or not all(py_seqs):
-        return lisptype.T
-    min_len = min(len(seq) for seq in py_seqs)
-    for i in range(min_len):
-        args = [seq[i] for seq in py_seqs]
-        if not predicate(*args):
+    """True if the predicate holds for every set of corresponding elements.
+
+    The predicate is a function *designator* and its answer is a Lisp truth
+    value; testing it with a bare `if` made a returned NIL -- a Python-truthy
+    object -- count as true.
+    """
+    predicate = _coerce_function_designator(predicate)
+    for args in _parallel_elements(sequences, 'EVERY'):
+        if not _lisp_truthy(predicate(*args)):
             return lisptype.NIL
     return lisptype.T
 
 
 @_registry.cl_function('SOME')
 def some(predicate, *sequences):
-    """Test if predicate is true for some element."""
-    if not sequences:
-        return lisptype.NIL
-    # Convert all sequences to Python lists to handle lispCons
-    py_seqs = [_cons_to_list(seq) for seq in sequences]
-    if not py_seqs or not all(py_seqs):
-        return lisptype.NIL
-    min_len = min(len(seq) for seq in py_seqs)
-    for i in range(min_len):
-        args = [seq[i] for seq in py_seqs]
-        if predicate(*args):
-            return lisptype.T
+    """The first true value the predicate returns, or NIL (CLHS 17.3).
+
+    SOME returns the *value* of the predicate, not T."""
+    predicate = _coerce_function_designator(predicate)
+    for args in _parallel_elements(sequences, 'SOME'):
+        value = predicate(*args)
+        if _lisp_truthy(value):
+            return value
     return lisptype.NIL
 
 
 @_registry.cl_function('NOTEVERY')
 def notevery(predicate, *sequences):
     """Test if predicate is false for some element."""
-    ev = every(predicate, *sequences)
-    return lisptype.NIL if ev == lisptype.T else lisptype.T
+    return lisptype.lisp_bool(not _lisp_truthy(every(predicate, *sequences)))
 
 
 @_registry.cl_function('NOTANY')
 def notany(predicate, *sequences):
     """Test if predicate is false for all elements."""
-    sv = some(predicate, *sequences)
-    return lisptype.NIL if sv == lisptype.T else lisptype.T
+    return lisptype.lisp_bool(not _lisp_truthy(some(predicate, *sequences)))
 
 
 # Mapping operations
 @_registry.cl_function('MAP')
 def map_fn(result_type, function, *sequences):
-    """Map function over sequences."""
-    if not sequences:
-        return []
-    
-    # Convert all sequences to Python lists to handle lispCons
-    py_seqs = [_cons_to_list(seq) for seq in sequences]
-    if not py_seqs or not all(py_seqs):
-        if result_type is None:
-            return None
-        return []
-    
-    min_len = min(len(seq) for seq in py_seqs)
-    results = []
-    
-    for i in range(min_len):
-        args = [seq[i] for seq in py_seqs]
-        results.append(function(*args))
-    
-    if result_type is None:
-        return None
-    elif result_type == 'LIST':
-        # Return as Lisp cons list
-        result = lisptype.NIL
-        for elem in reversed(results):
-            result = lisptype.lispCons(elem, result)
-        return result
+    """Map `function` over corresponding elements, building a `result_type`
+    sequence (CLHS 17.3).
+
+    `result_type` is a full sequence type specifier, resolved by the shared
+    protocol. It used to be compared against the Python string `'LIST'`, so
+    `(map 'string #'char-upcase "abc")` fell into an `else` that returned the
+    Python list of results -- a vector -- and every non-list request was
+    wrong. A NIL specifier means "for effect", and MAP then returns NIL.
+    """
+    function = _coerce_function_designator(function)
+    results = [function(*args) for args in _parallel_elements(sequences, 'MAP')]
+    if result_type is None or result_type is lisptype.NIL:
+        # CLHS: MAP with a NIL result type calls the function for effect and
+        # returns NIL -- unlike MAKE-SEQUENCE/CONCATENATE, for which NIL is
+        # the *type* NIL and a non-empty result is an error.
+        return lisptype.NIL
+    return build_sequence(result_type, results, 'MAP')
+
+
+@_registry.cl_function('MAP-INTO')
+def map_into(result_sequence, function, *sequences):
+    """Map `function` into an existing sequence, destructively (CLHS 17.3).
+
+    Writes through the protocol's element store, so the destination may be a
+    list, a vector or a string. With no source sequences the function is
+    called once per element of the destination.
+    """
+    function = _coerce_function_designator(function)
+    limit = seq_length(result_sequence, 'MAP-INTO')
+    if sequences:
+        rows = _parallel_elements(sequences, 'MAP-INTO')[:limit]
     else:
-        return results
+        rows = [[] for _ in range(limit)]
+    for index, args in enumerate(rows):
+        seq_set(result_sequence, index, function(*args), 'MAP-INTO')
+    return result_sequence
 
 
 @_registry.cl_function('MAPCAR')
 def mapcar(function, *lists):
-    """Map function over lists."""
-    return map_fn('LIST', function, *lists)
+    """Map over successive elements of lists, collecting results (CLHS 14.2)."""
+    function = _coerce_function_designator(function)
+    return make_lisp_list([function(*args)
+                      for args in _parallel_elements(lists, 'MAPCAR')])
+
+
+def _nconc_results(results, what):
+    """Splice the list results of MAPCAN/MAPCON together (CLHS 14.2).
+
+    A non-list result is spliced as itself only when it is the last one; the
+    previous version tested `isinstance(result, list)`, which is false for
+    every Lisp list, so `(mapcan #'list '(1 2 3))` collected the sublists
+    unspliced.
+    """
+    elements = []
+    for result in results:
+        if isinstance(result, lisptype.lispCons):
+            elements.extend(_cons_to_list(result, what))
+        elif result is None or result is lisptype.NIL:
+            continue
+        else:
+            elements.append(result)
+    return make_lisp_list(elements)
 
 
 @_registry.cl_function('MAPCAN')
 def mapcan(function, *lists):
-    """Map and concatenate results."""
-    results = mapcar(function, *lists)
-    flattened = []
-    for result in results:
-        if isinstance(result, list):
-            flattened.extend(result)
-        else:
-            flattened.append(result)
-    return flattened
+    """MAPCAR, with the results spliced together (CLHS 14.2)."""
+    function = _coerce_function_designator(function)
+    return _nconc_results(
+        [function(*args) for args in _parallel_elements(lists, 'MAPCAN')],
+        'MAPCAN')
 
 
 @_registry.cl_function('MAPC')
 def mapc(function, *lists):
-    """Map for side effects."""
-    map_fn(None, function, *lists)
-    return lists[0] if lists else None
+    """Map for side effects, returning the first list (CLHS 14.2)."""
+    function = _coerce_function_designator(function)
+    for args in _parallel_elements(lists, 'MAPC'):
+        function(*args)
+    return lists[0] if lists else lisptype.NIL
+
+
+def _successive_tails(lists, what):
+    """The successive *tails* (`cdr`s) MAPLIST/MAPCON/MAPL iterate over.
+
+    CLHS 14.2 distinguishes the `-CAR` family, which passes elements, from
+    the `-LIST` family, which passes the sublists themselves. MAPLIST/MAPCON/
+    MAPL were aliases of MAPCAR/MAPCAN/MAPC here, i.e. the distinction did not
+    exist: `(maplist #'list '(1 2))` answered `((1) (2))` instead of
+    `(((1 2)) ((2)))`.
+    """
+    tails = [lst for lst in lists]
+    rows = []
+    while all(isinstance(tail, lisptype.lispCons) for tail in tails) and tails:
+        rows.append(list(tails))
+        tails = [tail.cdr for tail in tails]
+    return rows
 
 
 @_registry.cl_function('MAPCON')
 def mapcon(function, *lists):
-    """Map over cdrs and concatenate."""
-    return mapcan(function, *lists)  # Simplified
+    """MAPLIST, with the results spliced together (CLHS 14.2)."""
+    function = _coerce_function_designator(function)
+    return _nconc_results(
+        [function(*args) for args in _successive_tails(lists, 'MAPCON')],
+        'MAPCON')
 
 
 @_registry.cl_function('MAPLIST')
 def maplist(function, *lists):
-    """Map over lists as lists."""
-    return mapcar(function, *lists)  # Simplified
+    """Map over successive tails of lists, collecting results (CLHS 14.2)."""
+    function = _coerce_function_designator(function)
+    return make_lisp_list([function(*args)
+                      for args in _successive_tails(lists, 'MAPLIST')])
 
 
 @_registry.cl_function('MAPL')
 def mapl(function, *lists):
-    """Map over lists for side effects."""
-    return mapc(function, *lists)
+    """MAPLIST for side effects, returning the first list (CLHS 14.2)."""
+    function = _coerce_function_designator(function)
+    for args in _successive_tails(lists, 'MAPL'):
+        function(*args)
+    return lists[0] if lists else lisptype.NIL
 
 
 @_registry.cl_function('REDUCE')
@@ -208,53 +258,47 @@ def reduce_fn(function, sequence, key=None, from_end=None, start=None, end=None,
     # Handle keyword args that might be passed as :initial-value etc.
     if 'initial-value' in kwargs:
         initial_value = kwargs['initial-value']
-    
-    # Convert sequence to Python list to handle lispCons
-    py_seq = _cons_to_list(sequence)
-    
-    # Handle start/end
-    if start is not None:
-        start = int(start)
-    else:
-        start = 0
-    
-    if end is not None:
-        end = int(end)
-    else:
-        end = len(py_seq)
-    
+    has_initial = initial_value is not None
+
+    function = _coerce_function_designator(function)
+    key = _coerce_function_designator(key)
+
+    py_seq = _cons_to_list(sequence, 'REDUCE')
+    start, end = bounding_indices(len(py_seq), start, end, 'REDUCE')
     py_seq = py_seq[start:end]
-    
-    # Apply key function if provided
     if key is not None:
         py_seq = [key(item) for item in py_seq]
-    
-    # Handle from-end
-    if from_end:
-        py_seq = list(reversed(py_seq))
-    
+
     if not py_seq:
-        if initial_value is not None:
-            return initial_value
-        return function()
-    
-    result = py_seq[0] if initial_value is None else initial_value
-    start_idx = 1 if initial_value is None else 0
-    
-    for item in py_seq[start_idx:]:
+        # CLHS 17.3: with no elements and no :initial-value, the function is
+        # called with no arguments.
+        return initial_value if has_initial else function()
+
+    if from_end is not None and _lisp_truthy(from_end):
+        # :from-end folds right, and the accumulated value is the *second*
+        # argument: (f e1 (f e2 init)).
+        result = initial_value if has_initial else py_seq[-1]
+        rest = py_seq if has_initial else py_seq[:-1]
+        for item in reversed(rest):
+            result = function(item, result)
+        return result
+
+    result = initial_value if has_initial else py_seq[0]
+    rest = py_seq if has_initial else py_seq[1:]
+    for item in rest:
         result = function(result, item)
     return result
 
 
 def _finish_list(pylist):
-    """Return a Python list result as a Lisp value.
+    """Return the elements collected by a set operation as a Lisp **list**.
 
-    `_cons_to_list` turns NIL into `[]` for iteration; on the way back out
-    an empty Python list must become NIL again rather than printing as the
-    distinct-looking `()`, even though they are the same Lisp object --
-    otherwise `(nunion nil nil)` regresses from `NIL` to `()`.
+    This used to return the Python list verbatim. A Python list is this
+    implementation's *vector*, so every set operation answered a vector:
+    `(union '(1 2) '(2 3))` printed as `#(1 2 3)` and `(listp (union ...))`
+    was NIL -- eleven operators, one wrong result type (plan.md C5).
     """
-    return pylist if pylist else lisptype.NIL
+    return make_lisp_list(pylist)
 
 
 def _set_op_matcher(kwargs):
@@ -276,8 +320,9 @@ def _set_op_matcher(kwargs):
 def intersection(list1, list2, **kwargs):
     """Set intersection."""
     matcher = _set_op_matcher(kwargs)
-    list2 = _cons_to_list(list2)
-    return _finish_list([x for x in list1 if _matcher_contains(matcher, x, list2)])
+    list2 = _cons_to_list(list2, 'INTERSECTION')
+    return _finish_list([x for x in _cons_to_list(list1, 'INTERSECTION')
+                         if _matcher_contains(matcher, x, list2)])
 
 
 @_registry.cl_function('UNION')
@@ -306,8 +351,9 @@ def nunion(list1, list2, **kwargs):
 def set_difference(list1, list2, **kwargs):
     """Set difference."""
     matcher = _set_op_matcher(kwargs)
-    list2 = _cons_to_list(list2)
-    return _finish_list([x for x in list1 if not _matcher_contains(matcher, x, list2)])
+    list2 = _cons_to_list(list2, 'SET-DIFFERENCE')
+    return _finish_list([x for x in _cons_to_list(list1, 'SET-DIFFERENCE')
+                         if not _matcher_contains(matcher, x, list2)])
 
 
 @_registry.cl_function('NSET-DIFFERENCE')
@@ -574,7 +620,8 @@ __all__ = [
     # Predicate tests
     'every', 'some', 'notevery', 'notany',
     # Mapping operations
-    'map_fn', 'mapcar', 'mapcan', 'mapc', 'mapcon', 'maplist', 'mapl', 'reduce_fn',
+    'map_fn', 'map_into', 'mapcar', 'mapcan', 'mapc', 'mapcon', 'maplist', 'mapl',
+    'reduce_fn',
     # Set operations
     'intersection', 'union', 'nunion', 'set_difference', 'nset_difference',
     'set_exclusive_or', 'nset_exclusive_or', 'subsetp', 'nintersection',

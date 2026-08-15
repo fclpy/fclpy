@@ -37,17 +37,161 @@ ACCUMULATION_CLAUSES = {
     'NCONC': 'nconc', 'NCONCING': 'nconc',
     'SUM': 'sum', 'SUMMING': 'sum',
     'COUNT': 'count', 'COUNTING': 'count',
+    'MAXIMIZE': 'maximize', 'MAXIMIZING': 'maximize',
+    'MINIMIZE': 'minimize', 'MINIMIZING': 'minimize',
     'ALWAYS': 'always',
+    'NEVER': 'never',
     'THEREIS': 'thereis',
 }
+
+# The accumulations CLHS 6.1.3.2 gives a numeric result, and the only ones whose
+# grammar ends in an optional type-spec: `maximize x fixnum` is a type
+# declaration, but `collect x` takes no such trailing token, so parsing one
+# there would swallow the next clause's first form.
+NUMERIC_ACCUMULATIONS = frozenset({'sum', 'count', 'maximize', 'minimize'})
+
+# ALWAYS/NEVER/THEREIS (CLHS 6.1.2.2) do not accumulate: each one *decides* the
+# value of the whole LOOP and terminates it immediately, skipping the epilogue.
+# They are parsed through the accumulation table because their syntax is the
+# same, but they are executed as one shared early-decision, not three flags.
+BOOLEAN_TERMINATION_CLAUSES = frozenset({'always', 'never', 'thereis'})
 
 # Every token that begins a new LOOP clause, and therefore ends the one being
 # parsed. Single source of truth: this used to be two hand-maintained copies
 # (the FOR-clause scanner and the DO body scanner) that could drift apart.
 LOOP_CLAUSE_KEYWORDS = frozenset(ACCUMULATION_CLAUSES) | {
-    'FOR', 'AS', 'WHILE', 'UNTIL', 'REPEAT', 'DO', 'DOING',
+    'FOR', 'AS', 'WITH', 'AND', 'WHILE', 'UNTIL', 'REPEAT', 'DO', 'DOING',
     'WHEN', 'UNLESS', 'IF', 'RETURN', 'INITIALLY', 'FINALLY',
 }
+
+# The two `for var being ...` families, and every spelling CLHS gives them.
+# Singular and plural are synonyms (6.1.2.1.6, 6.1.2.1.7), which is most of why
+# the previous parse -- which matched only the plural SYMBOLS -- recognized one
+# of these eight tokens.
+LOOP_HASH_PARTS = {
+    'HASH-KEY': 'key', 'HASH-KEYS': 'key',
+    'HASH-VALUE': 'value', 'HASH-VALUES': 'value',
+}
+
+LOOP_PACKAGE_SYMBOL_SETS = {
+    'SYMBOL': 'symbols', 'SYMBOLS': 'symbols',
+    'PRESENT-SYMBOL': 'present-symbols', 'PRESENT-SYMBOLS': 'present-symbols',
+    'EXTERNAL-SYMBOL': 'external-symbols', 'EXTERNAL-SYMBOLS': 'external-symbols',
+}
+
+# CLHS 6.1.1.7's `simple-type-spec`: the only type specifiers that may follow a
+# LOOP variable *without* the OF-TYPE marker. Any richer specifier -- (fixnum
+# fixnum), string, (integer 0 7) -- must be introduced by OF-TYPE, which is what
+# makes it safe to treat every other token after a variable as the next clause.
+LOOP_SIMPLE_TYPE_SPECS = frozenset({'FIXNUM', 'FLOAT', 'T', 'NIL'})
+
+# The zero of each type, for a LOOP variable given a type-spec but no init form
+# (CLHS 6.1.1.7: "bound to an appropriate value for its type, such as 0").
+_LOOP_ZERO_BY_TYPE = {
+    'FIXNUM': 0, 'INTEGER': 0, 'BIGNUM': 0, 'BIT': 0, 'RATIONAL': 0,
+    'RATIO': 0, 'NUMBER': 0, 'SIGNED-BYTE': 0, 'UNSIGNED-BYTE': 0,
+    'FLOAT': 0.0, 'SHORT-FLOAT': 0.0, 'SINGLE-FLOAT': 0.0,
+    'DOUBLE-FLOAT': 0.0, 'LONG-FLOAT': 0.0, 'REAL': 0.0,
+}
+
+
+def _loop_sym_name(token):
+    """Uppercase name of a LOOP token that is a symbol, else None.
+
+    Shared by the clause parser and by the type-spec/variable helpers below so
+    that "is this token the keyword X" has exactly one answer. NIL reads as the
+    ``lispNull`` singleton rather than a ``LispSymbol``, so it needs its own
+    branch -- without it ``with nil = nil`` and the ``nil`` simple-type-spec
+    both look like anonymous non-symbol tokens.
+    """
+    if isinstance(token, lisptype.LispSymbol):
+        return token.name.upper()
+    if token is lisptype.NIL or token is None:
+        return 'NIL'
+    return None
+
+
+def _loop_is_discarded_var(varspec):
+    """True for the NIL that means "bind nothing here" (CLHS 6.1.1.7).
+
+    ``(loop for nil being the hash-values of h count t)`` and
+    ``(loop with (nil a) = '(1 2) return a)`` both use NIL as a placeholder
+    whose value is dropped. NIL has three representations in this
+    implementation, so all three have to be recognized.
+    """
+    return varspec is None or varspec is lisptype.NIL or (
+        isinstance(varspec, lisptype.LispSymbol) and varspec.name.upper() == 'NIL')
+
+
+def _loop_destructure(varspec, value, visit):
+    """Walk a LOOP variable spec against a value, calling visit(symbol, value).
+
+    One recursive walk over the cons structure replaces the three special-cased
+    shapes this used to enumerate (single symbol, dotted pair ``(a . b)``,
+    proper list ``(a b c)``). The general walk is what makes the shapes the
+    enumeration missed work: a dotted tail ``(a b . rest)``, a NIL hole
+    ``(nil . v)``, and a pattern longer than its value -- CLHS 6.1.1.7 fills
+    the missing positions with NIL rather than erring, which
+    ``(loop with (a b) = '(1) ...)`` relies on.
+
+    It is shared by WITH, by every FOR driver and by USING, so all of them
+    destructure identically; three copies of a partial walk is how they came to
+    disagree.
+    """
+    if _loop_is_discarded_var(varspec):
+        return
+    if isinstance(varspec, lisptype.LispSymbol):
+        visit(varspec, value)
+        return
+    if _consp_internal(varspec):
+        has_value = _consp_internal(value)
+        _loop_destructure(car(varspec), car(value) if has_value else lisptype.NIL, visit)
+        _loop_destructure(cdr(varspec), cdr(value) if has_value else lisptype.NIL, visit)
+        return
+    raise lisptype.LispProgramError(
+        f'LOOP variable must be a symbol or a destructuring pattern, not {varspec!r}')
+
+
+def _loop_varspec_names(varspec):
+    """The names a variable spec binds, in order -- CLHS 6.1.1.7's duplicate
+    check needs the names *found by destructuring*, not just the top-level one."""
+    names = []
+    _loop_destructure(varspec, lisptype.NIL, lambda sym, _value: names.append(sym.name.upper()))
+    return names
+
+
+def _loop_type_spec(forms, index):
+    """Consume the optional type-spec at forms[index] (CLHS 6.1.1.7).
+
+    Returns ``(next_index, spec)``; ``spec`` is None when there is no type-spec,
+    in which case the index is unchanged. Deciding this in one place is what
+    keeps FOR, WITH and the numeric accumulations from each guessing
+    differently -- and the guess has to be conservative, because consuming a
+    token that is really the next clause's keyword silently deletes that clause.
+    """
+    if index >= len(forms):
+        return index, None
+    name = _loop_sym_name(forms[index])
+    if name == 'OF-TYPE':
+        if index + 1 >= len(forms):
+            raise lisptype.LispProgramError('LOOP OF-TYPE requires a type specifier')
+        return index + 2, forms[index + 1]
+    if name in LOOP_SIMPLE_TYPE_SPECS:
+        return index + 1, forms[index]
+    return index, None
+
+
+def _loop_type_default(spec):
+    """The initial value a type-spec implies when no init form is given.
+
+    CLHS 6.1.1.7: a numeric type starts at its zero and everything else at NIL,
+    and a *destructured* type-spec supplies one default per position -- which is
+    why this mirrors the spec's own cons structure and hands the result to
+    `_loop_destructure`, rather than producing a single scalar.
+    """
+    if _consp_internal(spec):
+        return cons(_loop_type_default(car(spec)), _loop_type_default(cdr(spec)))
+    return _LOOP_ZERO_BY_TYPE.get(_loop_sym_name(spec), lisptype.NIL)
 
 
 class LoopWatchdog:
@@ -1318,53 +1462,34 @@ def eval_loop(form, env):
         forms.append(car(current))
         current = cdr(current)
     
-    def sym_name(x):
-        """Get uppercase symbol name or None."""
-        return x.name.upper() if isinstance(x, lisptype.LispSymbol) else None
+    sym_name = _loop_sym_name
 
     def _bind_varspec(frame, varspec, value):
-        """Bind a LOOP var spec (symbol or simple destructuring pattern).
+        """Bind a LOOP var spec (symbol or destructuring pattern).
 
         Goes through the loop's `BindingFrame`, which *establishes* the variable
         on the first iteration and assigns to that same binding afterwards. It
         used to call `set_variable`, which walks out to an enclosing binding of
         the same name and mutates it -- so `(loop for s = ...)` overwrote a
         caller's `s`, rt.lsp's report stream among them.
+
+        The pattern walk itself is `_loop_destructure`, shared with WITH and
+        USING so every clause destructures the same way.
         """
-        # Common case: single symbol
-        if isinstance(varspec, lisptype.LispSymbol):
-            frame.bind(varspec, value)
-            return
+        _loop_destructure(varspec, value, frame.bind)
 
-        # Destructuring patterns used by ANSI tests (e.g., (KEY . VAL))
-        if _consp_internal(varspec):
-            # Dotted pair pattern: (A . B)
-            left = car(varspec)
-            right = cdr(varspec)
-            if isinstance(left, lisptype.LispSymbol) and isinstance(right, lisptype.LispSymbol) and not _consp_internal(right):
-                if _consp_internal(value):
-                    frame.bind(left, car(value))
-                    frame.bind(right, cdr(value))
-                else:
-                    frame.bind(left, lisptype.NIL)
-                    frame.bind(right, lisptype.NIL)
-                return
+    # CLHS 6.1.1.7: "An error of type program-error is signaled (at macro
+    # expansion time) if the same variable is bound twice in any
+    # variable-binding clause of a single loop expression." Collected across
+    # every binding clause, including the names destructuring finds.
+    bound_variable_names = []
 
-            # Proper list pattern: (A B C)
-            pat = varspec
-            cur_val = value
-            while _consp_internal(pat):
-                pitem = car(pat)
-                if isinstance(pitem, lisptype.LispSymbol):
-                    if _consp_internal(cur_val):
-                        frame.bind(pitem, car(cur_val))
-                        cur_val = cdr(cur_val)
-                    else:
-                        frame.bind(pitem, lisptype.NIL)
-                pat = cdr(pat)
-            return
-
-        raise lisptype.LispNotImplementedError('LOOP FOR requires a symbol')
+    def _claim_variables(varspec):
+        for var_name in _loop_varspec_names(varspec):
+            if var_name in bound_variable_names:
+                raise lisptype.LispProgramError(
+                    f'LOOP binds {var_name} twice')
+            bound_variable_names.append(var_name)
 
     # Parse loop clauses into structured form
     i = 0
@@ -1397,6 +1522,14 @@ def eval_loop(form, env):
     # Each entry: {'type', 'form', 'into', 'conditionals'}.
     accumulations = []
 
+    # WITH's local variables (CLHS 6.1.1.4), as a list of *groups*. Successive
+    # WITH clauses initialize sequentially -- each one sees the previous -- but
+    # the specs an AND joins initialize in parallel, all from the environment
+    # outside the loop, which is the distinction LET* and LET make and the
+    # reason a flat list would not do.
+    # Each spec: {'var', 'type', 'init'} with 'init' None meaning "no = form".
+    with_groups = []
+
     initially_forms = []  # INITIALLY prologue, run once before the first iteration
     finally_forms = []
     return_form = None  # RETURN clause form to evaluate during loop
@@ -1413,6 +1546,30 @@ def eval_loop(form, env):
             i += 2
             continue
 
+        if name == 'WITH':
+            # with var [type-spec] [= form] {and var [type-spec] [= form]}*
+            # (CLHS 6.1.1.4). Previously unrecognized entirely, so WITH and its
+            # variable fell into body_forms and were evaluated once per
+            # iteration as free references -- "Unbound variable: WITH".
+            group = []
+            i += 1
+            while True:
+                spec_var = forms[i]
+                _claim_variables(spec_var)
+                i += 1
+                i, spec_type = _loop_type_spec(forms, i)
+                spec_init = None
+                if i < len(forms) and sym_name(forms[i]) == '=':
+                    spec_init = forms[i+1]
+                    i += 2
+                group.append({'var': spec_var, 'type': spec_type, 'init': spec_init})
+                if i < len(forms) and sym_name(forms[i]) == 'AND':
+                    i += 1
+                    continue
+                break
+            with_groups.append(group)
+            continue
+
         if name in ('FOR', 'AS'):
             # CLHS 6.1.2.1: "either the keyword FOR or the keyword AS may be
             # used to begin a for-as-clause" -- AS is a full synonym, not a
@@ -1422,14 +1579,21 @@ def eval_loop(form, env):
             # body forms until the 10-minute LOOP_TIMEOUT_ERROR hard cap
             # fired -- exercised by ~15 tests across iteration/loop2-7.lsp.
             candidate_var = forms[i+1]
-            if not (isinstance(candidate_var, lisptype.LispSymbol) or _consp_internal(candidate_var)):
+            if not (isinstance(candidate_var, lisptype.LispSymbol)
+                    or _consp_internal(candidate_var)
+                    or _loop_is_discarded_var(candidate_var)):
                 raise lisptype.LispNotImplementedError('LOOP FOR requires a symbol')
+            _claim_variables(candidate_var)
 
             clause_stop = LOOP_CLAUSE_KEYWORDS
 
             # Parse the FOR clause into either a driver (IN/ON/ACROSS/FROM...) or an aux binding (=
             # without FROM/IN/etc) when a driver already exists.
-            j = i + 2
+            # The optional type-spec sits between the variable and the driver
+            # keyword (`for v fixnum being the hash-values of h`), so it has to
+            # be consumed before the scan below or FIXNUM reads as the end of
+            # the clause and the driver is lost.
+            j, _for_type = _loop_type_spec(forms, i + 2)
             saw_driver_keyword = False
             driver_kind = None
             driver_start = None
@@ -1439,6 +1603,10 @@ def eval_loop(form, env):
             aux_init = None
             aux_then = None
             driver_downward = False
+            driver_hash_part = None
+            driver_symbol_set = None
+            driver_using_part = None
+            driver_using_var = None
 
             while j < len(forms):
                 fname = sym_name(forms[j])
@@ -1482,27 +1650,54 @@ def eval_loop(form, env):
                     driver_list = forms[j+1]
                     driver_kind = 'for-on'
                     j += 2
-                elif fname == 'BEING' or fname == 'BEING-THE':
-                    # Handle forms like: FOR x BEING THE SYMBOLS OF "KEYWORD"
+                elif fname == 'BEING':
+                    # being {each | the} <what> [{of | in} form] [using (<what> var)]
+                    #
+                    # CLHS 6.1.2.1.6 (hash tables) and 6.1.2.1.7 (packages). The
+                    # previous parse recognized exactly one spelling of one of
+                    # the eight -- plural SYMBOLS after THE -- and *broke out of
+                    # the clause* for every other, which left driver_kind None
+                    # and raised "LOOP FOR clause missing iteration spec". That
+                    # is the whole of loop6.lsp (47/47) and loop7.lsp (35/35).
                     saw_driver_keyword = True
                     k = j + 1
-                    # optional THE
-                    if k < len(forms) and sym_name(forms[k]) == 'THE':
+                    if k < len(forms) and sym_name(forms[k]) in ('THE', 'EACH'):
                         k += 1
-                    # expect SYMBOLS
-                    if k < len(forms) and sym_name(forms[k]) == 'SYMBOLS':
-                        # optional OF <package>
-                        if k + 1 < len(forms) and sym_name(forms[k+1]) == 'OF':
-                            driver_kind = 'for-being-symbols'
-                            driver_list = forms[k+2] if (k + 2) < len(forms) else None
-                            j = k + 3
-                        else:
-                            driver_kind = 'for-being-symbols'
-                            driver_list = None
-                            j = k + 1
+                    what = sym_name(forms[k]) if k < len(forms) else None
+                    k += 1
+                    if what in LOOP_HASH_PARTS:
+                        driver_kind = 'for-being-hash'
+                        driver_hash_part = LOOP_HASH_PARTS[what]
+                    elif what in LOOP_PACKAGE_SYMBOL_SETS:
+                        driver_kind = 'for-being-package'
+                        driver_symbol_set = LOOP_PACKAGE_SYMBOL_SETS[what]
                     else:
-                        # Not a supported BEING clause; stop parsing here
-                        break
+                        raise lisptype.LispProgramError(
+                            f'LOOP BEING does not name an iterable: {what}')
+                    # The source is required for a hash table and optional for a
+                    # package, which defaults to *PACKAGE*.
+                    if k < len(forms) and sym_name(forms[k]) in ('OF', 'IN'):
+                        driver_list = forms[k+1]
+                        k += 2
+                    elif driver_kind == 'for-being-hash':
+                        raise lisptype.LispProgramError(
+                            'LOOP BEING THE HASH-KEYS/HASH-VALUES requires OF or IN')
+                    # using ({hash-key | hash-value} other-var) names the other
+                    # half of the entry (CLHS 6.1.2.1.6).
+                    if k < len(forms) and sym_name(forms[k]) == 'USING':
+                        using_clause = forms[k+1] if (k + 1) < len(forms) else None
+                        if not _consp_internal(using_clause):
+                            raise lisptype.LispProgramError(
+                                'LOOP USING requires (hash-key var) or (hash-value var)')
+                        using_what = sym_name(car(using_clause))
+                        if using_what not in LOOP_HASH_PARTS:
+                            raise lisptype.LispProgramError(
+                                f'LOOP USING does not name a hash-table part: {using_what}')
+                        driver_using_part = LOOP_HASH_PARTS[using_what]
+                        driver_using_var = car(cdr(using_clause))
+                        _claim_variables(driver_using_var)
+                        k += 2
+                    j = k
                 elif fname == 'ACROSS':
                     saw_driver_keyword = True
                     driver_list = forms[j+1]
@@ -1556,6 +1751,10 @@ def eval_loop(form, env):
                 'end': driver_end,
                 'step': driver_step,
                 'list': driver_list,
+                'hash_part': driver_hash_part,
+                'symbol_set': driver_symbol_set,
+                'using_part': driver_using_part,
+                'using_var': driver_using_var,
             })
 
             i = j
@@ -1629,6 +1828,12 @@ def eval_loop(form, env):
             if i < len(forms) and sym_name(forms[i]) == 'INTO':
                 clause['into'] = forms[i+1]
                 i += 2
+            # `maximize x fixnum` / `sum x into total of-type integer`: only the
+            # numeric accumulations take a trailing type-spec (CLHS 6.1.3.2), so
+            # only they may consume one -- `collect x` followed by `t` would
+            # otherwise lose the T.
+            if clause['type'] in NUMERIC_ACCUMULATIONS:
+                i, _acc_type_spec = _loop_type_spec(forms, i)
             accumulations.append(clause)
 
         elif name == 'RETURN':
@@ -1673,14 +1878,18 @@ def eval_loop(form, env):
     result = None
     return_triggered = False  # Flag for when RETURN is executed
 
-    # ALWAYS/THEREIS decide the loop's value directly rather than accumulating.
-    always_failed = False
-    thereis_result = None
+    # ALWAYS/NEVER/THEREIS decide the loop's value outright (CLHS 6.1.2.2)
+    # instead of accumulating, and they end the loop the moment they decide, so
+    # the epilogue never runs and cannot override them. One decision slot for
+    # all three: they used to be two independent flags whose "did it fire?"
+    # tests differed (`always_failed` versus `thereis_result is not None`), and
+    # a third clause added that way would have been a third convention.
+    early_decision = {'decided': False, 'value': lisptype.NIL}
 
     # One accumulator per INTO destination, keyed by the variable's name (None
     # is "the loop's own value"). Several clauses may share a destination, which
     # is what makes `collect a into x collect b into x` accumulate in order.
-    # Each state is {'type': str, 'items': [], 'number': int}.
+    # Each state is {'type': str, 'items': [], 'number': int, 'extremum': None}.
     acc_states = {}
 
     def _acc_key(clause):
@@ -1690,7 +1899,8 @@ def eval_loop(form, env):
     for _clause in accumulations:
         _key = _acc_key(_clause)
         if _key not in acc_states:
-            acc_states[_key] = {'type': _clause['type'], 'items': [], 'number': 0}
+            acc_states[_key] = {'type': _clause['type'], 'items': [],
+                                'number': 0, 'extremum': None}
 
     def _conditionals_pass(clause_conditionals, loop_env):
         """Evaluate a WHEN/UNLESS conditional list against this iteration."""
@@ -1720,16 +1930,21 @@ def eval_loop(form, env):
             return result_list
         if acc_type in ('sum', 'count'):
             return state['number']
-        if acc_type == 'always':
-            # T for all iterations, including vacuous truth
-            return lisptype.NIL if always_failed else lisptype.T
-        if acc_type == 'thereis':
-            return thereis_result if thereis_result is not None else lisptype.NIL
+        if acc_type in ('maximize', 'minimize'):
+            # CLHS 6.1.3.2 leaves the value undefined when the clause never
+            # runs; NIL is the value with no extremum yet.
+            extremum = state['extremum']
+            return lisptype.NIL if extremum is None else extremum
+        if acc_type in BOOLEAN_TERMINATION_CLAUSES:
+            # Reached only when the loop ran to completion without the clause
+            # deciding: ALWAYS and NEVER are then true (vacuously so for a loop
+            # with no iterations), and THEREIS found nothing.
+            return lisptype.NIL if acc_type == 'thereis' else lisptype.T
         return lisptype.NIL
 
     def execute_iteration_body(loop_env):
         """Execute one iteration of the loop body."""
-        nonlocal result, always_failed, thereis_result, return_triggered
+        nonlocal result, return_triggered
 
         # Check for RETURN form and evaluate it if present
         if return_form is not None:
@@ -1768,16 +1983,27 @@ def eval_loop(form, env):
             elif acc_type == 'count':
                 if lisptype.is_truthy(acc_value):
                     state['number'] += 1
-            elif acc_type == 'always':
-                # ALWAYS: the test must hold on every iteration; the first
-                # failure ends the loop with NIL.
-                if not lisptype.is_truthy(acc_value):
-                    always_failed = True
-                    return_triggered = True
-            elif acc_type == 'thereis':
-                # THEREIS: the first true value ends the loop and is its value.
-                if lisptype.is_truthy(acc_value):
-                    thereis_result = acc_value
+            elif acc_type in ('maximize', 'minimize'):
+                # CLHS 6.1.3.2: the largest/smallest value the form takes. The
+                # first value seeds the extremum -- there is no identity element
+                # to start from, since the values need only be REALs and may be
+                # all negative or all positive.
+                extremum = state['extremum']
+                if extremum is None:
+                    state['extremum'] = acc_value
+                elif (acc_value > extremum) if acc_type == 'maximize' else (acc_value < extremum):
+                    state['extremum'] = acc_value
+            elif acc_type in BOOLEAN_TERMINATION_CLAUSES:
+                # CLHS 6.1.2.2. ALWAYS fails on the first false value, NEVER on
+                # the first true one, and THEREIS succeeds on the first true
+                # one; in every case the decision ends the loop at once. One
+                # branch, because they are one clause family that differs only
+                # in which truth value decides and what the answer then is.
+                is_true = lisptype.is_truthy(acc_value)
+                decides = (not is_true) if acc_type == 'always' else is_true
+                if decides:
+                    early_decision['decided'] = True
+                    early_decision['value'] = acc_value if acc_type == 'thereis' else lisptype.NIL
                     return_triggered = True
 
             if clause['into'] is not None:
@@ -1897,50 +2123,32 @@ def eval_loop(form, env):
                 # when I does not exist yet.
                 driver['_first'] = True
                 return True
-            if kind == 'for-being-symbols':
-                # Evaluate package spec (could be string, symbol, or package object)
+            if kind == 'for-being-hash':
+                # CLHS 6.1.2.1.6. The entries are snapshotted here rather than
+                # iterated lazily: the body may add to or remove from the table,
+                # and a live Python view would raise "dictionary changed size
+                # during iteration" as a Python error leaking into Lisp.
+                table = eval(driver['list'], loop_env)
+                if not hasattr(table, 'items'):
+                    raise lisptype.LispTypeError(
+                        datum=table, expected_type='HASH-TABLE',
+                        message='LOOP BEING THE HASH-KEYS requires a hash table')
+                driver['_items'] = list(table.items())
+                driver['_idx'] = 0
+                return True
+            if kind == 'for-being-package':
+                # CLHS 6.1.2.1.7. The package designator is *evaluated* -- it may
+                # be a string, a symbol or a (find-package ...) form -- and then
+                # resolved and enumerated by the shared package helpers, so this
+                # agrees with DO-SYMBOLS / DO-EXTERNAL-SYMBOLS about which
+                # symbols each of the three sets contains. The previous copy
+                # here swallowed a failed lookup with `except Exception` and
+                # iterated an empty package instead of signaling.
+                from .misc_packages import package_symbols
                 pkg_spec = driver.get('list')
-                pkg = None
-                if pkg_spec is None:
-                    pkg = None
-                else:
-                    # Evaluate the package spec in the loop environment if it's an expression
-                    try:
-                        pkg_val = eval(pkg_spec, loop_env) if not isinstance(pkg_spec, (str,)) else pkg_spec
-                    except Exception:
-                        pkg_val = pkg_spec
-
-                    # pkg_val may be a LispPackage, LispSymbol, or string.
-                    # (No local `import fclpy.lisptype as lisptype` here: it
-                    # made lisptype a local of the whole enclosing function, so
-                    # every earlier `lisptype.LispNotImplementedError` in
-                    # _init_driver raised UnboundLocalError instead. The
-                    # module-level import at the top of this file is the one to
-                    # use.)
-                    if isinstance(pkg_val, lisptype.Package):
-                        pkg = pkg_val
-                    else:
-                        name = None
-                        if isinstance(pkg_val, lisptype.LispSymbol):
-                            name = pkg_val.name
-                        elif isinstance(pkg_val, str):
-                            name = pkg_val
-                        else:
-                            # Try string conversion
-                            name = str(pkg_val)
-                        try:
-                            pkg = lisptype.find_package(name)
-                        except Exception:
-                            pkg = None
-
-                # Build a cons list of symbols from the package
-                cur_list = lisptype.NIL
-                if pkg is not None and hasattr(pkg, 'symbols'):
-                    # iterate over symbol objects
-                    vals = list(pkg.symbols.values())
-                    for s in reversed(vals):
-                        cur_list = cons(s, cur_list)
-                driver['_cur'] = cur_list
+                pkg = eval(pkg_spec, loop_env) if pkg_spec is not None else None
+                driver['_items'] = package_symbols(pkg, driver['symbol_set'])
+                driver['_idx'] = 0
                 return True
             raise lisptype.LispNotImplementedError(f'LOOP driver kind not implemented: {kind}')
 
@@ -1979,8 +2187,8 @@ def eval_loop(form, env):
                 return True
             if kind == 'repeat':
                 return driver.get('_remaining', 0) > 0
-            if kind == 'for-being-symbols':
-                return _consp_internal(driver.get('_cur'))
+            if kind in ('for-being-hash', 'for-being-package'):
+                return driver.get('_idx', 0) < len(driver.get('_items', ()))
             return False
 
         def _bind_driver(frame, driver):
@@ -2025,8 +2233,15 @@ def eval_loop(form, env):
                 return
             if kind == 'repeat':
                 return
-            if kind == 'for-being-symbols':
-                _bind_varspec(frame, var, car(driver['_cur']))
+            if kind == 'for-being-hash':
+                key, value = driver['_items'][driver['_idx']]
+                part = {'key': key, 'value': value}
+                _bind_varspec(frame, var, part[driver['hash_part']])
+                if driver['using_var'] is not None:
+                    _bind_varspec(frame, driver['using_var'], part[driver['using_part']])
+                return
+            if kind == 'for-being-package':
+                _bind_varspec(frame, var, driver['_items'][driver['_idx']])
                 return
 
         def _step_driver(loop_env, driver):
@@ -2049,8 +2264,8 @@ def eval_loop(form, env):
             if kind == 'repeat':
                 driver['_remaining'] -= 1
                 return
-            if kind == 'for-being-symbols':
-                driver['_cur'] = cdr(driver['_cur'])
+            if kind in ('for-being-hash', 'for-being-package'):
+                driver['_idx'] = driver.get('_idx', 0) + 1
                 return
     
         # ------------------------------------------------------------------
@@ -2078,6 +2293,24 @@ def eval_loop(form, env):
         # decision, the same one LET and the DO family now make.
         frame = BindingFrame(loop_env)
         loop_frame.append(frame)
+
+        # WITH's variables are initialized once, before the iteration begins
+        # (CLHS 6.1.1.4), and inside the loop's implicit NIL block -- which is
+        # what makes `(loop with nil = (return t) return nil)` return T rather
+        # than letting the RETURN escape to an enclosing loop.
+        #
+        # Within a group (the specs an AND joins) every init form is evaluated
+        # before any of them is bound, so each sees the *outer* value of the
+        # names its siblings bind; between groups the binding is sequential, so
+        # `with x = y with y = (1+ x)` reads the x this loop just bound. LET and
+        # LET* in miniature, and the reason the groups exist at all.
+        for group in with_groups:
+            values = [eval(spec['init'], loop_env) if spec['init'] is not None
+                      else _loop_type_default(spec['type'])
+                      for spec in group]
+            for spec, value in zip(group, values):
+                _bind_varspec(frame, spec['var'], value)
+
         for d in iteration_drivers:
             _init_driver(loop_env, d)
 
@@ -2123,8 +2356,8 @@ def eval_loop(form, env):
         # CLHS 6.1.2.2: ALWAYS/NEVER/THEREIS terminate the loop *immediately*
         # when their test decides the answer -- the epilogue does not run, so a
         # FINALLY (RETURN ...) cannot override the NIL or the found value.
-        if always_failed or thereis_result is not None:
-            return thereis_result if thereis_result is not None else lisptype.NIL
+        if early_decision['decided']:
+            return early_decision['value']
 
         # Execute FINALLY forms -- in the loop environment, so they can see the
         # iteration variables and any INTO accumulator (CLHS 6.1.4: the epilogue
@@ -2515,7 +2748,6 @@ def eval_do_symbols(form, env):
     Iterates over all symbols accessible in the package.
     """
     from .evaluation_core import eval
-    import fclpy.state as state
     
     args = cdr(form)
     if not _consp_internal(args):
@@ -2532,19 +2764,16 @@ def eval_do_symbols(form, env):
     rest = cdr(var_clause)
     package_form = car(rest) if _consp_internal(rest) else lisptype.NIL
     result_form = car(cdr(rest)) if _consp_internal(rest) and _consp_internal(cdr(rest)) else lisptype.NIL
-    
-    # Get the package
-    if package_form is None or package_form == lisptype.NIL:
-        pkg = getattr(state, 'current_package', lisptype.COMMON_LISP_USER_PACKAGE)
-    else:
-        pkg_designator = eval(package_form, env)
-        if isinstance(pkg_designator, lisptype.Package):
-            pkg = pkg_designator
-        else:
-            pkg = lisptype.find_package(str(pkg_designator))
-        if pkg is None:
-            raise lisptype.LispError(f"Package not found: {pkg_designator}")
-    
+
+    # The symbols *accessible* in the package: its own plus the externals of
+    # every package it uses. Enumerated by the shared helper, which is also what
+    # LOOP's `for x being the symbols of p` uses -- the copy that used to live
+    # here read `external_symbols` straight off each entry of `use_list`, but
+    # that list holds package *names* as well as Package objects, so a string
+    # entry yielded the empty set and its symbols were silently skipped.
+    from .misc_packages import coerce_to_package, package_symbols
+    pkg = coerce_to_package(eval(package_form, env))
+
     # Create loop environment
     loop_env = lisptype.Environment(env)
     frame = BindingFrame(loop_env, body=body, bound_vars=[var])
@@ -2552,24 +2781,9 @@ def eval_do_symbols(form, env):
     frame.bind(var, lisptype.NIL)
 
     def _loop():
-        # Iterate over all symbols in package (internal + external)
-        for name, sym in list(pkg.symbols.items()):
+        for sym in package_symbols(pkg, 'symbols'):
             frame.bind(var, sym)
             _exec_iteration_body(body, loop_env)
-
-        # Also iterate over inherited symbols from used packages
-        for used_pkg in getattr(pkg, 'use_list', []):
-            if used_pkg is not None:
-                external_names = getattr(used_pkg, 'external_symbols', set())
-                for item in list(external_names):
-                    # Handle both string names and LispSymbol objects
-                    if isinstance(item, lisptype.LispSymbol):
-                        sym = item
-                    else:
-                        sym = used_pkg.symbols.get(item)
-                    if sym is not None:
-                        frame.bind(var, sym)
-                        _exec_iteration_body(body, loop_env)
 
         # Set var to NIL for result form
         frame.bind(var, lisptype.NIL)
@@ -2587,7 +2801,6 @@ def eval_do_external_symbols(form, env):
     Iterates over all external (exported) symbols in the package.
     """
     from .evaluation_core import eval
-    import fclpy.state as state
     
     args = cdr(form)
     if not _consp_internal(args):
@@ -2604,19 +2817,12 @@ def eval_do_external_symbols(form, env):
     rest = cdr(var_clause)
     package_form = car(rest) if _consp_internal(rest) else lisptype.NIL
     result_form = car(cdr(rest)) if _consp_internal(rest) and _consp_internal(cdr(rest)) else lisptype.NIL
-    
-    # Get the package
-    if package_form is None or package_form == lisptype.NIL:
-        pkg = getattr(state, 'current_package', lisptype.COMMON_LISP_USER_PACKAGE)
-    else:
-        pkg_designator = eval(package_form, env)
-        if isinstance(pkg_designator, lisptype.Package):
-            pkg = pkg_designator
-        else:
-            pkg = lisptype.find_package(str(pkg_designator))
-        if pkg is None:
-            raise lisptype.LispError(f"Package not found: {pkg_designator}")
-    
+
+    # Same shared resolver and enumerator as DO-SYMBOLS and LOOP's
+    # for-as-package clause; only the symbol set differs.
+    from .misc_packages import coerce_to_package, package_symbols
+    pkg = coerce_to_package(eval(package_form, env))
+
     # Create loop environment
     loop_env = lisptype.Environment(env)
     frame = BindingFrame(loop_env, body=body, bound_vars=[var])
@@ -2624,19 +2830,9 @@ def eval_do_external_symbols(form, env):
     frame.bind(var, lisptype.NIL)
 
     def _loop():
-        # Iterate over external symbols only
-        # Note: external_symbols may contain strings (symbol names) or LispSymbol objects
-        external_names = getattr(pkg, 'external_symbols', set())
-        for item in list(external_names):
-            # Handle both string names and LispSymbol objects
-            if isinstance(item, lisptype.LispSymbol):
-                sym = item
-            else:
-                # It's a string name, look up the symbol
-                sym = pkg.symbols.get(item)
-            if sym is not None:
-                frame.bind(var, sym)
-                _exec_iteration_body(body, loop_env)
+        for sym in package_symbols(pkg, 'external-symbols'):
+            frame.bind(var, sym)
+            _exec_iteration_body(body, loop_env)
 
         # Set var to NIL for result form
         frame.bind(var, lisptype.NIL)

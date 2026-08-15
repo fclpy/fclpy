@@ -214,8 +214,6 @@ __all__ = [
     'nil_symbol_function',
     't_symbol',
     't_symbol_function',
-    'map_into',
-    'mapcon',
     'keyword_type',
     'integer_type',
     'fixnum_type',

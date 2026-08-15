@@ -1,6 +1,7 @@
 """Tests for Phase 5: Unified Sequence Protocol."""
 
 import pytest
+import fclpy.lisptype as lisptype
 from fclpy.lispfunc.sequences import (
     iterate, with_sequence_protocol, SequenceIterator
 )
@@ -186,11 +187,17 @@ class TestSequenceProtocolIntegration:
         assert items2 == [4, 5]
     
     def test_sequence_protocol_error_handling(self):
-        """Test error handling for unsupported types."""
-        with pytest.raises(TypeError):
+        """A non-sequence is rejected as a *Lisp* type error.
+
+        This asserted a Python `TypeError`, which is what the old
+        `iterate()` raised -- and which then surfaced as the value of the
+        Lisp form (plan.md standing rule 2). The sequence protocol signals
+        `LispTypeError` instead.
+        """
+        with pytest.raises(lisptype.LispTypeError):
             iterate(123)  # int not supported
-        
-        with pytest.raises(TypeError):
+
+        with pytest.raises(lisptype.LispTypeError):
             iterate({'a': 1})  # dict not supported
 
 

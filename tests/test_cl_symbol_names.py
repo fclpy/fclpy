@@ -42,10 +42,15 @@ def test_registry_internals_are_routed_to_fclpy_internal_not_cl():
     cl = lisptype.COMMON_LISP_PACKAGE
     internal = lisptype.FCLPY_INTERNAL_PACKAGE
     # A couple of the specific leaks plan.md's Finding A names by example.
+    # LIST-STAR was one of them; it is gone entirely now that the duplicate
+    # (and broken) `list_star` implementation of LIST* was deleted, so the
+    # property to hold is "not in CL", with routing checked only for the
+    # internals that still exist.
     for leaked_name in ('EVAL-IF', 'PUTPROP', 'LIST-STAR', 'GET-ENV'):
         assert leaked_name not in cl.symbols, (
             f"{leaked_name} should not be interned in COMMON-LISP at all"
         )
+    for leaked_name in ('EVAL-IF', 'PUTPROP', 'GET-ENV'):
         assert leaked_name in internal.symbols, (
             f"{leaked_name} should have been routed to FCLPY-INTERNAL"
         )

@@ -33,13 +33,13 @@ class TestFindFunction:
         """Test finding element in list."""
         seq = [1, 2, 3, 4, 5]
         assert find(3, seq) == 3
-        assert find(10, seq) is None
+        assert find(10, seq) is lisptype.NIL
     
     def test_find_in_string(self):
         """Test finding character in string."""
         seq = "hello"
         assert find('l', seq) == 'l'
-        assert find('x', seq) is None
+        assert find('x', seq) is lisptype.NIL
     
     def test_find_with_key(self):
         """Test FIND with key function."""
@@ -66,7 +66,7 @@ class TestFindFunction:
         result = find(30, seq, start=2, end=5)
         assert result == 30
         result = find(30, seq, start=0, end=2)
-        assert result is None
+        assert result is lisptype.NIL
 
 
 class TestFindIfFunction:
@@ -92,7 +92,7 @@ class TestFindIfFunction:
     
     def test_find_if_empty(self):
         """Test FIND-IF on empty sequence."""
-        assert find_if(lambda x: x > 0, []) is None
+        assert find_if(lambda x: x > 0, []) is lisptype.NIL
 
 
 class TestPositionFunction:
@@ -102,13 +102,13 @@ class TestPositionFunction:
         """Test POSITION in list."""
         seq = [10, 20, 30, 40, 50]
         assert position(30, seq) == 2
-        assert position(100, seq) is None
+        assert position(100, seq) is lisptype.NIL
     
     def test_position_in_string(self):
         """Test POSITION in string."""
         seq = "hello"
         assert position('l', seq) == 2
-        assert position('x', seq) is None
+        assert position('x', seq) is lisptype.NIL
     
     def test_position_with_key(self):
         """Test POSITION with key function."""
@@ -190,10 +190,15 @@ class TestMapFunction:
         assert cons_to_list(result) == [11, 22, 33]
     
     def test_map_none_result_type(self):
-        """Test MAP with None result type (for side effects)."""
+        """MAP with a NIL result type returns the Lisp NIL, not Python None.
+
+        `(map nil f s)` is specified to return NIL; asserting Python `None`
+        pinned one of NIL's three representations (plan.md Finding G) at a
+        boundary where the Lisp value is what callers compare against.
+        """
         seq = [1, 2, 3]
         result = map_fn(None, lambda x: x * 2, seq)
-        assert result is None
+        assert result is lisptype.NIL
     
     def test_map_different_lengths(self):
         """Test MAP with sequences of different lengths."""

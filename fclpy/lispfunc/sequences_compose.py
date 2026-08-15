@@ -4,6 +4,11 @@ import functools
 from .core import cons, car, cdr, atom, _consp_internal
 from . import registry as _registry
 from .vectors import AdjustableVector
+from .sequence_protocol import (
+    seq_elements, seq_length, bounding_indices, make_lisp_list, rebuild_like,
+    build_sequence, seq_set,
+)
+from .sequences_search import _coerce_function_designator, _lisp_truthy
 import fclpy.lisptype as lisptype
 
 
@@ -15,305 +20,203 @@ def endp(x):
 @_registry.cl_function('LENGTH')
 def length(sequence):
     """Get sequence length."""
-    if sequence is None or sequence == lisptype.NIL:
-        return 0
-    elif isinstance(sequence, lisptype.lispCons):
-        count = 0
-        current = sequence
-        while current is not None and current != lisptype.NIL:
-            if not isinstance(current, lisptype.lispCons):
-                break
-            count += 1
-            current = current.cdr
-        return count
-    elif isinstance(sequence, (str, list, tuple, AdjustableVector, lisptype.LispString)):
-        return len(sequence)
-    else:
-        raise lisptype.LispTypeError(f"LENGTH: {type(sequence).__name__} is not a sequence",
-                                    expected_type="SEQUENCE", actual_value=sequence)
+    return seq_length(sequence, 'LENGTH')
 
 
 @_registry.cl_function('REVERSE')
 def reverse(sequence):
-    """Reverse sequence."""
-    if sequence is None or sequence == lisptype.NIL:
-        return lisptype.NIL
-    elif isinstance(sequence, lisptype.lispCons):
-        result_list = []
-        current = sequence
-        while current is not None and current != lisptype.NIL and isinstance(current, lisptype.lispCons):
-            result_list.append(current.car)
-            current = current.cdr
-        return list(reversed(result_list))
-    else:
-        return list(reversed(sequence))
+    """Reverse a sequence, returning a fresh sequence of the same type.
+
+    CLHS 17.1: the result is of the same type as the argument. It used to be
+    a Python list unconditionally, so reversing a list produced a vector and
+    reversing a string produced a vector of characters.
+    """
+    return rebuild_like(sequence, list(reversed(seq_elements(sequence, 'REVERSE'))))
 
 
 @_registry.cl_function('NREVERSE')
 def nreverse(sequence):
-    """Destructively reverse sequence."""
-    return reverse(sequence)  # Non-destructive for now
+    """Destructively reverse sequence.
+
+    Permitted to be non-destructive (CLHS only allows the argument to be
+    destroyed, it does not require it), but the *type* of the result is not
+    optional -- that comes from the shared rebuild.
+    """
+    return rebuild_like(sequence, list(reversed(seq_elements(sequence, 'NREVERSE'))))
+
+
+def _append_onto(lists, tail, what):
+    """Copy every list in `lists` in front of `tail`, sharing `tail` itself.
+
+    CLHS 14.2: APPEND and NCONC copy all their arguments *except* the last,
+    whose structure the result shares -- which is why the last argument is
+    threaded through rather than flattened. Both used to flatten every
+    argument including the last, so the result never shared structure and a
+    non-list final argument (`(append '(1) 2)`, a legal dotted result) was
+    turned into a one-element list.
+    """
+    result = tail if tail is not None else lisptype.NIL
+    for seq in reversed(lists):
+        for item in reversed(seq_elements(seq, what)):
+            result = lisptype.lispCons(item, result)
+    return result
 
 
 @_registry.cl_function('APPEND')
 def append(*args):
-    """Append sequences together.
-    
-    In Common Lisp, APPEND copies all arguments except the last,
-    then returns the last argument. The result shares structure 
-    with the last argument.
-    """
-    if len(args) < 1:
+    """Concatenate lists, sharing structure with the last one (CLHS 14.2)."""
+    if not args:
         return lisptype.NIL
-    
-    # Collect all elements
-    head_elems = []
-    
-    # Process all arguments except the last
-    for seq in args[:-1]:
-        if seq is None or seq == lisptype.NIL:
-            continue
-        if isinstance(seq, lisptype.lispCons):
-            # Convert cons list to Python list
-            cur = seq
-            while cur is not None and cur != lisptype.NIL and isinstance(cur, lisptype.lispCons):
-                head_elems.append(cur.car)
-                cur = cur.cdr
-        elif isinstance(seq, (list, tuple)):
-            head_elems.extend(seq)
-        else:
-            # Single element
-            head_elems.append(seq)
-    
-    # Handle the last argument - this needs special treatment
-    last_part = args[-1]
-    
-    if not head_elems:
-        # No elements from previous args, just return last
-        return last_part
-    
-    # Convert last_part to elements list if it's a Lisp cons list
-    if isinstance(last_part, lisptype.lispCons):
-        cur = last_part
-        while cur is not None and cur != lisptype.NIL and isinstance(cur, lisptype.lispCons):
-            head_elems.append(cur.car)
-            cur = cur.cdr
-    elif isinstance(last_part, (list, tuple)):
-        head_elems.extend(last_part)
-    elif last_part is None or last_part == lisptype.NIL:
-        pass  # NIL at the end is fine
-    else:
-        head_elems.append(last_part)
-    
-    # Build proper Lisp cons list from elements
-    result = lisptype.NIL
-    for elem in reversed(head_elems):
-        result = lisptype.lispCons(elem, result)
-    
-    return result
+    return _append_onto(args[:-1], args[-1], 'APPEND')
 
 
 @_registry.cl_function('NCONC')
 def nconc(*lists):
-    """Destructively concatenate lists.
+    """APPEND, permitted to destroy all but the last argument (CLHS 14.2).
 
-    For now, implement a safe, non-destructive version that correctly
-    handles Lisp cons lists (and NIL) without assuming Python list semantics.
+    Implemented non-destructively; only the *sharing* of the final argument
+    is observable in conforming code.
     """
     if not lists:
         return lisptype.NIL
-
-    elems = []
-    tail = lisptype.NIL
-
-    for idx, lst in enumerate(lists):
-        if lst is None or lst == lisptype.NIL:
-            continue
-
-        if isinstance(lst, lisptype.lispCons):
-            cur = lst
-            while cur is not None and cur != lisptype.NIL and isinstance(cur, lisptype.lispCons):
-                elems.append(cur.car)
-                cur = cur.cdr
-            # If a dotted tail is provided, preserve it (best-effort)
-            if cur is not None and cur != lisptype.NIL:
-                tail = cur
-        elif isinstance(lst, (list, tuple)):
-            elems.extend(lst)
-        else:
-            # Treat non-lists as elements
-            elems.append(lst)
-
-    # Build a proper Lisp list from collected elements
-    result = tail
-    for elem in reversed(elems):
-        result = lisptype.lispCons(elem, result)
-    return result
+    return _append_onto(lists[:-1], lists[-1], 'NCONC')
 
 
 @_registry.cl_function('NRECONC')
 def nreconc(list1, list2):
-    """Destructively reverse list1 and concatenate with list2."""
-    if isinstance(list1, list):
-        list1.reverse()
-        list1.extend(list2)
-        return list1
-    return list2
+    """`(nconc (nreverse list1) list2)` -- CLHS 14.2.
+
+    Both this and REVAPPEND used to test `isinstance(list1, list)`, which is
+    false for the `lispCons` every Lisp list actually is, so the whole body
+    was dead and both returned `list2` alone: `(revappend '(1 2) '(3))` was
+    `(3)`.
+    """
+    result = list2 if list2 is not None else lisptype.NIL
+    for item in seq_elements(list1, 'NRECONC'):
+        result = lisptype.lispCons(item, result)
+    return result
 
 
 @_registry.cl_function('REVAPPEND')
 def revappend(list1, list2):
-    """Append reversed list1 to list2."""
-    if isinstance(list1, list):
-        return list(reversed(list1)) + list(list2)
-    return list(list2)
+    """`(append (reverse list1) list2)` -- CLHS 14.2."""
+    return nreconc(list1, list2)
 
 
 @_registry.cl_function('CONCATENATE')
 def concatenate(result_type, *sequences):
-    """Concatenate sequences."""
-    # Get the type name as a string for comparison
-    type_name = result_type
-    if isinstance(result_type, lisptype.LispSymbol):
-        type_name = result_type.name
-    elif hasattr(result_type, '__name__'):
-        type_name = result_type.__name__
-    
-    # Normalize type name to uppercase string
-    if isinstance(type_name, str):
-        type_name = type_name.upper()
-    
-    if type_name == 'LIST' or result_type == list:
-        result = []
-        for seq in sequences:
-            # Accept Lisp cons lists, Python lists/tuples, or single elements.
-            if isinstance(seq, lisptype.lispCons):
-                cur = seq
-                while cur is not None and cur != lisptype.NIL and isinstance(cur, lisptype.lispCons):
-                    result.append(cur.car)
-                    cur = cur.cdr
-                # If dotted tail, append as single element
-                if cur is not None and cur != lisptype.NIL:
-                    result.append(cur)
-            elif isinstance(seq, (list, tuple)):
-                result.extend(seq)
-            elif isinstance(seq, lisptype.LispSymbol):
-                # Treat a symbol as a single element in list concatenation
-                result.append(seq)
-            elif seq is None or seq == lisptype.NIL:
-                continue
-            else:
-                # Fallback: single element
-                result.append(seq)
-        return result
-    elif type_name == 'STRING' or result_type == str:
-        # For STRING result, concatenate all elements as strings
-        result_parts = []
-        for seq in sequences:
-            if isinstance(seq, str):
-                result_parts.append(seq)
-            elif isinstance(seq, lisptype.LispSymbol):
-                # Convert symbol to its name
-                result_parts.append(seq.name)
-            elif seq is None or seq == lisptype.NIL:
-                continue
-            else:
-                # For non-string sequences, try to iterate; if not iterable, stringify
-                try:
-                    for elem in seq:
-                        if isinstance(elem, str) and len(elem) == 1:
-                            result_parts.append(elem)
-                        elif isinstance(elem, int):
-                            # Could be a character code
-                            result_parts.append(chr(elem))
-                        else:
-                            result_parts.append(str(elem))
-                except TypeError:
-                    result_parts.append(str(seq))
-        return ''.join(result_parts)
-    elif type_name in ('VECTOR', 'SIMPLE-VECTOR'):
-        result = []
-        for seq in sequences:
-            result.extend(seq)
-        return result
-    else:
-        raise lisptype.LispTypeError(f"CONCATENATE: unsupported result type {result_type}",
-                                    expected_type="LIST, STRING, or VECTOR",
-                                    actual_value=result_type)
+    """Concatenate sequences into a fresh sequence of `result_type` (CLHS 17.3).
+
+    Both halves of this used to be open-coded per result type from an
+    upper-cased *string* comparison of the designator, and the LIST branch did
+    not iterate its arguments at all -- `(concatenate 'list "ab" #(1 2))`
+    returned a two-element vector holding the string and the vector. Element
+    access and result construction are now the shared protocol's, so a
+    compound designator like `(vector character 4)` works for free.
+    """
+    elements = []
+    for seq in sequences:
+        elements.extend(seq_elements(seq, 'CONCATENATE'))
+    return build_sequence(result_type, elements, 'CONCATENATE')
+
+
+def _sort_elements(elements, predicate, key, what):
+    """Order `elements` by a CLHS sort predicate.
+
+    The predicate and key are function *designators* (X2), and the predicate's
+    answer is a Lisp truth value -- a returned Lisp NIL is Python-truthy, so
+    it must go through `_lisp_truthy` rather than `if predicate(...)`.
+    """
+    predicate = _coerce_function_designator(predicate)
+    key = _coerce_function_designator(key)
+
+    def compare(a, b):
+        a_key = key(a) if key else a
+        b_key = key(b) if key else b
+        if _lisp_truthy(predicate(a_key, b_key)):
+            return -1
+        if _lisp_truthy(predicate(b_key, a_key)):
+            return 1
+        return 0
+
+    return sorted(elements, key=functools.cmp_to_key(compare))
+
+
+def _sort(sequence, predicate, key, what):
+    """SORT/STABLE-SORT: order in place where the argument allows it, and
+    return a sequence of the argument's own type (CLHS 17.1).
+
+    It used to return `sorted(...)`, a Python list, so `(sort (list 3 1 2)
+    #'<)` answered `#(1 2 3)` -- a vector -- and `(sort (copy-seq "cba")
+    #'char<)` answered a vector of characters. That single wrong result type
+    is the whole residual of `iteration/loop6.lsp` and `loop7.lsp`, whose
+    tests wrap a correct LOOP result in SORT.
+    """
+    ordered = _sort_elements(seq_elements(sequence, what), predicate, key, what)
+    if isinstance(sequence, (list, lisptype.LispString, AdjustableVector)):
+        # A vector or string is sorted in place, which is what "destructive"
+        # means for these operators; the argument and the result are then EQ.
+        for index, item in enumerate(ordered):
+            seq_set(sequence, index, item, what)
+        return sequence
+    return rebuild_like(sequence, ordered)
 
 
 @_registry.cl_function('SORT')
 def sort(sequence, predicate, key=None):
-    """Sort sequence using a two-arg predicate returning truthy when first < second.
-
-    Python 3 removed the cmp parameter, so we translate the predicate into a comparator
-    via cmp_to_key. If key is provided we apply it before comparisons.
-    """
-    from functools import cmp_to_key
-    def cmp(a, b):
-        a_key = key(a) if key else a
-        b_key = key(b) if key else b
-        if predicate(a_key, b_key):
-            return -1
-        if predicate(b_key, a_key):
-            return 1
-        return 0
-    return sorted(sequence, key=cmp_to_key(cmp))
+    """Sort a sequence with a two-argument predicate (CLHS 17.3)."""
+    return _sort(sequence, predicate, key, 'SORT')
 
 
 @_registry.cl_function('STABLE-SORT')
 def stable_sort(sequence, predicate, key=None):
-    """Stable sort sequence."""
-    return sort(sequence, predicate, key)  # Python's sort is stable
+    """Stable sort -- Python's `sorted` is already stable."""
+    return _sort(sequence, predicate, key, 'STABLE-SORT')
 
 
 @_registry.cl_function('MERGE')
-def merge(result_type, sequence1, sequence2, predicate, **kwargs):
-    """Merge two sorted sequences."""
+def merge(result_type, sequence1, sequence2, predicate, key=None, **kwargs):
+    """Merge two ordered sequences into one of `result_type` (CLHS 17.3).
+
+    CLHS: an element of `sequence2` is taken only when it *precedes* the
+    pending element of `sequence1`, so ties keep `sequence1`'s element first
+    -- which is why the predicate is applied as `(predicate e2 e1)` and not
+    the other way around.
+    """
+    predicate = _coerce_function_designator(predicate)
+    key = _coerce_function_designator(key)
+    left = seq_elements(sequence1, 'MERGE')
+    right = seq_elements(sequence2, 'MERGE')
+
+    def sort_key(item):
+        return key(item) if key else item
+
     result = []
-    i, j = 0, 0
-    
-    while i < len(sequence1) and j < len(sequence2):
-        if predicate(sequence1[i], sequence2[j]):
-            result.append(sequence1[i])
-            i += 1
-        else:
-            result.append(sequence2[j])
+    i = j = 0
+    while i < len(left) and j < len(right):
+        if _lisp_truthy(predicate(sort_key(right[j]), sort_key(left[i]))):
+            result.append(right[j])
             j += 1
-    
-    # Add remaining elements
-    result.extend(sequence1[i:])
-    result.extend(sequence2[j:])
-    
-    return result
+        else:
+            result.append(left[i])
+            i += 1
+    result.extend(left[i:])
+    result.extend(right[j:])
+    return build_sequence(result_type, result, 'MERGE')
 
 
 @_registry.cl_function('SUBSEQ')
 def subseq(sequence, start, end=None):
-    """Get subsequence."""
-    if end is None:
-        return sequence[start:]
-    else:
-        return sequence[start:end]
+    """Get a subsequence, of the same type as the argument (CLHS 17.3)."""
+    elements = seq_elements(sequence, 'SUBSEQ')
+    start, end = bounding_indices(len(elements), start, end, 'SUBSEQ')
+    return rebuild_like(sequence, elements[start:end])
 
 
 @_registry.cl_function('COPY-SEQ')
 def copy_seq(sequence):
-    """Copy sequence.
-    
-    For strings, returns a mutable LispString copy.
-    """
-    if isinstance(sequence, list):
-        return list(sequence)
-    elif isinstance(sequence, tuple):
-        return tuple(sequence)
-    elif isinstance(sequence, lisptype.LispString):
-        return sequence.copy()
-    elif isinstance(sequence, str):
-        # Return mutable LispString so REPLACE etc. can modify it
-        return lisptype.LispString(sequence)
-    else:
-        return sequence
+    """Copy a sequence, preserving its type (CLHS 17.3)."""
+    return rebuild_like(sequence, seq_elements(sequence, 'COPY-SEQ'))
 
 
 @_registry.cl_function('COPY-LIST')
@@ -338,82 +241,76 @@ def copy_list(list_seq):
 
 @_registry.cl_function('COPY-ALIST')
 def copy_alist(alist):
-    """Copy association list."""
-    return [list(pair) if isinstance(pair, (list, tuple)) else pair for pair in alist]
+    """Copy an association list: the spine *and* each pair are fresh conses
+    (CLHS 14.2), while a non-cons element is shared."""
+    pairs = []
+    for pair in seq_elements(alist, 'COPY-ALIST'):
+        if isinstance(pair, lisptype.lispCons):
+            pairs.append(lisptype.lispCons(pair.car, pair.cdr))
+        else:
+            pairs.append(pair)
+    return make_lisp_list(pairs)
 
 
 @_registry.cl_function('FILL')
 def fill(sequence, item, start=0, end=None):
-    """Fill sequence with item."""
-    if isinstance(sequence, list):
-        if end is None:
-            end = len(sequence)
-        for i in range(start, min(end, len(sequence))):
-            sequence[i] = item
-        return sequence
-    else:
-        raise lisptype.LispTypeError("FILL: unsupported sequence type",
-                                    expected_type="LIST or MUTABLE-SEQUENCE",
-                                    actual_value=type(sequence).__name__)
+    """Store `item` into a sequence, returning that same sequence (CLHS 17.3).
+
+    Destructive, so it writes *through* the argument via the protocol's
+    element store rather than rebuilding: this used to require the argument
+    to be a Python `list`, so filling a Lisp list signalled a type error.
+    """
+    start, end = bounding_indices(seq_length(sequence, 'FILL'), start, end, 'FILL')
+    for index in range(start, end):
+        seq_set(sequence, index, item, 'FILL')
+    return sequence
 
 
 @_registry.cl_function('REPLACE')
 def replace(sequence1, sequence2, **kwargs):
-    """Replace elements of sequence1 with elements of sequence2.
-    
-    Note: sequence1 must be mutable. For strings, use LispString (from COPY-SEQ).
+    """Copy a subsequence of `sequence2` into `sequence1` (CLHS 17.3).
+
+    Destructive on `sequence1`, which is returned.
     """
-    # Convert immutable Python strings to LispString
-    if isinstance(sequence1, str):
-        sequence1 = lisptype.LispString(sequence1)
-    
-    start1 = kwargs.get('start1', 0)
-    end1 = kwargs.get('end1', len(sequence1))
-    start2 = kwargs.get('start2', 0)
-    end2 = kwargs.get('end2', len(sequence2))
-    
-    # Convert source string if needed
-    if isinstance(sequence2, str):
-        src_chars = sequence2
-    elif isinstance(sequence2, lisptype.LispString):
-        src_chars = str(sequence2)
-    else:
-        src_chars = sequence2
-    
+    source = seq_elements(sequence2, 'REPLACE')
+    start1, end1 = bounding_indices(
+        seq_length(sequence1, 'REPLACE'),
+        kwargs.get('start1', 0), kwargs.get('end1'), 'REPLACE')
+    start2, end2 = bounding_indices(
+        len(source), kwargs.get('start2', 0), kwargs.get('end2'), 'REPLACE')
+
+    if sequence1 is sequence2 and start1 > start2:
+        # Overlapping copy within one sequence: CLHS says the result is as if
+        # the source subsequence were copied first, so materialize it.
+        source = list(source)
     for i, j in zip(range(start1, end1), range(start2, end2)):
-        if i < len(sequence1) and j < len(src_chars):
-            sequence1[i] = src_chars[j]
-    
+        seq_set(sequence1, i, source[j], 'REPLACE')
     return sequence1
 
 
 @_registry.cl_function('NBUTLAST')
 def nbutlast(seq, n=1):
-    """Destructively remove last n elements."""
-    if isinstance(seq, list):
-        for _ in range(n):
-            if seq:
-                seq.pop()
-        return seq
-    else:
-        # For other sequence types, return a new sequence
-        return seq[:-n] if len(seq) > n else []
+    """Return the list without its last `n` conses (CLHS 14.2)."""
+    elements = seq_elements(seq, 'NBUTLAST')
+    n = int(n)
+    return make_lisp_list(elements[:-n] if n else elements) if n <= len(elements) else lisptype.NIL
 
 
 @_registry.cl_function('LAST')
 def last(list_seq, n=1):
-    """Get last n elements."""
-    if not list_seq:
-        return None
-    
-    if isinstance(list_seq, list):
-        if n == 1:
-            return list_seq[-1:]
-        else:
-            return list_seq[-n:] if len(list_seq) >= n else list_seq
-    else:
-        # For other sequences
-        return list_seq[-n:] if len(list_seq) >= n else list_seq
+    """Return the last `n` *conses* of a list (CLHS 14.2).
+
+    The result is a tail of the list, so it is a list -- `(last '(1 2 3))` is
+    `(3)`, not the vector `#(3)` this used to build out of a Python slice.
+    """
+    n = int(n)
+    current = list_seq
+    if not isinstance(current, lisptype.lispCons):
+        return current if current is not None else lisptype.NIL
+    length = len(seq_elements(current, 'LAST'))
+    for _ in range(max(0, length - n)):
+        current = current.cdr
+    return current
 
 
 @_registry.cl_function('NTHCDR')
@@ -443,11 +340,20 @@ def nth(n, list_seq):
 
 @_registry.cl_function('ELT')
 def elt(sequence, index):
-    """Get element at index."""
-    try:
-        return sequence[index]
-    except (IndexError, TypeError):
-        return None
+    """Get element at index (CLHS 17.3).
+
+    An out-of-bounds index is a type error, not NIL: returning NIL made a
+    bad index indistinguishable from an element that is legitimately NIL,
+    and it silently satisfied the `.ERROR` tests that check for a signal.
+    """
+    elements = seq_elements(sequence, 'ELT')
+    index = int(index)
+    if index < 0 or index >= len(elements):
+        raise lisptype.LispTypeError(
+            f"ELT: index {index} is out of bounds for a sequence of length "
+            f"{len(elements)}",
+            expected_type=f"index in [0,{len(elements)})", actual_value=index)
+    return elements[index]
 
 
 @_registry.cl_function('MAKE-LIST')
@@ -474,20 +380,24 @@ def make_list(size, initial_element=None):
 
 @_registry.cl_function('MAKE-SEQUENCE')
 def make_sequence(sequence_type, size, **kwargs):
-    """Create a sequence of the specified type and size."""
-    # Ensure size is an integer
+    """Create a sequence of the given type and size (CLHS 17.3).
+
+    The type was previously compared against the *lower-case Python strings*
+    `'list'`/`'vector'`/`'string'`, which no Lisp type designator ever is, so
+    every branch fell through to the same Python list.
+    """
     if isinstance(size, lisptype.lispCons):
         size = size.car
     size = int(size)
+    from .sequence_protocol import parse_sequence_type
+    kind, _size, _element_type = parse_sequence_type(sequence_type, 'MAKE-SEQUENCE')
     initial_element = kwargs.get('initial_element', None)
-    if sequence_type == 'list' or sequence_type == list:
-        return [initial_element] * size
-    elif sequence_type == 'vector' or sequence_type == 'string':
-        if initial_element is None:
-            return [None] * size
-        return [initial_element] * size
-    else:
-        return [initial_element] * size
+    if initial_element is None:
+        # CLHS leaves the contents unspecified without :initial-element; a
+        # string must still be filled with characters rather than NIL.
+        initial_element = lisptype.Character(' ') if kind == 'STRING' else (
+            0 if kind == 'BIT-VECTOR' else lisptype.NIL)
+    return build_sequence(sequence_type, [initial_element] * size, 'MAKE-SEQUENCE')
 
 
 @_registry.cl_function('LIST')
@@ -503,22 +413,10 @@ def list_fn(*args):
     return result
 
 
-@_registry.cl_function('LIST*')
-def list_star(*args):
-    """Create dotted list."""
-    if not args:
-        return lisptype.NIL
-    if len(args) == 1:
-        return args[0]
-    
-    # Build dotted-like list using Python list ending with final element if not list
-    prefix = list(args[:-1])
-    last = args[-1]
-    if isinstance(last, list):
-        return prefix + last
-    else:
-        prefix.append(last)
-        return prefix
+# LIST* is implemented once, in `sequences_higher.list_s_star_`. The copy that
+# used to live here built a *Python list* and so produced a vector rather than
+# a dotted list; both registered the same name, and only the last import won
+# (standing rule 3).
 
 
 @_registry.cl_function('TREE-EQUAL')
@@ -571,5 +469,5 @@ __all__ = [
     'subseq', 'copy_seq', 'copy_list', 'copy_alist',
     'fill', 'replace', 'nbutlast', 'last',
     'nthcdr', 'nth', 'elt', 'make_list', 'make_sequence',
-    'list_fn', 'list_star', 'tree_equal', 'list_length',
+    'list_fn', 'tree_equal', 'list_length',
 ]

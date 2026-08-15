@@ -5,6 +5,7 @@ import fclpy.lisptype as lisptype
 import fclpy.state as state
 from fclpy.lispfunc import registry as _registry
 from .core import car, cdr, _consp_internal
+from .sequence_protocol import build_sequence, seq_elements
 
 
 def _function_spec_to_key(spec):
@@ -445,6 +446,14 @@ def lambda_parameters_limit():
     return 64
 
 
+# The sequence type specifiers COERCE shares with MAP/CONCATENATE/MERGE.
+_SEQUENCE_TYPE_NAMES = frozenset((
+    'LIST', 'CONS', 'VECTOR', 'SIMPLE-VECTOR', 'ARRAY', 'SIMPLE-ARRAY',
+    'STRING', 'SIMPLE-STRING', 'BASE-STRING', 'SIMPLE-BASE-STRING',
+    'BIT-VECTOR', 'SIMPLE-BIT-VECTOR', 'SEQUENCE',
+))
+
+
 @_registry.cl_function('COERCE')
 def coerce(object, result_type):
     """Coerce object to the specified type.
@@ -475,72 +484,16 @@ def coerce(object, result_type):
     if type_name == 'T':
         return object
     
-    # LIST - convert sequence to list
-    if type_name == 'LIST':
-        if isinstance(object, list):
-            return object
-        elif isinstance(object, str):
-            return list(object)
-        elif isinstance(object, tuple):
-            return list(object)
-        elif hasattr(object, '__iter__'):
-            return list(object)
-        else:
-            raise lisptype.LispTypeError(f"COERCE: cannot convert {type(object).__name__} to LIST",
-                                        expected_type="LIST",
-                                        actual_value=object)
-    
-    # VECTOR or SIMPLE-VECTOR - convert sequence to vector (list in Python)
-    if type_name in ('VECTOR', 'SIMPLE-VECTOR'):
-        if isinstance(object, (list, tuple)):
-            return list(object)
-        elif isinstance(object, str):
-            return list(object)
-        elif hasattr(object, '__iter__'):
-            return list(object)
-        else:
-            raise lisptype.LispTypeError(f"COERCE: cannot convert {type(object).__name__} to VECTOR",
-                                        expected_type="VECTOR",
-                                        actual_value=object)
-    
-    # STRING, SIMPLE-STRING, BASE-STRING, SIMPLE-BASE-STRING - convert sequence of characters to string
-    if type_name in ('STRING', 'SIMPLE-STRING', 'BASE-STRING', 'SIMPLE-BASE-STRING'):
-        if isinstance(object, str):
-            return object
-        elif isinstance(object, (list, tuple)):
-            # Sequence of characters - need to extract char from Character objects
-            chars = []
-            for c in object:
-                if isinstance(c, lisptype.Character):
-                    chars.append(c.char)
-                elif isinstance(c, str) and len(c) == 1:
-                    chars.append(c)
-                else:
-                    chars.append(str(c))
-            return ''.join(chars)
-        elif isinstance(object, lisptype.lispCons):
-            # Lisp list of characters
-            chars = []
-            current = object
-            while isinstance(current, lisptype.lispCons):
-                c = current.car
-                if isinstance(c, lisptype.Character):
-                    chars.append(c.char)
-                elif isinstance(c, str) and len(c) == 1:
-                    chars.append(c)
-                else:
-                    chars.append(str(c))
-                current = current.cdr
-            return ''.join(chars)
-        elif isinstance(object, lisptype.LispSymbol):
-            return object.name
-        elif hasattr(object, '__iter__'):
-            return ''.join(str(c) for c in object)
-        else:
-            raise lisptype.LispTypeError(f"COERCE: cannot convert {type(object).__name__} to STRING",
-                                        expected_type="STRING",
-                                        actual_value=object)
-    
+    # LIST / VECTOR / STRING and their subtypes are *sequence* type
+    # specifiers, so they are built by the one sequence protocol rather than
+    # by three more branches here. The branches this replaced were a fourth
+    # copy of that construction and disagreed with the others: COERCE's LIST
+    # branch returned a Python list, which is a **vector**, so
+    # `(coerce "abc" 'list)` answered `#("a" "b" "c")` and `(listp ...)` of it
+    # was NIL (plan.md standing rule 3, Finding M).
+    if type_name in _SEQUENCE_TYPE_NAMES:
+        return build_sequence(result_type, seq_elements(object, 'COERCE'), 'COERCE')
+
     # CHARACTER - must already be a character
     if type_name == 'CHARACTER':
         if isinstance(object, str) and len(object) == 1:

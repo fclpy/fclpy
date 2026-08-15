@@ -93,7 +93,15 @@ passing as many of its tests as possible.
     a scalar `iteration_type`, so the last clause parsed silently discarded the
     rest. If you are about to add an `if kind == ...` branch to the four driver
     primitives, that is the right place; if you are about to add a second loop,
-    it is not.
+    it is not. **The clause-level helpers are module-level and shared on
+    purpose** — `_loop_type_spec` (the optional type-spec, in all three
+    positions it can occupy), `_loop_destructure` (every var-spec pattern, for
+    WITH, every driver and USING) and `_loop_type_default`. A second copy of
+    any of them is the same defect these replaced: the partial copy handles the
+    shapes its author had in mind and silently mis-parses the rest.
+    **An unrecognized clause keyword is still dropped silently** once a driver
+    exists — the last such path, deliberately left loud-able as its own
+    measured change (plan.md §5).
   - `evaluation_conditions.py` — `HANDLER-BIND`/`HANDLER-CASE`/`IGNORE-ERRORS`,
     `SIGNAL`/`ERROR`/`CERROR`/`WARN`, condition signaling. **Handlers are invoked
     in exactly one place: `signal_condition()`, which walks
@@ -113,6 +121,37 @@ passing as many of its tests as possible.
     unevaluated arguments (macros, `DEFSETF`, `DEFPACKAGE`, ...) **must** be
     `cl_special` or `cl_macro` instead, or its arguments will be evaluated too
     early and it will crash or silently misbehave.
+- **Packages**: `lispfunc/misc_packages.py` — `coerce_to_package` (the package
+  *designator* rule, CLHS 11.1.1.1) and `package_symbols(pkg, kind)` for the
+  accessible / present / external symbol sets. `DO-SYMBOLS`,
+  `DO-EXTERNAL-SYMBOLS` and LOOP's `for x being the symbols of p` all go through
+  them; the copies they replaced disagreed, because `Package.use_packages` holds
+  package **names** as well as `Package` objects and a copy that read
+  `external_symbols` off a string silently dropped every inherited symbol.
+- **Hash tables**: `MAKE-HASH-TABLE` returns `misc_hashtables.HashTableDict`, a
+  `dict` subclass whose test/size/rehash options are **attributes**. They used
+  to be `'__hashmeta__...'` *keys*, i.e. entries in the table, so every
+  traversal needed to know to skip them and only four did. Note there is still a
+  second, dead hash-table implementation (`lispfunc/hashtables.py`'s
+  `HashTable`) that registers the same operators and loses the registration —
+  standing rule 3, not yet resolved.
+- **Sequences**: `lispfunc/sequence_protocol.py` — **the one place that answers
+  both halves of CLHS 17.1**: `seq_elements` (what are the elements of this Lisp
+  sequence — `lispCons`, Python `list`/`tuple` vector, `LispString`, `str`,
+  `AdjustableVector`), and the constructors, `rebuild_like` (a result of the
+  argument's own type, for REMOVE/SORT/REVERSE/SUBSEQ/…), `build_sequence`
+  (a result of the type a `result-type` designator names, for
+  MAP/CONCATENATE/MERGE/MAKE-SEQUENCE/COERCE), plus `bounding_indices`
+  (`:start`/`:end`, NIL included) and `seq_set` (the destructive operators).
+  `sequences_search.py` / `_modify.py` / `_compose.py` / `_higher.py` and
+  `utilities_functions.COERCE` all go through it. **A Python `list` is a
+  *vector* here, not a list** — a Lisp list is a `lispCons` chain, NIL when
+  empty, and a string is a `LispString`. That confusion is what the protocol
+  exists to prevent: every one of those modules used to build a Python list and
+  return it, so `(union '(1 2) '(2 3))` and `(sort (list 3 1 2) #'<)` answered a
+  vector that printed convincingly as a list. If you are about to write
+  `isinstance(x, list)` to mean "is a Lisp list", or to build a result with
+  `[...]`, that is the defect (plan.md Finding M).
 - **State**: `state.py` holds the few intentional cross-module globals
   (`packages`, `current_package`, `current_environment`, `restart_stack`,
   `handler_stack`). Don't add new ad-hoc globals elsewhere — put them here.

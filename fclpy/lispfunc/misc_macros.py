@@ -465,16 +465,10 @@ def t_symbol_function(*args):
     return lisptype.T
 
 
-@_registry.cl_function('MAP-INTO')
-def map_into(result_sequence, function, *sequences):
-    """MAP-INTO (stub)."""
-    return result_sequence
-
-
-@_registry.cl_function('MAPCON')
-def mapcon(function, *lists):
-    """MAPCON fallback."""
-    return []
+# MAP-INTO and MAPCON are implemented in `sequences_higher`. The stubs that
+# used to shadow them here returned the destination unchanged and `[]`
+# respectively -- silently wrong answers under the same registered names
+# (standing rules 3 and 4).
 
 
 # --- Type designators and system constants ---
@@ -1234,8 +1228,6 @@ __all__ = [
     'nil_symbol_function',
     't_symbol',
     't_symbol_function',
-    'map_into',
-    'mapcon',
     'keyword_type',
     'integer_type',
     'fixnum_type',

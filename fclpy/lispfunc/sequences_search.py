@@ -1,78 +1,20 @@
 """Sequence search and query operations."""
 
-import functools
 from .core import cons, car, cdr, atom, _consp_internal
 from . import registry as _registry
+from .sequence_protocol import (
+    bounding_indices as _bounding_indices,
+    seq_elements as _seq_to_list,
+    seq_length as _seq_length,
+    rebuild_like as _rebuild_sequence,
+)
 import fclpy.lisptype as lisptype
 
 
 # ===== HELPER FUNCTIONS =====
-
-def _seq_length(sequence):
-    """Get the length of any sequence-like object, including lispCons.
-    
-    Args:
-        sequence: List, string, tuple, lispCons, or other sequence type
-        
-    Returns:
-        The length of the sequence as an integer.
-    """
-    if hasattr(sequence, '__len__'):
-        return len(sequence)
-    # Handle lispCons by counting elements
-    if hasattr(sequence, 'car') and hasattr(sequence, 'cdr'):
-        length = 0
-        current = sequence
-        while current is not None and current != lisptype.NIL:
-            if not hasattr(current, 'cdr'):
-                # Dotted pair - add 1 for the car
-                length += 1
-                break
-            length += 1
-            current = current.cdr
-        return length
-    return 0
-
-
-def _seq_to_list(sequence):
-    """Convert any sequence to a Python list for easier processing.
-
-    Args:
-        sequence: List, string, tuple, lispCons, AdjustableVector,
-            LispString, or any other iterable sequence type
-
-    Returns:
-        A Python list containing the elements.
-    """
-    if isinstance(sequence, (list, tuple)):
-        return list(sequence)
-    if isinstance(sequence, str):
-        return list(sequence)
-    # Handle lispCons
-    if hasattr(sequence, 'car') and hasattr(sequence, 'cdr'):
-        result = []
-        current = sequence
-        while current is not None and current != lisptype.NIL:
-            if not hasattr(current, 'cdr'):
-                # Dotted pair
-                result.append(current)
-                break
-            result.append(current.car)
-            current = current.cdr
-        return result
-    # Everything else that carries the Lisp VECTOR/STRING protocol --
-    # `AdjustableVector` (reader-built `#(...)` literals) and `LispString`
-    # (`COPY-SEQ` on a string) -- supports plain Python iteration; falling
-    # through to `[]` for "unrecognized type" silently dropped every
-    # element of both, which is exactly the "Python type test standing in
-    # for a Lisp type test" pattern plan.md's Finding M warns about.
-    if hasattr(sequence, '__iter__'):
-        return list(sequence)
-    return []
-
-
-# ===== SEQUENCE PROTOCOL =====
-# Unified interface for sequences: lists, vectors, strings, and extensible for custom types
+# Element access and result construction live in `sequence_protocol`, which is
+# the single implementation of both halves of CLHS 17.1; the aliases above keep
+# this module's local spelling without keeping a second copy of the mechanism.
 
 
 def _lisp_truthy(value):
@@ -110,48 +52,6 @@ def _coerce_function_designator(designator):
         return designator
     from .evaluation_core import coerce_to_function
     return coerce_to_function(designator, 'sequence function')
-
-
-def _char_text(item):
-    """Return a 1-character Python str for a Lisp character-like value.
-
-    Elements pulled out of a string sequence are either a `lisptype.Character`
-    or, on some paths, an already-plain length-1 Python `str` (plan.md
-    Finding I). Rebuilding a string result needs plain text either way.
-    """
-    if isinstance(item, lisptype.Character):
-        return item.char
-    return item
-
-
-def _rebuild_sequence(original, elements):
-    """Reconstruct a result in the same kind of sequence as `original`.
-
-    CLHS 17.1: a generic sequence function (one with no `:result-type`
-    argument, e.g. REMOVE/SUBSTITUTE and their `N`-destructive counterparts)
-    returns a sequence of the *same type* as its `sequence` argument. Every
-    caller here has already flattened `original` into a plain Python
-    `elements` list via `_seq_to_list` for easy processing; returning that
-    list verbatim silently turns a LIST argument into an object that prints
-    identically to a proper Lisp list but is not `CONSP`/`EQUAL` to one
-    (plan.md Finding M -- a Python container standing in for a Lisp one),
-    and turns a STRING argument into a list of one-character pieces instead
-    of a string.
-    """
-    if original is lisptype.NIL or original is None or (
-        hasattr(original, 'car') and hasattr(original, 'cdr')
-    ):
-        result = lisptype.NIL
-        for item in reversed(elements):
-            result = lisptype.lispCons(item, result)
-        return result
-    if isinstance(original, lisptype.LispString):
-        return lisptype.LispString(''.join(_char_text(e) for e in elements))
-    if isinstance(original, str):
-        return ''.join(_char_text(e) for e in elements)
-    if isinstance(original, tuple):
-        return tuple(elements)
-    return elements
 
 
 def _matched_positions(start, end, from_end, count, matches_at):
@@ -207,7 +107,14 @@ def _make_matcher(test=None, test_not=None, key=None):
     elif test_not is not None:
         base, negate = test_not, True
     else:
-        base, negate = (lambda a, b: a == b), False
+        # CLHS 17.2.1: the default test is EQL, not Python `==`. The two
+        # differ on exactly the values these functions are asked about most:
+        # `1 == 1.0` is Python-true but `(eql 1 1.0)` is false, and a
+        # `Character`'s `__eq__` refuses a plain 1-character `str`, which is
+        # the other half of the `LispString` representation split -- so
+        # `(remove #\a "abc")` removed nothing.
+        from .comparison import eql as _eql
+        base, negate = _eql, False
 
     def matcher(item, candidate):
         value = key(candidate) if key else candidate
@@ -231,16 +138,16 @@ class SequenceIterator:
             test: Optional comparison function/designator (default is eql-like equality)
             test_not: Optional negated comparison function/designator
         """
-        # Convert lispCons to list for easier iteration
-        if hasattr(sequence, 'car') and hasattr(sequence, 'cdr'):
-            self.sequence = _seq_to_list(sequence)
-        else:
-            self.sequence = sequence
-        self.start = start
-        self.end = end if end is not None else _seq_length(self.sequence)
+        # One element-access path for every sequence representation: the
+        # iterator works over the protocol's element list rather than over
+        # whichever Python container happened to be passed in.
+        self.sequence = _seq_to_list(sequence)
+        self.start = 0 if start is None or start is lisptype.NIL else int(start)
+        self.end = (len(self.sequence) if end is None or end is lisptype.NIL
+                    else int(end))
         self.key = _coerce_function_designator(key)
         self._matcher = _make_matcher(test=test, test_not=test_not, key=key)
-        self.index = start
+        self.index = self.start
 
     def __iter__(self):
         """Return iterator."""
@@ -248,7 +155,7 @@ class SequenceIterator:
 
     def __next__(self):
         """Get next element."""
-        if self.index >= self.end or self.index >= _seq_length(self.sequence):
+        if self.index >= self.end or self.index >= len(self.sequence):
             raise StopIteration
         value = self.sequence[self.index]
         self.index += 1
@@ -284,13 +191,15 @@ def iterate(sequence, start=0, end=None, key=None, test=None, test_not=None):
 
     Returns:
         SequenceIterator instance for the sequence.
+
+    A non-sequence argument is rejected by the protocol's element access with
+    a Lisp `LispTypeError`. This used to gate on
+    `isinstance(sequence, (list, str, tuple))` and raise a *Python* TypeError
+    otherwise, so every `#(...)` literal (an `AdjustableVector`) and every
+    `"..."` literal (a `LispString`) made FIND/POSITION/COUNT/MISMATCH return
+    the text of a Python exception as a Lisp value -- plan.md Finding M
+    feeding standing rule 2.
     """
-    # Check if it's a lispCons (has car and cdr attributes)
-    is_lisp_cons = hasattr(sequence, 'car') and hasattr(sequence, 'cdr')
-
-    if not isinstance(sequence, (list, str, tuple)) and not is_lisp_cons:
-        raise TypeError(f"iterate: unsupported sequence type {type(sequence).__name__}")
-
     return SequenceIterator(sequence, start, end, key, test, test_not)
 
 
@@ -316,301 +225,263 @@ def with_sequence_protocol(sequence, start=0, end=None, key=None, test=None, tes
     return iterate(sequence, start, end, key, test, test_not)
 
 
+def _scan(sequence, kwargs, what):
+    """The (elements, indices) a CLHS scanning function should visit.
+
+    One place decides what `:start`, `:end` and `:from-end` mean, for all of
+    FIND/POSITION/COUNT and their `-IF`/`-IF-NOT` variants. Each of them used
+    to re-derive it, and each got a different subset right: `:end` was
+    `min(end, len)` in some and unbounded in others, `:from-end` was ignored
+    everywhere, and a NIL `:end` -- which CLHS explicitly allows, meaning
+    "the end" -- crashed the `min`.
+    """
+    elements = _seq_to_list(sequence, what)
+    start, end = _bounding_indices(
+        len(elements), kwargs.get('start', 0), kwargs.get('end'), what)
+    from_end = _lisp_truthy(kwargs.get('from_end', None))
+    indices = range(end - 1, start - 1, -1) if from_end else range(start, end)
+    return elements, indices
+
+
+def _scan_key(kwargs):
+    """The `:key` of a scanning function, as a callable or None."""
+    return _coerce_function_designator(kwargs.get('key', None))
+
+
+def _scan_matcher(kwargs):
+    """The shared `:test`/`:test-not`/`:key` matcher of a scanning function."""
+    return _make_matcher(test=kwargs.get('test'),
+                         test_not=kwargs.get('test_not'),
+                         key=kwargs.get('key'))
+
+
 @_registry.cl_function('FIND')
 def find(item, sequence, **kwargs):
-    """Find item in sequence.
+    """The first element matching `item` (CLHS 17.3).
 
-    Supports:
-      :key - function (or designator) to apply to each element before comparison
-      :test / :test-not - comparison function/designator (default is eql-like)
-      :start - start index
-      :end - end index
+    Honours :key, :test, :test-not, :start, :end and :from-end through the
+    shared scan and the shared matcher.
     """
-    start = kwargs.get('start', 0)
-    end = kwargs.get('end', _seq_length(sequence))
-    key = kwargs.get('key', None)
-    test = kwargs.get('test', None)
-    test_not = kwargs.get('test_not', None)
-
-    iterator = iterate(sequence, start=start, end=end, key=key, test=test, test_not=test_not)
-    for element in iterator:
-        if iterator.matches(element, item):
-            return element
-    return None
+    elements, indices = _scan(sequence, kwargs, 'FIND')
+    matcher = _scan_matcher(kwargs)
+    for i in indices:
+        if matcher(item, elements[i]):
+            return elements[i]
+    return lisptype.NIL
 
 
 @_registry.cl_function('FIND-IF')
 def find_if(predicate, sequence, **kwargs):
-    """Find item satisfying predicate.
-
-    Supports:
-      :key - function (or designator) to apply to each element before testing
-      :start - start index
-      :end - end index
-    """
-    start = kwargs.get('start', 0)
-    end = kwargs.get('end', _seq_length(sequence))
-    key = kwargs.get('key', None)
+    """The first element satisfying `predicate` (CLHS 17.3)."""
+    elements, indices = _scan(sequence, kwargs, 'FIND-IF')
+    key = _scan_key(kwargs)
     predicate = _coerce_function_designator(predicate)
-
-    iterator = iterate(sequence, start=start, end=end, key=key)
-    for element in iterator:
-        test_value = iterator.get_value(element)
-        if _lisp_truthy(predicate(test_value)):
+    for i in indices:
+        element = elements[i]
+        if _lisp_truthy(predicate(key(element) if key else element)):
             return element
-    return None
+    return lisptype.NIL
 
 
 @_registry.cl_function('FIND-IF-NOT')
 def find_if_not(predicate, sequence, **kwargs):
-    """Find item not satisfying predicate.
-
-    Supports:
-      :key - function (or designator) to apply to each element before testing
-      :start - start index
-      :end - end index
-    """
-    start = kwargs.get('start', 0)
-    end = kwargs.get('end', _seq_length(sequence))
-    key = kwargs.get('key', None)
+    """The first element failing `predicate` (CLHS 17.3)."""
+    elements, indices = _scan(sequence, kwargs, 'FIND-IF-NOT')
+    key = _scan_key(kwargs)
     predicate = _coerce_function_designator(predicate)
-
-    iterator = iterate(sequence, start=start, end=end, key=key)
-    for element in iterator:
-        test_value = iterator.get_value(element)
-        if not _lisp_truthy(predicate(test_value)):
+    for i in indices:
+        element = elements[i]
+        if not _lisp_truthy(predicate(key(element) if key else element)):
             return element
-    return None
+    return lisptype.NIL
 
 
 @_registry.cl_function('POSITION')
 def position(item, sequence, **kwargs):
-    """Find position of item.
-
-    Supports:
-      :key - function (or designator) to apply to each element before comparison
-      :test / :test-not - comparison function/designator (default is eql-like)
-      :start - start index
-      :end - end index
-    """
-    # Convert lispCons to list for indexing
-    if hasattr(sequence, 'car') and hasattr(sequence, 'cdr'):
-        sequence = _seq_to_list(sequence)
-
-    start = kwargs.get('start', 0)
-    end = kwargs.get('end', _seq_length(sequence))
-    key = kwargs.get('key', None)
-    test = kwargs.get('test', None)
-    test_not = kwargs.get('test_not', None)
-    matcher = _make_matcher(test=test, test_not=test_not, key=key)
-
-    for i in range(start, min(end, _seq_length(sequence))):
-        element = sequence[i]
-        if matcher(item, element):
+    """The index of the first element matching `item` (CLHS 17.3)."""
+    elements, indices = _scan(sequence, kwargs, 'POSITION')
+    matcher = _scan_matcher(kwargs)
+    for i in indices:
+        if matcher(item, elements[i]):
             return i
-    return None
+    return lisptype.NIL
 
 
 @_registry.cl_function('POSITION-IF')
 def position_if(predicate, sequence, **kwargs):
-    """Find position of item satisfying predicate.
-
-    Supports:
-      :key - function (or designator) to apply to each element before testing
-      :start - start index
-      :end - end index
-    """
-    # Convert lispCons to list for indexing
-    if hasattr(sequence, 'car') and hasattr(sequence, 'cdr'):
-        sequence = _seq_to_list(sequence)
-
-    start = kwargs.get('start', 0)
-    end = kwargs.get('end', _seq_length(sequence))
-    key = _coerce_function_designator(kwargs.get('key', None))
+    """The index of the first element satisfying `predicate` (CLHS 17.3)."""
+    elements, indices = _scan(sequence, kwargs, 'POSITION-IF')
+    key = _scan_key(kwargs)
     predicate = _coerce_function_designator(predicate)
-
-    for i in range(start, min(end, _seq_length(sequence))):
-        element = sequence[i]
-        test_val = key(element) if key else element
-        if _lisp_truthy(predicate(test_val)):
+    for i in indices:
+        element = elements[i]
+        if _lisp_truthy(predicate(key(element) if key else element)):
             return i
-    return None
+    return lisptype.NIL
 
 
 @_registry.cl_function('POSITION-IF-NOT')
 def position_if_not(predicate, sequence, **kwargs):
-    """Find position of item not satisfying predicate.
-
-    Supports:
-      :key - function (or designator) to apply to each element before testing
-      :start - start index
-      :end - end index
-    """
-    # Convert lispCons to list for indexing
-    if hasattr(sequence, 'car') and hasattr(sequence, 'cdr'):
-        sequence = _seq_to_list(sequence)
-
-    start = kwargs.get('start', 0)
-    end = kwargs.get('end', _seq_length(sequence))
-    key = _coerce_function_designator(kwargs.get('key', None))
+    """The index of the first element failing `predicate` (CLHS 17.3)."""
+    elements, indices = _scan(sequence, kwargs, 'POSITION-IF-NOT')
+    key = _scan_key(kwargs)
     predicate = _coerce_function_designator(predicate)
-
-    for i in range(start, min(end, _seq_length(sequence))):
-        element = sequence[i]
-        test_val = key(element) if key else element
-        if not _lisp_truthy(predicate(test_val)):
+    for i in indices:
+        element = elements[i]
+        if not _lisp_truthy(predicate(key(element) if key else element)):
             return i
-    return None
+    return lisptype.NIL
 
 
 @_registry.cl_function('COUNT')
 def count(item, sequence, **kwargs):
-    """Count occurrences of item.
-
-    Supports:
-      :key - function (or designator) to apply to each element before comparison
-      :test / :test-not - comparison function/designator (default is eql-like)
-      :start - start index
-      :end - end index
-    """
-    start = kwargs.get('start', 0)
-    end = kwargs.get('end', _seq_length(sequence))
-    key = kwargs.get('key', None)
-    test = kwargs.get('test', None)
-    test_not = kwargs.get('test_not', None)
-
-    iterator = iterate(sequence, start=start, end=end, key=key, test=test, test_not=test_not)
-    count_val = 0
-    for element in iterator:
-        if iterator.matches(element, item):
-            count_val += 1
-    return count_val
+    """How many elements match `item` (CLHS 17.3)."""
+    elements, indices = _scan(sequence, kwargs, 'COUNT')
+    matcher = _scan_matcher(kwargs)
+    return sum(1 for i in indices if matcher(item, elements[i]))
 
 
 @_registry.cl_function('COUNT-IF')
 def count_if(predicate, sequence, **kwargs):
-    """Count items satisfying predicate.
-
-    Supports:
-      :key - function (or designator) to apply to each element before testing
-      :start - start index
-      :end - end index
-    """
-    start = kwargs.get('start', 0)
-    end = kwargs.get('end', _seq_length(sequence))
-    key = kwargs.get('key', None)
+    """How many elements satisfy `predicate` (CLHS 17.3)."""
+    elements, indices = _scan(sequence, kwargs, 'COUNT-IF')
+    key = _scan_key(kwargs)
     predicate = _coerce_function_designator(predicate)
-
-    iterator = iterate(sequence, start=start, end=end, key=key)
-    count_val = 0
-    for element in iterator:
-        test_value = iterator.get_value(element)
-        if _lisp_truthy(predicate(test_value)):
-            count_val += 1
-    return count_val
+    return sum(1 for i in indices
+               if _lisp_truthy(predicate(key(elements[i]) if key else elements[i])))
 
 
 @_registry.cl_function('COUNT-IF-NOT')
 def count_if_not(predicate, sequence, **kwargs):
-    """Count items not satisfying predicate."""
-    # Convert lispCons to list
-    if hasattr(sequence, 'car') and hasattr(sequence, 'cdr'):
-        sequence = _seq_to_list(sequence)
-    key = _coerce_function_designator(kwargs.get('key', None))
+    """How many elements fail `predicate` (CLHS 17.3).
+
+    This one ignored :start/:end entirely, so a bounded count answered for
+    the whole sequence.
+    """
+    elements, indices = _scan(sequence, kwargs, 'COUNT-IF-NOT')
+    key = _scan_key(kwargs)
     predicate = _coerce_function_designator(predicate)
-    return sum(1 for x in sequence if not _lisp_truthy(predicate(key(x) if key else x)))
+    return sum(1 for i in indices
+               if not _lisp_truthy(predicate(key(elements[i]) if key else elements[i])))
+
+
+def _two_sequence_matcher(kwargs):
+    """The comparison SEARCH and MISMATCH apply to a pair of elements.
+
+    Both of their arguments are *sequence elements*, so CLHS 17.2.1's `:key`
+    applies to **both** -- unlike FIND/POSITION/COUNT, where the item being
+    searched for is not keyed. Reusing `_make_matcher` directly would key only
+    the second argument, which is why `(mismatch "1010" "1000" :key
+    'odddigitp)` needs this wrapper rather than the plain matcher.
+    """
+    base = _make_matcher(test=kwargs.get('test'), test_not=kwargs.get('test_not'))
+    key = _coerce_function_designator(kwargs.get('key', None))
+    if key is None:
+        return base
+    return lambda a, b: base(key(a), key(b))
+
+
+def _two_sequence_bounds(sequence1, sequence2, kwargs, what):
+    """Element lists and bounding indices for the two-sequence operators.
+
+    SEARCH and MISMATCH take *two* bounding-index pairs (`:start1`/`:end1`
+    and `:start2`/`:end2`); both used to ignore all four, along with `:test`
+    and `:key`, and compare with Python `==` on a slice.
+    """
+    left = _seq_to_list(sequence1, what)
+    right = _seq_to_list(sequence2, what)
+    start1, end1 = _bounding_indices(
+        len(left), kwargs.get('start1', 0), kwargs.get('end1'), what)
+    start2, end2 = _bounding_indices(
+        len(right), kwargs.get('start2', 0), kwargs.get('end2'), what)
+    return left, right, start1, end1, start2, end2
 
 
 @_registry.cl_function('SEARCH')
 def search(sequence1, sequence2, **kwargs):
-    """Search for sequence1 in sequence2."""
-    # Convert lispCons to lists
-    if hasattr(sequence1, 'car') and hasattr(sequence1, 'cdr'):
-        sequence1 = _seq_to_list(sequence1)
-    if hasattr(sequence2, 'car') and hasattr(sequence2, 'cdr'):
-        sequence2 = _seq_to_list(sequence2)
-    
-    len1 = _seq_length(sequence1)
-    len2 = _seq_length(sequence2)
-    for i in range(len2 - len1 + 1):
-        if sequence2[i:i+len1] == sequence1:
-            return i
-    return None
+    """The index in `sequence2` of a subsequence matching `sequence1`."""
+    left, right, start1, end1, start2, end2 = _two_sequence_bounds(
+        sequence1, sequence2, kwargs, 'SEARCH')
+    matcher = _two_sequence_matcher(kwargs)
+    pattern = left[start1:end1]
+    width = len(pattern)
+    candidates = list(range(start2, end2 - width + 1))
+    if _lisp_truthy(kwargs.get('from_end', None)):
+        candidates.reverse()
+    for offset in candidates:
+        if all(matcher(pattern[k], right[offset + k]) for k in range(width)):
+            return offset
+    return lisptype.NIL
 
 
 @_registry.cl_function('MISMATCH')
 def mismatch(sequence1, sequence2, **kwargs):
-    """Find first mismatch between sequences."""
-    # Convert lispCons to lists
-    if hasattr(sequence1, 'car') and hasattr(sequence1, 'cdr'):
-        sequence1 = _seq_to_list(sequence1)
-    if hasattr(sequence2, 'car') and hasattr(sequence2, 'cdr'):
-        sequence2 = _seq_to_list(sequence2)
-    
-    for i, (x, y) in enumerate(zip(sequence1, sequence2)):
-        if x != y:
-            return i
-    len1 = _seq_length(sequence1)
-    len2 = _seq_length(sequence2)
-    if len1 != len2:
-        return min(len1, len2)
-    return None
+    """The index in `sequence1` where the two sequences first differ.
+
+    CLHS 17.3: the index is relative to `sequence1` as a whole, not to its
+    bounded subsequence, and under `:from-end` it is *one plus* the index of
+    the rightmost difference. NIL means the bounded subsequences match.
+    """
+    left, right, start1, end1, start2, end2 = _two_sequence_bounds(
+        sequence1, sequence2, kwargs, 'MISMATCH')
+    matcher = _two_sequence_matcher(kwargs)
+    width1, width2 = end1 - start1, end2 - start2
+    shared = min(width1, width2)
+
+    if _lisp_truthy(kwargs.get('from_end', None)):
+        for offset in range(1, shared + 1):
+            if not matcher(left[end1 - offset], right[end2 - offset]):
+                return end1 - offset + 1
+        return lisptype.NIL if width1 == width2 else start1 + shared
+    for offset in range(shared):
+        if not matcher(left[start1 + offset], right[start2 + offset]):
+            return start1 + offset
+    return lisptype.NIL if width1 == width2 else start1 + shared
+
+
+def _member_tail(list_seq, accepts):
+    """The first tail of `list_seq` whose car satisfies `accepts`, else NIL.
+
+    CLHS 14.2: MEMBER returns *the tail itself*, which must be a sublist of
+    the argument -- callers rely on it being EQ to that sublist and on being
+    able to keep walking or RPLACD it. The three MEMBER functions used to
+    flatten the list and return a Python slice, i.e. a fresh vector, located
+    with `list.index(x)` -- so a duplicated element returned the tail at the
+    *first* equal element rather than the one that matched.
+    """
+    current = list_seq
+    while isinstance(current, lisptype.lispCons):
+        if accepts(current.car):
+            return current
+        current = current.cdr
+    return lisptype.NIL
 
 
 @_registry.cl_function('MEMBER')
 def member(item, list_seq, test=None, test_not=None, key=None):
-    """Find member in list.
-
-    Returns the tail of list starting at the first element equal to item,
-    or None if item is not found.
-    """
-    # Handle NIL and None as empty lists
-    if list_seq is None or list_seq == lisptype.NIL:
-        return None
-
-    # Convert lispCons to list
-    if hasattr(list_seq, 'car') and hasattr(list_seq, 'cdr'):
-        list_seq = _seq_to_list(list_seq)
-
-    # Handle non-iterable types (defensive - shouldn't happen in correct code)
-    if not hasattr(list_seq, '__iter__'):
-        return None
-
+    """The tail of the list beginning with the first element matching `item`."""
     matcher = _make_matcher(test=test, test_not=test_not, key=key)
-    for x in list_seq:
-        if matcher(item, x):
-            return list_seq[list_seq.index(x):]
-    return None
+    return _member_tail(list_seq, lambda element: matcher(item, element))
 
 
 @_registry.cl_function('MEMBER-IF')
 def member_if(predicate, list_seq, key=None):
-    """Find member satisfying predicate."""
-    # Convert lispCons to list
-    if hasattr(list_seq, 'car') and hasattr(list_seq, 'cdr'):
-        list_seq = _seq_to_list(list_seq)
-
+    """The tail beginning with the first element satisfying `predicate`."""
     key = _coerce_function_designator(key)
     predicate = _coerce_function_designator(predicate)
-    for x in list_seq:
-        if _lisp_truthy(predicate(key(x) if key else x)):
-            return list_seq[list_seq.index(x):]
-    return None
+    return _member_tail(
+        list_seq,
+        lambda element: _lisp_truthy(predicate(key(element) if key else element)))
 
 
 @_registry.cl_function('MEMBER-IF-NOT')
 def member_if_not(predicate, list_seq, key=None):
-    """Find member not satisfying predicate."""
-    # Convert lispCons to list
-    if hasattr(list_seq, 'car') and hasattr(list_seq, 'cdr'):
-        list_seq = _seq_to_list(list_seq)
-
+    """The tail beginning with the first element failing `predicate`."""
     key = _coerce_function_designator(key)
     predicate = _coerce_function_designator(predicate)
-    for x in list_seq:
-        if not _lisp_truthy(predicate(key(x) if key else x)):
-            return list_seq[list_seq.index(x):]
-    return None
+    return _member_tail(
+        list_seq,
+        lambda element: not _lisp_truthy(predicate(key(element) if key else element)))
 
 
 def _pair_key(pair, index):
@@ -736,7 +607,7 @@ def rassoc_if_not(predicate, alist, key=None):
 
 __all__ = [
     # Shared helpers
-    '_rebuild_sequence', '_matched_positions', '_char_text',
+    '_rebuild_sequence', '_matched_positions',
     # SequenceIterator protocol
     'SequenceIterator', 'iterate', 'with_sequence_protocol',
     # Find operations

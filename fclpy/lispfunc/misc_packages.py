@@ -38,6 +38,85 @@ def _parse_keyword_args(args):
     return positional, result
 
 
+def coerce_to_package(designator, default=None):
+    """Resolve a package designator to a Package (CLHS 11.1.1.1).
+
+    A designator is a package, a string, a symbol, or a character; NIL (or an
+    omitted argument) means `default`, which itself defaults to the value of
+    `*PACKAGE*`. An unknown name is a PACKAGE-ERROR, not None: returning None
+    made every caller invent its own "and if it wasn't found" branch, and the
+    ones that swallowed it (`except Exception: pkg = None`) turned a misspelled
+    package name into an empty iteration instead of an error.
+    """
+    if isinstance(designator, lisptype.Package):
+        return designator
+    if designator is None or designator is lisptype.NIL:
+        if default is not None:
+            return coerce_to_package(default)
+        current = getattr(state, 'current_package', None)
+        return current if current is not None else lisptype.COMMON_LISP_USER_PACKAGE
+    if isinstance(designator, lisptype.LispSymbol):
+        name = designator.name
+    elif isinstance(designator, str):
+        name = str(designator)
+    else:
+        name = str(designator)
+    pkg = lisptype.find_package(name)
+    if pkg is None:
+        raise lisptype.LispError(f'Package not found: {name}')
+    return pkg
+
+
+def package_symbols(package, kind):
+    """The symbols of `package` that `kind` names, as a Python list.
+
+    `kind` is one of 'symbols' (every symbol *accessible* in the package:
+    its own, plus the external symbols of the packages it uses),
+    'present-symbols' (its own, whether exported or not) or
+    'external-symbols' (the ones it exports) -- the three sets CLHS 6.1.2.1.7
+    gives LOOP's for-as-package clause and DO-SYMBOLS / DO-EXTERNAL-SYMBOLS.
+
+    One enumerator for all of them, because the interesting part is a detail
+    each open-coded copy got differently: `use_packages` holds package *names*
+    as well as `Package` objects (see `Package.intern`), so a copy that reads
+    `used.external_symbols` off a string gets the empty set and silently drops
+    every inherited symbol. `external_symbols` is likewise a set of names in
+    some packages and of symbol objects in others.
+    """
+    pkg = coerce_to_package(package)
+
+    def externals_of(p):
+        result = []
+        for item in list(getattr(p, 'external_symbols', ()) or ()):
+            sym = item if isinstance(item, lisptype.LispSymbol) else p.symbols.get(item)
+            if sym is not None:
+                result.append(sym)
+        return result
+
+    if kind == 'external-symbols':
+        return externals_of(pkg)
+
+    present = list(pkg.symbols.values())
+    if kind == 'present-symbols':
+        return present
+    if kind != 'symbols':
+        raise ValueError(f'unknown package symbol set: {kind!r}')
+
+    # Accessible = present + inherited externals, without duplicates. Identity
+    # is the right key: an inherited symbol *is* the used package's symbol.
+    seen = {id(s) for s in present}
+    accessible = list(present)
+    for used in list(getattr(pkg, 'use_list', ()) or ()):
+        used_pkg = lisptype.find_package(used) if isinstance(used, str) else used
+        if used_pkg is None:
+            continue
+        for sym in externals_of(used_pkg):
+            if id(sym) not in seen:
+                seen.add(id(sym))
+                accessible.append(sym)
+    return accessible
+
+
 # --- Package operations (advanced) ---
 @_registry.cl_function('MAKE-PACKAGE')
 def make_package(*args):

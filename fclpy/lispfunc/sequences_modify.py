@@ -5,8 +5,9 @@ from . import registry as _registry
 import fclpy.lisptype as lisptype
 from .sequences_search import (
     iterate, _seq_length, _seq_to_list, _make_matcher, _coerce_function_designator,
-    _lisp_truthy, _rebuild_sequence, _matched_positions,
+    _lisp_truthy, _rebuild_sequence, _matched_positions, _two_sequence_matcher,
 )
+from .sequence_protocol import bounding_indices as _bounding_indices
 
 
 @_registry.cl_function('REMOVE')
@@ -25,8 +26,8 @@ def remove(item, sequence, **kwargs):
     """
     original = sequence
     elements = _seq_to_list(sequence)
-    start = kwargs.get('start', 0)
-    end = min(kwargs.get('end', len(elements)), len(elements))
+    start, end = _bounding_indices(
+        len(elements), kwargs.get('start', 0), kwargs.get('end'))
     key = kwargs.get('key', None)
     test = kwargs.get('test', None)
     test_not = kwargs.get('test_not', None)
@@ -55,8 +56,8 @@ def remove_if(test, sequence, **kwargs):
     """
     original = sequence
     elements = _seq_to_list(sequence)
-    start = kwargs.get('start', 0)
-    end = min(kwargs.get('end', len(elements)), len(elements))
+    start, end = _bounding_indices(
+        len(elements), kwargs.get('start', 0), kwargs.get('end'))
     key = _coerce_function_designator(kwargs.get('key', None))
     test = _coerce_function_designator(test)
     from_end = _lisp_truthy(kwargs.get('from_end', None))
@@ -83,8 +84,8 @@ def remove_if_not(test, sequence, **kwargs):
     """
     original = sequence
     elements = _seq_to_list(sequence)
-    start = kwargs.get('start', 0)
-    end = min(kwargs.get('end', len(elements)), len(elements))
+    start, end = _bounding_indices(
+        len(elements), kwargs.get('start', 0), kwargs.get('end'))
     key = _coerce_function_designator(kwargs.get('key', None))
     test = _coerce_function_designator(test)
     from_end = _lisp_truthy(kwargs.get('from_end', None))
@@ -121,29 +122,44 @@ def delete_if_not(predicate, sequence, **kwargs):
 
 @_registry.cl_function('REMOVE-DUPLICATES')
 def remove_duplicates(sequence, **kwargs):
-    """Remove duplicate elements."""
-    # Convert lispCons to list
-    if hasattr(sequence, 'car') and hasattr(sequence, 'cdr'):
-        sequence = _seq_to_list(sequence)
-    
-    seen = set()
-    result = []
-    for item in sequence:
-        # Handle unhashable items
-        try:
-            if item not in seen:
-                seen.add(item)
-                result.append(item)
-        except TypeError:
-            # Item is unhashable, use linear search
-            if item not in result:
-                result.append(item)
-    return result
+    """Remove duplicate elements (CLHS 17.2.1).
+
+    Duplicates are decided by the shared `:test`/`:test-not`/`:key` matcher,
+    not by Python set membership: the old version put elements in a `set`, so
+    the comparison was Python hashing and equality -- `:test` and `:key` were
+    ignored entirely, `1` and `1.0` collided, and two `EQUAL` lists did not.
+    Which of a pair survives is CLHS's rule: the *later* element by default,
+    the earlier one under `:from-end`. Both arguments of the test are sequence
+    elements, so the `:key` applies to both and the earlier element is always
+    passed first -- `_two_sequence_matcher` is the same rule MISMATCH and
+    SEARCH need, for the same reason.
+    """
+    elements = _seq_to_list(sequence)
+    start = kwargs.get('start', 0)
+    end = kwargs.get('end', None)
+    start, end = _bounding_indices(len(elements), start, end, 'REMOVE-DUPLICATES')
+    matcher = _two_sequence_matcher(kwargs)
+    from_end = _lisp_truthy(kwargs.get('from_end', None))
+
+    keep = []
+    for index in range(start, end):
+        item = elements[index]
+        if from_end:
+            duplicate = any(matcher(elements[j], item) for j in keep)
+        else:
+            duplicate = any(matcher(item, elements[j])
+                            for j in range(index + 1, end))
+        if not duplicate:
+            keep.append(index)
+    kept = set(keep)
+    result = [item for index, item in enumerate(elements)
+              if index < start or index >= end or index in kept]
+    return _rebuild_sequence(sequence, result)
 
 
 @_registry.cl_function('DELETE-DUPLICATES')
 def delete_duplicates(sequence, **kwargs):
-    """Delete duplicate elements."""
+    """REMOVE-DUPLICATES, permitted to destroy its argument (CLHS 17.2.1)."""
     return remove_duplicates(sequence, **kwargs)
 
 
@@ -155,8 +171,8 @@ def substitute(newitem, olditem, sequence, **kwargs):
     """
     original = sequence
     elements = _seq_to_list(sequence)
-    start = kwargs.get('start', 0)
-    end = min(kwargs.get('end', len(elements)), len(elements))
+    start, end = _bounding_indices(
+        len(elements), kwargs.get('start', 0), kwargs.get('end'))
     key = kwargs.get('key', None)
     test = kwargs.get('test', None)
     test_not = kwargs.get('test_not', None)
@@ -180,8 +196,8 @@ def substitute_if(newitem, test, sequence, **kwargs):
     """
     original = sequence
     elements = _seq_to_list(sequence)
-    start = kwargs.get('start', 0)
-    end = min(kwargs.get('end', len(elements)), len(elements))
+    start, end = _bounding_indices(
+        len(elements), kwargs.get('start', 0), kwargs.get('end'))
     key = _coerce_function_designator(kwargs.get('key', None))
     test = _coerce_function_designator(test)
     from_end = _lisp_truthy(kwargs.get('from_end', None))
@@ -203,8 +219,8 @@ def substitute_if_not(newitem, test, sequence, **kwargs):
     """
     original = sequence
     elements = _seq_to_list(sequence)
-    start = kwargs.get('start', 0)
-    end = min(kwargs.get('end', len(elements)), len(elements))
+    start, end = _bounding_indices(
+        len(elements), kwargs.get('start', 0), kwargs.get('end'))
     key = _coerce_function_designator(kwargs.get('key', None))
     test = _coerce_function_designator(test)
     from_end = _lisp_truthy(kwargs.get('from_end', None))
@@ -260,8 +276,8 @@ def nsubstitute(newitem, olditem, sequence, **kwargs):
     for what "destructively" means for each sequence representation.
     """
     elements = _seq_to_list(sequence)
-    start = kwargs.get('start', 0)
-    end = min(kwargs.get('end', len(elements)), len(elements))
+    start, end = _bounding_indices(
+        len(elements), kwargs.get('start', 0), kwargs.get('end'))
     key = kwargs.get('key', None)
     test = kwargs.get('test', None)
     test_not = kwargs.get('test_not', None)
@@ -279,8 +295,8 @@ def nsubstitute(newitem, olditem, sequence, **kwargs):
 def nsubstitute_if(newitem, test, sequence, **kwargs):
     """Destructively substitute using predicate (CLHS 17.2.1)."""
     elements = _seq_to_list(sequence)
-    start = kwargs.get('start', 0)
-    end = min(kwargs.get('end', len(elements)), len(elements))
+    start, end = _bounding_indices(
+        len(elements), kwargs.get('start', 0), kwargs.get('end'))
     key = _coerce_function_designator(kwargs.get('key', None))
     test = _coerce_function_designator(test)
     from_end = _lisp_truthy(kwargs.get('from_end', None))
@@ -296,8 +312,8 @@ def nsubstitute_if(newitem, test, sequence, **kwargs):
 def nsubstitute_if_not(newitem, test, sequence, **kwargs):
     """Destructively substitute using negated predicate (CLHS 17.2.1)."""
     elements = _seq_to_list(sequence)
-    start = kwargs.get('start', 0)
-    end = min(kwargs.get('end', len(elements)), len(elements))
+    start, end = _bounding_indices(
+        len(elements), kwargs.get('start', 0), kwargs.get('end'))
     key = _coerce_function_designator(kwargs.get('key', None))
     test = _coerce_function_designator(test)
     from_end = _lisp_truthy(kwargs.get('from_end', None))

@@ -563,7 +563,7 @@ def _format_args_list(value):
     treated as a single opaque element. `(format nil "~{~A ~}" '(1 2 3))`
     returned `"(1 2 3) "` instead of `"1 2 3 "`.
 
-    Cons traversal is delegated to the sequence protocol's `_seq_to_list`
+    Cons traversal is delegated to the sequence protocol's `seq_elements`
     rather than open-coded a third time (standing rule 3); this function
     only adds the FORMAT-specific edges: NIL is the empty argument list, and
     a non-list argument stays wrapped rather than silently becoming empty.
@@ -573,8 +573,8 @@ def _format_args_list(value):
     if isinstance(value, (list, tuple)):
         return list(value)
     if hasattr(value, 'car') and hasattr(value, 'cdr'):
-        from .sequences_search import _seq_to_list
-        return _seq_to_list(value)
+        from .sequence_protocol import seq_elements
+        return seq_elements(value)
     return [value]
 
 

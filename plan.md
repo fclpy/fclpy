@@ -468,14 +468,21 @@ it — but each is a *clause*, so none of them justifies a second engine.
 - **`INTO` of mixed types into one destination.** Each destination's accumulator
   is typed on first use, so `collect a into x sum b into x` is wrong. ANSI
   forbids incompatible types here, so the fix is to *detect and signal* it.
-- **`WITH`, `NEVER`, `MAXIMIZE`/`MINIMIZE`, `OF-TYPE`, `AND`-joined parallel
-  clauses.** Unimplemented; their tokens are dropped.
+- ~~**`WITH`, `NEVER`, `MAXIMIZE`/`MINIMIZE`, `OF-TYPE`.**~~ **Done 2026-08-15
+  (c)**, together with the `BEING` drivers for hash tables and packages:
+  `iteration` **424 → 636**, 0 regressions, and only ~140 of the 212 targeted.
+  See the [Changelog](#changelog). **`AND`-joined parallel FOR clauses remain**
+  — unlike the rest of that list they are not another clause but a change to
+  the engine's *step* phase, since parallel drivers must all step from the
+  previous iteration's values.
 - **`IT` (CLHS 6.1.2.1.4).** Unimplemented — `(loop for x in l when x collect
   it)` signals `Unbound variable: IT`. It *appeared* to work in a whole-file
   run only because the iteration-variable leak left an earlier test's `it`
   bound at the root; LOOP.14.38/39 were passing off that constant. Doing it
   properly means the conditional clause supplying its test value to its own
-  body, so it belongs with the clause-order item above rather than beside it.
+  body, so it belongs with the clause-order item above rather than beside it —
+  as does `ELSE`/`END`, for the same reason: `when p collect x else collect y`
+  currently applies `p` to *both* accumulations.
 - **The last silent path.** An unrecognized loop keyword is still discarded once
   a driver has been parsed (standing rule 4). It was left alone deliberately —
   turning it loud converts a large number of currently-wrong answers into
@@ -770,7 +777,22 @@ Milestones now describe *mechanisms*, and map onto the clusters above.
    (its walk ends at the value cell) and "lexical chain, then value cell" is
    already right (the value cell *is* the end of the chain). +23 with 0
    regressions, 20 of them untargeted. Details in the [Changelog](#changelog).
-9. **Re-measure, then re-derive this list.** The residual distribution has
+9. ~~**C1's follow-ups — LOOP's clause vocabulary.**~~ **Done 2026-08-15 (c).**
+   `LOOP` had become the largest single operator cluster in the suite (410 of
+   10157 failures) *after* C1 landed, because C1 gave it one engine but not the
+   clauses. `iteration` **424 → 636**, 0 regressions. It also confirms the
+   ranking heuristic §3 gives: `loop6.lsp` and `loop7.lsp` were two of the
+   23 files failing 100%, and both were one absent driver each.
+10. **`SORT` must return a sequence of the argument's type** (CLHS 17.1). New,
+   and cheap: `(sort (list 3 1 2) #'<)` returns a *vector* and
+   `(sort (copy-seq "cba") #'char<)` returns `#("a" "b" "c")`. It is the entire
+   residual of `iteration/loop6.lsp` and `loop7.lsp` (41 tests that only wrap a
+   correct LOOP result in SORT), plus `sequences/sort.lsp` 20/34 and
+   `stable-sort.lsp` 20/34. Fix it as the shared *sequence result-type*
+   discipline (C3/M6) rather than in SORT alone — MERGE, REMOVE, SUBSTITUTE and
+   CONCATENATE owe the same guarantee, and `sequences/merge.lsp` at 81/124 is
+   the next-largest file in the directory.
+11. **Re-measure, then re-derive this list.** The residual distribution has
    already shifted enough that ranking further ahead is guesswork. On the
    current evidence the next-largest unblocked mechanism is
    [C2](#c2-format--formatter--largest-cluster-in-the-suite)'s remaining
@@ -793,7 +815,8 @@ Anything knowingly non-ANSI, with the milestone that removes it. Empty means
 | deviation | why tolerated | removed by |
 |---|---|---|
 | LOOP: one accumulation destination per *type*; `INTO` of mixed types into one var unsupported | accumulator state is typed on first use | C1 follow-up |
-| LOOP `WITH`, `NEVER`, `MAXIMIZE`/`MINIMIZE`, `OF-TYPE` unimplemented; tokens dropped | never written | C1 follow-up |
+| LOOP `AND`-joined *FOR* clauses (parallel stepping) unimplemented; the token is dropped. `AND` in a `WITH` clause **is** implemented | parallel drivers mean stepping every driver from the values of the previous iteration — a change to the engine's step phase, not another clause | C1 follow-up |
+| LOOP `IT` (CLHS 6.1.2.1.4) and `ELSE`/`END` unimplemented | all three need the conditional clause to own its own body, which is the clause-order item below rather than a separate feature | C1 follow-up |
 | LOOP body/accumulation clauses execute in bucket order, not clause order | only WHILE/UNTIL are position-aware so far | C1 follow-up |
 | LOOP silently drops an unrecognized keyword once a driver exists | violates standing rule 4 | C1 follow-up |
 | `_run_handlers_on_unwind` + `_condition_matches` legacy branch | most raise sites bypass `SIGNAL` | M8 |
@@ -975,6 +998,93 @@ rather than discovering these one crash at a time.
 Condensed from the previous chronological plan. Each entry is a *mechanism*
 landed, not a test count.
 
+- **2026-08-15 (c)** — **LOOP's clause vocabulary, in the one engine.** C1 gave
+  LOOP a single iteration engine over composing drivers; what it did not give
+  it was the *clauses*. Nine keywords — `WITH`, `MAXIMIZE`/`MAXIMIZING`,
+  `MINIMIZE`/`MINIMIZING`, `NEVER`, `OF-TYPE`, and the `BEING` families for hash
+  tables and packages — were absent from the parser, and **an absent keyword was
+  silently dropped**, so the loop ran and returned a plausible wrong answer:
+  `(loop for x in '(1 5 3) maximize x)` was NIL, and
+  `(loop for x in '(1 2 3) never (> x 5))` was NIL — which means its sibling
+  `never (> x 2)` had been *passing for the wrong reason*. `WITH` was worse than
+  dropped: its token fell into the loop body and evaluated as a free reference,
+  so every WITH loop signalled `Unbound variable: WITH`.
+  **`iteration` 424 → 636 of 843. +212, 0 regressions**, and the shape of the
+  movement is the point — only ~140 of the 212 were in the files targeted:
+  | file | before | after | | file | before | after |
+  |---|---|---|---|---|---|---|
+  | `loop8.lsp` (WITH) | 27 failing | **0** | | `loop1.lsp` | 24 | **15** |
+  | `loop6.lsp` (hash) | 47 | **15** | | `loop2.lsp` | 14 | **5** |
+  | `loop7.lsp` (package) | 35 | **26** | | `loop3.lsp` | 16 | **6** |
+  | `loop10.lsp` (numeric) | 62 | **23** | | `loop5.lsp` | 15 | **7** |
+  | `loop12.lsp` (bool) | 22 | **11** | | `loop15/16.lsp` | 19/19 | **3/3** |
+  loop1/2/3/5/11/13/15/16/17 were not targeted at all; they move because
+  type-specs and destructuring are used throughout them.
+  **Three sub-mechanisms did that untargeted work, and each replaced a partial
+  copy rather than adding a branch.** (1) **One type-spec parser**
+  (`_loop_type_spec`) for all three positions a type-spec can occupy — after a
+  FOR variable, after a WITH variable, after a numeric accumulation's form.
+  Only the numeric accumulations may consume one, because `collect x` followed
+  by `t` would otherwise lose the T. (2) **One destructurer**
+  (`_loop_destructure`), a recursive walk replacing three enumerated shapes;
+  the shapes the enumeration could not express are exactly what was failing —
+  a dotted tail `(a b . rest)`, a NIL hole `(nil . v)`, and a pattern longer
+  than its value. (3) **One early decision** for ALWAYS/NEVER/THEREIS instead of
+  two flags with different "did it fire?" tests (`always_failed` versus
+  `thereis_result is not None`), which is what made NEVER an addition rather
+  than a third convention.
+  **Landed with it, because the new hash driver could not be correct without
+  it: a hash table no longer stores its own options as entries.**
+  `MAKE-HASH-TABLE` returned a plain `dict` carrying its test and sizing in
+  three `'__hashmeta__...'` **keys**, i.e. in the key space that holds user
+  entries. Four places knew to filter them (MAPHASH, CLRHASH,
+  HASH-TABLE-COUNT, the printer) and everything else did not, so
+  `(loop for k being the hash-keys of h collect k)` collected the Python string
+  `"__hashmeta__test"` as a Lisp value (standing rule 2) — and filtering it in
+  the driver would have been a fifth copy. `HashTableDict` keeps them as
+  attributes, so a traversal is correct by default and the four filters are
+  **gone**, not five.
+  **And one shared package enumerator.** `for x being the symbols of p` needed
+  the accessible/present/external distinction that `DO-SYMBOLS` and
+  `DO-EXTERNAL-SYMBOLS` already open-coded, so `coerce_to_package` and
+  `package_symbols` now serve all three. The consolidation found a live bug in
+  the copy it replaced: `use_packages` holds package *names* as well as
+  `Package` objects (`Package.intern` handles both), and DO-SYMBOLS read
+  `external_symbols` straight off each entry — a string entry yields the empty
+  set, so every inherited symbol was silently skipped. LOOP's own copy was
+  worse: it swallowed a failed package lookup with a bare `except Exception`
+  and iterated an *empty* package, so a misspelled name returned 0 instead of
+  signalling (standing rule 4).
+  **Measured, before → after, each `before` in a stash of the same tree:**
+  | target | before | after |
+  |---|---|---|
+  | `iteration` | 424 of 843 | **636** |
+  | `sequences`, `misc`, `types-and-classes`, `structures` | 3505 of 6291 | **3513** |
+  | `hash-tables`, `packages`, `symbols`, `data-and-control-flow`, `cons`, `conditions`, `eval-and-compile`, `environment` | 4131 of 6305 | 4131 — unchanged |
+  **+220 over 13,439 tests with a per-test diff of 0 regressions in all three.**
+  The +8 outside `iteration` is `SEARCH-BITVECTOR.1`, `SEARCH-LIST.1`,
+  `SEARCH-STRING.2`, `SEARCH-VECTOR.3/.5/.7` and the two
+  `ALL-*-CLASSES-ARE-SUBTYPES-OF-*` tests — all of them aux code that drives its
+  own assertions with LOOP, which is the blast radius C1 predicted.
+  `pytest` 1616 passed (from 1552), same 1 pre-existing unrelated failure
+  (`test_all_expected_functions_are_registered`), plus 64 new tests in
+  `tests/test_loop_clauses.py`. They are pinned together rather than beside each
+  feature because they share a failure *mode*, not a feature: several assert a
+  value for a loop that already "worked", since a dropped clause produced a
+  wrong answer rather than an error.
+  **Discovered, diagnosed, not fixed:** **`SORT` does not preserve the sequence
+  type.** `(sort (list 3 1 2) #'<)` returns a *vector*, and
+  `(sort (copy-seq "cba") #'char<)` returns `#("a" "b" "c")` rather than
+  `"abc"` — CLHS 17.1 requires the result to be of the same type as the
+  argument. This is **the whole of what is left in `loop6.lsp` and
+  `loop7.lsp`**: LOOP.6.6–.18 and LOOP.7.1–.20 all wrap their result in
+  `(sort ... #'symbol<)`, so 41 of the 41 residual failures in those two files
+  are SORT's, not LOOP's. It is also `sequences/sort.lsp` 20/34 and
+  `stable-sort.lsp` 20/34, and it belongs with the sequence result-type
+  discipline (C3/M6), not here. Also found: **two hash-table implementations**
+  coexist — `lispfunc/hashtables.py`'s `HashTable` class and
+  `lispfunc/misc_hashtables.py`'s dict, both registering `MAKE-HASH-TABLE` and
+  `GETHASH`; the dict wins and the class is dead (standing rule 3, Finding L).
 - **2026-08-15 (b)** — **The divide-then-round family is exact, and returns two
   values.** All eight of FLOOR/CEILING/TRUNCATE/ROUND and their F- variants
   computed `x / divisor` — Python **float** division — before rounding, so every

@@ -125,15 +125,23 @@ def equalp(obj1, obj2):
         return lisptype.NIL
 
 
-    # Arrays/vectors
-    if isinstance(obj1, (list, tuple)) and isinstance(obj2, (list, tuple)):
-        if len(obj1) != len(obj2):
+    # Vectors -- CLHS 5.3: two arrays are EQUALP if they have the same
+    # dimensions and EQUALP elements. Which *Python* container holds those
+    # elements is not part of the question, and testing `isinstance(x, list)`
+    # made it part of the question: a `#(...)` literal is an
+    # `AdjustableVector` while `(vector ...)` and every rebuilt sequence
+    # result is a Python `list`, so the same vector built two ways was never
+    # EQUALP to itself (plan.md Finding M).
+    from .sequence_protocol import is_vector, seq_elements
+    if is_vector(obj1) and is_vector(obj2):
+        left, right = seq_elements(obj1), seq_elements(obj2)
+        if len(left) != len(right):
             return lisptype.NIL
-        for x, y in zip(obj1, obj2):
+        for x, y in zip(left, right):
             if equalp(x, y) != lisptype.T:
                 return lisptype.NIL
         return lisptype.T
-    
+
     return lisptype.NIL
 
 
@@ -505,6 +513,16 @@ def typep(object, type_specifier):
             isinstance(object, (list, tuple, AdjustableVector))
             or _string_characters(object) is not None
         )
+    elif type_name == 'SEQUENCE':
+        # CLHS 4.2: SEQUENCE is the union of LIST and VECTOR. TYPEP had no
+        # branch for it at all, so `(typep '(1 2) 'sequence)` was NIL -- and
+        # since ansi-test guards every `check-type-error` with `sequencep`,
+        # that made those tests demand a TYPE-ERROR from *every* argument,
+        # lists and vectors included. Answered by the sequence protocol's own
+        # predicate so that TYPEP and `seq_elements` cannot disagree about
+        # what a sequence is.
+        from .sequence_protocol import is_sequence
+        return lisptype.lisp_bool(is_sequence(object))
     elif type_name == 'HASH-TABLE':
         return lisptype.lisp_bool(isinstance(object, dict))
     elif type_name == 'BOOLEAN':

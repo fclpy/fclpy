@@ -786,12 +786,11 @@ def _write_structure(value, ctx, depth):
 def _write_hash_table_dict(value, ctx):
     """Print the dict-based hash table as ``#<HASH-TABLE ...>``.
 
-    ``MAKE-HASH-TABLE`` returns a Python ``dict`` carrying its test and sizing
-    in ``__hashmeta__`` keys, which must not be printed as entries.
+    ``MAKE-HASH-TABLE`` returns a ``HashTableDict``, whose test and sizing are
+    attributes rather than entries, so every key in it is a real key.
     """
-    count = sum(1 for key in value if not str(key).startswith('__hashmeta__'))
-    test = value.get('__hashmeta__test', 'EQL')
-    return f'#<HASH-TABLE :TEST {test} :COUNT {count}>'
+    test = getattr(value, 'test', 'EQL')
+    return f'#<HASH-TABLE :TEST {test} :COUNT {len(value)}>'
 
 
 def _unreadable(value, kind):
