@@ -377,6 +377,15 @@ def typep(object, type_specifier):
             # Just try the simple type name
             return typep(object, first)
     
+    # A condition class (built-in or DEFINE-CONDITION-created) as a type
+    # specifier: FIND-CLASS returns the raw Python class for one of these,
+    # not a CLOS `LispClass` (see `classes.find_class_fn`), so without this
+    # branch it fell through to the generic "no such class" NIL at the
+    # bottom -- `(typep condition-instance (find-class 'my-condition-type))`
+    # always failed regardless of the actual class relationship.
+    if isinstance(type_specifier, type) and issubclass(type_specifier, lisptype.Condition):
+        return lisptype.lisp_bool(isinstance(object, type_specifier))
+
     # Handle LispClass type specifiers (user-defined classes)
     if isinstance(type_specifier, classes.LispClass):
         # Check if object is an instance of this class
@@ -468,6 +477,15 @@ def typep(object, type_specifier):
         return lisptype.lisp_bool(isinstance(object, lisptype.lispKeyword))
     elif type_name == 'FUNCTION':
         return lisptype.lisp_bool(callable(object))
+    elif type_name == 'GENERIC-FUNCTION':
+        # A DEFINE-CONDITION :READER is marked as a generic function (CLHS
+        # 9.4) at the point it's built -- see evaluation_conditions.py's
+        # `_make_condition_reader` -- because this codebase's CLOS
+        # `GenericFunction` (fclpy/classes.py) is not wired into FUNCALL/APPLY
+        # at all (plan.md Finding L) and so cannot serve as a real accessor.
+        return lisptype.lisp_bool(
+            isinstance(object, classes.GenericFunction)
+            or (callable(object) and getattr(object, '_condition_reader_generic', False)))
     elif type_name == 'STANDARD-OBJECT' or type_name == 'INSTANCE':
         return lisptype.lisp_bool(isinstance(object, classes.LispInstance))
     elif type_name == 'SIMPLE-VECTOR':
@@ -561,9 +579,86 @@ def type_of(object):
         return lisptype.T
 
 
+def _resolve_condition_class(type_spec):
+    """Resolve a SUBTYPEP type designator to a Condition subclass, or None.
+
+    Reuses `_condition_class_for_name` -- the same resolver TYPEP and
+    HANDLER-CASE matching already use (plan.md Finding E: "build the lattice
+    once, use it twice") -- rather than growing SUBTYPEP's separate
+    hardcoded condition-name-pair table (below) as a third, independently
+    drifting copy of the same information. Also accepts a raw Python class
+    directly, since FIND-CLASS now returns one for a condition type name
+    (`classes.find_class_fn`).
+
+    A name may also arrive as a `classes.LispClass` -- the *other* class
+    representation (plan.md Finding L: two CLOS implementations). Bootstrap
+    registers a CLOS `LispClass` named CONDITION in that separate registry, so
+    `(find-class 'condition)` resolves there and returns that object, not
+    `lisptype.Condition`; without unwrapping it by name here, `(subtypep*
+    (find-class 'my-error) (find-class 'condition))` compared a real
+    condition class against an unrelated CLOS placeholder and always said NIL.
+    """
+    if isinstance(type_spec, type) and issubclass(type_spec, lisptype.Condition):
+        return type_spec
+    from fclpy import classes as _classes
+    if isinstance(type_spec, _classes.LispClass):
+        name = type_spec.name.name
+    elif isinstance(type_spec, lisptype.LispSymbol):
+        name = type_spec.name
+    elif isinstance(type_spec, str):
+        name = type_spec
+    else:
+        return None
+    from fclpy.lispfunc.evaluation_conditions import _condition_class_for_name
+    return _condition_class_for_name(name)
+
+
 @_registry.cl_function('SUBTYPEP')
 def subtypep(type1, type2):
-    """Test if type1 is a subtype of type2."""
+    """Test if type1 is a subtype of type2 (CLHS 4.3.4): two values, whether
+    type1 is known to be a subtype and whether that was determined for
+    certain.
+
+    `_subtypep_values` (below) returns a plain Python `(bool, bool)` pair, as
+    it always has; every `return lisptype.X, lisptype.Y` inside it is really
+    building that pair, not two genuine Lisp values -- a bare Python tuple is
+    just one value to MULTIPLE-VALUE-LIST/MULTIPLE-VALUE-BIND, which is why
+    `(multiple-value-list (subtypep 'x 'y))` read back a single value that
+    printed like a vector, `#(T T)`, instead of the two-element list ANSI
+    requires. Wrapping the pair in `lisptype.MultipleValues` once here, at the
+    single boundary between the two, is the fix for every branch inside
+    `_subtypep_values` at once (the same convention FLOOR/CEILING/TRUNCATE use
+    in math_arithmetic.py), rather than rewriting dozens of scattered
+    `return`s to build a `MultipleValues` each.
+    """
+    return lisptype.MultipleValues(*_subtypep_values(type1, type2))
+
+
+def _subtypep_values(type1, type2):
+    """The actual SUBTYPEP dispatch; see `subtypep` above for why this
+    returns a plain `(bool, bool)` pair rather than a `MultipleValues`."""
+    # The condition hierarchy (built-in *and* DEFINE-CONDITION-created types)
+    # is real Python class inheritance, so when either side names one, decide
+    # within that lattice via `issubclass` instead of falling through to the
+    # string-pair table below, which has no entries for a user-defined
+    # condition type and would answer "no relationship" for every one of
+    # them regardless of how it was actually defined (plan.md C14/Finding F:
+    # SUBTYPEP has no general type lattice; this does not attempt to build
+    # one, only to stop the one real lattice this codebase already has --
+    # Python's own class hierarchy for conditions -- from being ignored).
+    cls1 = _resolve_condition_class(type1)
+    cls2 = _resolve_condition_class(type2)
+    if cls1 is not None or cls2 is not None:
+        t2_is_t = (isinstance(type2, lisptype.LispSymbol) and type2.name.upper() == 'T') \
+            or (isinstance(type2, str) and type2.upper() == 'T')
+        if t2_is_t:
+            return lisptype.T, lisptype.T
+        if cls1 is not None and cls2 is not None:
+            return lisptype.lisp_bool(issubclass(cls1, cls2)), lisptype.T
+        # One side is a known condition class and the other is not (and is
+        # not T either), so they are certainly unrelated.
+        return lisptype.NIL, lisptype.T
+
     # Convert to uppercase string names for comparison
     if isinstance(type1, lisptype.LispSymbol):
         t1 = type1.name.upper()
@@ -651,13 +746,10 @@ def subtypep(type1, type2):
     if t1 == 'PACKAGE' and t2 == 'T':
         return lisptype.T, lisptype.T
 
-    # Condition types (simplified hierarchy)
-    if t1 in ['SIMPLE-ERROR', 'TYPE-ERROR', 'ARITHMETIC-ERROR'] and t2 in ['ERROR', 'SERIOUS-CONDITION', 'CONDITION']:
-        return lisptype.T, lisptype.T
-    if t1 == 'ERROR' and t2 in ['SERIOUS-CONDITION', 'CONDITION']:
-        return lisptype.T, lisptype.T
-    if t1 in ['WARNING', 'STYLE-WARNING'] and t2 == 'CONDITION':
-        return lisptype.T, lisptype.T
+    # Condition types are handled above via `_resolve_condition_class`, which
+    # covers every built-in and DEFINE-CONDITION-created type through the same
+    # lattice TYPEP uses -- not just the handful of names this table used to
+    # hardcode (standing rule 3: one implementation, not two that can drift).
 
     # No subtype relationship found
     return lisptype.NIL, lisptype.T

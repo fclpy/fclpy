@@ -345,7 +345,8 @@ def eval(form, env=None):
         eval_restart_case, eval_restart_bind, eval_invoke_restart, eval_abort,
         eval_multiple_value_call, eval_multiple_value_bind, eval_multiple_value_setq,
         eval_multiple_value_prog1,
-        eval_handler_bind, eval_handler_case, eval_ignore_errors
+        eval_handler_bind, eval_handler_case, eval_ignore_errors,
+        eval_define_condition
     )
     
     env = resolve_environment(env)
@@ -1415,39 +1416,7 @@ def eval(form, env=None):
                 # Return the name symbol as specified by ANSI CL
                 return name
             elif operator.name == 'DEFINE-CONDITION':
-                # (DEFINE-CONDITION name parent-types slot-specs &rest options)
-                # Arguments should NOT be evaluated - the name is a symbol
-                args = cdr(form)
-                if args is None or args == lisptype.NIL:
-                    raise lisptype.LispError("DEFINE-CONDITION requires a name")
-                
-                name = car(args)
-                if not isinstance(name, lisptype.LispSymbol):
-                    raise lisptype.LispError("DEFINE-CONDITION: name must be a symbol")
-                
-                # Get parent types and slot specs (unevaluated)
-                rest = cdr(args)
-                parent_types = car(rest) if _consp_internal(rest) else lisptype.NIL
-                rest2 = cdr(rest) if _consp_internal(rest) else lisptype.NIL
-                slot_specs = car(rest2) if _consp_internal(rest2) else lisptype.NIL
-                
-                # Get or create the global conditions storage
-                global_env = env
-                while global_env.parent is not None:
-                    global_env = global_env.parent
-                
-                if not hasattr(global_env, 'conditions'):
-                    global_env.conditions = {}
-                
-                # Store condition definition
-                global_env.conditions[name.name] = {
-                    'name': name,
-                    'parent_types': parent_types,
-                    'slot_specs': slot_specs
-                }
-                
-                # Return the name symbol
-                return name
+                return eval_define_condition(form, env)
             elif operator.name == 'DEFTYPE':
                 # (DEFTYPE name lambda-list &body body)
                 # Arguments should NOT be evaluated - the name is a symbol

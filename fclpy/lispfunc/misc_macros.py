@@ -302,15 +302,19 @@ def describe_object(obj, stream=None):
 
 @_registry.cl_function('PRINT-OBJECT')
 def print_object(obj, stream=None):
-    """Print object to stream.
-    
-    This is the primary interface to the Lisp printer. Users can add methods
-    for their own classes to customize print output.
+    """Print object to stream (CLHS 9.1.3 default method / 22.1.3).
+
+    Actually writes to `stream`, honouring the current *PRINT-ESCAPE* binding
+    -- the previous stub returned `repr(obj)` without touching the stream at
+    all, so `(with-output-to-string (s) (print-object c s))` always captured
+    the empty string regardless of what the object's printed representation
+    was (the same "measurement gate" shape C7 found in front of every
+    `def-print-test`; see plan.md).
     """
-    if stream is None:
-        stream = True  # *standard-output*
-    # Return the string representation
-    return repr(obj) if hasattr(obj, '__repr__') else str(obj)
+    from fclpy.lispfunc.io_write import write_text
+    from fclpy.printer import write_object as _write_object
+    write_text(_write_object(obj), stream)
+    return obj
 
 
 @_registry.cl_function('CONDITION-P')

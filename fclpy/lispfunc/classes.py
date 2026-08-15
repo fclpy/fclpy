@@ -324,13 +324,27 @@ def find_class_fn(name, errorp=True, environment=None):
         name = name.name
     elif not isinstance(name, str):
         raise TypeError(f"Class name must be symbol, got {name}")
-    
+
     cls = classes.find_class(name)
-    if cls is None:
-        if lisptype.is_truthy(errorp):
-            raise NameError(f"Class not found: {name}")
-        return lisptype.NIL
-    return cls
+    if cls is not None:
+        return cls
+
+    # Conditions (built-in or DEFINE-CONDITION-created) are plain Python
+    # classes, not CLOS `LispClass` objects -- see `_condition_class_for_name`
+    # -- so they live outside the `classes.find_class` registry above. Without
+    # this, `(find-class 'my-condition-type)` on any DEFINE-CONDITION type
+    # raised "Class not found" (plan.md X1: a Python exception as a Lisp
+    # value), which is exactly what every DEFINE-CONDITION-generated
+    # IS-SUBCLASS-OF/IS-NOT-SUPERCLASS-OF test calls to get a SUBTYPEP
+    # argument.
+    from fclpy.lispfunc.evaluation_conditions import _condition_class_for_name
+    condition_cls = _condition_class_for_name(name)
+    if condition_cls is not None:
+        return condition_cls
+
+    if lisptype.is_truthy(errorp):
+        raise NameError(f"Class not found: {name}")
+    return lisptype.NIL
 
 
 @_registry.cl_function('INSTANCEP')

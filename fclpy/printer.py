@@ -896,7 +896,9 @@ def _write(value, ctx, depth):
         if ctx.escape:
             type_name = type(value).__name__.upper()
             return f'#<{type_name} {value.message}>'
-        return str(value.message)
+        from fclpy.lispfunc.evaluation_conditions import condition_report_text
+        report = condition_report_text(value)
+        return str(value.message) if report is None else report
 
     from fclpy.classes import LispClass, LispInstance
     if isinstance(value, LispInstance):
@@ -904,6 +906,15 @@ def _write(value, ctx, depth):
             value, _apply_print_case(value.lisp_class.name.name, ctx), ctx)
     if isinstance(value, LispClass):
         return f'#<STANDARD-CLASS {_apply_print_case(value.name.name, ctx)}>'
+
+    if isinstance(value, type) and issubclass(value, lisptype.Condition):
+        # FIND-CLASS returns the raw Python class for a condition type
+        # (built-in or DEFINE-CONDITION-created) rather than a CLOS
+        # `LispClass` -- see `classes.find_class_fn` -- so without this branch
+        # it fell through to the generic `callable(value)` case below and
+        # printed as though it were a function, since classes are callable
+        # too (calling one constructs an instance).
+        return f'#<STANDARD-CLASS {_apply_print_case(value.__name__, ctx)}>'
 
     if callable(value):
         name = getattr(value, '__name__', None) or 'ANONYMOUS'

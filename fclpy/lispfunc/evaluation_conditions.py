@@ -10,10 +10,23 @@ from .evaluation_core import (
 import fclpy.lispfunc as lispfunc
 
 
+# User-defined condition types (CLHS DEFINE-CONDITION), keyed by CL type name
+# (upper-case). Each value is a Python class dynamically created by
+# `eval_define_condition`, subclassing `lisptype.Condition` (or whichever
+# condition classes its :DEFINE-CONDITION parent list named) exactly like the
+# built-in condition classes in lisptype_extended.py -- so TYPEP, SUBTYPEP and
+# HANDLER-BIND/HANDLER-CASE dispatch, which all already work via `isinstance`
+# against that hierarchy, need no separate case for a user-defined type.
+_USER_CONDITION_CLASSES = {}
+
+_MISSING = object()
+
+
 def _condition_class_for_name(name):
     """Map a CL condition type name (e.g. "TYPE-ERROR") to its Python class
-    in lisptype (e.g. lisptype.TypeError), or None if that name does not
-    designate a condition type.
+    in lisptype (e.g. lisptype.TypeError) or `_USER_CONDITION_CLASSES` (e.g. a
+    DEFINE-CONDITION type), or None if that name does not designate a
+    condition type.
 
     The camel-cased lookup is a naming convention over lisptype's namespace,
     which also contains plenty of non-condition classes (`Package`,
@@ -27,7 +40,317 @@ def _condition_class_for_name(name):
     candidate = getattr(lisptype, camel, None)
     if isinstance(candidate, type) and issubclass(candidate, lisptype.Condition):
         return candidate
-    return None
+    return _USER_CONDITION_CLASSES.get(name.upper())
+
+
+def _normalize_initarg(symbol):
+    """The keyword->kwarg-key normalization every MAKE-CONDITION caller uses,
+    so a DEFINE-CONDITION slot's declared :INITARG matches what MAKE-CONDITION
+    builds from the call's keyword arguments."""
+    return symbol.name.lower().replace('-', '_')
+
+
+def _raw_initarg_pairs(arguments):
+    """Normalize an evaluated MAKE-CONDITION argument list into ordered
+    (initarg-key, value) pairs, preserving call order and duplicates.
+
+    Order matters: CLHS 7.1.2 says that when more than one initialization
+    argument in the list is associated with a slot -- whether because the same
+    keyword was repeated or because two different declared :INITARGs for one
+    slot were both supplied -- the *leftmost* one supplied wins. Collapsing
+    into a dict first (as MAKE-CONDITION used to for every condition type)
+    destroys that order and lets Python's last-write-wins rule pick the wrong
+    one, backwards from ANSI's leftmost-wins rule.
+    """
+    it = iter(arguments)
+    for key in it:
+        value = next(it, lisptype.NIL)
+        if isinstance(key, (lisptype.LispSymbol, lisptype.lispKeyword)):
+            yield _normalize_initarg(key), value
+
+
+class _ConditionSlotSpec:
+    """One DEFINE-CONDITION slot: its name and the (unevaluated) forms that
+    fill it in -- the declared :INITARGs, in declaration order, and the
+    :INITFORM, evaluated fresh per MAKE-CONDITION call rather than baked in
+    at DEFINE-CONDITION time (condition-8/condition-20 pin this: their
+    initforms have side effects that must run once per instance, not once
+    ever)."""
+
+    __slots__ = ('name', 'initargs', 'initform')
+
+    def __init__(self, name, initargs, initform):
+        self.name = name
+        self.initargs = initargs
+        self.initform = initform
+
+
+def _lisp_list_items(form):
+    items = []
+    cur = form
+    while _consp_internal(cur):
+        items.append(car(cur))
+        cur = cdr(cur)
+    return items
+
+
+def _parse_condition_slot(spec):
+    """Parse one DEFINE-CONDITION slot-specifier (CLHS 9.4) into a
+    `_ConditionSlotSpec` plus the :READER symbol to register, if any."""
+    if isinstance(spec, lisptype.LispSymbol):
+        return _ConditionSlotSpec(spec.name, [], None), None
+    if not _consp_internal(spec):
+        raise lisptype.LispError(f"DEFINE-CONDITION: invalid slot specifier {spec!r}")
+
+    items = _lisp_list_items(spec)
+    slot_name_sym = items[0]
+    if not isinstance(slot_name_sym, lisptype.LispSymbol):
+        raise lisptype.LispError("DEFINE-CONDITION: slot name must be a symbol")
+
+    initargs = []
+    initform = None
+    reader = None
+    i = 1
+    while i < len(items):
+        key = items[i]
+        value = items[i + 1] if i + 1 < len(items) else lisptype.NIL
+        if isinstance(key, lisptype.lispKeyword):
+            key_name = key.name.upper()
+            if key_name == 'INITARG' and isinstance(value, (lisptype.LispSymbol, lisptype.lispKeyword)):
+                initargs.append(_normalize_initarg(value))
+            elif key_name == 'INITFORM':
+                initform = value
+            elif key_name in ('READER', 'ACCESSOR') and isinstance(value, lisptype.LispSymbol):
+                reader = value
+            # :TYPE, :WRITER, :ALLOCATION, :DOCUMENTATION are accepted but not
+            # modeled -- no measured test needs type checking, a writer, or
+            # per-slot allocation/documentation on a condition slot.
+        i += 2
+    return _ConditionSlotSpec(slot_name_sym.name, initargs, initform), reader
+
+
+def _condition_all_slots(cls):
+    """All slots for `cls`, base classes first so a subclass redefining a
+    same-named slot overrides its ancestor's definition (ordinary CLOS slot
+    inheritance)."""
+    merged = {}
+    for klass in reversed(cls.__mro__):
+        for slot in klass.__dict__.get('_direct_condition_slots', ()):
+            merged[slot.name] = slot
+    return merged
+
+
+def _condition_all_default_initargs(cls):
+    """All :DEFAULT-INITARGS for `cls`, base classes first so a subclass's own
+    :DEFAULT-INITARGS overrides its ancestor's for the same initarg."""
+    merged = {}
+    for klass in reversed(cls.__mro__):
+        merged.update(klass.__dict__.get('_direct_default_initargs', {}))
+    return merged
+
+
+def _condition_instance_init(self, _raw_initargs=()):
+    """The shared `__init__` for every DEFINE-CONDITION-created class.
+
+    One implementation for every user-defined condition type, rather than one
+    generated per class, because the slot-filling algorithm (leftmost-supplied
+    initarg wins, then :DEFAULT-INITARGS, then :INITFORM) does not depend on
+    which class is being built -- only on that class's merged slot/default
+    table, which `_condition_all_slots`/`_condition_all_default_initargs`
+    compute from `type(self)`.
+    """
+    lisptype.Condition.__init__(self)
+    cls = type(self)
+    env = state.current_environment
+
+    ordered = list(_raw_initarg_pairs(_raw_initargs))
+    supplied_keys = {key for key, _ in ordered}
+
+    from .evaluation_core import eval as _eval
+
+    # :DEFAULT-INITARGS only supplies a value for an initarg genuinely absent
+    # from the call -- evaluated lazily so a side-effecting default form (as
+    # in condition-20) does not run when its initarg was actually supplied.
+    for key, form in _condition_all_default_initargs(cls).items():
+        if key not in supplied_keys:
+            ordered.append((key, _eval(form, env)))
+
+    for slot_name, spec in _condition_all_slots(cls).items():
+        value = _MISSING
+        for key, val in ordered:
+            if key in spec.initargs:
+                value = val
+                break
+        if value is _MISSING and spec.initform is not None:
+            value = _eval(spec.initform, env)
+        if value is not _MISSING:
+            self._slots[slot_name] = value
+
+
+def _make_condition_reader(slot_name):
+    """Build the accessor a DEFINE-CONDITION :READER registers.
+
+    Keyed purely by slot name, not by condition class: CLHS lets two unrelated
+    condition types declare the same :READER name for their own same-named
+    slot (condition-27a/condition-27b both do, on purpose, to test that the
+    reader behaves like a generic function), and since every condition stores
+    its slots the same way (`Condition._slots`), one reader per name already
+    reads the right slot for whichever condition instance it is handed --
+    no per-class method table is needed to get that right.
+
+    Marked with `_condition_reader_generic` so TYPEP can answer
+    `(typep #'reader 'generic-function)` truthfully (CLHS 9.4: a :READER
+    defines an ordinary generic function) without this codebase's separate
+    CLOS `GenericFunction`, which is not wired into FUNCALL/APPLY at all
+    (plan.md Finding L) and would need to be to serve as a real accessor here.
+    """
+    def reader(condition):
+        if not isinstance(condition, lisptype.Condition):
+            raise lisptype.LispTypeError(
+                f"{slot_name}: not a condition: {condition!r}",
+                expected_type='condition', actual_value=condition)
+        value = condition.get_slot(slot_name)
+        return value if value is not None else lisptype.NIL
+    reader._condition_reader_generic = True
+    reader.__name__ = slot_name
+    return reader
+
+
+def eval_define_condition(form, env):
+    """Evaluate DEFINE-CONDITION (CLHS 9.4).
+
+    DEFINE-CONDITION used to record its name/parents/slots in a dict that
+    nothing else ever read, so `(make-condition 'my-error ...)` always failed
+    with "does not designate a known condition type" and every condition-type
+    name it introduced was invisible to TYPEP/SUBTYPEP/HANDLER-CASE (plan.md
+    C9, "DEFINE-CONDITION creates no class"). This builds a real Python class,
+    a peer of the built-in ones in lisptype_extended.py, so every consumer of
+    `_condition_class_for_name` (TYPEP, SUBTYPEP, HANDLER-CASE's matching,
+    MAKE-CONDITION) picks it up through the one mechanism instead of a second
+    one carved out for user-defined types.
+    """
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispError("DEFINE-CONDITION requires a name")
+    name = car(args)
+    if not isinstance(name, lisptype.LispSymbol):
+        raise lisptype.LispError("DEFINE-CONDITION: name must be a symbol")
+
+    rest = cdr(args)
+    parent_form = car(rest) if _consp_internal(rest) else lisptype.NIL
+    rest2 = cdr(rest) if _consp_internal(rest) else lisptype.NIL
+    slots_form = car(rest2) if _consp_internal(rest2) else lisptype.NIL
+    option_forms = cdr(rest2) if _consp_internal(rest2) else lisptype.NIL
+
+    parent_classes = []
+    for pname in _lisp_list_items(parent_form):
+        if not isinstance(pname, lisptype.LispSymbol):
+            raise lisptype.LispError("DEFINE-CONDITION: parent type must be a symbol")
+        pcls = _condition_class_for_name(pname.name)
+        if pcls is None:
+            raise lisptype.LispError(
+                f"DEFINE-CONDITION: {pname.name} does not name a known condition type")
+        parent_classes.append(pcls)
+    if not parent_classes:
+        parent_classes = [lisptype.Condition]
+
+    slot_specs = []
+    readers = []
+    for slot_form in _lisp_list_items(slots_form):
+        spec, reader_sym = _parse_condition_slot(slot_form)
+        slot_specs.append(spec)
+        if reader_sym is not None:
+            readers.append((spec.name, reader_sym))
+
+    report_spec = None
+    default_initargs = {}
+    documentation = None
+    for opt_form in _lisp_list_items(option_forms):
+        if not _consp_internal(opt_form):
+            continue
+        opt_items = _lisp_list_items(opt_form)
+        opt_key = opt_items[0]
+        if not isinstance(opt_key, lisptype.lispKeyword):
+            continue
+        opt_name = opt_key.name.upper()
+        if opt_name == 'REPORT':
+            report_value = opt_items[1] if len(opt_items) > 1 else lisptype.NIL
+            if isinstance(report_value, (str, lisptype.LispString)):
+                report_spec = ('string', str(report_value))
+            elif isinstance(report_value, lisptype.LispSymbol):
+                report_spec = ('function', report_value)
+            elif _consp_internal(report_value):
+                from .evaluation_core import eval as _eval
+                report_spec = ('function', _eval(report_value, env))
+            else:
+                raise lisptype.LispError(
+                    f"DEFINE-CONDITION: unsupported :REPORT value {report_value!r}")
+        elif opt_name == 'DEFAULT-INITARGS':
+            pairs = opt_items[1:]
+            i = 0
+            while i < len(pairs):
+                key = pairs[i]
+                value_form = pairs[i + 1] if i + 1 < len(pairs) else lisptype.NIL
+                if isinstance(key, (lisptype.LispSymbol, lisptype.lispKeyword)):
+                    default_initargs.setdefault(_normalize_initarg(key), value_form)
+                i += 2
+        elif opt_name == 'DOCUMENTATION':
+            doc_value = opt_items[1] if len(opt_items) > 1 else None
+            if isinstance(doc_value, (str, lisptype.LispString)):
+                documentation = str(doc_value)
+        # :WRITER and other slot-option-like clauses at the option level are
+        # not part of CLHS 9.4 and are ignored, matching DEFINE-CONDITION's
+        # existing tolerance of unrecognized options.
+
+    class_dict = {
+        '__init__': _condition_instance_init,
+        '_direct_condition_slots': tuple(slot_specs),
+        '_direct_default_initargs': default_initargs,
+        '__doc__': documentation,
+    }
+    # Only set _report_spec when this class declares its own :REPORT --
+    # leaving it unset lets a subclass with no :REPORT of its own inherit its
+    # nearest ancestor's through ordinary Python attribute/MRO lookup, the
+    # same inheritance CLOS gives PRINT-OBJECT methods.
+    if report_spec is not None:
+        class_dict['_report_spec'] = report_spec
+
+    new_cls = type(name.name, tuple(parent_classes), class_dict)
+    _USER_CONDITION_CLASSES[name.name.upper()] = new_cls
+
+    global_env = env
+    while global_env.parent is not None:
+        global_env = global_env.parent
+    for slot_name, reader_sym in readers:
+        global_env.add_function(reader_sym, _make_condition_reader(slot_name))
+
+    return name
+
+
+def condition_report_text(condition):
+    """Render a condition's :REPORT (CLHS 9.1.3), or None if it (and none of
+    its ancestors) declared one -- the caller then falls back to the
+    condition's plain message.
+
+    A string :REPORT is used verbatim; a function (or lambda) :REPORT is
+    called as `(report condition stream)`, exactly as CLHS specifies, using a
+    real string-output stream so a report that calls FORMAT/WRITE-STRING on
+    its stream argument (as condition-17/condition-18's do) writes into
+    something this can read back, rather than a plain string the report
+    function has no stream protocol to write through.
+    """
+    spec = getattr(type(condition), '_report_spec', None)
+    if spec is None:
+        return None
+    kind, payload = spec
+    if kind == 'string':
+        return payload
+    from .evaluation_core import coerce_to_function
+    from .streams import StringOutputStream
+    fn = coerce_to_function(payload, 'PRINT-OBJECT')
+    stream = StringOutputStream()
+    fn(condition, stream)
+    return stream.peek_string()
 
 
 def make_condition_of_type(type_designator, arguments):
@@ -49,12 +372,19 @@ def make_condition_of_type(type_designator, arguments):
     if condition_class is None:
         return None
 
+    if '_direct_condition_slots' in condition_class.__dict__ or any(
+            '_direct_condition_slots' in base.__dict__ for base in condition_class.__mro__):
+        # A DEFINE-CONDITION-created class: build it from the raw ordered
+        # arguments so duplicate/aliased initargs resolve leftmost-first
+        # (CLHS 7.1.2), not last-write-wins as a Python dict would.
+        return _apply_report(condition_class(_raw_initargs=arguments))
+
     kwargs = {}
-    it = iter(arguments)
-    for key in it:
-        value = next(it, lisptype.NIL)
-        if isinstance(key, (lisptype.LispSymbol, lisptype.lispKeyword)):
-            kwargs[key.name.lower().replace('-', '_')] = value
+    for key, value in _raw_initarg_pairs(arguments):
+        # Leftmost occurrence wins here too (CLHS 7.1.2): a built-in
+        # condition class's __init__ takes named Python parameters, so a
+        # repeated keyword can only pick one value to pass through.
+        kwargs.setdefault(key, value)
     return _apply_report(condition_class(**kwargs))
 
 
@@ -307,13 +637,12 @@ def build_condition(datum, arguments, default_class):
         # init-args -- not the bare type-name symbol itself.
         return built
 
-    # An unrecognized designator: most often a symbol naming a condition type
-    # that DEFINE-CONDITION accepted but never actually created a class for
-    # (plan.md Finding E, still open -- M8's DEFINE-CONDITION work). Degrading
-    # to `default_class` keeps the "a signaled condition is always a real
-    # condition object" invariant, and keeps the severity right: such a datum
-    # used to become a generic ERROR regardless of which operator signaled it,
-    # so (signal 'undefined-type) was catchable as an ERROR.
+    # An unrecognized designator: a symbol naming neither a built-in nor a
+    # DEFINE-CONDITION-created type. Degrading to `default_class` keeps the
+    # "a signaled condition is always a real condition object" invariant, and
+    # keeps the severity right: such a datum used to become a generic ERROR
+    # regardless of which operator signaled it, so (signal 'undefined-type)
+    # was catchable as an ERROR.
     return default_class(format_control=str(datum), format_arguments=list(arguments))
 
 
@@ -1113,6 +1442,7 @@ def eval_ignore_errors(form, env):
 
 
 __all__ = [
+    'eval_define_condition',
     'eval_signal',
     'eval_error',
     'eval_cerror',
