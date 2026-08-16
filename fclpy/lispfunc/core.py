@@ -4,24 +4,63 @@ import fclpy.lisptype as lisptype
 from . import registry as _registry
 
 
+def _null_internal(obj):
+    """True for every representation of NIL.
+
+    NIL is spelled three ways here (CLAUDE.md): Python `None`, the
+    `lisptype.NIL` singleton, and a `LispSymbol` named "NIL" interned in some
+    package.  Code that tests only one of them answers "not NIL" for the other
+    two, so the question has one home.
+    """
+    return (obj is None
+            or obj is lisptype.NIL
+            or (type(obj) is lisptype.LispSymbol and obj.name == 'NIL'))
+
+
+def _listp_internal(obj):
+    """True if `obj` is a Lisp *list* -- a cons or NIL (CLHS 14.1).
+
+    This is the type CAR/CDR accept, the type LISTP answers for, and the type
+    `(typep x 'list)` denotes.  All three must agree: ansi-test's
+    `(check-type-error #'car #'listp)` calls CAR on every object in the
+    universe that fails LISTP and requires a TYPE-ERROR from each, so a CAR
+    that accepts something LISTP rejects is directly observable.
+    """
+    return type(obj) is lisptype.lispCons or _null_internal(obj)
+
+
+def _not_a_list(operator, seq):
+    """The TYPE-ERROR CAR/CDR owe for a non-list argument (CLHS 14.2)."""
+    return lisptype.LispTypeError(
+        f"{operator}: {type(seq).__name__} is not a list",
+        expected_type="LIST", actual_value=seq)
+
+
 @_registry.cl_function('CAR')
 def car(seq):
-    """Get the first element of a cons cell or sequence."""
+    """The car of a list: its first element, or NIL for the empty list.
+
+    CLHS 14.2 requires the argument to be a *list*; anything else is a
+    TYPE-ERROR.  This used to `return seq` for every other object, so
+    `(car 'a)` answered `A` and `(car "ab")` answered `"ab"` -- a silent wrong
+    answer (standing rule 4) that also propagated into all 28 compound
+    accessors below, since each is a composition of this function.
+    """
     if type(seq) is lisptype.lispCons:
         return seq.car
-    if type(seq) is tuple:
-        return seq[0]
-    return seq
+    if _null_internal(seq):
+        return lisptype.NIL
+    raise _not_a_list('CAR', seq)
 
 
 @_registry.cl_function('CDR')
 def cdr(seq):
-    """Get the rest of a cons cell or sequence."""
+    """The cdr of a list: the rest of it, or NIL for the empty list."""
     if type(seq) is lisptype.lispCons:
         return seq.cdr
-    if type(seq) is tuple:
-        return seq[1:]
-    return seq
+    if _null_internal(seq):
+        return lisptype.NIL
+    raise _not_a_list('CDR', seq)
 
 
 @_registry.cl_function('CONS')
@@ -60,7 +99,7 @@ def acons(x, v, seq):
 @_registry.cl_function('LISTP')
 def listp(obj):
     """Test if object is a list (either nil or a cons cell)."""
-    return lisptype.lisp_bool(obj is lisptype.NIL or type(obj) is lisptype.lispCons)
+    return lisptype.lisp_bool(_listp_internal(obj))
 
 
 @_registry.cl_function('SYMBOLP')
