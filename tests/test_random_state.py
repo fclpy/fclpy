@@ -1,11 +1,27 @@
 """Tests for random state support (Phase 8 Task 5)."""
 
 import pytest
+from fclpy import lispenv
+import fclpy.lisptype as lisptype
 from fclpy.lisptype import T, NIL
 from fclpy.lispfunc.utilities_system import (
     random, make_random_state, random_state_p, RandomState,
-    get_random_state, set_random_state
+    current_random_state
 )
+
+
+@pytest.fixture(autouse=True)
+def standard_environment():
+    """Bootstrap the standard environment before each test in this file.
+
+    `RANDOM`/`MAKE-RANDOM-STATE` resolve `*RANDOM-STATE*` through the live
+    environment (see `current_random_state`), the same as any other special
+    variable read through `evaluation_core.eval` -- so, like
+    `test_printer.py`'s `standard_packages` fixture, this must run before a
+    bare call into those functions or there is no `*RANDOM-STATE*` binding
+    for them to find.
+    """
+    lispenv.setup_standard_environment()
 
 
 class TestRandomState:
@@ -138,36 +154,46 @@ class TestRandomStateP:
 
 
 class TestGlobalRandomState:
-    """Test global random state management."""
-    
-    def test_get_random_state(self):
-        """get_random_state returns a RandomState."""
-        rs = get_random_state()
+    """Test *RANDOM-STATE* as the live Lisp special variable it now is.
+
+    `RANDOM`/`MAKE-RANDOM-STATE` used to read a private Python module
+    global that a Lisp `(setq *random-state* ...)` could never reach --
+    the same defect class already fixed for `*PRINT-BASE*` and friends
+    (see `printer.resolve_control`). The fix is that `*RANDOM-STATE*` is a
+    real binding in the global environment, so it is set through
+    `state.current_environment` exactly like any other special variable,
+    not through a setter function.
+    """
+
+    def test_current_random_state(self):
+        """current_random_state() returns the live *RANDOM-STATE* binding."""
+        rs = current_random_state()
         assert isinstance(rs, RandomState)
-        
-    def test_set_random_state(self):
-        """set_random_state changes the global state."""
-        original = get_random_state()
+
+    def test_setting_the_variable_changes_the_state(self):
+        """Assigning the environment binding changes what RANDOM/MAKE-RANDOM-STATE see."""
+        import fclpy.state as state
+        symbol = lisptype.COMMON_LISP_PACKAGE.intern_symbol('*RANDOM-STATE*')
+        original = current_random_state()
         try:
             new_rs = RandomState(999)
-            set_random_state(new_rs)
-            assert get_random_state() is new_rs
+            state.current_environment.set_variable(symbol, new_rs)
+            assert current_random_state() is new_rs
         finally:
-            # Restore original
-            set_random_state(original)
-            
+            state.current_environment.set_variable(symbol, original)
+
     def test_set_random_state_affects_random(self):
-        """Setting global state affects RANDOM calls."""
-        original = get_random_state()
+        """Rebinding *RANDOM-STATE* affects RANDOM calls with no explicit state."""
+        import fclpy.state as state
+        symbol = lisptype.COMMON_LISP_PACKAGE.intern_symbol('*RANDOM-STATE*')
+        original = current_random_state()
         try:
-            rs = RandomState(42)
-            set_random_state(rs)
+            state.current_environment.set_variable(symbol, RandomState(42))
             val1 = random(1000)
-            
-            rs = RandomState(42)
-            set_random_state(rs)
+
+            state.current_environment.set_variable(symbol, RandomState(42))
             val2 = random(1000)
-            
+
             assert val1 == val2  # Same seed produces same result
         finally:
-            set_random_state(original)
+            state.current_environment.set_variable(symbol, original)

@@ -196,24 +196,52 @@ class RandomState:
         return "#<RANDOM-STATE>"
 
 
-# Global default random state
-_DEFAULT_RANDOM_STATE = RandomState()
+def _random_state_symbol():
+    return lisptype.COMMON_LISP_PACKAGE.intern_symbol('*RANDOM-STATE*')
+
+
+def current_random_state():
+    """Read the live value of `*RANDOM-STATE*` (CLHS 12.1.4.3, 25.1.1).
+
+    Mirrors `printer.resolve_control`'s resolution order -- lexical/dynamic
+    binding in the current environment chain, then the symbol's value cell
+    -- for the same reason that fix was needed: a private Python module
+    global is invisible to a Lisp `(let ((*random-state* ...)) ...)` or
+    `(setq *random-state* ...)`, which is exactly what `RANDOM` and
+    `MAKE-RANDOM-STATE` need to see. `*RANDOM-STATE*` is bound to a real
+    `RandomState` at bootstrap (`lispenv.py`), so this should always find
+    one; a missing binding is a bootstrap defect, not routine unbound-ness,
+    hence the `PROGRAM-ERROR` rather than a silent fallback that would mask it.
+    """
+    import fclpy.state as state
+
+    symbol = _random_state_symbol()
+    env = getattr(state, 'current_environment', None)
+    if env is not None and env.has_variable(symbol):
+        value = env.find_variable(symbol)
+        if isinstance(value, RandomState):
+            return value
+    value = getattr(symbol, 'value', None)
+    if isinstance(value, RandomState):
+        return value
+    raise lisptype.LispProgramError(
+        "*RANDOM-STATE* is not bound to a RANDOM-STATE object")
 
 
 @_registry.cl_function('RANDOM')
 def random(limit, state=None):
     """Generate random number up to limit.
-    
+
     Args:
         limit: Upper bound (exclusive). Must be positive integer or float.
         state: Optional random state to use. If None, uses *RANDOM-STATE*.
-    
+
     Returns:
         Random integer in [0, limit) if limit is integer.
         Random float in [0.0, limit) if limit is float.
     """
-    rs = state if isinstance(state, RandomState) else _DEFAULT_RANDOM_STATE
-    
+    rs = state if isinstance(state, RandomState) else current_random_state()
+
     if isinstance(limit, int):
         if limit <= 0:
             raise lisptype.LispError("RANDOM: limit must be positive")
@@ -229,19 +257,19 @@ def random(limit, state=None):
 @_registry.cl_function('MAKE-RANDOM-STATE')
 def make_random_state(state=None):
     """Make random state object.
-    
+
     Args:
         state: Controls how to initialize:
             - NIL or omitted: Copy current *RANDOM-STATE*
             - T: Create fresh state from entropy
             - RandomState: Copy that state
-    
+
     Returns:
         A new RandomState object.
     """
     if state is None or state is lisptype.NIL:
         # Copy the default random state
-        return RandomState(_DEFAULT_RANDOM_STATE)
+        return RandomState(current_random_state())
     elif state is True or state is lisptype.T:
         # Create a truly random new state
         return RandomState(True)
@@ -249,27 +277,20 @@ def make_random_state(state=None):
         # Copy the provided state
         return RandomState(state)
     else:
-        raise lisptype.LispError("MAKE-RANDOM-STATE: invalid state argument")
+        # CLHS: an unrecognized state designator is a TYPE-ERROR, not a
+        # generic error condition -- MAKE-RANDOM-STATE.ERROR.4 probes this
+        # with `check-type-error`, which requires the condition signaled to
+        # actually be a TYPE-ERROR.
+        raise lisptype.LispTypeError(
+            f"MAKE-RANDOM-STATE: invalid state argument: {state}",
+            expected_type="(OR (MEMBER NIL T) RANDOM-STATE)",
+            actual_value=state)
 
 
 @_registry.cl_function('RANDOM-STATE-P')
 def random_state_p(object):
     """Test if object is random state."""
     return lisptype.lisp_bool(isinstance(object, RandomState))
-
-
-def get_random_state():
-    """Get the current *RANDOM-STATE* value."""
-    return _DEFAULT_RANDOM_STATE
-
-
-def set_random_state(state):
-    """Set the *RANDOM-STATE* value."""
-    global _DEFAULT_RANDOM_STATE
-    if isinstance(state, RandomState):
-        _DEFAULT_RANDOM_STATE = state
-    else:
-        raise lisptype.LispError("*RANDOM-STATE* must be a RandomState object")
 
 
 __all__ = [
@@ -294,6 +315,5 @@ __all__ = [
     'make_random_state',
     'random_state_p',
     'RandomState',
-    'get_random_state',
-    'set_random_state',
+    'current_random_state',
 ]

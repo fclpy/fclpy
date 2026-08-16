@@ -486,7 +486,13 @@ def typep(object, type_specifier):
     elif type_name == 'BIGNUM':
         # Bignum: integers outside fixnum range
         return lisptype.lisp_bool(isinstance(object, int) and (object < FIXNUM_MIN or object > FIXNUM_MAX))
-    elif type_name == 'FLOAT' or type_name == 'SINGLE-FLOAT' or type_name == 'DOUBLE-FLOAT':
+    elif type_name in ('FLOAT', 'SHORT-FLOAT', 'SINGLE-FLOAT', 'DOUBLE-FLOAT', 'LONG-FLOAT'):
+        # Every CL float subtype is the same Python `float` here (no distinct
+        # short/single/double/long representations), same as the compound
+        # `(single-float ...)`/`(short-float ...)` branch above -- this is
+        # that branch's atomic-specifier twin and must agree with it, or
+        # `(typep x 'short-float)` and `(typep x '(short-float * *))` answer
+        # differently for the same `x`.
         return lisptype.lisp_bool(isinstance(object, float))
     elif type_name == 'COMPLEX':
         return lisptype.lisp_bool(isinstance(object, complex))
@@ -538,6 +544,9 @@ def typep(object, type_specifier):
         return lisptype.lisp_bool(is_sequence(object))
     elif type_name == 'HASH-TABLE':
         return lisptype.lisp_bool(isinstance(object, dict))
+    elif type_name == 'RANDOM-STATE':
+        from .utilities_system import RandomState
+        return lisptype.lisp_bool(isinstance(object, RandomState))
     elif type_name == 'BOOLEAN':
         # In Common Lisp, BOOLEAN is equivalent to (OR NULL (EQL T))
         # i.e., only NIL and T are booleans

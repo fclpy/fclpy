@@ -120,18 +120,28 @@ class TestNumeratorDenominator:
 
 
 class TestRationalConstructor:
-    """Test rational number constructor."""
-    
-    def test_create_fraction(self):
-        """Create fraction from numerator and denominator."""
-        r = rational(3, 4)
-        assert r == Fraction(3, 4)
-        
-    def test_fraction_auto_reduced(self):
-        """Fractions are automatically reduced."""
-        r = rational(6, 8)
-        assert r == Fraction(3, 4)
-        
+    """Test the RATIONAL function (CLHS 12.1.1.2: takes exactly one argument
+    -- there is no numerator/denominator constructor; that is `/`, a
+    different function)."""
+
+    def test_rational_of_integer_is_itself(self):
+        """RATIONAL of an already-rational integer returns it unchanged."""
+        assert rational(3) == 3
+
+    def test_rational_of_float_is_exact(self):
+        """RATIONAL of a float is its exact binary value, collapsed to an
+        integer when that value has no fractional part (CLHS 12.1.1.2:
+        a rational with denominator 1 is an integer, not a ratio)."""
+        assert rational(0.5) == Fraction(1, 2)
+        assert rational(4.0) == 4
+        assert isinstance(rational(4.0), int)
+
+    def test_rational_rejects_extra_argument(self):
+        """RATIONAL takes one argument; a second is a PROGRAM-ERROR
+        (arity), not a numerator/denominator pair."""
+        with pytest.raises(TypeError):
+            rational(3, 4)
+
     def test_rationalize(self):
         """Rationalize a float."""
         r = rationalize(0.5)

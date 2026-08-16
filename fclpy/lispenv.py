@@ -290,7 +290,16 @@ def setup_standard_environment():
             def __repr__(self):
                 return "#<PPRINT-DISPATCH-TABLE>"
         state.current_environment.add_variable(pprint_dispatch_sym, PprintDispatchTable())
-        
+
+    # *RANDOM-STATE* - proclaimed special above, but proclamation alone
+    # leaves the value cell empty; RANDOM/MAKE-RANDOM-STATE read it through
+    # fclpy.lispfunc.utilities_system.current_random_state(), which raises
+    # rather than silently defaulting if this binding is ever missing.
+    random_state_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*RANDOM-STATE*')
+    if state.current_environment.find_variable(random_state_sym) is None:
+        from fclpy.lispfunc.utilities_system import RandomState
+        state.current_environment.add_variable(random_state_sym, RandomState())
+
     # === Numeric Constants (ANSI CL required) ===
     # These constants must be in COMMON_LISP_PACKAGE and exported so all
     # packages that use CL can access them (including test code).

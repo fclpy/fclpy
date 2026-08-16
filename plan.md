@@ -1018,10 +1018,28 @@ overwritten by each full run and no 08-15 snapshot was saved.
 
 **`types-and-classes` at −14.1 points is the largest single regression and is
 not yet in this table**, because it is a *rate* change spread across files
-rather than a per-file count. Diagnose it before the next mechanism: the
-hypothesis is that the `unless` repair made previously-skipped assertions run
-and fail honestly, in which case the correct action is to accept it in writing
-here, not to "fix" it.
+rather than a per-file count. **Diagnosed 2026-08-16 (confirms the
+hypothesis): this is the `unless` repair making previously-vacuous assertions
+run and fail honestly, not new breakage.** Every one of the large SUBTYPEP
+regressions (`subtypep-member.lsp` +32, `subtypep-real.lsp` +19,
+`subtypep-cons.lsp` +15, `subtypep-rational.lsp` +12, `subtypep-eql.lsp` +5,
+`subtypep.lsp` +1) is a `(loop ... unless (equal (subtypep* ...) '(t t))
+collect ...)` or `check-equivalence` form: before the `unless` fix, the
+`SUBTYPEP*` call inside the loop's test was never evaluated, so the loop
+always collected `NIL` regardless of what `SUBTYPEP` actually returned —
+`subtypep-real.lsp`'s `SUBTYPEP.REAL.1` alone drives 121 `SUBTYPEP*` pairs
+that all silently passed. Once `unless` evaluates its test, the pairs are
+genuinely checked against [C14](#tier-2--subsystem-gaps)'s known-absent type
+lattice (`SUBTYPEP` is a string-pair table with no interval/lattice logic for
+bounded `(real lo hi)`/`(integer lo hi)`/`(rational lo hi)` types), and fail
+honestly. **Action per this section's own rule: accept this in writing rather
+than "fixing" it here** — the correct fix is C14's type lattice (owned by M9),
+not a patch local to this regression. `types-and-classes/subtypep-array.lsp`
+(−8) and `coerce.lsp` (−7) improving in the same run corroborate the
+diagnosis: `coerce.lsp` exercises the same numeric-tower functions as the
+2026-08-16(b) fixes below, so the same `unless` mechanism cuts both ways —
+honest failures where the lattice is missing, honest passes where the
+underlying operator was already correct.
 
 **Process lesson, unchanged from 08-15 and now more expensive:** a mechanism
 change should be measured against the run before it, which requires saving that

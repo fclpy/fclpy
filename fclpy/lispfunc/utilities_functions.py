@@ -1,6 +1,7 @@
 """Function binding, definition, and macro operations."""
 
 import inspect
+from fractions import Fraction
 import fclpy.lisptype as lisptype
 import fclpy.state as state
 from fclpy.lispfunc import registry as _registry
@@ -479,7 +480,27 @@ def coerce(object, result_type):
     # Normalize type name to uppercase string
     if isinstance(type_name, str):
         type_name = type_name.upper()
-    
+
+    # Compound COMPLEX, e.g. `(complex short-float)`: a list, so `type_name`
+    # above never matches it by name and it fell all the way through to the
+    # "unsupported result type" error. The component type isn't tracked
+    # separately here -- there is one Python `complex` behind every CL
+    # complex subtype, the same simplification `comparison.py` documents for
+    # the four CL float subtypes sharing one Python `float` -- so building it
+    # is the plain COMPLEX branch below, just also reached from a list head.
+    if _consp_internal(result_type):
+        head = car(result_type)
+        head_name = head.name.upper() if hasattr(head, 'name') else str(head).upper()
+        if head_name == 'COMPLEX':
+            if isinstance(object, complex):
+                return object
+            elif isinstance(object, (int, float, Fraction)):
+                return complex(object, 0)
+            else:
+                raise lisptype.LispTypeError(f"COERCE: cannot convert to COMPLEX",
+                                            expected_type=result_type,
+                                            actual_value=object)
+
     # T - identity coercion (always works)
     if type_name == 'T':
         return object
@@ -542,6 +563,16 @@ def coerce(object, result_type):
                                         expected_type="FUNCTION",
                                         actual_value=object)
     
+    # CLHS `coerce`: "if OBJECT is already of the given type, ... coerce
+    # simply returns it." That is a general rule, not a per-type branch --
+    # it is what makes `(coerce 2000 'integer)` and `(coerce 1/2 'rational)`
+    # work without INTEGER/RATIONAL/RATIO/REAL/NUMBER each needing their own
+    # copy of "return the object", so it belongs as the fallback here
+    # instead of one more `if type_name == ...` above.
+    from .comparison import typep
+    if typep(object, result_type) == lisptype.T:
+        return object
+
     # If we get here, the type is not supported
     raise lisptype.LispTypeError(f"COERCE: unsupported result type {result_type}",
                                 expected_type="LIST, VECTOR, STRING, CHARACTER, FLOAT, COMPLEX, FUNCTION, or T",

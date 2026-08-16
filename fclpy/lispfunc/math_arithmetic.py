@@ -67,34 +67,91 @@ def abs_fn(x):
     return abs(_ensure_number(x, 'ABS'))
 
 
+def _ensure_integer(x, func_name):
+    if isinstance(x, bool) or not isinstance(x, int):
+        raise lisptype.LispTypeError(
+            f"{func_name}: {x!r} is not an INTEGER",
+            expected_type="INTEGER", actual_value=x)
+    return x
+
+
+def _ensure_integers(integers, func_name):
+    for x in integers:
+        _ensure_integer(x, func_name)
+
+
 @_registry.cl_function('GCD')
 def gcd(*integers):
-    """Greatest common divisor."""
-    if not integers:
-        return 0
-    return functools.reduce(math.gcd, integers)
+    """Greatest common divisor.
+
+    `math.gcd` (3.9+) already implements CLHS's `(gcd)` => 0, `(gcd i)` =>
+    `(abs i)`, and `(gcd ... 0 ...)` correctly for any number of arguments,
+    so reducing over it by hand was a second, incomplete copy: `reduce`
+    over a single argument returns that argument unchanged rather than its
+    absolute value, which `math.gcd(*integers)` does not get wrong.
+    """
+    _ensure_integers(integers, 'GCD')
+    return math.gcd(*integers)
 
 
 @_registry.cl_function('LCM')
 def lcm(*integers):
-    """Least common multiple."""
-    if not integers:
-        return 1
-    def lcm2(a, b):
-        return abs(a * b) // math.gcd(a, b)
-    return functools.reduce(lcm2, integers)
+    """Least common multiple.
+
+    Same reasoning as GCD: `math.lcm` (3.9+) already returns 0 for any
+    zero argument and `(abs i)` for a single argument, both of which the
+    hand-rolled `abs(a*b) // gcd(a, b)` reduction got wrong -- `gcd(0, 0)
+    == 0` made folding in a literal 0 a `ZeroDivisionError` (LCM.9-12), and
+    reducing over one argument returned it unmodified instead of its
+    absolute value (LCM.2/LCM.3).
+    """
+    _ensure_integers(integers, 'LCM')
+    return math.lcm(*integers)
+
+
+def _extremum(args, func_name, better):
+    """Shared MIN/MAX body (CLHS 12.1.4.1).
+
+    Both take `&rest number+` -- at least one argument is required, so a
+    zero-arg call is a PROGRAM-ERROR, and Python's `min()`/`max()` raising
+    `ValueError: ... empty sequence` for that case was exactly X1's shape
+    (a Python exception standing in for the condition). Every argument must
+    be REAL, not just comparable in Python.
+
+    The comparisons are exact (CLHS 12.1.4.1's contagion applies to
+    *arithmetic* functions; MIN/MAX just pick the winning argument), and the
+    winner is returned unmodified -- coercing a rational winner to float
+    whenever a float happened to also be present looked like the ANSI
+    "float contagion" rule but is actively wrong: MIN.2 compares a
+    near-2**63 exact integer against a MOST-POSITIVE-SINGLE-FLOAT and the
+    integer wins, and `float()` of that integer is *not* the same number
+    (`9223372036854775802` rounds to `9223372036854775808.0`), so contagion
+    silently corrupted the very comparison MIN.2 checks. `(min 1/3 0.8s0)`
+    accepts either `1/3` or its float image (MIN.28 asserts an `or` of the
+    two), so nothing requires the coercion in the first place.
+    """
+    if not args:
+        raise lisptype.LispProgramError(
+            f"{func_name}: requires at least 1 argument")
+    for arg in args:
+        _ensure_real(arg, func_name)
+    winner = args[0]
+    for arg in args[1:]:
+        if better(arg, winner):
+            winner = arg
+    return winner
 
 
 @_registry.cl_function('MAX')
 def max_fn(*args):
     """Maximum of numbers."""
-    return max(args)
+    return _extremum(args, 'MAX', lambda a, b: a > b)
 
 
 @_registry.cl_function('MIN')
 def min_fn(*args):
     """Minimum of numbers."""
-    return min(args)
+    return _extremum(args, 'MIN', lambda a, b: a < b)
 
 
 @_registry.cl_function('SIGNUM')
@@ -277,37 +334,55 @@ def denominator(rational):
     return 1  # For integers, denominator is 1
 
 
-@_registry.cl_function('RATIONAL')
-def rational(number, denominator=None):
-    """Convert a real number to a rational, or create a fraction from numerator/denominator.
-    
-    With one argument:
-        If number is already rational (integer or Fraction), returns it.
-        If number is a float, converts it to an exact rational representation.
-    
-    With two arguments:
-        Creates a Fraction from numerator and denominator (automatically reduced).
+def _canonicalize_rational(value):
+    """Collapse a `Fraction` whose denominator reduced to 1 into a plain int.
+
+    CLHS 12.1.1.2: a rational whose denominator is 1 *is* an integer --
+    there is no separate ratio representation for it, so `(eql (rational
+    -10000.0) -10000)` must hold. `/` already does exactly this
+    normalization inline; RATIONAL/RATIONALIZE need the same one, not a
+    second copy of the check with its own chance to disagree.
     """
-    from fractions import Fraction
-    
-    # Two-argument form: create fraction from numerator/denominator
-    if denominator is not None:
-        return Fraction(number, denominator)
-    
-    # One-argument form: convert to rational
+    if isinstance(value, Fraction) and value.denominator == 1:
+        return value.numerator
+    return value
+
+
+@_registry.cl_function('RATIONAL')
+def rational(number):
+    """Convert a real number to a rational (CLHS 12.1.1.2).
+
+    RATIONAL takes exactly one argument. There is no numerator/denominator
+    form in ANSI CL -- that was invented here: a second positional
+    argument used to be accepted silently instead of the PROGRAM-ERROR
+    RATIONAL.ERROR.2/3 require, since `/` (which *does* take a
+    denominator) and RATIONAL are different functions.
+    """
+    _ensure_real(number, 'RATIONAL')
     if isinstance(number, int):
         return number
     if isinstance(number, Fraction):
-        return number
-    # Float - convert to exact rational
-    return Fraction(number)
+        return _canonicalize_rational(number)
+    # Float -- Fraction(float) is its *exact* binary value, which is what
+    # RATIONAL requires (RATIONALIZE, not RATIONAL, approximates).
+    return _canonicalize_rational(Fraction(number))
 
 
 @_registry.cl_function('RATIONALIZE')
 def rationalize(x):
-    """Convert number to rational"""
-    from fractions import Fraction
-    return Fraction(x).limit_denominator()
+    """Convert a float to the simplest rational within its representable
+    precision (CLHS 12.1.1.2), approximated here via
+    `Fraction.limit_denominator` -- CLHS's exact continued-fraction
+    algorithm, keyed to the float's own ulp rather than a fixed
+    denominator cap, is not attempted here and remains a known gap for
+    values (e.g. irrational transcendentals) where the two disagree.
+    """
+    _ensure_real(x, 'RATIONALIZE')
+    if isinstance(x, int):
+        return x
+    if isinstance(x, Fraction):
+        return _canonicalize_rational(x)
+    return _canonicalize_rational(Fraction(x).limit_denominator())
 
 
 # Type predicates
@@ -338,8 +413,21 @@ def complexp(obj):
 
 @_registry.cl_function('REALP')
 def realp(obj):
-    """Test if object is a real number."""
-    return isinstance(obj, (int, float))
+    """Test if object is a real number.
+
+    A RATIO is a REAL (CLHS 4.2.2: RATIONAL, which includes RATIO, is a
+    subtype of REAL) -- `Fraction` was missing here even though `NUMBERP`
+    and `RATIONALP` right next to it both already include it, and
+    `_ensure_real` (this module's own internal REAL check, used by MIN/MAX
+    and the `<`/`>`/`<=`/`>=` family) already treats a `Fraction` as real.
+    A representative ratio in ansi-test's `*mini-universe*` therefore made
+    `REALP` disagree with the code its own callers use to decide the same
+    question -- `check-type-error`'s guard said "not real" while `MIN`
+    correctly accepted it as real and returned it, an unresolvable
+    contradiction from the test's point of view.
+    """
+    from fractions import Fraction
+    return isinstance(obj, (int, float, Fraction))
 
 
 @_registry.cl_function('RATIONALP')
@@ -376,10 +464,22 @@ def conjugate(number):
 
 @_registry.cl_function('PHASE')
 def phase(number):
-    """Return phase of complex number."""
+    """Return the phase (angle in radians) of a number.
+
+    CLHS: PHASE always returns a float, even for an exact real -- `(phase
+    0)` is `0.0`, not `0`, and PHASE.1-7 check that with `EQLT`, which is
+    type-sensitive. Also validates `number` the same way as the other
+    functions in this module (`_ensure_number`-style): a non-number must
+    signal a TYPE-ERROR carrying that value as its datum, not a bare Python
+    `TypeError` from `number >= 0`.
+    """
+    if not isinstance(number, (int, float, complex, Fraction)):
+        raise lisptype.LispTypeError(
+            f"PHASE: argument is not a NUMBER: {number!r}",
+            expected_type="NUMBER", actual_value=number)
     if isinstance(number, complex):
         return math.atan2(number.imag, number.real)
-    return 0 if number >= 0 else math.pi
+    return 0.0 if number >= 0 else math.pi
 
 
 @_registry.cl_function('CIS')
@@ -392,6 +492,7 @@ def cis(theta):
 @_registry.cl_function('LOGAND')
 def logand(*args):
     """Bitwise AND."""
+    _ensure_integers(args, 'LOGAND')
     if not args:
         return -1
     return functools.reduce(lambda x, y: x & y, args)
@@ -400,6 +501,7 @@ def logand(*args):
 @_registry.cl_function('LOGIOR')
 def logior(*args):
     """Bitwise OR."""
+    _ensure_integers(args, 'LOGIOR')
     if not args:
         return 0
     return functools.reduce(lambda x, y: x | y, args)
@@ -408,6 +510,7 @@ def logior(*args):
 @_registry.cl_function('LOGXOR')
 def logxor(*args):
     """Bitwise XOR."""
+    _ensure_integers(args, 'LOGXOR')
     if not args:
         return 0
     return functools.reduce(lambda x, y: x ^ y, args)
@@ -416,12 +519,14 @@ def logxor(*args):
 @_registry.cl_function('LOGNOT')
 def lognot(integer):
     """Bitwise NOT."""
+    _ensure_integer(integer, 'LOGNOT')
     return ~integer
 
 
 @_registry.cl_function('LOGEQV')
 def logeqv(*args):
     """Bitwise equivalence."""
+    _ensure_integers(args, 'LOGEQV')
     if not args:
         return -1
     return functools.reduce(lambda x, y: ~(x ^ y), args)
@@ -436,6 +541,7 @@ def ash(i, count):
 @_registry.cl_function('INTEGER-LENGTH')
 def integer_length(integer):
     """Number of bits in integer."""
+    _ensure_integer(integer, 'INTEGER-LENGTH')
     if integer < 0:
         integer = ~integer
     return integer.bit_length()
@@ -443,57 +549,97 @@ def integer_length(integer):
 
 @_registry.cl_function('LOGBITP')
 def logbitp(index, integer):
-    """Test if bit is set."""
-    return bool(integer & (1 << index))
+    """Test if bit `index` of `integer`'s two's-complement representation is set.
+
+    `integer & (1 << index)` materializes a bignum with `index` bits just to
+    test one of them -- for `index` near MOST-POSITIVE-FIXNUM that is an
+    unbounded allocation (a MemoryError, not a slow answer). Shifting
+    `integer` right by `index` instead costs work proportional to
+    `integer`'s own size: Python's arbitrary-precision shift collapses a
+    negative integer's infinite sign-extension to -1 (or a positive one to
+    0) once `index` exceeds its bit length, exactly CLHS 12.1.1's two's
+    complement rule, without ever building a value the size of `index`.
+    """
+    from .arrays import nonnegative_integer
+    nonnegative_integer(index, 'LOGBITP', expected="UNSIGNED-BYTE")
+    _ensure_integer(integer, 'LOGBITP')
+    return bool((integer >> index) & 1)
 
 
 @_registry.cl_function('LOGCOUNT')
 def logcount(integer):
-    """Number of 1 bits."""
-    if integer < 0:
-        return bin(integer).count('0') - 1  # Subtract 1 for the '0b' prefix
-    return bin(integer).count('1')
+    """Number of bits that differ from the sign bit (CLHS 12.1.1.1) --
+    the number of 1 bits for a non-negative integer, or of 0 bits for a
+    negative one.
+
+    `bin(integer).count('0')` for a negative `integer` doesn't compute
+    that: Python's `bin()` of a negative int is a `-` sign followed by the
+    binary digits of its *magnitude*, not a two's-complement bit pattern,
+    so counting `'0'` characters in it (and subtracting 1 for the `0b`)
+    answers a question about the magnitude's zero digits, unrelated to
+    LOGCOUNT's actual definition -- `(logcount x)` and `(logcount (lognot
+    x))` must always be equal (LOGCOUNT.7), and the old formula didn't
+    have that identity. `~integer` for negative `integer` is non-negative,
+    so `bin(~integer)` is a clean two's-complement view with no sign to
+    special-case.
+    """
+    _ensure_integer(integer, 'LOGCOUNT')
+    return bin(integer if integer >= 0 else ~integer).count('1')
 
 
 @_registry.cl_function('LOGTEST')
 def logtest(integer1, integer2):
     """Test if any bits are set in both integers."""
+    _ensure_integer(integer1, 'LOGTEST')
+    _ensure_integer(integer2, 'LOGTEST')
     return (integer1 & integer2) != 0
 
 
 @_registry.cl_function('LOGANDC1')
 def logandc1(integer1, integer2):
     """AND with complement of first arg: (logand (lognot integer1) integer2)."""
+    _ensure_integer(integer1, 'LOGANDC1')
+    _ensure_integer(integer2, 'LOGANDC1')
     return ~integer1 & integer2
 
 
 @_registry.cl_function('LOGANDC2')
 def logandc2(integer1, integer2):
     """AND with complement of second arg: (logand integer1 (lognot integer2))."""
+    _ensure_integer(integer1, 'LOGANDC2')
+    _ensure_integer(integer2, 'LOGANDC2')
     return integer1 & ~integer2
 
 
 @_registry.cl_function('LOGNAND')
 def lognand(integer1, integer2):
     """NOT of AND: (lognot (logand integer1 integer2))."""
+    _ensure_integer(integer1, 'LOGNAND')
+    _ensure_integer(integer2, 'LOGNAND')
     return ~(integer1 & integer2)
 
 
 @_registry.cl_function('LOGNOR')
 def lognor(integer1, integer2):
     """NOT of OR: (lognot (logior integer1 integer2))."""
+    _ensure_integer(integer1, 'LOGNOR')
+    _ensure_integer(integer2, 'LOGNOR')
     return ~(integer1 | integer2)
 
 
 @_registry.cl_function('LOGORC1')
 def logorc1(integer1, integer2):
     """OR with complement of first arg: (logior (lognot integer1) integer2)."""
+    _ensure_integer(integer1, 'LOGORC1')
+    _ensure_integer(integer2, 'LOGORC1')
     return ~integer1 | integer2
 
 
 @_registry.cl_function('LOGORC2')
 def logorc2(integer1, integer2):
     """OR with complement of second arg: (logior integer1 (lognot integer2))."""
+    _ensure_integer(integer1, 'LOGORC2')
+    _ensure_integer(integer2, 'LOGORC2')
     return integer1 | ~integer2
 
 
@@ -685,7 +831,7 @@ def _s_slash_(*args):
         # Reciprocal: (/ x) = 1/x
         x = args[0]
         if isinstance(x, int) and x != 0:
-            return Fraction(1, x)
+            return _canonicalize_rational(Fraction(1, x))
         return 1 / x
     
     result = args[0]
@@ -701,11 +847,7 @@ def _s_slash_(*args):
         else:
             result = result / x
     
-    # If result is a Fraction with denominator 1, return as integer
-    if isinstance(result, Fraction) and result.denominator == 1:
-        return result.numerator
-    
-    return result
+    return _canonicalize_rational(result)
 
 
 @_registry.cl_function('1+')

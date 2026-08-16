@@ -1,30 +1,68 @@
 """Advanced mathematical functions - transcendental, trigonometric, and special functions."""
 
+import cmath
 import math
 import sys
+from fractions import Fraction
 import fclpy.lisptype as lisptype
 from . import registry as _registry
+
+
+def _irrational(real_fn, complex_fn, x):
+    """Apply an irrational/transcendental function per CLHS 12.1.5.1.
+
+    Each of these functions is defined over the whole complex plane; a real
+    argument outside the function's real-valued domain (e.g. `(sqrt -4)`,
+    `(asin 2)`, `(acosh 0)`) must produce a complex result, not an error.
+    `math.*` only covers the real domain and raises `ValueError: math domain
+    error` the moment it is left, which used to surface as a bare Python
+    exception standing in for a Lisp value (X1). One dispatch used by every
+    caller below keeps that promotion consistent instead of teaching each
+    operator its own domain boundary.
+
+    A non-number `x` must signal a TYPE-ERROR *whose datum is `x` itself*
+    (CLHS: `type-error-datum` identifies the offending value) -- letting
+    `math.sin("foo")`'s bare `TypeError` reach the generic FUNCALL boundary
+    produced a TYPE-ERROR with `datum=None`, which is not `eql` to `"foo"`
+    and so still reads as a Python exception standing in for the Lisp
+    value ansi-test's `check-type-error` expects.
+    """
+    if not isinstance(x, (int, float, complex, Fraction)):
+        raise lisptype.LispTypeError(
+            f"{real_fn.__name__.upper()}: argument is not a NUMBER: {x!r}",
+            expected_type="NUMBER", actual_value=x)
+    if isinstance(x, complex):
+        return complex_fn(x)
+    try:
+        return real_fn(x)
+    except ValueError:
+        return complex_fn(complex(x))
 
 
 # Exponential and logarithmic functions
 @_registry.cl_function('EXP')
 def exp(x):
     """Exponential function."""
-    return math.exp(x)
+    return _irrational(math.exp, cmath.exp, x)
 
 
 @_registry.cl_function('LOG')
 def log(x, base=None):
     """Logarithm function."""
     if base is None:
-        return math.log(x)
-    return math.log(x, base)
+        return _irrational(math.log, cmath.log, x)
+    if isinstance(x, complex) or isinstance(base, complex):
+        return cmath.log(x, base)
+    try:
+        return math.log(x, base)
+    except ValueError:
+        return cmath.log(complex(x), complex(base))
 
 
 @_registry.cl_function('SQRT')
 def sqrt(x):
     """Square root function."""
-    return math.sqrt(x)
+    return _irrational(math.sqrt, cmath.sqrt, x)
 
 
 @_registry.cl_function('EXPT')
@@ -45,74 +83,84 @@ def isqrt(x):
 @_registry.cl_function('SIN')
 def sin(a):
     """Sine function."""
-    return math.sin(a)
+    return _irrational(math.sin, cmath.sin, a)
 
 
 @_registry.cl_function('COS')
 def cos(a):
     """Cosine function."""
-    return math.cos(a)
+    return _irrational(math.cos, cmath.cos, a)
 
 
 @_registry.cl_function('TAN')
 def tan(a):
     """Tangent function."""
-    return math.tan(a)
+    return _irrational(math.tan, cmath.tan, a)
 
 
 @_registry.cl_function('ASIN')
 def asin(x):
     """Arc sine function."""
-    return math.asin(x)
+    return _irrational(math.asin, cmath.asin, x)
 
 
 @_registry.cl_function('ACOS')
 def acos(x):
     """Arc cosine function."""
-    return math.acos(x)
+    return _irrational(math.acos, cmath.acos, x)
 
 
 @_registry.cl_function('ATAN')
-def atan(x):
-    """Arc tangent function."""
-    return math.atan(x)
+def atan(y, x=None):
+    """Arc tangent function.
+
+    CLHS 12.1.4.2: with one argument this is the general (possibly complex)
+    arctangent; with two, `(atan y x)` is the four-quadrant real arctangent
+    of `y/x` (both must be non-complex), distinct from `(/ y x)` at `x = 0`.
+    """
+    if x is None:
+        return _irrational(math.atan, cmath.atan, y)
+    from .math_arithmetic import _ensure_real
+    _ensure_real(y, 'ATAN')
+    _ensure_real(x, 'ATAN')
+    return math.atan2(y, x)
 
 
 # Hyperbolic functions
 @_registry.cl_function('SINH')
 def sinh(x):
     """Hyperbolic sine function."""
-    return math.sinh(x)
+    return _irrational(math.sinh, cmath.sinh, x)
 
 
 @_registry.cl_function('COSH')
 def cosh(x):
     """Hyperbolic cosine function."""
-    return math.cosh(x)
+    return _irrational(math.cosh, cmath.cosh, x)
 
 
 @_registry.cl_function('TANH')
 def tanh(x):
     """Hyperbolic tangent function."""
-    return math.tanh(x)
+    return _irrational(math.tanh, cmath.tanh, x)
 
 
 @_registry.cl_function('ASINH')
 def asinh(x):
     """Hyperbolic arc sine function."""
-    return math.asinh(x)
+    return _irrational(math.asinh, cmath.asinh, x)
 
 
 @_registry.cl_function('ACOSH')
 def acosh(x):
     """Hyperbolic arc cosine function."""
-    return math.acosh(x)
+    return _irrational(math.acosh, cmath.acosh, x)
 
 
 @_registry.cl_function('ATANH')
 def atanh(x):
     """Hyperbolic arc tangent function."""
-    return math.atanh(x)
+    return _irrational(math.atanh, cmath.atanh, x)
 
 
 # Float decoding and encoding
