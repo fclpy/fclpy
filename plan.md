@@ -236,6 +236,45 @@ failing, the binding constraint is a small number of core mechanisms.
 - A test that passes for the wrong reason is not progress.
 - Per-test work becomes correct only in [Tier 3](#tier-3--the-genuine-tail).
 
+### Policy change trigger: under 3,000 failures and under 100 files
+
+**This mode has a planned expiration, and it is a measured one, not a vibe.**
+The mechanism-first strategy above is justified by a specific premise: with
+roughly half the suite failing, a small number of core mechanisms binds most
+of the failures, so a fix that only moves the file you targeted is suspect.
+That premise gets weaker as the suite shrinks — [§3](#3-the-checklist) already
+recorded the distribution *flattening* well before this threshold ("no cluster
+now exceeds 6% of the remainder... the argument that one mechanism unblocks
+everything is weaker than at any previous point").
+
+**Once a full run reports fewer than 3,000 failing tests *and* fewer than 100
+files containing failures, switch modes:**
+
+- Stop hunting for clusters as the default move. At this scale most remaining
+  files fail for their *own* reason — a missing operator, an edge case, a
+  format directive — not because one shared mechanism is still absent. Working
+  the checklist file-by-file (still cheapest-first, still checking the
+  disappeared-failures signal after each fix) is no longer the wrong mode; it
+  is [Tier 3](#tier-3--the-genuine-tail) becoming the *main* mode rather than
+  the tail.
+- Still open every file with the same discipline as before: reproduce the
+  smallest failing case, find the actual defect, and check whether the fix
+  moves other files before assuming it doesn't. A shared mechanism can still be
+  hiding under a small footprint — the point of this section is to stop
+  *assuming* one is there, not to stop looking when one surfaces on its own.
+- Still run the full per-file regression check ([§7](#preventing-regression))
+  before and after every fix — a smaller remaining surface makes a regression
+  *cheaper to catch* immediately, not less costly if missed.
+- Re-derive the ranking from the live checklist rather than from this
+  document's Tier 1/2 lists, which were written against a much larger, more
+  clustered failure set and will be stale by the time this threshold is
+  reached.
+- If a full run afterward pushes failures back above 3,000 or files back above
+  100 (a mechanism regressed, or a large new test population registered — see
+  [§1](#1-status)'s note on `total` rising), fall back to mechanism-first until
+  it drops again. This is a threshold on the live scoreboard, not a one-way
+  door.
+
 ### The checklist artifact
 
 **`docs/ansi_checklist.md`** is the working checklist: all 7341 failures grouped
@@ -688,17 +727,92 @@ failure and the best cost/benefit entry in the suite — `restart-case.lsp` 27/3
 `restart-bind.lsp` 17/26, **`check-type.lsp` 9/9**.
 **Owner:** M8. **Verify:** `run_ansi.py conditions`.
 
-#### C10. Package model
+#### C10. Package model — **LARGELY DONE (2026-08-16 targeted, not yet in a full run)**
 
-**Evidence.** `MAKE-PACKAGE` 51, `DEFPACKAGE` 27, `UNUSE-PACKAGE` 23,
-`PACKAGE-NAME` 21, `USE-PACKAGE` 20; `packages/` is 198 failing of 340 with 70
-still unrun.
+`run_ansi.py packages`: **201 → 373 passing of 500** (40.2% → 74.6%), 0
+per-file regressions against `docs/ansi_checklist_baseline.json`.
+`make-package.lsp` and `defpackage.lsp` — the two largest 100%-failing files in
+the whole suite — are now 37/51 (72.5%) and 25/28 (89.3%).
 
-Known specifics: `shadowing_symbols`; CL/CL-USER/KEYWORD missing from
-`state.packages`; `IMPORT`/`EXPORT`/`RENAME-PACKAGE`; and **`INTERN` case-folds
-its string argument** — case conversion is the *reader's* job via
-`readtable-case` (CLHS 23.1.2), so `(eq (intern "myvar") (intern "MYVAR"))` must
-be NIL. **Owner:** M1. **Verify:** `run_ansi.py packages`.
+**The mechanism was "a Python object leaking as a Lisp value," found five
+times over** (plan.md Finding M's pattern again): `PACKAGE-NICKNAMES`,
+`PACKAGE-USE-LIST`, `PACKAGE-USED-BY-LIST`, `PACKAGE-SHADOWING-SYMBOLS`,
+`PACKAGE-EXTERNAL-SYMBOLS`, `PACKAGE-INTERNAL-SYMBOLS`, `LIST-ALL-PACKAGES` and
+`FIND-ALL-SYMBOLS` all returned a bare Python `list`. A Python `list` is a
+*vector* here (plan.md Finding M / `sequence_protocol.make_lisp_list`'s own
+docstring), so `(equal (package-nicknames p) nil)` compared an empty vector to
+NIL and was false regardless of what the package under test actually
+contained — the harness could not observe a correct answer from these
+accessors even when the underlying package model was right. Fixed by routing
+every one of them through a shared `_lisp_list` builder.
+
+**A second, independent mechanism sat behind that one: at least six separate
+copies of "resolve a package/string designator" existed** (`MAKE-PACKAGE`,
+`IN-PACKAGE`, `INTERN`, `FIND-SYMBOL`, `FIND-PACKAGE`, `EXPORT`,
+`DELETE-PACKAGE`, `coerce_to_package` itself), each hand-rolling its own
+`isinstance(x, lispKeyword) ... elif LispSymbol ... else str(x)` chain. Every
+copy agreed on strings/symbols/keywords and *disagreed* on everything else
+(characters, and every specialized character-array shape ANSI's
+`make-package.lsp` deliberately exercises as a name designator) — so
+`(make-package name)` and `(in-package name)` for the identical `name` value
+silently resolved to two *different*, wrongly-named packages. Consolidated
+onto one `_designator_to_string` (misc_packages.py) and `coerce_to_package`
+now calls it, so every caller of `coerce_to_package` was fixed at once instead
+of six times. **`DEFPACKAGE` itself was a hardcoded, incomplete branch in
+`evaluation_core.py`'s `eval()` dispatch** (correctly *not* a `cl_function`,
+per the registry note in CLAUDE.md, since its option clauses must not be
+evaluated) supporting only `:USE`/`:NICKNAMES`/`:INTERN`/`:EXPORT`; rewritten
+to also handle `:SHADOW`, `:SHADOWING-IMPORT-FROM`, `:IMPORT-FROM`, `:SIZE`,
+`:DOCUMENTATION`, nickname-clash and CLHS 7.2's disjointness checks, and to
+merge (not overwrite) repeated `:NICKNAMES` clauses. `SHADOW` and
+`SHADOWING-IMPORT` were both complete stubs (`return T`); `IMPORT` re-interned
+a same-named symbol instead of preserving the given symbol's identity, so an
+imported symbol was never `EQ` to the one it was imported from.
+
+**One more defect surfaced only once `LIST-ALL-PACKAGES` returned every
+package for real:** exporting a name a package only *inherited* (via `:USE`)
+left `Package.intern`'s inheritance branch returning the inherited symbol
+without ever adding it to the exporting package's own `symbols`, so
+`FIND-SYMBOL` kept answering `:INHERITED` instead of `:EXTERNAL` — CLHS
+11.1.2.1.2 requires the symbol become directly present. Fixed in
+`lisptype_extended.Package.intern`.
+
+**Cross-cutting bug found while fixing this, not specific to packages:**
+`IGNORE-ERRORS`'s non-error path unconditionally returned `(values result
+NIL)` instead of passing `result` through unmodified, so
+`(multiple-value-list (ignore-errors (values 1 2 3)))` answered `(1 NIL)`
+instead of `(1 2 3)` — CLHS: "if execution completes normally, ignore-errors
+returns whatever values the forms return." This alone unblocked four
+`defpackage.lsp` tests with no package-specific change at all, which is the
+plan's own signal that a fix crossed from symptom to mechanism.
+
+**Discovered, not fixed (separate mechanisms):** (1) two tests that regressed
+from "passing" to failing *because* `LIST-ALL-PACKAGES` now enumerates every
+package for real — `FIND-ALL-SYMBOLS.1` (a consistency check across every
+`FCLPY-INTERNAL` implementation symbol) and `WITH-PACKAGE-ITERATOR.12/13/14`
+(errors on unrelated leftover packages, e.g. an "Undefined function G22468"
+gensym artifact) — both were vacuous passes before (LOOP over a bare Python
+list iterated zero times), not real coverage, and now fail honestly; (2)
+`intern_keyword` force-uppercases its argument, so a pipe-escaped lowercase
+keyword designator (`:|f|`) loses its case before any designator-resolution
+code ever sees it (`DEFPACKAGE.6`'s remaining failure) — a reader/interning
+defect, not a package-model one; (3) `MAKE-PACKAGE.ERROR.1-4` and
+`DEFPACKAGE.24/25` need a *continuable* `PACKAGE-ERROR` (a working
+restart/`CERROR` chain) that M8 owns — `PackageError` is now signaled
+correctly via `signal_error_object` rather than crashing the run (a bare
+`raise` bypassed `signal_condition` entirely, since `PackageError` is in the
+*real* condition hierarchy, not the "legacy" `lisptype.LispError` one
+`HANDLER-CASE`/`IGNORE-ERRORS` also catch directly), but nothing in this
+implementation can yet make the handler *continue*.
+
+**Owner:** M1. **Verify:** `run_ansi.py packages`. Previous evidence, now
+superseded: `MAKE-PACKAGE` 51, `DEFPACKAGE` 27, `UNUSE-PACKAGE` 23,
+`PACKAGE-NAME` 21, `USE-PACKAGE` 20 failing; `packages/` 198 failing of 340
+with 70 unrun. Known specifics not yet addressed above: CL/CL-USER/KEYWORD
+missing from `state.packages`; `RENAME-PACKAGE`; and **`INTERN` case-folds its
+string argument** — case conversion is the *reader's* job via
+`readtable-case` (CLHS 23.1.2), so `(eq (intern "myvar") (intern "MYVAR"))`
+must be NIL.
 
 ### Tier 2 — subsystem gaps
 
@@ -864,10 +978,15 @@ these are ranked on measured evidence rather than on that premise.
     (§7), and a uniform small delta across eleven numeric files is the
     signature of one shared defect — the same shape the 08-15 rounding family
     turned out to have. Cheap to check, and it protects the +3224.
-15. **[C10](#c10-package-model), the package model.** `packages/` is 40.6% and
-    now owns the two largest 100%-failing files (`make-package.lsp` 30,
-    `defpackage.lsp` 27). It is also M1, i.e. a prerequisite for the ASDF rung
-    in [§7](#7-acceptance--the-ecosystem-ladder).
+15. ~~**[C10](#c10-package-model), the package model.**~~ **Largely done
+    (2026-08-16 targeted; not yet folded into a full run).** `packages/`
+    **201 → 373 of 500 (74.6%)**, 0 regressions; `make-package.lsp` and
+    `defpackage.lsp` — the two 100%-failing files this item was ranked for —
+    are now 72.5% and 89.3%. Still open: `RENAME-PACKAGE` (a stub),
+    `INTERN`'s case-folding, `DELETE-PACKAGE`/`DO-SYMBOLS`/`WITH-PACKAGE-ITERATOR`
+    edge cases, and the two M8-owned continuable-`PACKAGE-ERROR` test pairs.
+    It is also M1, i.e. a prerequisite for the ASDF rung in
+    [§7](#7-acceptance--the-ecosystem-ladder).
 16. **[C2](#c2-format--formatter--largest-cluster-in-the-suite)'s remaining
     directives**, still the largest single family at 417, plus the adjacent
     `PRINT.INTEGERS.BASE`/`RADIX.BASE` pair at 161 — which is *not* FORMAT but

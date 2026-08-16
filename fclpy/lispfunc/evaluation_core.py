@@ -1566,90 +1566,201 @@ def eval(form, env=None):
                 # Return the name symbol
                 return name
             elif operator.name == 'DEFPACKAGE':
-                # DEFPACKAGE is a macro in Common Lisp - option clauses must not be evaluated.
-                # Example: (DEFPACKAGE 'FOO (:USE 'CL) (:INTERN 'A 'B) (:EXPORT 'A))
+                # DEFPACKAGE's option clauses are literal data (CLHS 7.2), not
+                # forms to evaluate -- so this stays a special case in the
+                # dispatcher rather than a cl_function, exactly as CLAUDE.md's
+                # registry note requires for operators like this one.
+                from .misc_packages import (
+                    _designator_to_string, shadow as _pkg_shadow,
+                    shadowing_import as _pkg_shadowing_import,
+                )
+                from .utilities_symbols import import_symbol as _pkg_import
+                from .evaluation_conditions import signal_error_object as _signal_error
+
+                def _signal_package_error(package, message):
+                    # PACKAGE-ERROR lives in the *real* condition hierarchy
+                    # (lisptype_extended.Error), not the "legacy"
+                    # lisptype.LispError one HANDLER-CASE/IGNORE-ERRORS also
+                    # catch directly -- signaling it any other way (a bare
+                    # `raise`) skips signal_condition() and every handler, and
+                    # the condition object then unwinds as a plain, unmatched
+                    # Python exception instead of being caught.
+                    _signal_error(lisptype.PackageError(package=package, message=message))
+
                 args = cdr(form)
                 if args is None or args == lisptype.NIL:
-                    raise lisptype.LispError("DEFPACKAGE requires a package name")
+                    raise lisptype.LispProgramError(
+                        "DEFPACKAGE: wrong number of arguments (got 0, expected at least 1)")
 
                 name_arg = car(args)
                 opt_forms = cdr(args)
 
-                def _unquote(x):
-                    if isinstance(x, lisptype.lispCons):
-                        op = car(x)
-                        if isinstance(op, lisptype.LispSymbol) and op.name == 'QUOTE':
-                            qargs = cdr(x)
-                            if qargs is not None and qargs != lisptype.NIL:
-                                return car(qargs)
-                    return x
+                def _clause_items(r):
+                    items = []
+                    while _consp_internal(r):
+                        items.append(car(r))
+                        r = cdr(r)
+                    return items
 
-                def _designator_to_name(x):
-                    x = _unquote(x)
-                    if isinstance(x, lisptype.lispKeyword):
-                        return x.name if hasattr(x, 'name') else str(x)
-                    if isinstance(x, lisptype.LispSymbol):
-                        return x.name if hasattr(x, 'name') else str(x)
-                    if isinstance(x, str):
-                        return x
-                    return str(x)
+                def _key_name(key):
+                    if isinstance(key, (lisptype.lispKeyword, lisptype.LispSymbol)):
+                        n = key.name.upper()
+                        return n[1:] if n.startswith(':') else n
+                    return str(key).upper()
 
-                pkg_name = _designator_to_name(name_arg)
-                pkg = lisptype.make_package(pkg_name)
+                pkg_name = _designator_to_string(name_arg)
+
+                nicknames = []
+                use_names = []
+                export_names = []
+                intern_names = []
+                shadow_names = []
+                shadowing_import_clauses = []  # [(pkg_name, [names])]
+                import_from_clauses = []       # [(pkg_name, [names])]
+                size_seen = False
+                doc_seen = False
 
                 cur = opt_forms
                 while _consp_internal(cur):
                     clause = car(cur)
                     if _consp_internal(clause):
-                        key = car(clause)
-                        rest = cdr(clause)
-
-                        if isinstance(key, lisptype.lispKeyword):
-                            key_name = key.name.upper()
-                        elif isinstance(key, lisptype.LispSymbol):
-                            key_name = key.name.upper()
-                            if key_name.startswith(':'):
-                                key_name = key_name[1:]
-                        else:
-                            key_name = str(key).upper()
+                        key_name = _key_name(car(clause))
+                        rest_items = [_designator_to_string(i) if key_name not in
+                                      ('SHADOWING-IMPORT-FROM', 'IMPORT-FROM', 'SIZE', 'DOCUMENTATION')
+                                      else i
+                                      for i in _clause_items(cdr(clause))]
 
                         if key_name == 'USE':
-                            use_list = []
-                            r = rest
-                            while _consp_internal(r):
-                                use_list.append(_designator_to_name(car(r)))
-                                r = cdr(r)
-                            pkg.use_packages = []
-                            for use_pkg_name in use_list:
-                                use_pkg = lisptype.find_package(use_pkg_name)
-                                if use_pkg is None:
-                                    use_pkg = lisptype.make_package(use_pkg_name)
-                                if use_pkg not in pkg.use_packages:
-                                    pkg.use_packages.append(use_pkg)
-
+                            use_names.extend(rest_items)
                         elif key_name == 'NICKNAMES':
-                            nicknames = []
-                            r = rest
-                            while _consp_internal(r):
-                                nicknames.append(_designator_to_name(car(r)))
-                                r = cdr(r)
-                            pkg.nick_names = nicknames
-
+                            nicknames.extend(rest_items)
                         elif key_name == 'INTERN':
-                            r = rest
-                            while _consp_internal(r):
-                                sym_name = _designator_to_name(car(r))
-                                pkg.intern(sym_name, external=False)
-                                r = cdr(r)
-
+                            intern_names.extend(rest_items)
                         elif key_name == 'EXPORT':
-                            r = rest
-                            while _consp_internal(r):
-                                sym_name = _designator_to_name(car(r))
-                                pkg.intern(sym_name, external=True)
-                                r = cdr(r)
-
+                            export_names.extend(rest_items)
+                        elif key_name == 'SHADOW':
+                            shadow_names.extend(rest_items)
+                        elif key_name == 'SHADOWING-IMPORT-FROM':
+                            raw = _clause_items(cdr(clause))
+                            if not raw:
+                                raise lisptype.LispProgramError(
+                                    "DEFPACKAGE: :SHADOWING-IMPORT-FROM requires a package name")
+                            shadowing_import_clauses.append(
+                                (_designator_to_string(raw[0]),
+                                 [_designator_to_string(i) for i in raw[1:]]))
+                        elif key_name == 'IMPORT-FROM':
+                            raw = _clause_items(cdr(clause))
+                            if not raw:
+                                raise lisptype.LispProgramError(
+                                    "DEFPACKAGE: :IMPORT-FROM requires a package name")
+                            import_from_clauses.append(
+                                (_designator_to_string(raw[0]),
+                                 [_designator_to_string(i) for i in raw[1:]]))
+                        elif key_name == 'SIZE':
+                            if size_seen:
+                                raise lisptype.LispProgramError(
+                                    "DEFPACKAGE: :SIZE may only be given once")
+                            size_seen = True
+                        elif key_name == 'DOCUMENTATION':
+                            if doc_seen:
+                                raise lisptype.LispProgramError(
+                                    "DEFPACKAGE: :DOCUMENTATION may only be given once")
+                            doc_seen = True
+                        # An unrecognized option keyword is left alone rather
+                        # than made an error -- CLHS reserves this space for
+                        # implementation extensions and no ANSI test exercises
+                        # rejecting one.
                     cur = cdr(cur)
+
+                # CLHS 7.2p2: these four options' names must be pairwise
+                # disjoint, and :EXPORT/:INTERN must be disjoint -- checked
+                # before any mutation so a malformed DEFPACKAGE has no partial
+                # effect.
+                shadow_set = set(shadow_names)
+                shadowing_import_set = {n for _, names in shadowing_import_clauses for n in names}
+                import_set = {n for _, names in import_from_clauses for n in names}
+                intern_set = set(intern_names)
+                export_set = set(export_names)
+
+                def _require_disjoint(name_a, set_a, name_b, set_b):
+                    overlap = set_a & set_b
+                    if overlap:
+                        raise lisptype.LispProgramError(
+                            f"DEFPACKAGE: {name_a} and {name_b} must be disjoint "
+                            f"(shared {sorted(overlap)!r})")
+
+                _require_disjoint('SHADOW', shadow_set, 'SHADOWING-IMPORT-FROM', shadowing_import_set)
+                _require_disjoint('SHADOW', shadow_set, 'IMPORT-FROM', import_set)
+                _require_disjoint('SHADOW', shadow_set, 'INTERN', intern_set)
+                _require_disjoint('SHADOWING-IMPORT-FROM', shadowing_import_set, 'IMPORT-FROM', import_set)
+                _require_disjoint('SHADOWING-IMPORT-FROM', shadowing_import_set, 'INTERN', intern_set)
+                _require_disjoint('IMPORT-FROM', import_set, 'INTERN', intern_set)
+                _require_disjoint('EXPORT', export_set, 'INTERN', intern_set)
+
+                # A nickname (or the name itself) that already denotes a
+                # different existing package is a PACKAGE-ERROR (CLHS
+                # MAKE-PACKAGE/DEFPACKAGE); genuinely *continuable* handling
+                # needs the restart machinery M8 owns, so this signals the
+                # condition honestly rather than silently accepting the clash.
+                existing = lisptype.find_package(pkg_name)
+                for nn in nicknames:
+                    clash = lisptype.find_package(nn)
+                    if clash is not None and clash is not existing:
+                        _signal_package_error(nn, f"A package named {nn!r} already exists")
+
+                pkg = existing if existing is not None else lisptype.make_package(pkg_name)
+                if nicknames:
+                    # Merge rather than overwrite: DEFPACKAGE allows multiple
+                    # :NICKNAMES clauses, and each contributes its names.
+                    merged = list(pkg.nick_names) if existing is not None else []
+                    for nn in nicknames:
+                        if nn not in merged:
+                            merged.append(nn)
+                    pkg.nick_names = merged
+
+                use_packages = []
+                for use_pkg_name in use_names:
+                    use_pkg = lisptype.find_package(use_pkg_name)
+                    if use_pkg is None:
+                        use_pkg = lisptype.make_package(use_pkg_name)
+                    if use_pkg not in use_packages:
+                        use_packages.append(use_pkg)
+                pkg.use_packages = use_packages
+
+                for sym_name in intern_names:
+                    pkg.intern(sym_name, external=False)
+                for sym_name in export_names:
+                    pkg.intern(sym_name, external=True)
+                if shadow_names:
+                    _pkg_shadow([lisptype.LispString(n) for n in shadow_names], pkg)
+
+                for src_name, names in shadowing_import_clauses:
+                    src_pkg = lisptype.find_package(src_name)
+                    if src_pkg is None:
+                        _signal_package_error(src_name, f"No package named {src_name!r}")
+                    syms = []
+                    for n in names:
+                        sym, status = src_pkg.find_symbol(n)
+                        if sym is None:
+                            _signal_package_error(
+                                src_name, f"{n!r} is not accessible in package {src_name!r}")
+                        syms.append(sym)
+                    if syms:
+                        _pkg_shadowing_import(syms, pkg)
+
+                for src_name, names in import_from_clauses:
+                    src_pkg = lisptype.find_package(src_name)
+                    if src_pkg is None:
+                        _signal_package_error(src_name, f"No package named {src_name!r}")
+                    syms = []
+                    for n in names:
+                        sym, status = src_pkg.find_symbol(n)
+                        if sym is None:
+                            _signal_package_error(
+                                src_name, f"{n!r} is not accessible in package {src_name!r}")
+                        syms.append(sym)
+                    if syms:
+                        _pkg_import(syms, pkg)
 
                 return pkg
         

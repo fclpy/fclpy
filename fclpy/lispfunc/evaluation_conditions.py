@@ -1412,7 +1412,15 @@ def eval_ignore_errors(form, env):
             while _consp_internal(cur):
                 result = eval(car(cur), env)
                 cur = cdr(cur)
-            return lisptype.MultipleValues(result, lisptype.NIL)
+            # CLHS: "If the execution of forms is completed normally,
+            # ignore-errors returns whatever values the forms return" -- not
+            # the primary value padded with a forced NIL. Forcing a second
+            # value here made `(ignore-errors (values 1 2 3))` answer `(1
+            # NIL)` instead of `(1 2 3)`, which is wrong even in the common
+            # single-value case: any caller capturing *all* values (
+            # MULTIPLE-VALUE-LIST, MULTIPLE-VALUE-BIND with >1 var) saw an
+            # extra NIL that was never there.
+            return result
     except HandlerCaseTransfer as transferred:
         if transferred.tag is not tag:
             raise

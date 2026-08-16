@@ -34,8 +34,85 @@ def _parse_keyword_args(args):
         else:
             positional.append(arg)
             i += 1
-    
+
     return positional, result
+
+
+def _as_list(x):
+    """Normalize a Lisp designator-or-list argument into a Python list.
+
+    Many package operators (`USE-PACKAGE`, `EXPORT`, `SHADOW`, ...) accept
+    either a single designator or a list of them (CLHS "list of X or X").
+    This was previously a 4-line `isinstance` block copy-pasted at every call
+    site; a single shared helper means a shape one copy forgot (e.g. NIL
+    itself, which is also a `lispCons`-less empty list) cannot silently
+    diverge between operators.
+    """
+    if x is None or x is lisptype.NIL:
+        return []
+    if isinstance(x, lisptype.lispCons):
+        return list(x)
+    if isinstance(x, (list, tuple)):
+        return list(x)
+    return [x]
+
+
+def _lisp_list(items):
+    """Build a proper Lisp list (`lispCons` chain, NIL when empty).
+
+    Every package accessor that answers "a list of ..." (`PACKAGE-NICKNAMES`,
+    `PACKAGE-USE-LIST`, `PACKAGE-USED-BY-LIST`, `PACKAGE-SHADOWING-SYMBOLS`,
+    `LIST-ALL-PACKAGES`, ...) used to return a bare Python `list`. A Python
+    `list` is a *vector* in this implementation (plan.md Finding M), so
+    `(equal (package-nicknames p) nil)` compared an empty vector to NIL and
+    `(equal (package-use-list p) (list pkg))` compared a vector to a cons --
+    both structurally false regardless of the packages under test, which is
+    why nearly every assertion in make-package.lsp/defpackage.lsp failed.
+    """
+    result = lisptype.NIL
+    for item in reversed(list(items)):
+        result = lisptype.lispCons(item, result)
+    return result
+
+
+def _designator_to_string(x):
+    """Resolve a string designator to plain text (CLHS "string designator").
+
+    A string designator is a string, a symbol (its name), or a character
+    (a length-1 string) -- and the ANSI package tests also exercise every
+    specialized character-array shape (fill-pointered, adjustable, displaced)
+    as a package/nickname/symbol name. This is the one place that decides,
+    replacing the `isinstance(x, lispKeyword) ... elif LispSymbol ... else
+    str(x)` block that was previously copy-pasted in `MAKE-PACKAGE` and again
+    (differently) in `evaluation_core.py`'s `DEFPACKAGE` handling.
+    """
+    from .comparison import _string_characters
+    s = _string_characters(x)
+    if s is not None:
+        return s
+    if isinstance(x, (lisptype.lispKeyword, lisptype.LispSymbol)):
+        n = x.name
+        # A reader-produced |...|-escaped name keeps its pipes in `.name`
+        # (SYMBOL-NAME strips them for the same reason); without this an
+        # uninterned designator like `#:|TEST1|` produced "|TEST1|" instead
+        # of "TEST1" and every comparison against the plain string failed.
+        if isinstance(n, str) and n.startswith('|') and n.endswith('|') and len(n) >= 2:
+            n = n[1:-1]
+        return n
+    if isinstance(x, lisptype.Character):
+        return x.char
+    from . import arrays as _arrays
+    if _arrays.is_array(x) and _arrays.array_rank_of(x) == 1:
+        chars = []
+        for e in _arrays.array_elements(x):
+            if isinstance(e, lisptype.Character):
+                chars.append(e.char)
+            elif isinstance(e, str) and len(e) == 1:
+                chars.append(e)
+            else:
+                return str(x)
+        return ''.join(chars)
+    return str(x)
 
 
 def coerce_to_package(designator, default=None):
@@ -55,12 +132,7 @@ def coerce_to_package(designator, default=None):
             return coerce_to_package(default)
         current = getattr(state, 'current_package', None)
         return current if current is not None else lisptype.COMMON_LISP_USER_PACKAGE
-    if isinstance(designator, lisptype.LispSymbol):
-        name = designator.name
-    elif isinstance(designator, str):
-        name = str(designator)
-    else:
-        name = str(designator)
+    name = _designator_to_string(designator)
     pkg = lisptype.find_package(name)
     if pkg is None:
         raise lisptype.LispError(f'Package not found: {name}')
@@ -118,88 +190,44 @@ def package_symbols(package, kind):
 
 
 # --- Package operations (advanced) ---
+_MAKE_PACKAGE_KEYS = {'nicknames', 'use'}
+
+
 @_registry.cl_function('MAKE-PACKAGE')
 def make_package(*args):
-    """Create a new package.
-    
-    Handles both:
-    - (make-package name)
-    - (make-package name :nicknames list :use list)
+    """Create a new package (CLHS `MAKE-PACKAGE`).
+
+    (make-package package-name &key nicknames use)
     """
     if not args:
-        raise ValueError("MAKE-PACKAGE requires a name")
-    
-    # First argument is always the package name (positional)
+        raise lisptype.LispProgramError(
+            "MAKE-PACKAGE: wrong number of arguments (got 0, expected at least 1)")
+
     name_arg = args[0]
-    
-    # Remaining arguments are keyword args
     remaining_args = args[1:] if len(args) > 1 else []
-    _, kwargs = _parse_keyword_args(remaining_args)
-    if isinstance(name_arg, lisptype.lispKeyword):
-        name = name_arg.name  # Keywords store name without colon
-    elif isinstance(name_arg, lisptype.LispSymbol):
-        name = name_arg.name
-        if name.startswith(':'):
-            name = name[1:]  # Remove leading colon
-    else:
-        name = str(name_arg)
-        if name.startswith(':'):
-            name = name[1:]  # Remove leading colon
-    
-    nicknames = kwargs.get('nicknames', None)
-    use = kwargs.get('use', None)
-    
-    # Convert nicknames to Python list if it's a Lisp list
-    if nicknames is not None and nicknames != lisptype.NIL:
-        if isinstance(nicknames, lisptype.lispCons):
-            nick_list = []
-            cur = nicknames
-            while cur is not None and cur != lisptype.NIL and isinstance(cur, lisptype.lispCons):
-                item = cur.car
-                if isinstance(item, lisptype.lispKeyword):
-                    nick_list.append(item.name)
-                elif isinstance(item, lisptype.LispSymbol):
-                    n = item.name
-                    if n.startswith(':'):
-                        n = n[1:]
-                    nick_list.append(n)
-                else:
-                    nick_list.append(str(item) if item else None)
-                cur = cur.cdr
-            nicknames = [n for n in nick_list if n]
-        elif isinstance(nicknames, (list, tuple)):
-            nicknames = [str(n) for n in nicknames if n]
-    
-    # Convert use to Python list if it's a Lisp list
+    positional, kwargs = _parse_keyword_args(remaining_args)
+    if positional:
+        raise lisptype.LispProgramError(
+            f"MAKE-PACKAGE: malformed keyword arguments {positional!r}")
+    allow_other_keys = lisptype.is_truthy(kwargs.get('allow-other-keys', lisptype.NIL))
+    unknown = set(kwargs) - _MAKE_PACKAGE_KEYS - {'allow-other-keys'}
+    if unknown and not allow_other_keys:
+        raise lisptype.LispProgramError(
+            f"MAKE-PACKAGE: unrecognized keyword argument(s) {sorted(unknown)!r}")
+
+    name = _designator_to_string(name_arg)
+    nicknames = [_designator_to_string(n) for n in _as_list(kwargs.get('nicknames'))]
     use_list = []
-    if use is not None and use != lisptype.NIL:
-        if isinstance(use, lisptype.lispCons):
-            cur = use
-            while cur is not None and cur != lisptype.NIL and isinstance(cur, lisptype.lispCons):
-                item = cur.car
-                if isinstance(item, lisptype.lispKeyword):
-                    use_list.append(item.name)
-                elif isinstance(item, lisptype.LispSymbol):
-                    n = item.name
-                    if n.startswith(':'):
-                        n = n[1:]
-                    use_list.append(n)
-                elif isinstance(item, lisptype.Package):
-                    use_list.append(item.name)
-                else:
-                    use_list.append(str(item) if item else None)
-                cur = cur.cdr
-            use_list = [n for n in use_list if n]
-        elif isinstance(use, (list, tuple)):
-            use_list = [str(n) for n in use if n]
-    
+    for item in _as_list(kwargs.get('use')):
+        use_list.append(item.name if isinstance(item, lisptype.Package) else _designator_to_string(item))
+
     # Create the package
     pkg = lisptype.make_package(name)
-    
+
     # Store nicknames if provided
     if nicknames:
         pkg.nick_names = nicknames  # Use nick_names to match Package class
-    
+
     # Add USE'd packages
     for use_pkg_name in use_list:
         use_pkg = lisptype.find_package(use_pkg_name)
@@ -212,14 +240,17 @@ def make_package(*args):
 @_registry.cl_function('PACKAGE-NAME')
 def package_name(package):
     """Get package name."""
-    return package.name if isinstance(package, lisptype.Package) else None
+    pkg = coerce_to_package(package)
+    return lisptype.LispString(pkg.name)
 
 
 @_registry.cl_function('PACKAGE-NICKNAMES')
 def package_nicknames(package):
     """Get package nicknames."""
+    pkg = coerce_to_package(package)
     # Package class uses `nick_names`; accept either for compatibility
-    return getattr(package, 'nick_names', getattr(package, 'nicknames', []))
+    names = getattr(pkg, 'nick_names', None) or getattr(pkg, 'nicknames', [])
+    return _lisp_list(lisptype.LispString(n) for n in names)
 
 
 @_registry.cl_function('RENAME-PACKAGE')
@@ -233,92 +264,76 @@ def rename_package(package, new_name, new_nicknames=None):
 @_registry.cl_function('PACKAGE-USE-LIST')
 def package_use_list(package):
     """Get packages this package uses."""
-    pkg = package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)) if package else getattr(state, 'current_package', None)
-    if pkg is None:
-        return lisptype.NIL
-    result = list(pkg.use_list)
-    return result if result else lisptype.NIL
+    pkg = coerce_to_package(package)
+    return _lisp_list(pkg.use_list)
 
 
 @_registry.cl_function('PACKAGE-USED-BY-LIST')
 def package_used_by_list(package):
     """Get packages that use this package."""
-    pkg = package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)) if package else getattr(state, 'current_package', None)
-    if pkg is None:
-        return lisptype.NIL
+    pkg = coerce_to_package(package)
     used_by = []
     for p in list({id(p): p for p in state.packages.values()}.values()):
         if pkg in getattr(p, 'use_list', []):
             used_by.append(p)
-    return used_by if used_by else lisptype.NIL
+    return _lisp_list(used_by)
 
 
 @_registry.cl_function('PACKAGE-SHADOWING-SYMBOLS')
 def package_shadowing_symbols(package):
     """Get shadowing symbols in package."""
-    pkg = package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)) if package else getattr(state, 'current_package', None)
-    if pkg is None:
-        return lisptype.NIL
+    pkg = coerce_to_package(package)
     syms = []
     for name in getattr(pkg, 'shadowing_symbols', set()):
         s = pkg.symbols.get(name)
         if s is not None:
             syms.append(s)
-    return syms if syms else lisptype.NIL
+    return _lisp_list(syms)
 
 
 @_registry.cl_function('PACKAGE-EXTERNAL-SYMBOLS')
 def package_external_symbols(package):
     """Get external symbols in package.
-    
+
     Returns a list of symbols that are exported from the package.
     """
-    pkg = package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)) if package else getattr(state, 'current_package', None)
-    if pkg is None:
-        return lisptype.NIL
+    pkg = coerce_to_package(package)
     syms = []
     external_names = getattr(pkg, 'external_symbols', set())
     for name in external_names:
         s = pkg.symbols.get(name)
         if s is not None:
             syms.append(s)
-    return syms if syms else lisptype.NIL
+    return _lisp_list(syms)
 
 
 @_registry.cl_function('PACKAGE-INTERNAL-SYMBOLS')
 def package_internal_symbols(package):
     """Get internal (non-exported) symbols in package.
-    
+
     Returns a list of symbols that are in the package but not exported.
     """
-    pkg = package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)) if package else getattr(state, 'current_package', None)
-    if pkg is None:
-        return lisptype.NIL
+    pkg = coerce_to_package(package)
     syms = []
     external_names = getattr(pkg, 'external_symbols', set())
     for name, sym in pkg.symbols.items():
         if name not in external_names:
             syms.append(sym)
-    return syms if syms else lisptype.NIL
+    return _lisp_list(syms)
 
 
 @_registry.cl_function('LIST-ALL-PACKAGES')
 def list_all_packages():
     """List all known packages."""
     unique = {id(p): p for p in state.packages.values()}
-    return list(unique.values())
+    return _lisp_list(unique.values())
 
 
 @_registry.cl_function('UNINTERN')
 def unintern(symbol, package=None):
     """Remove symbol from package."""
-    if not isinstance(symbol, str) and hasattr(symbol, 'name'):
-        name = symbol.name
-    else:
-        name = str(symbol)
-    pkg = package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)) if package else getattr(state, 'current_package', None)
-    if pkg is None:
-        return lisptype.NIL
+    name = _designator_to_string(symbol)
+    pkg = coerce_to_package(package)
     name = name.upper()
     if name in pkg.symbols:
         del pkg.symbols[name]
@@ -331,47 +346,61 @@ def unintern(symbol, package=None):
 @_registry.cl_function('UNEXPORT')
 def unexport(symbols, package=None):
     """Unexport symbols from package."""
-    # Handle lispCons (Lisp list)
-    if isinstance(symbols, lisptype.lispCons):
-        symbols = list(symbols)
-    elif not isinstance(symbols, (list, tuple)):
-        symbols = [symbols]
-    pkg = package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)) if package else getattr(state, 'current_package', None)
-    if pkg is None:
-        return lisptype.NIL
-    for s in symbols:
-        name = s.name if hasattr(s, 'name') else str(s)
+    pkg = coerce_to_package(package)
+    for s in _as_list(symbols):
+        name = s.name if hasattr(s, 'name') else _designator_to_string(s)
         pkg.external_symbols.discard(name.upper())
     return lisptype.T
 
 
 @_registry.cl_function('SHADOWING-IMPORT')
 def shadowing_import(symbols, package=None):
-    """Shadowing import symbols."""
+    """Shadowing-import symbols into a package (CLHS 11.3).
+
+    Unlike `SHADOW`, the arguments here are already the actual symbols to be
+    made present in `package` (typically fetched from another package with
+    `FIND-SYMBOL`) -- the given symbol object itself becomes accessible, it
+    is not copied or re-interned under a fresh identity, and it is marked as
+    a shadowing symbol so it takes precedence over anything `package` would
+    otherwise inherit through `USE-PACKAGE`.
+    """
+    pkg = coerce_to_package(package)
+    for sym in _as_list(symbols):
+        name = sym.name if hasattr(sym, 'name') else _designator_to_string(sym)
+        pkg.symbols[name] = sym
+        pkg.shadowing_symbols.add(name)
     return lisptype.T
 
 
 @_registry.cl_function('SHADOW')
 def shadow(symbols, package=None):
-    """Create shadowing symbols in package."""
+    """Create shadowing symbols in a package (CLHS 11.3).
+
+    Unlike `SHADOWING-IMPORT`, the arguments are string designators: if a
+    symbol of that name is already present (not merely inherited) in
+    `package`, it is simply marked as shadowing; otherwise a *new* symbol is
+    interned directly into `package`, deliberately not the one `package`
+    would inherit via its use-list, and then marked as shadowing.
+    """
+    pkg = coerce_to_package(package)
+    for designator in _as_list(symbols):
+        name = _designator_to_string(designator)
+        existing = pkg.symbols.get(name)
+        if existing is None:
+            existing = lisptype.LispSymbol(name, package=pkg)
+            pkg.symbols[name] = existing
+        pkg.shadowing_symbols.add(name)
     return lisptype.T
 
 
 @_registry.cl_function('USE-PACKAGE')
 def use_package(packages, package=None):
     """Install packages into use-list."""
-    # Handle lispCons (Lisp list)
-    if isinstance(packages, lisptype.lispCons):
-        packages = list(packages)
-    elif not isinstance(packages, (list, tuple)):
-        packages = [packages]
-    target = package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)) if package else getattr(state, 'current_package', None)
-    if target is None:
-        return lisptype.NIL
-    for p in packages:
-        pkgobj = p if isinstance(p, lisptype.Package) else lisptype.find_package(str(p))
+    target = coerce_to_package(package)
+    for p in _as_list(packages):
+        pkgobj = p if isinstance(p, lisptype.Package) else lisptype.find_package(_designator_to_string(p))
         if pkgobj is None:
-            pkgobj = lisptype.make_package(str(p))
+            pkgobj = lisptype.make_package(_designator_to_string(p))
         if pkgobj not in target.use_packages:
             target.use_packages.append(pkgobj)
     return lisptype.T
@@ -380,16 +409,9 @@ def use_package(packages, package=None):
 @_registry.cl_function('UNUSE-PACKAGE')
 def unuse_package(packages, package=None):
     """Remove packages from use-list."""
-    # Handle lispCons (Lisp list)
-    if isinstance(packages, lisptype.lispCons):
-        packages = list(packages)
-    elif not isinstance(packages, (list, tuple)):
-        packages = [packages]
-    target = package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)) if package else getattr(state, 'current_package', None)
-    if target is None:
-        return lisptype.NIL
-    for p in packages:
-        pkgobj = p if isinstance(p, lisptype.Package) else lisptype.find_package(str(p))
+    target = coerce_to_package(package)
+    for p in _as_list(packages):
+        pkgobj = p if isinstance(p, lisptype.Package) else lisptype.find_package(_designator_to_string(p))
         if pkgobj in target.use_packages:
             target.use_packages.remove(pkgobj)
     return lisptype.T
@@ -402,7 +424,7 @@ def delete_package(package):
     Removes the package from the global package registry and
     from other packages' use-lists. Returns T if deleted, NIL otherwise.
     """
-    pkg = package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package))
+    pkg = package if isinstance(package, lisptype.Package) else lisptype.find_package(_designator_to_string(package))
     if pkg is None:
         return lisptype.NIL
 

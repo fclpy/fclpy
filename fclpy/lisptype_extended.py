@@ -398,6 +398,7 @@ class Package(lispT):
         self.use_packages = use_packages or []
         self.symbols = {}  # Map from symbol name to LispSymbol
         self.external_symbols = set()  # Set of exported symbol names
+        self.shadowing_symbols = set()  # Set of shadowing symbol names (CLHS 11.1.2.3)
     
     @property
     def use_list(self):
@@ -441,6 +442,18 @@ class Package(lispT):
                 if name in used_pkg.external_symbols:
                     sym = used_pkg.symbols.get(name)
                     if sym is not None:
+                        if external:
+                            # CLHS 11.1.2.1.2: exporting a name this package
+                            # only inherits makes that symbol directly
+                            # *present* here too, not merely inherited -- the
+                            # same symbol object, not a copy, so its home
+                            # package is unchanged. Skipping this left
+                            # `(export ...)`/DEFPACKAGE's :EXPORT unable to
+                            # promote an inherited symbol: FIND-SYMBOL kept
+                            # answering :INHERITED because the name was never
+                            # added to `self.symbols`.
+                            self.symbols[name] = sym
+                            self.external_symbols.add(name)
                         # Return the inherited symbol (don't create a new one)
                         return sym
         

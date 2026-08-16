@@ -201,18 +201,19 @@ def in_package(*args):
     if isinstance(name, lisptype.Package):
         pkg = name
     else:
-        # Handle keywords  
-        if isinstance(name, lisptype.lispKeyword):
-            pkg_name = name.name
-        elif isinstance(name, lisptype.LispSymbol):
-            pkg_name = name.name
-            if pkg_name.startswith(':'):
-                pkg_name = pkg_name[1:]
-        else:
-            pkg_name = str(name)
-            if pkg_name.startswith(':'):
-                pkg_name = pkg_name[1:]
-        
+        # A package designator is a package, a string, a symbol, or a
+        # character (CLHS 11.1.1.1) -- the same designator MAKE-PACKAGE and
+        # DEFPACKAGE resolve via `_designator_to_string`. This used to be a
+        # second, ad-hoc copy of that resolution (string()-ing anything that
+        # wasn't a keyword/symbol), which silently disagreed with the other
+        # two the moment the designator was anything else -- a specialized
+        # character-array name, for instance, str()'d to a Python object repr
+        # instead of its text, so `(make-package name)` and `(in-package
+        # name)` for the very same `name` value resolved to two different,
+        # wrongly-named packages instead of one.
+        from .misc_packages import _designator_to_string
+        pkg_name = _designator_to_string(name)
+
         pkg = lisptype.find_package(pkg_name)
         if pkg is None:
             # Create package - by default new packages USE COMMON-LISP
@@ -237,45 +238,19 @@ def in_package(*args):
 
 @_registry.cl_function('IMPORT')
 def import_symbol(symbols, package=None):
-    """Import symbols into a package."""
-    import fclpy.state as state  # Re-import to ensure we have the same state module
-    
-    # Convert symbols to a list for iteration
-    if isinstance(symbols, lisptype.lispCons):
-        # Convert lispCons to Python list
-        sym_list = []
-        cur = symbols
-        while isinstance(cur, lisptype.lispCons):
-            sym_list.append(cur.car)
-            cur = cur.cdr
-        symbols = sym_list
-    elif not isinstance(symbols, (list, tuple)):
-        symbols = [symbols]
-    
-    # Determine the target package
-    if package is None:
-        pkg = lisptype.COMMON_LISP_USER_PACKAGE
-    elif isinstance(package, lisptype.Package):
-        pkg = package
-    else:
-        # Handle keywords and symbols - extract the name
-        if isinstance(package, lisptype.lispKeyword):
-            pkg_name = package.name  # Keyword names don't include the colon
-        elif isinstance(package, lisptype.LispSymbol):
-            pkg_name = package.name
-            if pkg_name.startswith(':'):
-                pkg_name = pkg_name[1:]  # Remove leading colon if present
-        else:
-            pkg_name = str(package)
-            if pkg_name.startswith(':'):
-                pkg_name = pkg_name[1:]  # Remove leading colon
-        pkg = lisptype.find_package(pkg_name)
-    
-    if pkg is None:
-        raise lisptype.LispNotImplementedError(f"IMPORT: unknown package '{pkg_name}'")
-    for s in symbols:
+    """Import symbols into a package (CLHS 11.3).
+
+    The given symbol objects themselves become accessible in `package` as
+    *internal* symbols -- `IMPORT` does not export them, and it must not
+    re-intern a fresh symbol under the same name, or `(eq sym (find-symbol
+    (symbol-name sym) package))` becomes false for every imported symbol and
+    `SYMBOL-PACKAGE` still points at the original home package.
+    """
+    from .misc_packages import _as_list, coerce_to_package
+    pkg = coerce_to_package(package)
+    for s in _as_list(symbols):
         name = s.name if hasattr(s, 'name') else str(s)
-        pkg.intern_symbol(name, external=True)
+        pkg.symbols[name] = s
     return lisptype.T
 
 
@@ -284,25 +259,21 @@ def intern(name, package=None):
     """Intern a symbol in a package or create new interned symbol."""
     if not isinstance(name, str):
         name = str(name)
-    if package is None:
-        package = getattr(state, 'current_package', None) or lisptype.COMMON_LISP_USER_PACKAGE
-    if isinstance(package, lisptype.Package):
-        return package.intern_symbol(name)
-    pkg = lisptype.find_package(str(package))
-    if pkg is None:
-        pkg = lisptype.make_package(str(package))
+    from .misc_packages import coerce_to_package
+    pkg = coerce_to_package(package)
     return pkg.intern_symbol(name)
 
 
 @_registry.cl_function('FIND-SYMBOL')
 def find_symbol(name, package=None):
     """Find a symbol in a package.
-    
+
     Returns two values:
     1. The symbol (or NIL if not found)
     2. Status: :INTERNAL, :EXTERNAL, :INHERITED, or NIL if not found
     """
-    pkg = package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)) if package else getattr(state, 'current_package', None)
+    from .misc_packages import coerce_to_package
+    pkg = coerce_to_package(package)
     if pkg is None:
         return lisptype.MultipleValues(lisptype.NIL, lisptype.NIL)
     
@@ -326,8 +297,9 @@ def find_package(*args):
         raise lisptype.LispProgramError(
             f"FIND-PACKAGE: wrong number of arguments (got {len(args)}, expected 1)"
         )
+    from .misc_packages import _designator_to_string
     name = args[0]
-    return lisptype.find_package(str(name))
+    return lisptype.find_package(_designator_to_string(name))
 
 
 @_registry.cl_function('FIND-ALL-SYMBOLS')
@@ -343,7 +315,10 @@ def find_all_symbols(*args):
         sym, status = pkg.find_symbol(name)
         if sym is not None:
             results.append(sym)
-    return results
+    result = lisptype.NIL
+    for sym in reversed(results):
+        result = lisptype.lispCons(sym, result)
+    return result
 
 
 @_registry.cl_function('EXPORT')
@@ -357,9 +332,8 @@ def export(symbols, package=None):
         symbols = list(symbols)  # lispCons is iterable
     elif not isinstance(symbols, (list, tuple)):
         symbols = [symbols]
-    pkg = package if isinstance(package, lisptype.Package) else lisptype.find_package(str(package)) if package else getattr(state, 'current_package', None)
-    if pkg is None:
-        pkg = lisptype.COMMON_LISP_USER_PACKAGE
+    from .misc_packages import coerce_to_package
+    pkg = coerce_to_package(package)
     for s in symbols:
         sym_name = s.name if hasattr(s, 'name') else str(s)
         # Intern the symbol if not already present, then export it
