@@ -184,7 +184,6 @@ __all__ = [
     'with_compilation_unit',
     'with_pprint_logical_block',
     'with_slots',
-    'with_standard_io_syntax',
     'complex_fn',
     'load_time_value',
     'load',

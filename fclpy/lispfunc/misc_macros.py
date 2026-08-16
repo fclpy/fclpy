@@ -50,13 +50,13 @@ def with_slots(slot_entries, instance_form, *body):
     return result
 
 
-@_registry.cl_function('WITH-STANDARD-IO-SYNTAX')
-def with_standard_io_syntax(*body):
-    """WITH-STANDARD-IO-SYNTAX macro."""
-    result = None
-    for form in body:
-        result = form
-    return result
+# WITH-STANDARD-IO-SYNTAX is a real macro expander in
+# evaluation_special_forms.py, for the same reason as the WITH-*-STRING macros
+# above: it was a `cl_function` here whose body was "evaluate every argument
+# eagerly, return the last", so it established none of the twenty-one bindings
+# CLHS 23.4 gives it and its subforms ran in the *caller's* dynamic
+# environment. Keeping a second registration would silently win or lose
+# depending on module import order (standing rule 3).
 
 
 # --- Miscellaneous utilities ---
@@ -1198,7 +1198,6 @@ __all__ = [
     'with_compilation_unit',
     'with_pprint_logical_block',
     'with_slots',
-    'with_standard_io_syntax',
     'complex_fn',
     'load_time_value',
     'load',

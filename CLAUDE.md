@@ -91,6 +91,17 @@ passing as many of its tests as possible.
   **Still absent:** there is no character *syntax type* model, so
   `SET-SYNTAX-FROM-CHAR` is a stub, and `_read_symbol` upcases unconditionally
   rather than consulting `readtable-case`.
+- **`WITH-STANDARD-IO-SYNTAX`** is a `cl_macro` in
+  `evaluation_special_forms.py` expanding to the `LET` of CLHS 23.4's
+  twenty-one bindings — *not* a `cl_function`, which would evaluate its body
+  before establishing anything. Two of the values are objects with one home
+  each: `readtable.standard_readtable()` and
+  `io_write.standard_pprint_dispatch()` (the latter is also what
+  `*PRINT-PPRINT-DISPATCH*` starts out holding, so `lispenv` must not build
+  its own). Its binding variables are the **interned** `COMMON-LISP` symbols;
+  a bare `LispSymbol('*PRINT-BASE*')` in an expansion binds a *different*
+  variable from the one the printer reads, because global lookup is by symbol
+  identity.
 - **Types**: `lisptype_basic.py` (symbols, cons cells, NIL/T, `MultipleValues`) and
   `lisptype_extended.py` (`Environment`, **`Package` — at `:322`, *not* in
   `lisptype_basic.py`**, symbol-macros, condition types). `lisptype.py` re-exports

@@ -565,6 +565,103 @@ def with_open_stream_macro(spec, *body):
     ])
 
 
+def _cl(name):
+    """The *interned* COMMON-LISP symbol named `name`.
+
+    A macro expander must not build its variable names with a bare
+    `LispSymbol(...)`. A global variable's home is the symbol's own value
+    cell and lookup is by symbol *identity* (CLAUDE.md, "the global
+    environment has no lexical variables"), so a freshly constructed
+    `*PRINT-BASE*` would be bound and read as a *different* variable from the
+    interned one the printer consults.
+    """
+    return lisptype.COMMON_LISP_PACKAGE.intern_symbol(name)
+
+
+def _standard_io_syntax_bindings():
+    """The binding list CLHS 23.4 gives WITH-STANDARD-IO-SYNTAX.
+
+    Built fresh on each expansion because two of the values are objects, not
+    literals: the standard readtable and the standard pprint dispatch table.
+    """
+    from fclpy.readtable import standard_readtable
+    from .io_write import standard_pprint_dispatch
+
+    def quoted(obj):
+        return _cons_from([lisptype.LispSymbol('QUOTE'), obj])
+
+    return [
+        # CLHS names the package by string rather than by the value of
+        # *PACKAGE* at expansion time, and WITH-STANDARD-IO-SYNTAX.1 checks
+        # exactly that: it runs under `(let ((*package* (find-package
+        # :cl-test))) ...)` and requires *PACKAGE* to be CL-USER inside.
+        (_cl('*PACKAGE*'), _cons_from([lisptype.LispSymbol('FIND-PACKAGE'),
+                                       lisptype.LispString("COMMON-LISP-USER")])),
+        (_cl('*PRINT-ARRAY*'), lisptype.T),
+        (_cl('*PRINT-BASE*'), 10),
+        (_cl('*PRINT-CASE*'), quoted(lisptype.intern_keyword('UPCASE'))),
+        (_cl('*PRINT-CIRCLE*'), lisptype.NIL),
+        (_cl('*PRINT-ESCAPE*'), lisptype.T),
+        (_cl('*PRINT-GENSYM*'), lisptype.T),
+        (_cl('*PRINT-LENGTH*'), lisptype.NIL),
+        (_cl('*PRINT-LEVEL*'), lisptype.NIL),
+        (_cl('*PRINT-LINES*'), lisptype.NIL),
+        (_cl('*PRINT-MISER-WIDTH*'), lisptype.NIL),
+        (_cl('*PRINT-PPRINT-DISPATCH*'), quoted(standard_pprint_dispatch())),
+        (_cl('*PRINT-PRETTY*'), lisptype.NIL),
+        (_cl('*PRINT-RADIX*'), lisptype.NIL),
+        (_cl('*PRINT-READABLY*'), lisptype.T),
+        (_cl('*PRINT-RIGHT-MARGIN*'), lisptype.NIL),
+        (_cl('*READ-BASE*'), 10),
+        (_cl('*READ-DEFAULT-FLOAT-FORMAT*'), quoted(_cl('SINGLE-FLOAT'))),
+        (_cl('*READ-EVAL*'), lisptype.T),
+        (_cl('*READ-SUPPRESS*'), lisptype.NIL),
+        # "The standard readtable" -- the object itself, not a copy. It is
+        # immutable (CLHS 23.1.1), and ansi-test rebinds *READTABLE* to
+        # `(copy-readtable nil)` wherever it means to modify one.
+        (_cl('*READTABLE*'), quoted(standard_readtable())),
+    ]
+
+
+@_registry.cl_macro('WITH-STANDARD-IO-SYNTAX',
+                    documentation='WITH-STANDARD-IO-SYNTAX macro expander')
+def with_standard_io_syntax_macro(*body):
+    """Macro expander for WITH-STANDARD-IO-SYNTAX (CLHS 23.4).
+
+    Transforms:
+      (WITH-STANDARD-IO-SYNTAX body...)
+    into:
+      (LET ((*PACKAGE* (FIND-PACKAGE "COMMON-LISP-USER")) ...21 bindings...)
+        body...)
+
+    so the form's value, its multiple values and any non-local exit out of it
+    are LET's, which is what CLHS requires and what
+    `WITH-STANDARD-IO-SYNTAX.19/.20/.21/.22` check.
+
+    It was a `cl_function` whose body was "evaluate every argument eagerly,
+    return the last", i.e. it established **none** of the twenty-one bindings
+    -- `(let ((*print-base* 2)) (with-standard-io-syntax (prin1-to-string 5)))`
+    answered "101" where ANSI requires "5". That is the registry defect
+    CLAUDE.md describes: a form whose subforms must be evaluated in a
+    modified dynamic environment cannot be a `cl_function`, because
+    `cl_function` evaluates them before the form runs at all.
+
+    Expanding to LET is deliberate and is not a second binding mechanism:
+    `BindingFrame` already decides lexical vs. dynamic, and every one of these
+    variables is proclaimed special by `lispenv.STANDARD_SPECIAL_VARIABLES`,
+    so LET binds all twenty-one in their value cells -- the one home the
+    printer and reader read them from.
+
+    455 uses across 58 ansi-test files go through this macro, `def-pprint-test`
+    among them, so it gates the pretty-printer test vocabulary the way
+    `(copy-readtable nil)` gated `printer/print-integers.lsp`.
+    """
+    bindings = [_cons_from([var, init]) for var, init in _standard_io_syntax_bindings()]
+    return _cons_from(
+        [lisptype.LispSymbol('LET'), _cons_from(bindings)] + list(body)
+    )
+
+
 def eval_defun(form, env):
     """Evaluate DEFUN special form.
     

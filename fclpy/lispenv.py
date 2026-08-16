@@ -282,14 +282,14 @@ def setup_standard_environment():
         # Also set symbol value for direct access
         gensym_counter_sym.value = 0
         
-    # *PRINT-PPRINT-DISPATCH* - the current pretty print dispatch table
+    # *PRINT-PPRINT-DISPATCH* - the current pretty print dispatch table. It
+    # starts out holding the *standard* table (CLHS 23.4), which is the same
+    # object WITH-STANDARD-IO-SYNTAX rebinds it to, so the table has one home
+    # in io_write rather than a class declared inline here.
+    from fclpy.lispfunc.io_write import standard_pprint_dispatch
     pprint_dispatch_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*PRINT-PPRINT-DISPATCH*')
     if state.current_environment.find_variable(pprint_dispatch_sym) is None:
-        # Create a simple pprint dispatch table object
-        class PprintDispatchTable:
-            def __repr__(self):
-                return "#<PPRINT-DISPATCH-TABLE>"
-        state.current_environment.add_variable(pprint_dispatch_sym, PprintDispatchTable())
+        state.current_environment.add_variable(pprint_dispatch_sym, standard_pprint_dispatch())
 
     # *RANDOM-STATE* - proclaimed special above, but proclamation alone
     # leaves the value cell empty; RANDOM/MAKE-RANDOM-STATE read it through

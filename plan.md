@@ -972,12 +972,25 @@ flattened** — no cluster now exceeds 6% of the remainder — so the argument f
 "one mechanism unblocks everything" is weaker than at any previous point, and
 these are ranked on measured evidence rather than on that premise.
 
-14. **Attribute `types-and-classes`' 14.1-point fall, and the ~11-file
-    transcendental/float regression cluster.** Before any new mechanism.
-    A per-file regression is a build failure even when the total improved
-    (§7), and a uniform small delta across eleven numeric files is the
-    signature of one shared defect — the same shape the 08-15 rounding family
-    turned out to have. Cheap to check, and it protects the +3224.
+14. ~~**Attribute `types-and-classes`' 14.1-point fall, and the ~11-file
+    transcendental/float regression cluster.**~~ **Both attributed; neither
+    is live breakage.** `types-and-classes` is the `unless` repair making
+    previously-vacuous `SUBTYPEP` assertions run and fail honestly against
+    C14's known-absent type lattice — diagnosed in
+    [preventing regression](#preventing-regression) and accepted there in
+    writing. **The transcendental/float cluster does not exist** (checked
+    2026-08-16 c): all fourteen of its files run **250 passing of 254** on
+    `run_ansi.py`, and the four failures are two unrelated defects —
+    `MIN.27`/`.28` are LOOP's documented bucket-order execution (a C1
+    follow-up), and `RATIONALIZE.1`/`.3` are one genuine `RATIONALIZE`
+    defect that neither round-trips nor handles denormals (C15). The
+    "uniform small delta across eleven numeric files" was an artefact of
+    diffing against a **three-run-old** baseline, which is the cost
+    [§7](#preventing-regression)'s process lesson already named. **The
+    standing action from this is [§7](#preventing-regression)'s, not a code
+    fix: save a dated snapshot of `ansi_results/` beside each full run** so
+    the next mechanism change can be attributed against the run before it
+    rather than against 08-12.
 15. ~~**[C10](#c10-package-model), the package model.**~~ **Largely done
     (2026-08-16 targeted; not yet folded into a full run).** `packages/`
     **201 → 373 of 500 (74.6%)**, 0 regressions; `make-package.lsp` and
@@ -999,15 +1012,22 @@ these are ranked on measured evidence rather than on that premise.
     family at 417.** The lesson is [§3](#the-checklist)'s own: a 100%-failing
     file names an absent mechanism, and the mechanism is not always in the
     subsystem the test names belong to.
-16a. **`WITH-STANDARD-IO-SYNTAX` (new, and the cheapest thing in the suite).**
-    It establishes *no* bindings — `(let ((*print-base* 2))
-    (with-standard-io-syntax (prin1-to-string 5)))` is `"101"`, not `"5"`. 58
-    ansi-test files use it and `def-pprint-test` is built on it, so it gates
-    the pretty-printer files the way `copy-readtable` gated the integer ones.
-    Now cheap, because its binding list needs the `(copy-readtable nil)` that
-    16 just supplied. Verify with `run_ansi.py printer` — but note that
-    directory is now slow and memory-hungry for the reason recorded in the
-    [Changelog](#changelog).
+16a. ~~**`WITH-STANDARD-IO-SYNTAX` (new, and the cheapest thing in the suite).**~~
+    **Done 2026-08-16 (c).** It established *no* bindings, because it was a
+    `cl_function`. It is now a `cl_macro` expanding to the `LET` of CLHS
+    23.4's twenty-one bindings, so `BindingFrame` does the binding and there
+    is no second mechanism. Measured, same runner both sides over eight files
+    that use it: **122 → 142 passing of 182**, failures 60 → 40, **0 newly
+    failing**; `reader/with-standard-io-syntax.lsp` **19 → 1 failing of 23**.
+    Details in the [Changelog](#changelog). **The predicted blast radius did
+    not materialise, and that is the finding:** it was ranked here as a
+    *gate* in front of the pretty-printer files, on the strength of 455 uses
+    across 58 files. Only 2 of the 20 recovered tests were outside the file
+    that tests the operator itself — the pretty-printer files are blocked on
+    the pretty printer *being absent*, not on the gate, and `def-pprint-test`
+    binds `*print-pretty*` to T immediately after this macro sets it to NIL.
+    Cheap and correct, but a symptom-sized fix by [§2](#the-development-loop)
+    step 7's own test.
 17. **[C8](#c8-clos--defgeneric--defmethod--defclass--change-class), CLOS.**
     `objects/` is 28.0% and barely moved (+1.7) across a run that moved
     everything else. Two implementations still coexist (Finding L), so
@@ -1048,7 +1068,7 @@ Anything knowingly non-ANSI, with the milestone that removes it. Empty means
 | `~&` sees only the column within its own control string, so a `~&` opening a control string cannot tell the stream is mid-line; `FRESH-LINE` is correct | FORMAT builds its whole output as a string before writing, and the column is not threaded through the eleven nested `_format_process_cursor` call sites | C2 |
 | `SUBTYPEP` string-pair table | no type lattice | M9 |
 | The reader does not parse **ratios**: `3/5` reads as a symbol, so it evaluates as an unbound variable | found 2026-08-16 while probing `*mini-universe*`, whose ratio entry is therefore not a ratio | M10 / C12 |
-| `WITH-STANDARD-IO-SYNTAX` binds none of the fourteen variables CLHS gives it — it is a `cl_function` that evaluates its body eagerly and returns the last value | predates the printer control variables being real variables; 58 ansi-test files depend on it, so it is its own measured change | C2 / M10 |
+| `WITH-STANDARD-IO-SYNTAX` binds `*PRINT-PPRINT-DISPATCH*` to a dispatch table that dispatches nothing | the *object* now has one home (`io_write.standard_pprint_dispatch`) and the binding is correct, but `SET-PPRINT-DISPATCH`/`PPRINT-DISPATCH` are stubs, so `WITH-STANDARD-IO-SYNTAX.23` cannot pass. It is the pretty printer's absence, not the macro's | C2 / M10 |
 | `SET-SYNTAX-FROM-CHAR` returns T without doing anything, and there is no character *syntax type* model for it to act on | `Readtable` records macro characters and a case and nothing else; building syntax types is the bulk of what `reader/` still owes | M10 / C12 |
 | The reader upcases every symbol token regardless of `readtable-case`, though the readtable records it and the printer honours it (CLHS 23.1.2) | `Readtable._read_symbol` predates the readtable being a real object | M10 / C12 |
 | `MAKE-LIST`/`MAKE-SEQUENCE` refuse a size above `CONSTRUCTIBLE_LIMIT` (2**30) with a plain error rather than a `STORAGE-CONDITION` | CLHS 4.4 permits refusing, but the condition *type* should be `STORAGE-CONDITION` once the class lattice exists | M8 / M9 |
@@ -1250,6 +1270,100 @@ rather than discovering these one crash at a time.
 
 Condensed from the previous chronological plan. Each entry is a *mechanism*
 landed, not a test count.
+
+- **2026-08-16 (c)** — **`WITH-STANDARD-IO-SYNTAX` establishes its bindings,
+  and a predicted gate turns out not to be one.** It was a `cl_function` whose
+  body was "evaluate every argument eagerly, return the last", so it
+  established **none** of the twenty-one bindings CLHS 23.4 gives it —
+  `(let ((*print-base* 2)) (with-standard-io-syntax (prin1-to-string 5)))`
+  answered `"101"` where ANSI requires `"5"`. That is exactly the registry
+  defect `CLAUDE.md` names: a form whose subforms must run in a *modified*
+  dynamic environment cannot be a `cl_function`, because `cl_function`
+  evaluates them before the form runs at all. It is now a `cl_macro` in
+  `evaluation_special_forms.py`, beside the WITH-*-STRING expanders that were
+  the same defect, expanding to the `LET` of CLHS 23.4's binding list. **This
+  deliberately adds no binding mechanism:** every one of the twenty-one
+  variables is proclaimed special by `lispenv.STANDARD_SPECIAL_VARIABLES`, so
+  `BindingFrame` already binds them in their value cells, and the form's
+  value, its multiple values and any non-local exit out of it are LET's —
+  which is what `WITH-STANDARD-IO-SYNTAX.19/.20/.21/.22` check.
+  **Two details the expansion cannot get wrong quietly.** The binding
+  variables are the *interned* `COMMON-LISP` symbols, not bare
+  `LispSymbol(...)`: a global variable's home is the symbol's own value cell
+  and lookup is by symbol *identity*, so a freshly built `*PRINT-BASE*` would
+  be bound and read as a different variable from the one the printer
+  consults. And `*PACKAGE*` binds `(find-package "COMMON-LISP-USER")` by name
+  rather than to whatever the caller had — `WITH-STANDARD-IO-SYNTAX.1` checks
+  precisely that.
+  **One object model came with it.** CLHS 23.4 binds
+  `*PRINT-PPRINT-DISPATCH*` to "the standard pprint dispatch table", and
+  there was no such object to name: `COPY-PPRINT-DISPATCH` answered a bare
+  Python `dict` (standing rule 2) and `lispenv` built the initial table from a
+  class declared *inline inside* `setup_standard_environment`, so nothing
+  else could reach the object the macro has to rebind to.
+  `io_write.standard_pprint_dispatch()` is now its one home, the same shape
+  as `readtable.standard_readtable()`, and `COPY-PPRINT-DISPATCH` resolves
+  NIL to it and raises on anything else rather than answering a dict.
+  **Measured, same runner both sides**, over eight files that use the macro
+  (`reader/with-standard-io-syntax.lsp`, `printer/print-level.lsp`,
+  `pprint-indent.lsp`, `print-strings.lsp`, `write.lsp`, `print-characters.lsp`,
+  `format/format-x.lsp`, `format/format-o.lsp`; 182 registered both sides):
+  **122 → 142 passing, failures 60 → 40, and every failure that remains is a
+  strict subset of the ones before — 0 newly failing.**
+  `reader/with-standard-io-syntax.lsp` **19 → 1 failing of 23**. `pytest`
+  **1669 → 1699 passed**, same single pre-existing `STREAM-ELEMENT-TYPE`
+  failure; the 30 new tests are `tests/test_with_standard_io_syntax.py`, and
+  they include the architectural guards [§7](#preventing-regression) asks
+  for — the registration is a macro, and no competing special-form
+  registration exists.
+  **Checklist effect:** 6776 → **6756** failing (−20), files with failures
+  544 → 543, merge recorded as `fixed 20, regressed 0, new 0`, and the
+  `REGRESSION` marker count against the 08-12 baseline stays at **55** —
+  none added. `printer/print-level.lsp` leaves the list entirely.
+  **The prediction was wrong, and the way it was wrong is the point.**
+  [§4](#recommended-order) item 16a ranked this as a *measurement gate* in
+  front of the pretty-printer files, on 455 uses across 58 files — the shape
+  items 4, 6, 16 and the COND fix all had. It is not one. Across the **8 of
+  those 58 files** measured here — the heaviest users that finish in
+  reasonable time — only **2** of the 20 recovered tests were outside the
+  file that tests the operator itself
+  (`printer/print-level.lsp` 2 → 0, untargeted). The pretty-printer files are
+  blocked on the pretty printer *being absent*, not on the gate:
+  `def-pprint-test` binds `*print-pretty*` to T in the very next form, so
+  what this macro sets it to never mattered to them. By [§2](#the-development-loop)
+  step 7's own test — how many failures disappeared that you did not target —
+  this is a symptom-sized fix, and the four preceding gate-shaped wins made
+  it look larger than it was. **`printer/`'s remaining failures belong to the
+  pretty printer and to `FORMAT`'s missing directives, not to their
+  preamble.**
+  **Discovered, not fixed:** `WITH-STANDARD-IO-SYNTAX.23` needs
+  `SET-PPRINT-DISPATCH`/`PPRINT-DISPATCH` to actually dispatch — both are
+  stubs returning NIL, so the table's *contents* are still unobservable even
+  though its identity now is.
+  **And item 14's transcendental/float "regression cluster" does not exist.**
+  All fourteen of its files run **250 passing of 254** on `run_ansi.py`
+  (`atan`/`sin`/`log`/`acos`/`lcm`/`min` 123 of 125; `tan`/`cos`/`asin`/
+  `acosh`/`phase`/`logbitp`/`rationalize`/`make-random-state` 127 of 129),
+  and the four failures share no mechanism with each other, let alone one
+  float defect:
+  - `MIN.27`/`.28` are
+    `(loop for i ... for x = (make-list i ...) do (setf (elt x (random i)) 0)
+    unless (eql (apply #'min x) 0) collect x)`. `(apply #'min '(1 0 1))`
+    answers `0` correctly in isolation; they fail on **LOOP's documented
+    bucket-order execution** ([§5](#5-known-temporary-deviations)), which
+    evaluates the `unless` test before the `do` that plants the zero, so it
+    reads an all-ones list. A C1 follow-up.
+  - `RATIONALIZE.1`/`.3` are a real **`RATIONALIZE`** defect: CLHS requires
+    the simplest rational that reads back as the *same* float, and this one
+    neither round-trips (`(float (rationalize x) x)` ≠ `x`) nor handles
+    denormals — `(rationalize 1.4e-45)` is `0`. C15/Phase 4, one operator.
+
+  So the +1/+2 per-file deltas item 14 reads as one shared defect are an
+  artefact of measuring against a **three-run-old** baseline, not live
+  breakage — which is the cost [§7](#preventing-regression)'s own "process
+  lesson" predicted when it noted that refusing to refresh the baseline
+  protects old evidence at the price of attributing every future diff
+  against an ever-staler point.
 
 - **2026-08-16 (b)** — **The readtable becomes an object with one home, and a
   fourth measurement gate falls.** `(copy-readtable nil)` raised

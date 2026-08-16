@@ -394,11 +394,69 @@ def make_two_way_stream(input_stream, output_stream):
     return output_stream
 
 
-# Pretty printing operations
+# === Pretty printing operations ===
+#
+# The pretty printer itself is absent (every PPRINT-* below is a stub), but the
+# *dispatch table* is an object CLHS names in two places that are already
+# reachable: `*PRINT-PPRINT-DISPATCH*` and WITH-STANDARD-IO-SYNTAX's binding
+# list, which CLHS 23.4 says binds it to "the standard pprint dispatch table".
+# So the table needs an object model and one home, exactly as the readtable
+# does -- `readtable.standard_readtable()` is the same shape. Without it,
+# `COPY-PPRINT-DISPATCH` answered a bare Python `dict` (standing rule 2) and
+# `lispenv` built the initial table from a class declared inline inside
+# `setup_standard_environment`, so nothing else could name the object
+# WITH-STANDARD-IO-SYNTAX has to rebind to.
+
+
+class PprintDispatchTable:
+    """A pretty-print dispatch table (CLHS 22.2.1.4).
+
+    `entries` is the (type-specifier, function, priority) list SET-PPRINT-DISPATCH
+    writes and PPRINT-DISPATCH reads. Nothing consumes it yet -- the pretty
+    printer is not implemented -- but the object's *identity* is already
+    observable through `*PRINT-PPRINT-DISPATCH*`, which is what
+    WITH-STANDARD-IO-SYNTAX needs.
+    """
+
+    def __init__(self, entries=None):
+        self.entries = list(entries) if entries else []
+
+    def copy(self):
+        return PprintDispatchTable(self.entries)
+
+    def __repr__(self):
+        return "#<PPRINT-DISPATCH-TABLE>"
+
+
+_standard_pprint_dispatch = None
+
+
+def standard_pprint_dispatch():
+    """The **standard pprint dispatch table** (CLHS 22.2.1.4, 23.4).
+
+    One shared object, the way `readtable.standard_readtable()` is: it is what
+    `*PRINT-PPRINT-DISPATCH*` starts out holding and what
+    WITH-STANDARD-IO-SYNTAX rebinds it to, so both must name the *same* table
+    or the rebinding is unobservable.
+    """
+    global _standard_pprint_dispatch
+    if _standard_pprint_dispatch is None:
+        _standard_pprint_dispatch = PprintDispatchTable()
+    return _standard_pprint_dispatch
+
+
 @_registry.cl_function('COPY-PPRINT-DISPATCH')
 def copy_pprint_dispatch(table=None):
-    """Copy pretty print dispatch table."""
-    return {}  # Simplified
+    """Copy a pretty print dispatch table (CLHS 22.2.1.4).
+
+    NIL denotes the standard table, as it does for every readtable designator.
+    """
+    if table is None or table is lisptype.NIL:
+        return standard_pprint_dispatch().copy()
+    if isinstance(table, PprintDispatchTable):
+        return table.copy()
+    raise lisptype.LispNotImplementedError(
+        f"COPY-PPRINT-DISPATCH: not a pprint dispatch table: {table!r}")
 
 
 @_registry.cl_function('PPRINT')
