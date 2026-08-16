@@ -4,6 +4,7 @@ Tests that the Readtable class properly manages macro characters and dispatch ma
 """
 
 import pytest
+import fclpy.lisptype as lisptype
 from fclpy.readtable import Readtable, get_current_readtable, set_current_readtable
 from fclpy.lispfunc.io import (
     set_macro_character,
@@ -333,14 +334,31 @@ class TestReadtableLispFunctions:
         assert rt2.get_macro_character('~') is not None
     
     def test_readtable_case_function(self):
-        """Test READTABLE-CASE function."""
+        """READTABLE-CASE answers a *keyword*, not a Python string (CLHS 23.2).
+
+        This asserted `== 'DOWNCASE'`, i.e. it pinned a Python object appearing
+        as a Lisp value (standing rule 2): the string is not EQ to the
+        `:DOWNCASE` every caller compares the result against.
+        """
+        import fclpy.lisptype as lisptype
+
         rt = Readtable()
         rt.set_readtable_case('DOWNCASE')
-        
+
         set_current_readtable(rt)
         case = readtable_case()
-        
-        assert case == 'DOWNCASE'
+
+        assert case is lisptype.intern_keyword('DOWNCASE')
+
+    def test_readtable_case_rejects_a_non_case(self):
+        """The four values of CLHS 23.1.2 are the only ones accepted."""
+        import pytest
+
+        import fclpy.lisptype as lisptype
+
+        rt = Readtable()
+        with pytest.raises(lisptype.LispTypeError):
+            rt.set_readtable_case('SIDEWAYS')
     
     def test_macro_character_functions(self):
         """Test SET-MACRO-CHARACTER and GET-MACRO-CHARACTER functions."""
@@ -350,13 +368,16 @@ class TestReadtableLispFunctions:
         def dummy_reader(char, stream):
             return None
         
-        set_macro_character('~', dummy_reader, True)
-        
-        # get_macro_character returns a tuple (function, non_terminating_p)
+        assert set_macro_character('~', dummy_reader, True) is lisptype.T
+
+        # GET-MACRO-CHARACTER answers *two values* (CLHS 23.2): the function
+        # and non-terminating-p. This asserted a Python 2-tuple with a Python
+        # `True` in it -- the readtable's internal storage handed back as the
+        # value of the form (standing rule 2).
         result = get_macro_character('~')
-        assert result is not None
+        assert isinstance(result, lisptype.MultipleValues)
         assert result[0] is dummy_reader
-        assert result[1] == True
+        assert result[1] is lisptype.T
     
     def test_dispatch_macro_character_functions(self):
         """Test SET-DISPATCH-MACRO-CHARACTER and GET-DISPATCH-MACRO-CHARACTER."""

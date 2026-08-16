@@ -1,6 +1,7 @@
 """I/O read operations - stream input and character reading."""
 
 import fclpy.lisptype as lisptype
+import fclpy.readtable as _rt
 from . import registry as _registry
 
 
@@ -15,11 +16,43 @@ def get_read_base():
     return _read_base
 
 
+def _supplied_true(value):
+    """Truth of an optional argument whose omitted value is false.
+
+    `lisptype.is_truthy(False)` answers True (plan.md S5, owned by M2), so a
+    Python `False` cannot simply be handed to it.
+    """
+    return value is not None and value is not False and lisptype.is_truthy(value)
+
+
+def _char_of(char, what):
+    """The Python character a **character designator** names.
+
+    The readtable is keyed by one-character strings, so a `Character` object --
+    which is what `#\\(` evaluates to -- used to miss every entry and answer
+    "not a macro character" for characters that plainly are.
+    """
+    if isinstance(char, lisptype.Character):
+        return char.char
+    if isinstance(char, str) and len(char) == 1:
+        return char
+    text = getattr(char, 'value', None)
+    if isinstance(text, str) and len(text) == 1:
+        return text
+    raise lisptype.LispTypeError(
+        f"{what}: {char!r} is not a character",
+        expected_type="CHARACTER", actual_value=char)
+
+
 @_registry.cl_function('READTABLEP')
 def readtablep(obj):
-    """Test if object is a readtable."""
-    # For now, we don't have readtable objects yet; return NIL
-    return lisptype.NIL
+    """READTABLEP: is `obj` a readtable? (CLHS 23.2)
+
+    This returned NIL unconditionally -- "we don't have readtable objects yet"
+    -- long after `Readtable` existed, so `(readtablep *readtable*)` denied the
+    very object `*READTABLE*` was bound to.
+    """
+    return lisptype.lisp_bool(isinstance(obj, _rt.Readtable))
 
 
 @_registry.cl_function('STREAMP')
@@ -206,70 +239,115 @@ def make_string_input_stream(string, start=0, end=None):
     return _make_sis(string, start, end)
 
 
+# Every operator below resolves its readtable argument through the one
+# `coerce_to_readtable`, so NIL means the standard readtable in all of them
+# (CLHS glossary, "readtable designator") and an omitted argument means the
+# current one. `_OMITTED` is what tells those two apart -- a plain `=None`
+# default cannot, and that is why every one of these used to raise on NIL.
+
 @_registry.cl_function('COPY-READTABLE')
-def copy_readtable(from_readtable=None, to_readtable=None):
-    """Copy readtable."""
-    from ..readtable import get_current_readtable
-    if from_readtable is None:
-        from_readtable = get_current_readtable()
-    # Use the built-in copy method on Readtable
-    return from_readtable.copy()
+def copy_readtable(from_readtable=_rt._OMITTED, to_readtable=_rt._OMITTED):
+    """COPY-READTABLE: copy `from-readtable` (CLHS 23.2).
+
+    NIL as `from-readtable` designates the *standard* readtable, which is what
+    makes `(copy-readtable nil)` -- the basis of every
+    `with-standard-io-syntax`-style form, including ansi-test's own
+    `my-with-standard-io-syntax` -- answer standard syntax.
+    """
+    source = _rt.coerce_to_readtable(from_readtable, 'COPY-READTABLE')
+    target = to_readtable
+    if target is _rt._OMITTED or target is None or target is lisptype.NIL \
+            or isinstance(target, lisptype.lispNull):
+        return source.copy()
+    if not isinstance(target, _rt.Readtable):
+        raise lisptype.LispTypeError(
+            f"COPY-READTABLE: {type(target).__name__} is not a readtable",
+            expected_type="READTABLE", actual_value=target)
+    return source.copy_into(target)
 
 
 @_registry.cl_function('READTABLE-CASE')
-def readtable_case(readtable=None):
-    """Get readtable case."""
-    from ..readtable import get_current_readtable
-    if readtable is None:
-        readtable = get_current_readtable()
-    return readtable.readtable_case()
+def readtable_case(readtable=_rt._OMITTED):
+    """READTABLE-CASE: the case sensitivity mode, as a keyword (CLHS 23.2).
+
+    This answered the Python string `'UPCASE'`, which is a Python object
+    appearing as a Lisp value (standing rule 2) and is not `EQ` to the
+    `:UPCASE` every caller compares it against.
+    """
+    table = _rt.coerce_to_readtable(readtable, 'READTABLE-CASE')
+    return _rt.case_keyword(table.readtable_case())
+
+
+@_registry.cl_function('SET-READTABLE-CASE')
+def set_readtable_case(readtable, mode):
+    """`(setf (readtable-case rt) mode)` (CLHS 23.2).
+
+    SETF reaches a place named by a function through a `SET-<name>` function
+    when no expander is registered, so this is the writer half of
+    READTABLE-CASE rather than a sixth entry in the place ladder (M5).
+    """
+    table = _rt.coerce_to_readtable(readtable, 'SETF READTABLE-CASE')
+    table.set_readtable_case(_rt.case_from_designator(mode, 'SETF READTABLE-CASE'))
+    return mode
 
 
 @_registry.cl_function('GET-MACRO-CHARACTER')
-def get_macro_character(char, readtable=None):
-    """Get macro character function."""
-    from ..readtable import get_current_readtable
-    if readtable is None:
-        readtable = get_current_readtable()
-    return readtable.get_macro_character(char)
+def get_macro_character(char, readtable=_rt._OMITTED):
+    """GET-MACRO-CHARACTER: the reader macro function and its terminating flag.
+
+    CLHS 23.2 gives this **two values**: the function (or NIL) and
+    non-terminating-p. The readtable stores them as a Python 2-tuple, which
+    must not be handed back as the value of the form (standing rule 2).
+    """
+    table = _rt.coerce_to_readtable(readtable, 'GET-MACRO-CHARACTER')
+    entry = table.get_macro_character(_char_of(char, 'GET-MACRO-CHARACTER'))
+    if entry is None:
+        return lisptype.MultipleValues(lisptype.NIL, lisptype.NIL)
+    function, non_terminating_p = entry
+    return lisptype.MultipleValues(
+        function, lisptype.lisp_bool(non_terminating_p))
 
 
 @_registry.cl_function('SET-MACRO-CHARACTER')
-def set_macro_character(char, function, non_terminating_p=None, readtable=None):
+def set_macro_character(char, function, non_terminating_p=None, readtable=_rt._OMITTED):
     """Set macro character function."""
-    from ..readtable import get_current_readtable
-    if readtable is None:
-        readtable = get_current_readtable()
-    return readtable.set_macro_character(char, function, non_terminating_p or False)
+    table = _rt.coerce_to_readtable(readtable, 'SET-MACRO-CHARACTER')
+    table.set_macro_character(
+        _char_of(char, 'SET-MACRO-CHARACTER'), function,
+        _supplied_true(non_terminating_p))
+    return lisptype.T  # CLHS 23.2: SET-MACRO-CHARACTER returns T
 
 
 @_registry.cl_function('GET-DISPATCH-MACRO-CHARACTER')
-def get_dispatch_macro_character(disp_char, sub_char, readtable=None):
+def get_dispatch_macro_character(disp_char, sub_char, readtable=_rt._OMITTED):
     """Get dispatch macro character function."""
-    from ..readtable import get_current_readtable
-    if readtable is None:
-        readtable = get_current_readtable()
-    return readtable.get_dispatch_macro_character(disp_char, sub_char)
+    table = _rt.coerce_to_readtable(readtable, 'GET-DISPATCH-MACRO-CHARACTER')
+    function = table.get_dispatch_macro_character(
+        _char_of(disp_char, 'GET-DISPATCH-MACRO-CHARACTER'),
+        _char_of(sub_char, 'GET-DISPATCH-MACRO-CHARACTER').upper())
+    # "No function" is NIL, not Python None (standing rule 2).
+    return lisptype.NIL if function is None else function
 
 
 @_registry.cl_function('SET-DISPATCH-MACRO-CHARACTER')
-def set_dispatch_macro_character(disp_char, sub_char, function, readtable=None):
+def set_dispatch_macro_character(disp_char, sub_char, function, readtable=_rt._OMITTED):
     """Set dispatch macro character."""
-    from ..readtable import get_current_readtable
-    if readtable is None:
-        readtable = get_current_readtable()
-    return readtable.set_dispatch_macro_character(disp_char, sub_char, function)
+    table = _rt.coerce_to_readtable(readtable, 'SET-DISPATCH-MACRO-CHARACTER')
+    table.set_dispatch_macro_character(
+        _char_of(disp_char, 'SET-DISPATCH-MACRO-CHARACTER'),
+        _char_of(sub_char, 'SET-DISPATCH-MACRO-CHARACTER').upper(), function)
+    return lisptype.T  # CLHS 23.2: SET-DISPATCH-MACRO-CHARACTER returns T
 
 
 @_registry.cl_function('MAKE-DISPATCH-MACRO-CHARACTER')
-def make_dispatch_macro_character(char, non_terminating_p=False, readtable=None):
+def make_dispatch_macro_character(char, non_terminating_p=None, readtable=_rt._OMITTED):
     """Make character into dispatch macro character."""
-    from ..readtable import get_current_readtable
-    if readtable is None:
-        readtable = get_current_readtable()
+    table = _rt.coerce_to_readtable(readtable, 'MAKE-DISPATCH-MACRO-CHARACTER')
     # Our simplified Readtable doesn't expose a dedicated creator; emulate by
     # registering a placeholder sharp reader if needed and marking non-terminating.
-    readtable.set_macro_character(char, lambda c, s: None, not non_terminating_p)
+    table.set_macro_character(
+        _char_of(char, 'MAKE-DISPATCH-MACRO-CHARACTER'),
+        lambda c, s: None, _supplied_true(non_terminating_p))
     return lisptype.T
 
 
@@ -280,14 +358,13 @@ def set_syntax_from_char(to_char, from_char, to_readtable=None, from_readtable=N
     return lisptype.T
 
 
-@_registry.cl_function('*READTABLE*')
-def get_readtable_var():
-    """Get the value of *READTABLE* (current readtable).
-    
-    Returns the current readtable used for reading Lisp expressions.
-    """
-    from ..readtable import get_current_readtable
-    return get_current_readtable()
+# NOTE: `*READTABLE*` is a *variable*, bound in `lispenv.py` and living in the
+# symbol's value cell like every other special. It used to also be registered
+# here as a `cl_function` under the variable's own name -- the defect plan.md
+# C7 describes for `*PRINT-BASE*`, where registering a function under a
+# variable's name is what made the variable evaluate to a Python function
+# object. `readtable.get_current_readtable()` now reads that value cell, so
+# there is one home and no accessor to keep in step with it.
 
 
 # NOTE: the real macro expander lives in evaluation_special_forms.py.
@@ -303,9 +380,8 @@ __all__ = [
     'listen', 'clear_input', 'read', 'read_char_no_hang',
     'read_delimited_list', 'read_from_string', 'read_preserving_whitespace',
     'make_string_input_stream',
-    'copy_readtable', 'readtable_case',
+    'copy_readtable', 'readtable_case', 'set_readtable_case',
     'get_macro_character', 'set_macro_character',
     'get_dispatch_macro_character', 'set_dispatch_macro_character',
     'make_dispatch_macro_character', 'set_syntax_from_char',
-    'get_readtable_var',
 ]

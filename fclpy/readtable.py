@@ -6,23 +6,43 @@ This module provides a single centralized location for all macro character handl
 
 from typing import Dict, Tuple, Callable, Optional, Any
 
-# Global readtable instance
-_current_readtable = None
+# The standard readtable (CLHS 23.1.1). Built once, on demand.
+_standard_readtable = None
+
+# The four values `readtable-case` can take (CLHS 23.1.2).
+READTABLE_CASES = ('UPCASE', 'DOWNCASE', 'PRESERVE', 'INVERT')
+
 
 class Readtable:
     """
     Centralized readtable for managing macro characters and reader macros.
     This replaces the scattered macro character implementations across multiple modules.
     """
-    
+
     def __init__(self):
         self._macro_characters: Dict[str, Tuple[Callable, bool]] = {}
         self._dispatch_macro_characters: Dict[str, Dict[str, Callable]] = {}
         self._case = 'UPCASE'  # :UPCASE, :DOWNCASE, :PRESERVE, :INVERT
-        
+        # True only for the one object `standard_readtable()` returns.
+        self._standard = False
+
         # Initialize with standard Common Lisp macro characters
         self._setup_standard_macros()
-    
+
+    def _check_mutable(self, what: str):
+        """The standard readtable is immutable (CLHS 23.1.1).
+
+        It is shared, and NIL denotes it wherever a readtable designator is
+        accepted, so a form that mutated it would silently redefine what
+        "standard syntax" means for the rest of the session -- including for
+        every later `(copy-readtable nil)`.
+        """
+        if self._standard:
+            from . import lisptype
+            raise lisptype.LispError(
+                f"{what}: the standard readtable may not be modified "
+                "(CLHS 23.1.1); copy it with (copy-readtable nil) first")
+
     def _setup_standard_macros(self):
         """Set up the standard Common Lisp macro characters."""
         # Standard terminating macro characters
@@ -55,6 +75,7 @@ class Readtable:
             function: The reader function to call
             non_terminating_p: True if this is a non-terminating macro character
         """
+        self._check_mutable('SET-MACRO-CHARACTER')
         self._macro_characters[char] = (function, non_terminating_p)
     
     def get_dispatch_macro_character(self, dispatch_char: str, sub_char: str) -> Optional[Callable]:
@@ -66,18 +87,32 @@ class Readtable:
     
     def set_dispatch_macro_character(self, dispatch_char: str, sub_char: str, function: Callable):
         """Set a dispatch macro character function."""
+        self._check_mutable('SET-DISPATCH-MACRO-CHARACTER')
         if dispatch_char not in self._dispatch_macro_characters:
             self._dispatch_macro_characters[dispatch_char] = {}
         self._dispatch_macro_characters[dispatch_char][sub_char] = function
     
     def readtable_case(self):
-        """Get the current readtable case setting."""
+        """The readtable case, as one of `READTABLE_CASES`.
+
+        This is the *internal* spelling, which the reader and the printer both
+        consult directly. `READTABLE-CASE` the Lisp function answers the
+        corresponding keyword -- see `case_keyword`.
+        """
         return self._case
-    
+
     def set_readtable_case(self, case: str):
         """Set the readtable case (:UPCASE, :DOWNCASE, :PRESERVE, :INVERT)."""
+        self._check_mutable('SETF READTABLE-CASE')
+        if case not in READTABLE_CASES:
+            from . import lisptype
+            raise lisptype.LispTypeError(
+                f"SETF READTABLE-CASE: {case!r} is not one of "
+                f"{', '.join(READTABLE_CASES)} (CLHS 23.1.2)",
+                expected_type="(MEMBER :UPCASE :DOWNCASE :PRESERVE :INVERT)",
+                actual_value=case)
         self._case = case
-    
+
     def copy(self) -> 'Readtable':
         """Create a copy of this readtable.
         
@@ -94,7 +129,26 @@ class Readtable:
             k: dict(v) for k, v in self._dispatch_macro_characters.items()
         }
         new_rt._case = self._case
+        # A copy of the standard readtable is an ordinary, mutable readtable --
+        # that is the whole point of `(copy-readtable nil)`.
+        new_rt._standard = False
         return new_rt
+
+    def copy_into(self, target: 'Readtable') -> 'Readtable':
+        """Overwrite `target` with this readtable's syntax and return it.
+
+        `COPY-READTABLE`'s `to-readtable` argument (CLHS): when supplied, the
+        readtable it names is *modified* and returned rather than a fresh one
+        being made, which is how `copy-readtable.6` observes that the result is
+        EQL to the table it passed in.
+        """
+        target._check_mutable('COPY-READTABLE')
+        target._macro_characters = dict(self._macro_characters)
+        target._dispatch_macro_characters = {
+            k: dict(v) for k, v in self._dispatch_macro_characters.items()
+        }
+        target._case = self._case
+        return target
     
     # Simple macro character implementations that don't create circular dependencies
     def _left_paren_reader(self, char, stream):
@@ -1004,17 +1058,132 @@ def _nested_dimensions(contents, rank):
     return dimensions
 
 
+def standard_readtable() -> Readtable:
+    """The **standard readtable** (CLHS 23.1.1).
+
+    CLHS makes this a distinct object from the current one, and NIL denotes
+    *it* -- not the current readtable -- wherever a readtable designator is
+    accepted. There was no such object at all, which is why
+    `(copy-readtable nil)` raised instead of answering standard syntax; see
+    `coerce_to_readtable`.
+    """
+    global _standard_readtable
+    if _standard_readtable is None:
+        rt = Readtable()
+        # Set last: `__init__` installs the standard macro characters through
+        # `set_macro_character`, which the immutability guard would reject.
+        rt._standard = True
+        _standard_readtable = rt
+    return _standard_readtable
+
+
+# `*READTABLE*` is interned once; caching it keeps `get_current_readtable`
+# cheap enough for the per-symbol calls the printer makes.
+_readtable_sym = None
+
+
+def _readtable_symbol():
+    global _readtable_sym
+    if _readtable_sym is None:
+        from . import lisptype
+        _readtable_sym = lisptype.COMMON_LISP_PACKAGE.intern_symbol('*READTABLE*')
+    return _readtable_sym
+
+
 def get_current_readtable() -> Readtable:
-    """Get the current global readtable."""
-    global _current_readtable
-    if _current_readtable is None:
-        _current_readtable = Readtable()
-    return _current_readtable
+    """The current readtable: the value of `*READTABLE*`, its one home.
+
+    This used to read a module-global `_current_readtable` while `*READTABLE*`
+    was a separate variable that nothing consulted, so
+    `(let ((*readtable* rt)) (read ...))` bound the variable and then read with
+    the old table anyway. That is the same defect the printer's control
+    variables had (plan.md C7): a control variable not connected to the
+    mechanism it names. Every reader entry point already funnels through this
+    function, so giving the variable one home fixes all of them at once.
+    """
+    from . import lisptype
+    sym = _readtable_symbol()
+    rt = getattr(sym, 'value', None)
+    if isinstance(rt, Readtable):
+        return rt
+    if rt is None or rt is lisptype.NIL or isinstance(rt, lisptype.lispNull):
+        # Not yet initialized (bootstrap, or a fresh environment). The current
+        # readtable starts as a *copy* of the standard one so that mutating it
+        # cannot corrupt standard syntax.
+        rt = standard_readtable().copy()
+        sym.value = rt
+        return rt
+    raise lisptype.LispTypeError(
+        f"*READTABLE* is bound to {type(rt).__name__}, which is not a readtable",
+        expected_type="READTABLE", actual_value=rt)
+
 
 def set_current_readtable(readtable: Readtable):
-    """Set the current global readtable."""
-    global _current_readtable
-    _current_readtable = readtable
+    """Set the current readtable by assigning `*READTABLE*`."""
+    _readtable_symbol().value = readtable
+
+
+def coerce_to_readtable(designator, what: str, default=None) -> Readtable:
+    """Resolve a **readtable designator** (CLHS glossary).
+
+    NIL denotes the **standard** readtable -- not the current one, and not an
+    error. A readtable denotes itself. `default` is the readtable an *omitted*
+    argument denotes, which for every operator that takes one is the current
+    readtable.
+
+    This is the one resolver. Eight operators in `io_read.py` each carried
+    their own `if readtable is None: readtable = get_current_readtable()`,
+    which handled an omitted argument and nothing else -- so every one of them
+    broke on exactly the NIL the designator rule exists for, and
+    `(copy-readtable nil)` raised `'lispNull' object has no attribute 'copy'`
+    as the value of the form (standing rule 2).
+    """
+    from . import lisptype
+    if designator is _OMITTED:
+        return default if default is not None else get_current_readtable()
+    if isinstance(designator, Readtable):
+        return designator
+    if designator is None or designator is lisptype.NIL or isinstance(
+            designator, lisptype.lispNull):
+        return standard_readtable()
+    raise lisptype.LispTypeError(
+        f"{what}: {type(designator).__name__} is not a readtable designator",
+        expected_type="READTABLE", actual_value=designator)
+
+
+class _Omitted:
+    """Marks an argument that was not supplied at all.
+
+    Needed because NIL is a *meaningful* readtable designator here, so the
+    usual `=None` default cannot tell "omitted" (the current readtable) from
+    "given NIL" (the standard readtable).
+    """
+
+    def __repr__(self):
+        return '<omitted>'
+
+
+_OMITTED = _Omitted()
+
+
+def case_keyword(case_name: str):
+    """The `READTABLE-CASE` keyword for an internal case name."""
+    from . import lisptype
+    return lisptype.intern_keyword(case_name)
+
+
+def case_from_designator(value, what: str) -> str:
+    """The internal case name a `(setf readtable-case)` value names."""
+    from . import lisptype
+    name = getattr(value, 'name', None)
+    if name is None and isinstance(value, str):
+        name = value
+    if name is not None and name.upper() in READTABLE_CASES:
+        return name.upper()
+    raise lisptype.LispTypeError(
+        f"{what}: {value!r} is not one of :UPCASE :DOWNCASE :PRESERVE :INVERT",
+        expected_type="(MEMBER :UPCASE :DOWNCASE :PRESERVE :INVERT)",
+        actual_value=value)
 
 # Convenience functions for backward compatibility
 def get_macro_character(char: str) -> Optional[Callable]:

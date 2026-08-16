@@ -547,6 +547,11 @@ def typep(object, type_specifier):
     elif type_name == 'RANDOM-STATE':
         from .utilities_system import RandomState
         return lisptype.lisp_bool(isinstance(object, RandomState))
+    elif type_name == 'READTABLE':
+        # Asked of the same object model READTABLEP answers for, so the
+        # predicate and the type specifier cannot disagree.
+        from fclpy.readtable import Readtable
+        return lisptype.lisp_bool(isinstance(object, Readtable))
     elif type_name == 'BOOLEAN':
         # In Common Lisp, BOOLEAN is equivalent to (OR NULL (EQL T))
         # i.e., only NIL and T are booleans

@@ -987,10 +987,27 @@ these are ranked on measured evidence rather than on that premise.
     edge cases, and the two M8-owned continuable-`PACKAGE-ERROR` test pairs.
     It is also M1, i.e. a prerequisite for the ASDF rung in
     [§7](#7-acceptance--the-ecosystem-ladder).
-16. **[C2](#c2-format--formatter--largest-cluster-in-the-suite)'s remaining
-    directives**, still the largest single family at 417, plus the adjacent
-    `PRINT.INTEGERS.BASE`/`RADIX.BASE` pair at 161 — which is *not* FORMAT but
-    the printer's radix/base handling, and is the more self-contained of the two.
+16. ~~**[C2](#c2-format--formatter--largest-cluster-in-the-suite)'s remaining
+    directives**, plus the adjacent `PRINT.INTEGERS.BASE`/`RADIX.BASE` pair at
+    161 — the printer's radix/base handling.~~ **The second half was
+    misdiagnosed and is now done (2026-08-16 b).** The 161 were not radix/base
+    handling — that was already correct, measured before any change — they were
+    `(copy-readtable nil)` raising underneath `my-with-standard-io-syntax`, so
+    `printer/print-integers.lsp` went **0 → 189 of 194** by fixing the
+    *readtable object model*. **`FORMAT`'s remaining directives (`~E`, `~F`,
+    `~R`, `~T`, logical blocks) are still open and still the largest single
+    family at 417.** The lesson is [§3](#the-checklist)'s own: a 100%-failing
+    file names an absent mechanism, and the mechanism is not always in the
+    subsystem the test names belong to.
+16a. **`WITH-STANDARD-IO-SYNTAX` (new, and the cheapest thing in the suite).**
+    It establishes *no* bindings — `(let ((*print-base* 2))
+    (with-standard-io-syntax (prin1-to-string 5)))` is `"101"`, not `"5"`. 58
+    ansi-test files use it and `def-pprint-test` is built on it, so it gates
+    the pretty-printer files the way `copy-readtable` gated the integer ones.
+    Now cheap, because its binding list needs the `(copy-readtable nil)` that
+    16 just supplied. Verify with `run_ansi.py printer` — but note that
+    directory is now slow and memory-hungry for the reason recorded in the
+    [Changelog](#changelog).
 17. **[C8](#c8-clos--defgeneric--defmethod--defclass--change-class), CLOS.**
     `objects/` is 28.0% and barely moved (+1.7) across a run that moved
     everything else. Two implementations still coexist (Finding L), so
@@ -1031,6 +1048,9 @@ Anything knowingly non-ANSI, with the milestone that removes it. Empty means
 | `~&` sees only the column within its own control string, so a `~&` opening a control string cannot tell the stream is mid-line; `FRESH-LINE` is correct | FORMAT builds its whole output as a string before writing, and the column is not threaded through the eleven nested `_format_process_cursor` call sites | C2 |
 | `SUBTYPEP` string-pair table | no type lattice | M9 |
 | The reader does not parse **ratios**: `3/5` reads as a symbol, so it evaluates as an unbound variable | found 2026-08-16 while probing `*mini-universe*`, whose ratio entry is therefore not a ratio | M10 / C12 |
+| `WITH-STANDARD-IO-SYNTAX` binds none of the fourteen variables CLHS gives it — it is a `cl_function` that evaluates its body eagerly and returns the last value | predates the printer control variables being real variables; 58 ansi-test files depend on it, so it is its own measured change | C2 / M10 |
+| `SET-SYNTAX-FROM-CHAR` returns T without doing anything, and there is no character *syntax type* model for it to act on | `Readtable` records macro characters and a case and nothing else; building syntax types is the bulk of what `reader/` still owes | M10 / C12 |
+| The reader upcases every symbol token regardless of `readtable-case`, though the readtable records it and the printer honours it (CLHS 23.1.2) | `Readtable._read_symbol` predates the readtable being a real object | M10 / C12 |
 | `MAKE-LIST`/`MAKE-SEQUENCE` refuse a size above `CONSTRUCTIBLE_LIMIT` (2**30) with a plain error rather than a `STORAGE-CONDITION` | CLHS 4.4 permits refusing, but the condition *type* should be `STORAGE-CONDITION` once the class lattice exists | M8 / M9 |
 | `EQUAL` descends a *general* vector element-wise | CLHS 5.3 descends only conses, strings, bit vectors and pathnames, so `(equal #(1 2) #(1 2))` must be NIL. Conses, strings and bit vectors are now right; the general-vector branch predates them and turning it off changes the answer for a heavily-used predicate, which should be its own measured change | M6 |
 | A *displaced* character vector is a `LispArray`, not a `LispString`, so the STRING-specific operators do not accept it | `LispString` stores its characters directly, and threading displacement through it means a second indirection in every string access; every other character array (fill-pointered and adjustable included) is a `LispString` | M9 |
@@ -1230,6 +1250,121 @@ rather than discovering these one crash at a time.
 
 Condensed from the previous chronological plan. Each entry is a *mechanism*
 landed, not a test count.
+
+- **2026-08-16 (b)** — **The readtable becomes an object with one home, and a
+  fourth measurement gate falls.** `(copy-readtable nil)` raised
+  `AttributeError: 'lispNull' object has no attribute 'copy'` *as the value of
+  the form* (standing rule 2). ansi-test's `my-with-standard-io-syntax` binds
+  `*readtable*` to exactly that, `def-print-test` is built on
+  `my-with-standard-io-syntax`, and **189 of the 194 tests in
+  `printer/print-integers.lsp` are `def-print-test`s** — so every one of them
+  failed regardless of what the printer did.
+  **The printer was not at fault, and [§4](#recommended-order) item 16 said it
+  was.** That item attributes the 161 `PRINT.INTEGERS.BASE` /
+  `PRINT.INTEGERS.RADIX.BASE` failures to "the printer's radix/base handling".
+  Measured before changing anything: `(prin1-to-string 1)` is `"1"`,
+  `(let ((*print-base* 2)) (prin1-to-string 5))` is `"101"`, and
+  `(let ((*print-radix* t)) (prin1-to-string 5))` is `"5."` — the radix/base
+  half was already correct. This is [§4](#recommended-order) items 4 and 6 and
+  the COND fix a **fourth** time: rank a cluster by its failure count and you
+  rank the gate in front of it, not the defect.
+  **Six defects, one mechanism: there was no readtable *object model*.**
+  (1) **No standard readtable existed.** CLHS 23.1.1 makes it a distinct object
+  and the glossary makes NIL denote *it* — not the current readtable — wherever
+  a readtable designator is accepted. `readtable.standard_readtable()` is now
+  that object, and it is **immutable**: it is shared, so a form that mutated it
+  would silently redefine what "standard syntax" means for every later
+  `(copy-readtable nil)`. The current readtable starts as a *copy* of it.
+  (2) **The designator rule was copy-pasted eight times.** Every operator in
+  `io_read.py` carried its own `if readtable is None: readtable =
+  get_current_readtable()`, which resolves an *omitted* argument and nothing
+  else — so all eight broke on exactly the NIL the rule exists for. One
+  `coerce_to_readtable` now serves them all. It needs an `_OMITTED` sentinel
+  rather than the usual `=None` default, because NIL is a *meaningful* value
+  here and `None` cannot tell "omitted" (current) from "given NIL" (standard).
+  (3) **`*READTABLE*` was not connected to the reader** — plan.md
+  [C7](#c7-the-printer--largely-done-2026-08-14)'s defect in a second
+  subsystem. The reader read a module global `readtable._current_readtable`
+  while `*READTABLE*` was a separate variable nothing consulted, so
+  `(let ((*readtable* rt)) (read ...))` bound the variable and then read with
+  the old table. `get_current_readtable()` now reads the symbol's value cell,
+  which is its one home; **every reader entry point already funnels through
+  that function**, so all of them were fixed at once rather than one at a time.
+  (4) `READTABLEP` returned NIL unconditionally — "we don't have readtable
+  objects yet" — long after `Readtable` existed, so `(readtablep *readtable*)`
+  denied the object `*READTABLE*` was bound to; `TYPEP`'s `READTABLE` branch
+  was absent. Both now ask the one object model, so they cannot disagree.
+  (5) `READTABLE-CASE` answered the Python string `'UPCASE'` (standing rule 2),
+  which is not `EQ` to the `:UPCASE` every caller compares it against, and had
+  no writer at all. It answers a keyword, and `SET-READTABLE-CASE` is the
+  `(setf (readtable-case rt) ...)` half — reached through SETF's existing
+  `SET-<name>` fallback, so this is **not** a sixth entry in the place ladder
+  (M5).
+  (6) `COPY-READTABLE` ignored its `to-readtable` argument, so
+  `copy-readtable.6`'s "modify and return *that* table" could not hold.
+  **Measured, same runner both sides:** `printer/print-integers.lsp`
+  **0 → 189 passing of 194**. `run_ansi.py reader` (a directory that was *not*
+  targeted): **+20 newly passing, 0 newly failing, 0 regressions** merged into
+  the checklist. `pytest` **1642 → 1664 passed**, with only the documented
+  pre-existing `STREAM-ELEMENT-TYPE` failure; 20 new tests in
+  `tests/test_readtable_designator.py` plus one in
+  `tests/test_readtable_advanced.py`, and one non-ANSI assertion retired —
+  `test_readtable_case_function` pinned `readtable_case() == 'DOWNCASE'`, i.e.
+  it certified the Python-string leak.
+  **A cost that is a measurement correction, not a regression.** `printer/` as
+  a *whole directory* now runs far slower and at one point reached 16.9GB
+  resident. The cause is the gate opening: `randomly-check-readability`
+  (`printer-aux.lsp:77`) is *also* built on `my-with-standard-io-syntax`, so
+  every `PRINT.*.RANDOM` test used to die at the gate immediately. They now
+  really run — 1000 random iterations each, with `*print-base*` random in
+  2..36 and `*print-level*`/`*print-length*` random in 0..50 — and printing the
+  large random structures they build is expensive. This is the same shape as
+  the 67 → 113 minute rise the `unless` repair caused: work that used to be
+  skipped is really being done. **It is nevertheless unresolved as a practical
+  matter, and it cost this change its directory-wide number:** `run_ansi.py
+  printer` was attempted twice and abandoned both times (once at 16.9GB
+  resident, once after 16 minutes on five files), so **`printer/` as a whole is
+  unmeasured here** — only `print-integers.lsp` is. The watchdog printed
+  `RESOLVED: progress resumed` at every warning, so this is slow, not wedged.
+  See [Discovered issues](#discovered-2026-08-16-b).
+  **Checklist effect:** 6985 → **6776** failing (−209), unattributable
+  2202 → 2012, files with failures 546 → 544, and the `REGRESSION` marker count
+  against the 08-12 baseline fell 56 → 55 — one cleared, **none added**. Note
+  the `printer` directory *row* does not move despite the +189, because
+  `def-print-test` expands to `deftest` at load time and the checklist's static
+  scan cannot attribute those tests to a file ([§3](#the-checklist)'s property
+  1); they come out of the *unattributable* bucket instead. `reader` does move,
+  129 → 110.
+
+  <a id="discovered-2026-08-16-b"></a>
+  **Discovered, diagnosed, not fixed:**
+  - **`WITH-STANDARD-IO-SYNTAX` establishes no bindings.** It is registered as
+    a `cl_function` in `misc_macros.py` whose body is "evaluate every argument
+    eagerly, return the last" — so it binds none of the fourteen variables
+    CLHS requires. Reproduction:
+    `(let ((*print-base* 2)) (with-standard-io-syntax (prin1-to-string 5)))`
+    answers `"101"` where ANSI requires `"5"`. **58 ansi-test files use it**,
+    and `def-pprint-test` — the whole pretty-printer test vocabulary — is built
+    on it. It is a `cl_function` where the registry note in `CLAUDE.md` says it
+    must be a `cl_special`/`cl_macro`. This is the obvious next task and it is
+    cheap now that `(copy-readtable nil)` works, since the binding list needs
+    it.
+  - **`SET-SYNTAX-FROM-CHAR` is a stub that returns T** (standing rule 4) and
+    `reader/set-syntax-from-char.lsp` is 12/12 failing. There is no
+    *character syntax type* model at all — `Readtable` records macro characters
+    and a case, and nothing else — so this is a genuine absent mechanism rather
+    than a bug, and it is most of what `reader/` still owes.
+  - **The reader ignores `readtable-case`.** `Readtable._read_symbol`
+    upcases every token unconditionally, so `:preserve`/`:downcase`/`:invert`
+    have no effect on reading even though the readtable now records them
+    faithfully and the *printer* honours them. CLHS 23.1.2.
+  - **`printer.py:integer_digits` is O(d²) in the digit count** — it `divmod`s
+    a shrinking bignum one digit at a time. Fine for fixnums, and it is the
+    frame the watchdog caught repeatedly during the slow `printer/` run.
+  - `(copy-readtable *readtable* nil nil)` should signal a `PROGRAM-ERROR`
+    (`copy-readtable.error.1`); it raises a Python `TypeError` for too many
+    arguments instead, which is [X1](#x1-python-exceptions-leaking-as-lisp-values)'s
+    boundary rather than anything readtable-specific.
 
 - **2026-08-16** — **A test that never ran, a hang nothing could see, and the
   package leak under both.** The 08-15 tree **could not complete a full run**:

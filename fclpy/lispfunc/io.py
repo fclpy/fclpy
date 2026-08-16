@@ -21,7 +21,7 @@ __all__ = [
     'read', 'read_char_no_hang', 'read_delimited_list',
     'read_from_string', 'read_preserving_whitespace',
     'make_string_input_stream',
-    'copy_readtable', 'readtable_case',
+    'copy_readtable', 'readtable_case', 'set_readtable_case',
     'get_macro_character', 'set_macro_character',
     'get_dispatch_macro_character', 'set_dispatch_macro_character',
     'make_dispatch_macro_character', 'set_syntax_from_char',

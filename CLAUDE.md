@@ -69,6 +69,28 @@ passing as many of its tests as possible.
   looks like a Python type error on oddly-shaped data, check here first — many
   "evaluator" bugs are actually mis-parsed syntax (dotted pairs, bit-vectors,
   exponent markers, etc).
+- **Readtables**: `readtable.py` owns the object model, and there are three
+  things in it that every caller must go through. **`standard_readtable()` is
+  a distinct, immutable object** (CLHS 23.1.1) and **NIL denotes *it*** —
+  not the current readtable — wherever a readtable designator is accepted;
+  that is what `(copy-readtable nil)` asks for. **`coerce_to_readtable` is the
+  one designator resolver**; the eight copies it replaced in `io_read.py` each
+  read `if readtable is None: ... get_current_readtable()`, which resolves an
+  *omitted* argument and nothing else, so every one of them raised on NIL. It
+  takes an `_OMITTED` sentinel rather than defaulting to `None`, because NIL
+  is a meaningful value here and `None` cannot tell "omitted" from "given
+  NIL". **`get_current_readtable()` reads the `*READTABLE*` symbol's value
+  cell**, which is the variable's one home — it used to read a module global
+  while `*READTABLE*` was a separate variable nothing consulted, so
+  `(let ((*readtable* rt)) (read ...))` read with the old table (the same
+  defect the printer's control variables had). Every reader entry point funnels
+  through that function, so change it there and not per-site. Note the internal
+  `Readtable.readtable_case()` answers a Python string (`'UPCASE'`) for the
+  reader and printer, while the Lisp `READTABLE-CASE` answers the *keyword* —
+  `case_keyword`/`case_from_designator` are the only two places that convert.
+  **Still absent:** there is no character *syntax type* model, so
+  `SET-SYNTAX-FROM-CHAR` is a stub, and `_read_symbol` upcases unconditionally
+  rather than consulting `readtable-case`.
 - **Types**: `lisptype_basic.py` (symbols, cons cells, NIL/T, `MultipleValues`) and
   `lisptype_extended.py` (`Environment`, **`Package` — at `:322`, *not* in
   `lisptype_basic.py`**, symbol-macros, condition types). `lisptype.py` re-exports
