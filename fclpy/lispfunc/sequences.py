@@ -47,7 +47,6 @@ __all__ = [
     'reduce_fn',
     'intersection', 'union', 'nunion', 'set_difference', 'nset_difference',
     'set_exclusive_or', 'nset_exclusive_or', 'subsetp', 'nintersection',
-    'pop_fn', 'push_fn', 'pushnew',
     'make_array',
     # Symbol-safe names
     'list_s_star_',

@@ -1522,8 +1522,54 @@ def eval_loop(form, env):
     # records whether a main clause had already been seen when it was parsed.
     termination_tests = []  # list of ('while'/'until', test_form, after_body)
 
-    conditionals = []  # list of ('when'/'unless', test_form)
-    body_forms = []
+    # A WHEN/UNLESS guards *the clause that follows it*, not every clause in the
+    # loop (CLHS 6.1.3.1). So the conditions accumulate as `pending_conditionals`
+    # and are handed to -- and cleared by -- the next clause that consumes them.
+    #
+    # These used to be two flat shared lists, `conditionals` and `body_forms`,
+    # tested together as `if _conditionals_pass(conditionals): for f in
+    # body_forms: ...`. That made `when A do X when B do Y` mean
+    # `(and A B) -> X, Y`: every condition guarded every form. When the
+    # conditions are mutually exclusive the body then becomes *unreachable*, and
+    # in a driverless loop -- whose only exit is a RETURN in its body -- that is
+    # an infinite loop. ansi-aux's `is-noncontiguous-sublist-of` is exactly that
+    # shape and spun 1.7 million iterations:
+    #
+    #     (loop when (null list2)            do (return-from ... nil)
+    #           when (eql x (pop list2))     do (return))
+    #
+    # Each entry: {'conditionals': [...], 'forms': [...]} -- the same shape the
+    # accumulation clauses below already use, so there is one convention for
+    # "a clause carries its own guards" rather than two.
+    pending_conditionals = []  # list of ('when'/'unless', test_form)
+    body_clauses = []
+
+    # `AND` joins a clause to the previous one *under the same conditional*
+    # (CLHS 6.1.3): in
+    #
+    #     when (evenp x) collect x into foo and count t into bar
+    #
+    # the `when` guards both accumulations. So an AND-joined clause re-uses the
+    # conditions the clause before it consumed instead of taking a fresh (by then
+    # empty) set. `AND` previously had no handler at all outside `with`, so it
+    # fell through LOOP's silent-drop path -- which is precisely why the old
+    # shared-bucket code got these three tests right by accident, and why making
+    # the buckets per-clause broke them until AND became real.
+    clause_join = {'active': False, 'last': []}
+
+    def take_pending_conditionals():
+        """Hand the pending WHEN/UNLESS conditions to the clause consuming them."""
+        if clause_join['active']:
+            clause_join['active'] = False
+            return list(clause_join['last'])
+        taken = list(pending_conditionals)
+        del pending_conditionals[:]
+        clause_join['last'] = taken
+        return taken
+
+    def add_body_clause(forms):
+        body_clauses.append({'conditionals': take_pending_conditionals(),
+                             'forms': list(forms)})
 
     # Accumulation clauses, in order. CLHS 6.1.3 permits several in one loop
     # (`collect i into foo always (< i 20)`); a single slot silently kept only
@@ -1770,11 +1816,11 @@ def eval_loop(form, env):
             continue
 
         elif name == 'WHILE':
-            termination_tests.append(('while', forms[i+1], bool(body_forms or accumulations)))
+            termination_tests.append(('while', forms[i+1], bool(body_clauses or accumulations)))
             i += 2
 
         elif name == 'UNTIL':
-            termination_tests.append(('until', forms[i+1], bool(body_forms or accumulations)))
+            termination_tests.append(('until', forms[i+1], bool(body_clauses or accumulations)))
             i += 2
 
         elif name == 'REPEAT':
@@ -1790,20 +1836,31 @@ def eval_loop(form, env):
             i += 2
 
         elif name in ('WHEN', 'IF'):
-            conditionals.append(('when', forms[i+1]))
+            pending_conditionals.append(('when', forms[i+1]))
             i += 2
-            
+
         elif name == 'UNLESS':
-            conditionals.append(('unless', forms[i+1]))
+            pending_conditionals.append(('unless', forms[i+1]))
             i += 2
-            
-        elif name in ('DO', 'DOING'):
-            # Collect body forms until next clause keyword
-            # DO clause consumes the current conditionals - they don't apply to subsequent clauses
+
+        elif name == 'AND':
+            # A bare AND in clause position joins the next clause to the previous
+            # one; `with a = 1 and b = 2` and parallel `for` clauses consume their
+            # own ANDs in their own branches before reaching here.
+            clause_join['active'] = True
             i += 1
+
+        elif name in ('DO', 'DOING'):
+            # Collect body forms until the next clause keyword. The DO clause
+            # *consumes* the pending conditionals -- which the comment here used
+            # to claim while the code left them in a shared list for every later
+            # clause to be guarded by as well.
+            i += 1
+            do_forms = []
             while i < len(forms) and sym_name(forms[i]) not in LOOP_CLAUSE_KEYWORDS:
-                body_forms.append(forms[i])
+                do_forms.append(forms[i])
                 i += 1
+            add_body_clause(do_forms)
 
         elif name == 'INITIALLY':
             # CLHS 6.1.7.1: the prologue. Its forms run once, after the
@@ -1825,8 +1882,12 @@ def eval_loop(form, env):
                 'type': ACCUMULATION_CLAUSES[name],
                 'form': forms[i+1],
                 'into': None,
-                # Pending conditionals apply here only if no DO consumed them.
-                'conditionals': [] if body_forms else list(conditionals),
+                # This clause consumes the pending conditionals, the same way a
+                # DO clause does. The test it replaced -- `[] if body_forms else
+                # list(conditionals)` -- was reaching for that rule with the only
+                # signal available while the buckets were shared: "did some DO
+                # anywhere in this loop already take them?"
+                'conditionals': take_pending_conditionals(),
             }
             i += 2
             # CLHS 6.1.3: "into var" accumulates into a loop-local variable
@@ -1880,7 +1941,7 @@ def eval_loop(form, env):
             # still dropped here, as it always has been -- see plan.md's
             # Discovered issues, this is the one remaining silent path in LOOP.
             if not iteration_drivers and not termination_tests:
-                body_forms.append(token)
+                add_body_clause([token])
             i += 1
     
     # Execute the loop
@@ -1961,10 +2022,15 @@ def eval_loop(form, env):
             return_triggered = True
             return
 
-        # Execute body forms (controlled by main conditionals like WHEN/UNLESS)
-        if _conditionals_pass(conditionals, loop_env):
-            for f in body_forms:
+        # Each body clause carries its own WHEN/UNLESS guards, so a condition
+        # applies to the clause it precedes and to nothing after it.
+        for clause in body_clauses:
+            if not _conditionals_pass(clause['conditionals'], loop_env):
+                continue
+            for f in clause['forms']:
                 result = eval(f, loop_env)
+                if return_triggered:
+                    return
 
         # Each accumulation clause has its own conditionals (possibly empty).
         for clause in accumulations:
@@ -2026,7 +2092,7 @@ def eval_loop(form, env):
 
     loop_watchdog = LoopWatchdog(
         'LOOP',
-        lambda: [f"body_forms: {body_forms}",
+        lambda: [f"body_clauses: {body_clauses}",
                  f"drivers: {[(d['kind'], d['var']) for d in iteration_drivers]}",
                  f"termination_tests: {termination_tests}"],
         hard_cap=LOOP_TIMEOUT_ERROR)
@@ -2337,7 +2403,7 @@ def eval_loop(form, env):
 
         # With no drivers, no termination test and nothing to execute there is
         # nothing to iterate; running would just spin until the hard cap.
-        if iteration_drivers or termination_tests or body_forms or accumulations \
+        if iteration_drivers or termination_tests or body_clauses or accumulations \
                 or (return_form is not None):
             while all(_driver_has_value(d) for d in iteration_drivers):
                 check_loop_timeout()

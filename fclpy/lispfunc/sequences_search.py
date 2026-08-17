@@ -87,7 +87,26 @@ def _matched_positions(start, end, from_end, count, matches_at):
     return chosen
 
 
-def _make_matcher(test=None, test_not=None, key=None):
+def _call_checked(fn, *call_args, caller_name='sequence function'):
+    """Call a :test/:test-not/:key designator, translating a Python arity
+    `TypeError` into a signaled PROGRAM-ERROR instead of letting it surface
+    as a Lisp value (plan.md finding X1) -- e.g. `(pushnew 'c x :key #'cons)`
+    calls the 2-argument CONS with 1 argument, and CLHS requires that be a
+    PROGRAM-ERROR (`pushnew.error.1`-`.3`), not a raw Python exception.
+    """
+    try:
+        return fn(*call_args)
+    except TypeError as e:
+        from .evaluation_core import ConditionException, is_arity_mismatch_message
+        error_str = str(e)
+        if is_arity_mismatch_message(error_str):
+            raise ConditionException(
+                lisptype.ProgramError(message=f"{caller_name}: {error_str}"),
+                recoverable=False)
+        raise
+
+
+def _make_matcher(test=None, test_not=None, key=None, key_item=False):
     """Build a `matcher(item, candidate)` implementing CLHS 17.2.1's
     two-argument test protocol in one place.
 
@@ -97,6 +116,13 @@ def _make_matcher(test=None, test_not=None, key=None):
     the second. `SequenceIterator.matches` previously called it the other
     way around (plan.md finding X3); every caller now shares this one
     matcher instead of re-deriving (and re-reversing) the same logic.
+
+    `key_item=True` additionally applies `key` to `item` itself before the
+    comparison. Plain `member`/`find`/`position` never do that -- only
+    `key` applies to elements -- but CLHS 14.2 spells out ADJOIN (and so
+    PUSHNEW, defined in terms of it) as the one exception: "key ... is
+    applied to both item and to elements of list." `adjoin.lsp`/
+    `pushnew.lsp` (e.g. `pushnew.6`-`.9`) pin this.
     """
     test = _coerce_function_designator(test)
     test_not = _coerce_function_designator(test_not)
@@ -117,8 +143,9 @@ def _make_matcher(test=None, test_not=None, key=None):
         base, negate = _eql, False
 
     def matcher(item, candidate):
-        value = key(candidate) if key else candidate
-        matched = _lisp_truthy(base(item, value))
+        value = _call_checked(key, candidate, caller_name=':KEY') if key else candidate
+        keyed_item = _call_checked(key, item, caller_name=':KEY') if (key and key_item) else item
+        matched = _lisp_truthy(_call_checked(base, keyed_item, value, caller_name=':TEST/:TEST-NOT'))
         return (not matched) if negate else matched
 
     return matcher

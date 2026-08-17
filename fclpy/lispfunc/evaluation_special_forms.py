@@ -927,23 +927,34 @@ def eval_defun(form, env):
         func_name.plist['DOCUMENTATION'] = docstring
     
     return func_name
-def _create_macro_function(macro_name, lambda_list, body, env):
+def _create_macro_function(macro_name, lambda_list, body, env,
+                           unsupplied_default=None):
     """Create a macro function callable from lambda-list and body.
-    
-    This is used by both DEFMACRO and MACROLET to create macro functions.
+
+    This is used by DEFMACRO, MACROLET and DEFTYPE to create macro functions.
     The resulting function has __is_macro__ = True and captures the defining
     environment for proper lexical scoping.
-    
+
     Args:
         macro_name: LispSymbol for the macro name (used for debugging)
         lambda_list: Lisp list of parameter specifications
         body: Lisp list of body forms
         env: The environment where the macro is defined (captured for closure)
-    
+        unsupplied_default: what an &OPTIONAL/&KEY parameter with *no default
+            form* gets when the caller omits it. NIL for a macro, but the symbol
+            `*` for a DEFTYPE lambda list (CLHS 4.2.3) -- which is the whole
+            reason DEFTYPE can share this binder instead of getting a seventh
+            copy of it (plan.md Finding C). It is why
+            `(deftype foo (&optional x) `(integer 0 ,x))` written bare denotes
+            `(integer 0 *)`, i.e. UNSIGNED-BYTE, rather than `(integer 0 nil)`.
+
     Returns:
         A callable with __is_macro__ = True
     """
     from .evaluation_core import eval, parse_lambda_list, bind_destructuring_pattern
+
+    if unsupplied_default is None:
+        unsupplied_default = lisptype.NIL
 
     # Extract docstring if present (first form in body can be a string)
     docstring = None
@@ -1069,7 +1080,7 @@ def _create_macro_function(macro_name, lambda_list, body, env):
                 if opt_default is not None:
                     default_value = eval(opt_default, macro_env)
                 else:
-                    default_value = lisptype.NIL
+                    default_value = unsupplied_default
 
                 if isinstance(opt_name, lisptype.LispSymbol):
                     macro_env.add_variable(opt_name, default_value)
@@ -1122,7 +1133,7 @@ def _create_macro_function(macro_name, lambda_list, body, env):
             if default_form is not None:
                 default_value = eval(default_form, macro_env)
             else:
-                default_value = lisptype.NIL
+                default_value = unsupplied_default
             _bind_pattern(var_pattern, default_value)
 
             if supplied_p is not None:
@@ -2246,26 +2257,32 @@ _registry.function_registry['POP'] = _registry.RegistryEntry(
 
 
 def eval_pop(form, env):
-    """Evaluate POP special form (macro).
+    """Evaluate POP special form.
 
     (POP place) — Remove and return the first element from the list stored
-    in place.  This handler is called directly by the evaluator fast-path;
-    it builds the macro expansion and immediately evaluates it so that it
-    returns a *value*, not a form.
+    in place. Goes through `_place_accessor` (shared with ROTATEF/SHIFTF)
+    so any place kind it supports works here too, not just a bare
+    variable -- `cons/pop.lsp`'s `(pop (aref x i))`-style cases need
+    exactly that.
     """
-    from .evaluation_core import eval
-
     args = cdr(form)
     if not _consp_internal(args):
         raise lisptype.LispNotImplementedError("POP requires a place argument")
 
     place = car(args)
+    getter, setter = _place_accessor(place, env)
+    old_value = getter()
+    if old_value is lisptype.NIL or old_value is None:
+        # (car nil) and (cdr nil) are both NIL, not an error (CLHS NIL is
+        # the empty list) -- `pop.2` pops an already-empty place and
+        # expects `(nil nil)` back, not a signaled error.
+        setter(lisptype.NIL)
+        return lisptype.NIL
+    if not _consp_internal(old_value):
+        raise lisptype.LispError("POP: place does not hold a cons")
 
-    if isinstance(place, lisptype.LispSymbol):
-        let_form = _pop_expander(place)
-        return eval(let_form, env)
-
-    raise lisptype.LispNotImplementedError(f"POP not implemented for place: {place}")
+    setter(old_value.cdr)
+    return old_value.car
 
 
 def _push_expander(item, place, *_rest):
@@ -2298,12 +2315,13 @@ _registry.function_registry['PUSH'] = _registry.RegistryEntry(
 
 
 def eval_push(form, env):
-    """Evaluate PUSH special form (macro).
+    """Evaluate PUSH special form.
 
     (PUSH item place) — Prepend item to the list stored in place, and store
-    the result back in place. This handler is called directly by the
-    evaluator fast-path; it builds the macro expansion and immediately
-    evaluates it so that it returns a *value*, not a form.
+    the result back in place. CLHS 5.1.3: item is evaluated before place's
+    subforms (pinned by `push.order.1`-`.3`); `_place_accessor` (shared with
+    ROTATEF/SHIFTF) evaluates those subforms exactly once, so any place kind
+    it supports works here too, not just a bare variable.
     """
     from .evaluation_core import eval
 
@@ -2311,14 +2329,65 @@ def eval_push(form, env):
     if not _consp_internal(args) or not _consp_internal(cdr(args)):
         raise lisptype.LispNotImplementedError("PUSH requires an item and a place argument")
 
-    item = car(args)
+    item_form = car(args)
     place = car(cdr(args))
 
-    if isinstance(place, lisptype.LispSymbol):
-        setq_form = _push_expander(item, place)
-        return eval(setq_form, env)
+    item = eval(item_form, env)
+    getter, setter = _place_accessor(place, env)
+    new_value = cons(item, getter())
+    setter(new_value)
+    return new_value
 
-    raise lisptype.LispNotImplementedError(f"PUSH not implemented for place: {place}")
+
+def eval_pushnew(form, env):
+    """Evaluate PUSHNEW special form.
+
+    (PUSHNEW item place &key key test test-not) — CLHS 5.1.3 defines this
+    directly in terms of ADJOIN: `(setf place (adjoin item place ...))`,
+    with item evaluated first, then place's subforms, then the keyword
+    arguments left to right as written (pinned by `pushnew.order.1`-`.3`
+    and `pushnew.12`-`.15`).
+
+    Previously a `cl_function` (`sequences_higher.pushnew`) that received
+    `place` already evaluated to a value, so it only ever worked when place
+    was a plain Python-list variable, and it ignored :test/:key/:test-not
+    entirely -- the largest 100%-failing file in the suite (plan.md C16).
+    """
+    from .evaluation_core import eval
+    from .sequences_higher import adjoin
+
+    args = cdr(form)
+    if not _consp_internal(args) or not _consp_internal(cdr(args)):
+        raise lisptype.LispNotImplementedError("PUSHNEW requires an item and a place argument")
+
+    item_form = car(args)
+    place = car(cdr(args))
+    kw_forms = cdr(cdr(args))
+
+    item = eval(item_form, env)
+    getter, setter = _place_accessor(place, env)
+    old_value = getter()
+
+    test = test_not = key = None
+    cur = kw_forms
+    while _consp_internal(cur):
+        kw = car(cur)
+        cur = cdr(cur)
+        if not _consp_internal(cur):
+            raise lisptype.LispError("PUSHNEW: odd number of keyword arguments")
+        value = eval(car(cur), env)
+        cur = cdr(cur)
+        kw_name = kw.name if isinstance(kw, lisptype.LispSymbol) else None
+        if kw_name == 'TEST':
+            test = value
+        elif kw_name == 'TEST-NOT':
+            test_not = value
+        elif kw_name == 'KEY':
+            key = value
+
+    new_value = adjoin(item, old_value, test=test, test_not=test_not, key=key)
+    setter(new_value)
+    return new_value
 
 
 def _place_accessor(place_form, env):
@@ -2363,6 +2432,17 @@ def _place_accessor(place_form, env):
             values = _eval_args(place_args, env)
             return (lambda: _arrays.array_place_read(op_name, values),
                     lambda v: _arrays.array_place_write(op_name, values, v))
+
+        # Not a place op this function knows directly -- it may still be a
+        # macro call (e.g. ansi-aux's `expand-in-current-env`, which exists
+        # specifically so a MACROLET-local macro expands in the *caller's*
+        # lexical environment). CLHS 5.1.3 requires place resolution to see
+        # through macroexpansion; `pushnew.21`/`push.5` are exactly a place
+        # that is a macro form.
+        from .misc_packages import _direct_macroexpand_1
+        expanded, did_expand = _direct_macroexpand_1(place_form, env)
+        if did_expand:
+            return _place_accessor(expanded, env)
 
     raise lisptype.LispNotImplementedError(f"place not supported: {place_form}")
 

@@ -24,6 +24,23 @@ import fclpy.lispfunc as lispfunc
 
 logger = logging.getLogger(__name__)
 
+
+def is_arity_mismatch_message(error_str):
+    """True if a Python `TypeError` string names a call-arity problem.
+
+    Calling a Python callable with the wrong number of arguments is how a
+    Lisp function invoked with the wrong number of arguments looks from
+    here; CLHS says that signals PROGRAM-ERROR, not a raw Python exception
+    reaching a Lisp value (plan.md finding X1). One predicate shared by
+    every call site that converts a `TypeError` into a condition, so the
+    definition of "looks like an arity error" cannot drift between them.
+    """
+    low = error_str.lower()
+    return (('missing' in low and 'argument' in low)
+            or ('takes' in low and 'argument' in low)
+            or ('positional argument' in low))
+
+
 # Cache for function signature information to avoid repeated inspect.signature calls
 @lru_cache(maxsize=1024)
 def _get_func_signature_info(func_id: int, func):
@@ -187,9 +204,31 @@ class ConditionException(Exception):
         super().__init__(str(condition))
 
 
+def expand_deftype(entry, args):
+    """Expand a DEFTYPE'd type specifier to the type it denotes (CLHS 4.2.3).
+
+    `entry` is what the DEFTYPE special form stored in the global environment's
+    `user_types`; `args` are the compound specifier's arguments (empty for an
+    atomic reference to the type name). Called by `fclpy.typespec`, which is the
+    one reader of that table.
+
+    Only the expander's *primary* value is the type -- `deftype.17` defines an
+    expander whose body is `(values 'integer t)` and requires the type to be
+    INTEGER -- so a MultipleValues result is reduced here rather than being
+    handed on as a type specifier.
+    """
+    expander = entry.get('expander')
+    if expander is None:
+        raise lisptype.LispError('DEFTYPE %r has no expander' % (entry.get('name'),))
+    result = expander(*args)
+    if isinstance(result, lisptype.MultipleValues):
+        return result.values[0] if result.values else lisptype.NIL
+    return result
+
+
 def parse_lambda_list(lambda_list):
     """Parse a Common Lisp lambda list into structured form.
-    
+
     Returns a dict with keys:
     - required: list of required parameter symbols
     - optional: list of optional parameter specs (symbol or [symbol, default])
@@ -466,7 +505,7 @@ def eval(form, env=None):
     from .evaluation_special_forms import (
         eval_if, eval_setq, eval_defun, eval_defmacro, eval_macroexpand_1,
         eval_macro_function, eval_lambda, eval_declare, eval_declaim,
-        eval_defvar, eval_defparameter, eval_defconstant, eval_defstruct, eval_pop, eval_push,
+        eval_defvar, eval_defparameter, eval_defconstant, eval_defstruct, eval_pop, eval_push, eval_pushnew,
         eval_incf, eval_decf, eval_defclass, eval_defgeneric, eval_defmethod, eval_define_method_combination,
         eval_call_method, eval_make_method,
         eval_destructuring_bind, eval_psetq, eval_rotatef
@@ -1206,6 +1245,8 @@ def eval(form, env=None):
                 return eval_pop(form, env)
             elif operator.name == 'PUSH':
                 return eval_push(form, env)
+            elif operator.name == 'PUSHNEW':
+                return eval_pushnew(form, env)
             elif operator.name == 'DEFUN':
                 return eval_defun(form, env)
             elif operator.name == 'LAMBDA':
@@ -1551,23 +1592,42 @@ def eval(form, env=None):
                 rest = cdr(args)
                 lambda_list = car(rest) if _consp_internal(rest) else lisptype.NIL
                 body = cdr(rest) if _consp_internal(rest) else lisptype.NIL
-                
+
                 # Get or create the global types storage
                 global_env = env
                 while global_env.parent is not None:
                     global_env = global_env.parent
-                
+
                 if not hasattr(global_env, 'user_types'):
                     global_env.user_types = {}
-                
-                # Store type definition
+
+                # Store a real *expander*, not the raw source.
+                #
+                # This dict used to hold `lambda_list`/`body`/`env` and nothing
+                # anywhere read it, so a DEFTYPE'd name was invisible to both
+                # TYPEP and SUBTYPEP -- `(deftype foo () '(integer 0 10))`
+                # succeeded and then `(typep 5 'foo)` was NIL. The expander is
+                # built by the one macro-lambda-list binder (CLHS 4.2.3: a
+                # deftype lambda list is a macro lambda list, except that an
+                # omitted &OPTIONAL/&KEY parameter defaults to `*` rather than
+                # NIL, which is what `unsupplied_default` supplies). Reusing it
+                # is also what gives DEFTYPE &WHOLE, &REST, &KEY,
+                # destructuring, the docstring and the implicit BLOCK that
+                # `(return-from <type-name> ...)` needs -- all of which
+                # ansi-test's deftype.9-.19 exercise.
+                from .evaluation_special_forms import _create_macro_function
+                wild = lisptype.COMMON_LISP_PACKAGE.intern('*')
+                expander = _create_macro_function(
+                    name, lambda_list, body, env, unsupplied_default=wild)
+
                 global_env.user_types[name.name] = {
                     'name': name,
                     'lambda_list': lambda_list,
                     'body': body,
-                    'env': env  # Capture lexical environment
+                    'env': env,          # Capture lexical environment
+                    'expander': expander,
                 }
-                
+
                 # Return the name symbol
                 return name
             elif operator.name == 'DEFPACKAGE':
@@ -1975,8 +2035,7 @@ def eval(form, env=None):
         except TypeError as e:
             # Check if this is an argument count error (function signature problem)
             error_str = str(e)
-            if ('missing' in error_str.lower() and 'argument' in error_str.lower()) or \
-               ('takes' in error_str.lower() and 'argument' in error_str.lower()):
+            if is_arity_mismatch_message(error_str):
                 # Argument count mismatch - PROGRAM-ERROR per ANSI CL spec
                 condition = lisptype.ProgramError(message=error_str)
                 raise ConditionException(condition, recoverable=False)

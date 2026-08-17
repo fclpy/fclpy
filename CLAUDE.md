@@ -107,6 +107,44 @@ passing as many of its tests as possible.
   `lisptype_basic.py`**, symbol-macros, condition types). `lisptype.py` re-exports
   both. Note `setf-expanders` is **monkey-patched onto `Environment` at runtime**
   (`evaluation_core.py:1229-1230`) rather than declared in `__init__`.
+- **Type specifiers**: `fclpy/typespec.py` — **the one place a type specifier is
+  interpreted**, and the type lattice C14 asked for. `parse_type` turns a
+  specifier into a `Ctype`; `type_subtypep` decides `SUBTYPEP` as emptiness of
+  `type1 \ type2`, and `type_contains` is there for `TYPEP` to move onto (it has
+  not yet — see below). It replaced three partial interpretations that could not
+  see what the others knew: `TYPEP`'s `elif type_name == ...` ladder, `SUBTYPEP`'s
+  table of hardcoded **string pairs**, and `DEFTYPE`'s expander store, which
+  *nothing ever read*. They also disagreed on facts — `TYPEP` called an integer a
+  FIXNUM below 2**29 while `MOST-POSITIVE-FIXNUM` answered 2**63-1, so
+  `(typep most-positive-fixnum 'fixnum)` was false. `MOST_POSITIVE_FIXNUM` here is
+  now that constant's one home.
+  The universe is partitioned into disjoint **sorts** (INTEGER, RATIO, FLOAT,
+  COMPLEX, CHARACTER, SYMBOL, CONS, ARRAY, CLASS), each with a representation
+  closed under union, intersection **and complement** — which is the requirement,
+  because ansi-test's `check-equivalence` asks twelve questions per call and
+  demands all twelve be *certain*, including `(subtypep '(and A (not B)) nil)` and
+  `(subtypep t '(or A (not B)))`. Two invariants to keep:
+  - **`top()`/`bottom()` are functions, not constants.** The CLASS sort's universe
+    is the set of classes that *currently* exist, so a universe captured at import
+    time would permanently omit every DEFCLASS/DEFINE-CONDITION type. Relatedly,
+    the universal type contains the universal *cons* type, so `(cons * *)` holds
+    the `ANY` placeholder rather than a materialised universe — resolving it
+    eagerly does not terminate.
+  - **An undecidable specifier becomes an `Opaque` literal, never a guess.**
+    `(satisfies f)` is decided only when what remains of the conjunct is a finite
+    set of concrete objects, in which case the predicate is called on each. That
+    is not a shortcut: `subtypep.member.27` requires a *certain* T for
+    `(member a b c d)` vs `(satisfies symbolp)`, while `subtypep.cons.44` builds a
+    type from `(= 1 (random 2))` predicates and requires **NIL NIL**.
+  Cell keys must stay **hashable** — a `classes.LispClass` defines `__eq__`
+  without `__hash__`, so putting class objects into a cell `frozenset` directly
+  made every `(subtypep (find-class 'x) ...)` answer
+  `TypeError: unhashable type: 'LispClass'` *as the value of the Lisp form*; go
+  through `_cell_key`.
+  **`TYPEP` still has its own ladder** (`comparison.py`) and is therefore still a
+  second interpretation of a specifier — standing rule 3, not yet resolved. Moving
+  it onto `type_contains` needs the CLASS sort to answer "yes" for an object whose
+  cell is not enumerated, or `(typep x t)` could go NIL; see plan.md.
 - **Evaluator** (`lispfunc/`):
   - `evaluation_core.py` — the `eval`/`apply` dispatcher and the control-transfer
     exceptions (`ReturnFromException`, `ThrowException`, `GoException`,

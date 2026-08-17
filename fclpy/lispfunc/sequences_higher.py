@@ -32,9 +32,13 @@ def adjoin(x, seq, test=None, test_not=None, key=None, **kwargs):
 
     Supports :test/:test-not/:key like every other CLHS "two-argument
     test" sequence function (default is eql-like equality); previously
-    ignored :key entirely and hardcoded `is` for :test.
+    ignored :key entirely and hardcoded `is` for :test. `key_item=True`
+    because CLHS 14.2 says ADJOIN applies :key to `x` as well as to each
+    element -- unlike MEMBER/FIND, where :key only ever applies to
+    elements. PUSHNEW (`evaluation_special_forms.eval_pushnew`) is defined
+    directly in terms of this function.
     """
-    matcher = _make_matcher(test=test, test_not=test_not, key=key)
+    matcher = _make_matcher(test=test, test_not=test_not, key=key, key_item=True)
     seq_list = _cons_to_list(seq)
     return seq if _matcher_contains(matcher, x, seq_list) else cons(x, seq)
 
@@ -399,32 +403,16 @@ def nintersection(list1, list2, **kwargs):
     return intersection(list1, list2, **kwargs)
 
 
-# Stack operations
-@_registry.cl_function('POP')
-def pop_fn(place):
-    """Remove and return first element of list."""
-    if isinstance(place, list) and place:
-        return place.pop(0)
-    return None
-
-
-@_registry.cl_function('PUSH')
-def push_fn(item, place):
-    """Add item to front of list."""
-    if isinstance(place, list):
-        place.insert(0, item)
-        return place
-    return [item]
-
-
-@_registry.cl_function('PUSHNEW')
-def pushnew(item, place, **kwargs):
-    """Add item to front of list if not already present."""
-    if isinstance(place, list):
-        if item not in place:
-            place.insert(0, item)
-        return place
-    return [item]
+# PUSH, POP and PUSHNEW are special forms (`evaluation_special_forms.py`'s
+# `eval_push`/`eval_pop`/`eval_pushnew`, registered `cl_special` in
+# evaluation_special_registrations.py) -- `place` is a place designator,
+# not a value, so it must reach them unevaluated. Registering them here too
+# as `cl_function`s over Python lists was a second, competing
+# implementation (plan.md standing rule 3): dead for PUSH/POP, since a
+# special-form registration always wins dispatch, and *live but wrong* for
+# PUSHNEW, which had no special-form registration and so actually ran this
+# copy -- ignoring :test/:key/:test-not entirely and only ever working when
+# `place` was already a plain Python list (plan.md C16).
 
 
 # The array operators that used to live here -- AREF, SVREF, VECTOR, VECTORP,
@@ -458,8 +446,6 @@ __all__ = [
     # Set operations
     'intersection', 'union', 'nunion', 'set_difference', 'nset_difference',
     'set_exclusive_or', 'nset_exclusive_or', 'subsetp', 'nintersection',
-    # Stack operations
-    'pop_fn', 'push_fn', 'pushnew',
     # Symbol-safe names
     'list_s_star_',
 ]

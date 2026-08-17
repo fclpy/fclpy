@@ -283,6 +283,19 @@ def special_push(*args):
     raise lisptype.LispNotImplementedError('PUSH (evaluated in evaluator)')
 
 
+@_registry.cl_special('PUSHNEW')
+def special_pushnew(*args):
+    """PUSHNEW special form (handled by evaluator).
+
+    Was a `cl_function` (`lispfunc.sequences_higher.pushnew`) that received
+    `place` already evaluated to a value -- so it could never write the
+    result back anywhere except a Python-list-backed variable, and it
+    ignored :test/:key/:test-not entirely. `place` is a place designator,
+    not a value; PUSHNEW must see it unevaluated the way PUSH/POP already
+    do (plan.md C16)."""
+    raise lisptype.LispNotImplementedError('PUSHNEW (evaluated in evaluator)')
+
+
 @_registry.cl_special('LAMBDA')
 def special_lambda(*args):
     """LAMBDA special form (handled by evaluator)."""

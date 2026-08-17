@@ -637,180 +637,51 @@ def type_of(object):
         return lisptype.T
 
 
-def _resolve_condition_class(type_spec):
-    """Resolve a SUBTYPEP type designator to a Condition subclass, or None.
-
-    Reuses `_condition_class_for_name` -- the same resolver TYPEP and
-    HANDLER-CASE matching already use (plan.md Finding E: "build the lattice
-    once, use it twice") -- rather than growing SUBTYPEP's separate
-    hardcoded condition-name-pair table (below) as a third, independently
-    drifting copy of the same information. Also accepts a raw Python class
-    directly, since FIND-CLASS now returns one for a condition type name
-    (`classes.find_class_fn`).
-
-    A name may also arrive as a `classes.LispClass` -- the *other* class
-    representation (plan.md Finding L: two CLOS implementations). Bootstrap
-    registers a CLOS `LispClass` named CONDITION in that separate registry, so
-    `(find-class 'condition)` resolves there and returns that object, not
-    `lisptype.Condition`; without unwrapping it by name here, `(subtypep*
-    (find-class 'my-error) (find-class 'condition))` compared a real
-    condition class against an unrelated CLOS placeholder and always said NIL.
-    """
-    if isinstance(type_spec, type) and issubclass(type_spec, lisptype.Condition):
-        return type_spec
-    from fclpy import classes as _classes
-    if isinstance(type_spec, _classes.LispClass):
-        name = type_spec.name.name
-    elif isinstance(type_spec, lisptype.LispSymbol):
-        name = type_spec.name
-    elif isinstance(type_spec, str):
-        name = type_spec
-    else:
-        return None
-    from fclpy.lispfunc.evaluation_conditions import _condition_class_for_name
-    return _condition_class_for_name(name)
-
-
 @_registry.cl_function('SUBTYPEP')
-def subtypep(type1, type2):
+def subtypep(*args):
     """Test if type1 is a subtype of type2 (CLHS 4.3.4): two values, whether
-    type1 is known to be a subtype and whether that was determined for
-    certain.
+    type1 is known to be a subtype and whether that was determined for certain.
 
-    `_subtypep_values` (below) returns a plain Python `(bool, bool)` pair, as
-    it always has; every `return lisptype.X, lisptype.Y` inside it is really
-    building that pair, not two genuine Lisp values -- a bare Python tuple is
-    just one value to MULTIPLE-VALUE-LIST/MULTIPLE-VALUE-BIND, which is why
-    `(multiple-value-list (subtypep 'x 'y))` read back a single value that
-    printed like a vector, `#(T T)`, instead of the two-element list ANSI
-    requires. Wrapping the pair in `lisptype.MultipleValues` once here, at the
-    single boundary between the two, is the fix for every branch inside
-    `_subtypep_values` at once (the same convention FLOOR/CEILING/TRUNCATE use
-    in math_arithmetic.py), rather than rewriting dozens of scattered
-    `return`s to build a `MultipleValues` each.
+    Decided by `fclpy.typespec`, the one type-specifier model, as emptiness of
+    `type1 \\ type2`. What this replaced was a table of hardcoded *string
+    pairs* -- `if t1 == 'INTEGER' and t2 in ['RATIONAL','REAL','NUMBER']` -- with
+    no entry for any compound specifier at all, so `(subtypep '(integer 0 10)
+    'integer)` and `(subtypep 'fixnum 'integer)` both answered NIL, and it
+    answered `NIL, T` ("certainly not a subtype") for every relationship it had
+    no row for. That last part is why the table could not simply be grown: a
+    lookup miss is indistinguishable from a real negative, so the wrong answers
+    were reported as certain ones.
+
+    The `MultipleValues` wrapper stays at this one boundary: `type_subtypep`
+    answers a plain Python pair, and a bare Python tuple is a *single* value to
+    MULTIPLE-VALUE-LIST, which is what once made
+    `(multiple-value-list (subtypep 'x 'y))` read back `#(T T)` instead of the
+    two-element list ANSI requires.
     """
-    return lisptype.MultipleValues(*_subtypep_values(type1, type2))
+    # SUBTYPEP takes two required arguments and an optional environment
+    # (CLHS 4.3.4); anything else is a PROGRAM-ERROR, which ansi-test's
+    # subtypep.error.1/.2/.3 check for 0, 1 and 4 arguments. Registered as
+    # `*args` because a `cl_function` with a fixed signature raises a Python
+    # TypeError instead -- standing rule 2, a Python exception as a Lisp value.
+    if not 2 <= len(args) <= 3:
+        raise lisptype.LispProgramError(
+            'SUBTYPEP requires two type specifiers and an optional environment, '
+            'got %d arguments' % (len(args),))
+    type1, type2 = args[0], args[1]
+    environment = args[2] if len(args) > 2 else None
+    if _is_nil_designator(environment):
+        environment = None
+    from fclpy import typespec
+    sub, certain = typespec.type_subtypep(type1, type2, environment)
+    return lisptype.MultipleValues(lisptype.lisp_bool(sub),
+                                   lisptype.lisp_bool(certain))
 
 
-def _subtypep_values(type1, type2):
-    """The actual SUBTYPEP dispatch; see `subtypep` above for why this
-    returns a plain `(bool, bool)` pair rather than a `MultipleValues`."""
-    # The condition hierarchy (built-in *and* DEFINE-CONDITION-created types)
-    # is real Python class inheritance, so when either side names one, decide
-    # within that lattice via `issubclass` instead of falling through to the
-    # string-pair table below, which has no entries for a user-defined
-    # condition type and would answer "no relationship" for every one of
-    # them regardless of how it was actually defined (plan.md C14/Finding F:
-    # SUBTYPEP has no general type lattice; this does not attempt to build
-    # one, only to stop the one real lattice this codebase already has --
-    # Python's own class hierarchy for conditions -- from being ignored).
-    cls1 = _resolve_condition_class(type1)
-    cls2 = _resolve_condition_class(type2)
-    if cls1 is not None or cls2 is not None:
-        t2_is_t = (isinstance(type2, lisptype.LispSymbol) and type2.name.upper() == 'T') \
-            or (isinstance(type2, str) and type2.upper() == 'T')
-        if t2_is_t:
-            return lisptype.T, lisptype.T
-        if cls1 is not None and cls2 is not None:
-            return lisptype.lisp_bool(issubclass(cls1, cls2)), lisptype.T
-        # One side is a known condition class and the other is not (and is
-        # not T either), so they are certainly unrelated.
-        return lisptype.NIL, lisptype.T
-
-    # Convert to uppercase string names for comparison
-    if isinstance(type1, lisptype.LispSymbol):
-        t1 = type1.name.upper()
-    elif isinstance(type1, str):
-        t1 = type1.upper()
-    else:
-        t1 = str(type1).upper()
-
-    if isinstance(type2, lisptype.LispSymbol):
-        t2 = type2.name.upper()
-    elif isinstance(type2, str):
-        t2 = type2.upper()
-    else:
-        t2 = str(type2).upper()
-
-    # T is supertype of everything
-    if t2 == 'T':
-        return lisptype.T, lisptype.T
-
-    # Everything is a subtype of itself
-    if t1 == t2:
-        return lisptype.T, lisptype.T
-
-    # Numeric type hierarchy
-    if t1 == 'INTEGER' and t2 in ['RATIONAL', 'REAL', 'NUMBER']:
-        return lisptype.T, lisptype.T
-    if t1 == 'RATIONAL' and t2 in ['REAL', 'NUMBER']:
-        return lisptype.T, lisptype.T
-    if t1 in ['SINGLE-FLOAT', 'DOUBLE-FLOAT', 'FLOAT'] and t2 in ['REAL', 'NUMBER']:
-        return lisptype.T, lisptype.T
-    if t1 == 'REAL' and t2 == 'NUMBER':
-        return lisptype.T, lisptype.T
-    if t1 == 'COMPLEX' and t2 == 'NUMBER':
-        return lisptype.T, lisptype.T
-
-    # List type hierarchy
-    if t1 == 'NULL' and t2 in ['LIST', 'ATOM']:
-        return lisptype.T, lisptype.T
-    if t1 == 'CONS' and t2 == 'LIST':
-        return lisptype.T, lisptype.T
-
-    # Character and string hierarchy
-    if t1 == 'CHARACTER' and t2 == 'BASE-CHAR':
-        return lisptype.T, lisptype.T
-    if t1 == 'BASE-CHAR' and t2 == 'CHARACTER':
-        return lisptype.T, lisptype.T
-
-    # Symbol hierarchy
-    if t1 == 'KEYWORD' and t2 == 'SYMBOL':
-        return lisptype.T, lisptype.T
-
-    # Atom hierarchy
-    if t2 == 'ATOM' and t1 not in ['CONS', 'LIST']:
-        return lisptype.T, lisptype.T
-    if t2 == 'ATOM' and t1 == 'NULL':
-        return lisptype.T, lisptype.T
-
-    # Function types
-    if t1 in ['COMPILED-FUNCTION', 'INTERPRETED-FUNCTION'] and t2 == 'FUNCTION':
-        return lisptype.T, lisptype.T
-
-    # Array and vector types
-    if t1 == 'SIMPLE-VECTOR' and t2 in ['VECTOR', 'SIMPLE-ARRAY', 'ARRAY']:
-        return lisptype.T, lisptype.T
-    if t1 == 'VECTOR' and t2 == 'ARRAY':
-        return lisptype.T, lisptype.T
-    if t1 == 'SIMPLE-ARRAY' and t2 == 'ARRAY':
-        return lisptype.T, lisptype.T
-
-    # Stream types
-    if t1 in ['INPUT-STREAM', 'OUTPUT-STREAM'] and t2 == 'STREAM':
-        return lisptype.T, lisptype.T
-    if t1 in ['FILE-STREAM', 'STRING-STREAM'] and t2 in ['STREAM', 'INPUT-STREAM', 'OUTPUT-STREAM']:
-        return lisptype.T, lisptype.T
-
-    # Hash table types
-    if t1 == 'HASH-TABLE' and t2 == 'T':
-        return lisptype.T, lisptype.T
-
-    # Pathname types
-    if t1 == 'LOGICAL-PATHNAME' and t2 == 'PATHNAME':
-        return lisptype.T, lisptype.T
-
-    # Package type
-    if t1 == 'PACKAGE' and t2 == 'T':
-        return lisptype.T, lisptype.T
-
-    # Condition types are handled above via `_resolve_condition_class`, which
-    # covers every built-in and DEFINE-CONDITION-created type through the same
-    # lattice TYPEP uses -- not just the handful of names this table used to
-    # hardcode (standing rule 3: one implementation, not two that can drift).
-
-    # No subtype relationship found
-    return lisptype.NIL, lisptype.T
+def _is_nil_designator(obj):
+    """NIL, in any of the three shapes it takes here (see CLAUDE.md)."""
+    return (obj is None or obj is lisptype.NIL
+            or isinstance(obj, lisptype.lispNull)
+            or (isinstance(obj, lisptype.LispSymbol) and obj.name.upper() == 'NIL'))
 
 
 @_registry.cl_function('IDENTITY')
@@ -838,7 +709,16 @@ def constantp(form, environment=None):
 def complement(function):
     """Return complement of function."""
     def complemented_function(*args, **kwargs):
-        return not_fn(function(*args, **kwargs))
+        # `function` is called directly here, not through `eval`'s CALL
+        # path, so its raw Python return value never passes through that
+        # path's `bool` -> T/NIL normalization -- and a predicate like
+        # STRING= returns a plain Python `bool`. `not_fn` only recognizes
+        # NIL/None as false, so an un-normalized `False` reads as *true* to
+        # it (CLAUDE.md's `is_truthy(False)` landmine, from the opposite
+        # direction): `(complement #'string=)` complemented nothing.
+        # `lisp_bool` is the existing normalizer for exactly this Python
+        # bool -> Lisp boolean gap.
+        return not_fn(lisptype.lisp_bool(function(*args, **kwargs)))
     return complemented_function
 
 
