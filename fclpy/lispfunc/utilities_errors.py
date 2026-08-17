@@ -210,46 +210,25 @@ def use_value(value):
 
 
 # --- Method combination and condition errors ---
-# NOTE: DEFINE-METHOD-COMBINATION is implemented as a special form in evaluation_core.py
-# This function stub is kept for backward compatibility if called directly
-@_registry.cl_function('DEFINE-METHOD-COMBINATION')
-def define_method_combination(name, *args):
-    """Define method combination.
-    
-    In FCLpy, we create a simple method combination object that can be
-    used as a value. Full method combination semantics are not implemented.
-    
-    NOTE: This should typically be called as a special form that doesn't evaluate
-    its name argument. This function exists for direct invocation.
-    """
-    import fclpy.state as state
-    import fclpy.lisptype as lt
-    
-    # Create a simple method combination object
-    class MethodCombination:
-        def __init__(self, name):
-            self.name = name
-        def __repr__(self):
-            return f"#<METHOD-COMBINATION {self.name}>"
-    
-    mc = MethodCombination(name if isinstance(name, str) else name.name if hasattr(name, 'name') else str(name))
-    
-    # Bind to global environment if available
-    if hasattr(state, 'current_environment') and state.current_environment is not None:
-        env = state.current_environment
-        # Walk to global environment
-        while env.parent is not None:
-            env = env.parent
-        if isinstance(name, lt.LispSymbol):
-            env.add_variable(name, mc)
-    
-    return mc
+# DEFINE-METHOD-COMBINATION lives in `evaluation_special_forms.py` and is
+# dispatched by the evaluator, because none of its subforms may be
+# evaluated. The second implementation that used to sit here -- a
+# `cl_function` building a private one-off MethodCombination class and
+# binding it as a *variable* -- was reachable through `SYMBOL-FUNCTION` and
+# `FUNCALL`, defined nothing, and disagreed with the special form about
+# what the operator even produces (standing rule 3).
 
 
 @_registry.cl_function('METHOD-COMBINATION-ERROR')
 def method_combination_error(format_control, *format_arguments):
-    """Method combination error."""
-    return None
+    """METHOD-COMBINATION-ERROR (CLHS 7.6.6): signal that the applicable
+    methods cannot be combined. It *signals*; returning NIL (what this did)
+    let a method combination whose own body detected an inconsistency carry
+    on and produce an answer anyway."""
+    from fclpy.lispfunc.io_write import format_fn
+    import fclpy.classes as classes
+    message = format_fn(lisptype.NIL, format_control, *format_arguments)
+    raise classes.MethodCombinationError(str(message))
 
 
 @_registry.cl_function('INVALID-METHOD-ERROR')
@@ -360,7 +339,6 @@ __all__ = [
     'invoke_debugger',
     'store_value',
     'use_value',
-    'define_method_combination',
     'method_combination_error',
     'invalid_method_error',
     'package_error_package',

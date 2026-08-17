@@ -254,6 +254,17 @@ def special_defstruct(*args):
     raise lisptype.LispNotImplementedError('DEFSTRUCT (evaluated in evaluator)')
 
 
+@_registry.cl_special('DEFINE-METHOD-COMBINATION')
+def special_define_method_combination(*args):
+    """DEFINE-METHOD-COMBINATION special form (handled by evaluator).
+
+    It has to be a special operator here rather than the `cl_function` that
+    used to live in `utilities_errors.py`: none of its subforms may be
+    evaluated -- the long form's body is what *computes* an effective
+    method, per generic-function call."""
+    raise lisptype.LispNotImplementedError('DEFINE-METHOD-COMBINATION (evaluated in evaluator)')
+
+
 @_registry.cl_special('LOOP')
 def special_loop(*args):
     """LOOP special form (handled by evaluator)."""

@@ -2650,6 +2650,50 @@ def _make_method_function(params, body, captured_env, block_name):
     return method_func
 
 
+def _resolve_method_combination(func_name, option_tail):
+    """DEFGENERIC's `(:method-combination name option*)`: none of it is
+    evaluated. The name must already denote a combination type -- CLHS
+    requires an error otherwise, and silently falling back to standard
+    combination is what made every `(:method-combination progn)` generic
+    function drop its `progn`-qualified methods."""
+    import fclpy.classes as classes
+
+    if not _consp_internal(option_tail):
+        raise lisptype.LispProgramError(
+            f"DEFGENERIC {func_name.name}: :METHOD-COMBINATION requires a name")
+    name = car(option_tail)
+    combination_type = classes.find_method_combination_type(name)
+    if combination_type is None:
+        raise lisptype.LispProgramError(
+            f"DEFGENERIC {func_name.name}: {name} does not name a method combination type")
+    return classes.MethodCombination(combination_type, _list_elements(cdr(option_tail)))
+
+
+def _check_argument_precedence_order(func_name, lambda_list, order_tail):
+    """CLHS 7.7: :ARGUMENT-PRECEDENCE-ORDER must name each required
+    parameter of the generic function's lambda list exactly once.
+
+    Only the *validation* is here. Dispatching in that order is a change to
+    method specificity ordering (`classes._specificity_key`), which has no
+    class precedence list to reorder yet -- see plan.md's discovered issues
+    rather than adding a second ordering mechanism beside it.
+    """
+    required = []
+    for param in _list_elements(lambda_list):
+        if isinstance(param, lisptype.LispSymbol) and param.name.startswith('&'):
+            break
+        required.append(_lambda_list_param_name(param))
+
+    given = _list_elements(order_tail)
+    given_names = [p.name for p in given if isinstance(p, lisptype.LispSymbol)]
+    required_names = [p.name for p in required if isinstance(p, lisptype.LispSymbol)]
+
+    if sorted(given_names) != sorted(required_names) or len(set(given_names)) != len(given_names):
+        raise lisptype.LispProgramError(
+            f"DEFGENERIC {func_name.name}: :ARGUMENT-PRECEDENCE-ORDER {given_names} "
+            f"is not a permutation of the required parameters {required_names}")
+
+
 def eval_defgeneric(form, env):
     """Evaluate DEFGENERIC special form (CLHS 7.7).
 
@@ -2668,44 +2712,87 @@ def eval_defgeneric(form, env):
     Supported options:
         (:method qualifiers* specialized-lambda-list body)
         (:documentation string)
+        (:method-combination name option*)
+        (:argument-precedence-order parameter*)
+        (:generic-function-class class) / (:method-class class) / (declare ...)
+
+    An option this implementation does not act on is still *checked*: CLHS
+    7.7 requires a PROGRAM-ERROR for an unknown option or a repeated
+    :DOCUMENTATION, and the loop this replaced dropped every option but
+    :METHOD and :DOCUMENTATION on the floor without a word -- which is how
+    `(:method-combination progn)` silently got standard combination and
+    every method qualified `progn` then failed to match any of it
+    (standing rule 4).
     """
     import fclpy.classes as classes
 
     args = cdr(form)
     if not _consp_internal(args):
-        raise lisptype.LispNotImplementedError("DEFGENERIC requires at least a name and lambda-list")
+        raise lisptype.LispProgramError("DEFGENERIC requires at least a name and lambda-list")
 
     func_name = car(args)
     rest = cdr(args)
 
     if not isinstance(func_name, lisptype.LispSymbol):
-        raise lisptype.LispNotImplementedError("DEFGENERIC: function name must be a symbol")
+        raise lisptype.LispProgramError("DEFGENERIC: function name must be a symbol")
 
     if not _consp_internal(rest):
-        raise lisptype.LispNotImplementedError("DEFGENERIC requires a lambda-list")
+        raise lisptype.LispProgramError("DEFGENERIC requires a lambda-list")
 
     lambda_list = car(rest)
     options = cdr(rest)
 
     documentation = None
+    method_combination = None
     method_specs = []  # (qualifiers, specializers, params, body)
+    seen = set()
 
     current = options
     while _consp_internal(current):
         option = car(current)
-        if _consp_internal(option):
-            opt_name = car(option)
-            if isinstance(opt_name, lisptype.lispKeyword) and opt_name.name == 'METHOD':
-                qualifiers, specialized_lambda_list, method_body = _parse_defmethod_tail(cdr(option))
-                params, specializers = _parse_specialized_lambda_list(specialized_lambda_list, env)
-                method_specs.append((qualifiers, specializers, params, method_body))
-            elif isinstance(opt_name, lisptype.lispKeyword) and opt_name.name == 'DOCUMENTATION':
-                doc_rest = cdr(option)
-                if _consp_internal(doc_rest):
-                    documentation = car(doc_rest)
         current = cdr(current)
+        if not _consp_internal(option):
+            raise lisptype.LispProgramError(
+                f"DEFGENERIC {func_name.name}: {option} is not a valid option")
+        opt_name = _keyword_name(car(option))
+        if opt_name == 'METHOD':
+            qualifiers, specialized_lambda_list, method_body = _parse_defmethod_tail(cdr(option))
+            params, specializers = _parse_specialized_lambda_list(specialized_lambda_list, env)
+            method_specs.append((qualifiers, specializers, params, method_body))
+            continue
+
+        # CLHS 7.7 names exactly which options may appear at most once.
+        # `(declare ...)` is deliberately *not* among them -- DEFGENERIC.26
+        # supplies two of them around a method description -- so a blanket
+        # once-only rule rejects conforming code.
+        if opt_name != 'DECLARE':
+            if opt_name in seen:
+                raise lisptype.LispProgramError(
+                    f"DEFGENERIC {func_name.name}: option :{opt_name} appears more than once")
+            seen.add(opt_name)
+
+        if opt_name == 'DOCUMENTATION':
+            doc_rest = cdr(option)
+            if not _consp_internal(doc_rest):
+                raise lisptype.LispProgramError(
+                    f"DEFGENERIC {func_name.name}: :DOCUMENTATION requires a string")
+            documentation = car(doc_rest)
+        elif opt_name == 'METHOD-COMBINATION':
+            method_combination = _resolve_method_combination(func_name, cdr(option))
+        elif opt_name == 'ARGUMENT-PRECEDENCE-ORDER':
+            _check_argument_precedence_order(func_name, lambda_list, cdr(option))
+        elif opt_name in ('GENERIC-FUNCTION-CLASS', 'METHOD-CLASS', 'DECLARE'):
+            # Accepted and recorded nowhere yet: this implementation has one
+            # generic-function class and one method class, so there is
+            # nothing for them to select. They are not errors, though, and
+            # must not fall through to the unknown-option branch.
+            pass
+        else:
+            raise lisptype.LispProgramError(
+                f"DEFGENERIC {func_name.name}: unknown option {car(option)}")
 
     gf = classes.ensure_generic_function(func_name, documentation=documentation, lambda_list=lambda_list)
+    gf.method_combination = method_combination
 
     for qualifiers, specializers, params, method_body in method_specs:
         method_fn = _make_method_function(params, method_body, env, func_name)
@@ -2778,48 +2865,457 @@ __all__ = [
     'eval_defgeneric',
     'eval_defmethod',
     'eval_define_method_combination',
+    'eval_call_method',
+    'eval_make_method',
     '_store_optimization_declaration',
     '_store_special_declaration',
 ]
 
 
+def _list_elements(lst):
+    """The elements of a Lisp list as a Python list. NIL (in any of its
+    three representations -- see CLAUDE.md) is the empty list."""
+    out = []
+    current = lst
+    while _consp_internal(current):
+        out.append(car(current))
+        current = cdr(current)
+    return out
+
+
+def _keyword_name(obj):
+    """The upcased, colon-stripped name of `obj` if it is a symbol, else
+    None. Used to read option keywords without caring whether the reader
+    produced a `lispKeyword` or a plain symbol."""
+    if isinstance(obj, lisptype.LispSymbol):
+        return obj.name.upper().lstrip(':')
+    return None
+
+
 def eval_define_method_combination(form, env):
-    """Evaluate DEFINE-METHOD-COMBINATION special form.
-    
-    DEFINE-METHOD-COMBINATION does not evaluate its name argument.
-    It creates a method combination object and binds it in the global environment.
-    
-    Syntax:
-        (define-method-combination name [options...])
-    
-    In FCLpy, we implement a simplified version that just creates a
-    named method combination object without full CLOS semantics.
+    """DEFINE-METHOD-COMBINATION (CLHS): define a method combination type.
+
+    Both forms are implemented here because both produce the same kind of
+    object -- a `classes.MethodCombinationType` in the one registry
+    `call_generic_function` consults -- and only the way they compute an
+    effective method differs.
+
+    Short form:
+        (define-method-combination name &key documentation
+                                             identity-with-one-argument
+                                             operator)
+
+    Long form:
+        (define-method-combination name lambda-list (method-group-spec*)
+                                        [(:arguments . lambda-list)]
+                                        [(:generic-function var)]
+                                        declaration* body)
+
+    None of the subforms are evaluated, which is why this is a special
+    operator: the long form's body is a *macro-like* body that computes an
+    effective-method form, and it must run per generic-function call rather
+    than once here.
+
+    What this replaced created an anonymous Python object, bound it as a
+    *variable* under the combination's name, and defined nothing -- so a
+    generic function asking for `(:method-combination progn)` got standard
+    combination silently, and every method qualified `progn` was dropped
+    on the floor at dispatch time (standing rule 4).
     """
+    import fclpy.classes as classes
+
     args = cdr(form)
     if not _consp_internal(args):
-        raise lisptype.LispNotImplementedError("DEFINE-METHOD-COMBINATION requires a name")
-    
+        raise lisptype.LispProgramError("DEFINE-METHOD-COMBINATION requires a name")
+
     name = car(args)
-    # Name is NOT evaluated
-    
     if not isinstance(name, lisptype.LispSymbol):
-        raise lisptype.LispNotImplementedError("DEFINE-METHOD-COMBINATION: name must be a symbol")
-    
-    # Create a method combination object
-    class MethodCombination:
-        def __init__(self, mc_name):
-            self.name = mc_name.name if isinstance(mc_name, lisptype.LispSymbol) else str(mc_name)
-        def __repr__(self):
-            return f"#<METHOD-COMBINATION {self.name}>"
-    
-    mc = MethodCombination(name)
-    
-    # Walk up to global environment
-    global_env = env
-    while global_env.parent is not None:
-        global_env = global_env.parent
-    
-    # Bind the method combination
-    global_env.add_variable(name, mc)
-    
+        raise lisptype.LispProgramError(
+            "DEFINE-METHOD-COMBINATION: name must be a symbol")
+
+    rest = cdr(args)
+    # CLHS distinguishes the two forms by the second subform: a keyword (or
+    # nothing at all) means the short form's option plist, anything else is
+    # the long form's lambda list.
+    second = car(rest) if _consp_internal(rest) else None
+    is_short = (not _consp_internal(rest)) or isinstance(second, lisptype.lispKeyword)
+
+    if is_short:
+        combination = _parse_short_form_combination(name, _list_elements(rest), env)
+    else:
+        combination = _parse_long_form_combination(name, rest, env)
+
+    classes.register_method_combination_type(combination)
     return name
+
+
+def _parse_short_form_combination(name, options, env):
+    """Build a short-form combination type from its `&key` option plist.
+    The option *values* are evaluated (CLHS), unlike the long form's."""
+    import fclpy.classes as classes
+    from .evaluation_core import eval as _eval
+
+    documentation = None
+    operator = None
+    identity = False
+
+    i = 0
+    while i < len(options):
+        key = _keyword_name(options[i])
+        if key is None or i + 1 >= len(options):
+            raise lisptype.LispProgramError(
+                f"DEFINE-METHOD-COMBINATION {name.name}: malformed option list")
+        value = options[i + 1]
+        if key == 'DOCUMENTATION':
+            documentation = _eval(value, env)
+        elif key == 'OPERATOR':
+            operator = value
+        elif key == 'IDENTITY-WITH-ONE-ARGUMENT':
+            identity = lisptype.is_truthy(_eval(value, env))
+        else:
+            raise lisptype.LispProgramError(
+                f"DEFINE-METHOD-COMBINATION {name.name}: unknown option {options[i]}")
+        i += 2
+
+    doc = str(documentation) if documentation not in (None, lisptype.NIL) else None
+    return classes.ShortFormMethodCombination(
+        name, operator=operator, identity_with_one_argument=identity, documentation=doc)
+
+
+# A method-group specifier, parsed once at definition time.
+#   name        the variable the matching methods are bound to
+#   patterns    qualifier patterns, or None when `predicate` is used instead
+#   predicate   a symbol naming a one-argument function of the qualifier list
+#   order_form  unevaluated; evaluated per call, since it may name one of the
+#               combination's own lambda-list parameters (CLHS)
+#   required_form  likewise
+class _MethodGroup:
+    __slots__ = ('name', 'patterns', 'predicate', 'order_form', 'required_form', 'description')
+
+    def __init__(self, name, patterns, predicate, order_form, required_form, description):
+        self.name = name
+        self.patterns = patterns
+        self.predicate = predicate
+        self.order_form = order_form
+        self.required_form = required_form
+        self.description = description
+
+
+def _parse_method_group(spec):
+    """Parse one method-group specifier (CLHS DEFINE-METHOD-COMBINATION):
+        (name {qualifier-pattern+ | predicate}
+              [[:description string]] [[:order order]] [[:required bool]])
+    """
+    elements = _list_elements(spec)
+    if not elements:
+        raise lisptype.LispProgramError(
+            "DEFINE-METHOD-COMBINATION: empty method group specifier")
+    group_name = elements[0]
+    order_form = None
+    required_form = None
+    description = None
+    patterns = []
+
+    i = 1
+    while i < len(elements):
+        item = elements[i]
+        key = _keyword_name(item) if isinstance(item, lisptype.lispKeyword) else None
+        if key in ('DESCRIPTION', 'ORDER', 'REQUIRED'):
+            if i + 1 >= len(elements):
+                raise lisptype.LispProgramError(
+                    f"DEFINE-METHOD-COMBINATION: {item} needs a value")
+            if key == 'DESCRIPTION':
+                description = elements[i + 1]
+            elif key == 'ORDER':
+                order_form = elements[i + 1]
+            else:
+                required_form = elements[i + 1]
+            i += 2
+            continue
+        patterns.append(item)
+        i += 1
+
+    # A lone symbol that is not `*` is a predicate, not a pattern: `*` is the
+    # wildcard pattern and NIL is the pattern matching an empty qualifier
+    # list, so neither can be one.
+    predicate = None
+    if (len(patterns) == 1 and isinstance(patterns[0], lisptype.LispSymbol)
+            and not isinstance(patterns[0], lisptype.lispKeyword)
+            and patterns[0].name != '*'
+            and not _is_nil(patterns[0])):
+        predicate = patterns[0]
+        patterns = None
+
+    return _MethodGroup(group_name, patterns, predicate, order_form, required_form,
+                        description)
+
+
+def _is_nil(obj):
+    """Is `obj` NIL in any of its representations (CLAUDE.md: Python None,
+    the NIL singleton, or a symbol named NIL)?"""
+    if obj is None or obj is lisptype.NIL:
+        return True
+    if isinstance(obj, lisptype.lispNull):
+        return True
+    return isinstance(obj, lisptype.LispSymbol) and obj.name.upper() == 'NIL'
+
+
+def _qualifiers_match_pattern(qualifiers, pattern):
+    """CLHS: a method matches a qualifier-pattern if its qualifier list is
+    EQUAL to the pattern, except that a trailing `*` matches any remaining
+    qualifiers and a bare `*` matches every method."""
+    if isinstance(pattern, lisptype.LispSymbol) and pattern.name == '*':
+        return True
+    if _is_nil(pattern):
+        return not qualifiers
+    expected = _list_elements(pattern)
+    if expected and isinstance(expected[-1], lisptype.LispSymbol) and expected[-1].name == '*':
+        head = expected[:-1]
+        if len(qualifiers) < len(head):
+            return False
+        return all(_qualifier_equal(a, b) for a, b in zip(qualifiers, head))
+    if len(qualifiers) != len(expected):
+        return False
+    return all(_qualifier_equal(a, b) for a, b in zip(qualifiers, expected))
+
+
+def _qualifier_equal(a, b):
+    an = a.name.upper().lstrip(':') if isinstance(a, lisptype.LispSymbol) else str(a).upper()
+    bn = b.name.upper().lstrip(':') if isinstance(b, lisptype.LispSymbol) else str(b).upper()
+    return an == bn
+
+
+def _parse_long_form_combination(name, rest, env):
+    """Build a long-form combination type. The body is kept unevaluated and
+    run per generic-function call, because it is what computes the
+    effective method from the applicable ones."""
+    import fclpy.classes as classes
+    from .evaluation_core import eval as _eval
+    from fclpy.lispfunc.sequence_protocol import make_lisp_list
+
+    lambda_list = car(rest)
+    tail = cdr(rest)
+    if not _consp_internal(tail):
+        raise lisptype.LispProgramError(
+            f"DEFINE-METHOD-COMBINATION {name.name}: missing method group specifiers")
+    groups = [_parse_method_group(g) for g in _list_elements(car(tail))]
+    body = cdr(tail)
+
+    # (:arguments . lambda-list) and (:generic-function var) may precede the
+    # body proper; declarations and a documentation string may follow them.
+    arguments_ll = None
+    gf_var = None
+    while _consp_internal(body):
+        head = car(body)
+        if not _consp_internal(head):
+            break
+        head_key = _keyword_name(car(head))
+        if head_key == 'ARGUMENTS':
+            arguments_ll = cdr(head)
+        elif head_key == 'GENERIC-FUNCTION':
+            gf_var = car(cdr(head))
+        elif head_key == 'DOCUMENTATION' or head_key == 'DECLARE':
+            pass
+        else:
+            break
+        body = cdr(body)
+
+    def builder(gf, applicable, options, call_args):
+        comb_env = lisptype.Environment(env)
+        for var, value in _combination_lambda_list_bindings(lambda_list, options, comb_env):
+            comb_env.add_variable(var, value)
+        if gf_var is not None:
+            comb_env.add_variable(gf_var, gf)
+
+        # The effective method is evaluated in a child of the environment the
+        # body ran in, so the two can bind the same name to different things
+        # -- which is exactly what `:arguments` needs (below).
+        eval_env = lisptype.Environment(comb_env)
+
+        if arguments_ll is not None:
+            # CLHS: the `:arguments` lambda list gives the body access to the
+            # generic function's arguments *as forms it can splice*, not as
+            # values. Binding the values directly (the obvious reading, and
+            # what this did first) means a `,r1` whose &rest list is
+            # `(:z1 4)` splices a live cons into the effective method, where
+            # it is evaluated as a call to the function :Z1. So each
+            # parameter is bound in the body's environment to its own symbol,
+            # and that symbol is bound to the argument value in the
+            # environment the resulting form is evaluated in.
+            for var, value in _combination_lambda_list_bindings(
+                    arguments_ll, call_args, comb_env):
+                comb_env.add_variable(var, var)
+                eval_env.add_variable(var, value)
+
+        remaining = list(applicable)
+        for group in groups:
+            matched = []
+            still = []
+            for m in remaining:
+                if _method_in_group(m, group, comb_env):
+                    matched.append(m)
+                else:
+                    still.append(m)
+            remaining = still
+
+            order = 'MOST-SPECIFIC-FIRST'
+            if group.order_form is not None:
+                order = (_keyword_name(_eval(group.order_form, comb_env))
+                         or 'MOST-SPECIFIC-FIRST')
+            if order == 'MOST-SPECIFIC-LAST':
+                matched = list(reversed(matched))
+
+            if group.required_form is not None and lisptype.is_truthy(
+                    _eval(group.required_form, comb_env)) and not matched:
+                raise classes.MethodCombinationError(
+                    f"{name.name}: method group {group.name} is required but no "
+                    f"applicable method matched it")
+
+            comb_env.add_variable(group.name, make_lisp_list(matched))
+
+        if remaining:
+            raise classes.MethodCombinationError(
+                f"{name.name}: {len(remaining)} applicable method(s) match no "
+                f"method group of this combination")
+
+        result = lisptype.NIL
+        current = body
+        while _consp_internal(current):
+            result = _eval(car(current), comb_env)
+            current = cdr(current)
+        return result, eval_env
+
+    return classes.LongFormMethodCombination(name, builder)
+
+
+def _method_in_group(method, group, comb_env):
+    from .evaluation_core import funcall
+    from fclpy.lispfunc.sequence_protocol import make_lisp_list
+    qualifiers = list(getattr(method, 'qualifiers', []))
+    if group.predicate is not None:
+        return lisptype.is_truthy(funcall(group.predicate, make_lisp_list(qualifiers)))
+    return any(_qualifiers_match_pattern(qualifiers, p) for p in group.patterns)
+
+
+def _combination_lambda_list_bindings(lambda_list, values, default_env):
+    """Match a method combination's lambda list (the one after its name, and
+    the `:arguments` one) against `values`, answering `[(var, value), ...]`.
+
+    It answers bindings instead of establishing them because the two lambda
+    lists need them established *differently* -- see `:arguments` in
+    `_parse_long_form_combination` -- and one matcher with two callers beats
+    a second copy that drifts.
+
+    It is an ordinary lambda list -- `&optional`, `&rest` and `&key` all
+    appear in ansi-test's long-form combinations -- but a *missing* argument
+    is bound to NIL rather than signalling, because CLHS says this lambda
+    list is not subject to the usual error checking: a generic function is
+    allowed to supply fewer options than the combination names.
+    """
+    from fclpy.lispfunc.sequence_protocol import make_lisp_list
+
+    params = _list_elements(lambda_list)
+    values = list(values)
+    bindings = []
+    mode = 'REQUIRED'
+    index = 0
+    for param in params:
+        if isinstance(param, lisptype.LispSymbol) and param.name.startswith('&'):
+            mode = param.name.upper().lstrip('&')
+            continue
+        var, default, supplied_var = _combination_parameter_parts(param)
+        if mode in ('REST', 'BODY'):
+            bindings.append((var, make_lisp_list(values[index:])))
+            continue
+        if mode == 'KEY':
+            bindings.extend(_key_parameter_binding(param, values[index:], default_env))
+            continue
+        if index < len(values):
+            bindings.append((var, values[index]))
+            if supplied_var is not None:
+                bindings.append((supplied_var, lisptype.T))
+            index += 1
+        else:
+            bindings.append((var, _default_value(default, default_env)))
+            if supplied_var is not None:
+                bindings.append((supplied_var, lisptype.NIL))
+    return bindings
+
+
+def _combination_parameter_parts(param):
+    """`var`, `(var default)` or `(var default supplied-p)` -> the three."""
+    if not _consp_internal(param):
+        return param, None, None
+    parts = _list_elements(param)
+    var = parts[0]
+    default = parts[1] if len(parts) > 1 else None
+    supplied = parts[2] if len(parts) > 2 else None
+    return var, default, supplied
+
+
+def _default_value(default, default_env):
+    if default is None:
+        return lisptype.NIL
+    from .evaluation_core import eval as _eval
+    return _eval(default, default_env)
+
+
+def _key_parameter_binding(param, rest_values, default_env):
+    var, default, supplied = _combination_parameter_parts(param)
+    keyword_name = var.name.upper().lstrip(':') if isinstance(var, lisptype.LispSymbol) else str(var)
+    for i in range(0, len(rest_values) - 1, 2):
+        if _keyword_name(rest_values[i]) == keyword_name:
+            found = [(var, rest_values[i + 1])]
+            if supplied is not None:
+                found.append((supplied, lisptype.T))
+            return found
+    result = [(var, _default_value(default, default_env))]
+    if supplied is not None:
+        result.append((supplied, lisptype.NIL))
+    return result
+
+
+def eval_call_method(form, env):
+    """CALL-METHOD (CLHS 7.6.6.2): `(call-method method [next-method-list])`.
+
+    Neither operand is evaluated: `method` is a method object the method
+    combination spliced into the effective-method form (or a
+    `(make-method form)` form), and `next-method-list` is a list of the
+    same. The *arguments* are the ones the generic function was called
+    with -- CALL-METHOD does not name them -- so they come from the
+    effective-method context rather than from the form.
+    """
+    import fclpy.classes as classes
+
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispProgramError("CALL-METHOD requires a method")
+    method = _resolve_method_designator(car(args), env)
+    next_spec = car(cdr(args)) if _consp_internal(cdr(args)) else lisptype.NIL
+    next_methods = [_resolve_method_designator(m, env) for m in _list_elements(next_spec)]
+    return classes.call_method(method, next_methods, classes.effective_method_arguments())
+
+
+def _resolve_method_designator(spec, env):
+    """A CALL-METHOD operand: a method object, or a `(make-method form)`
+    form naming a method whose body is that one form."""
+    import fclpy.classes as classes
+
+    if _consp_internal(spec):
+        head = car(spec)
+        if isinstance(head, lisptype.LispSymbol) and head.name.upper() == 'MAKE-METHOD':
+            body_form = car(cdr(spec))
+            from .evaluation_core import eval as _eval
+            return classes.make_method_from_thunk(lambda *_args: _eval(body_form, env))
+    if hasattr(spec, 'function') and callable(getattr(spec, 'function')):
+        return spec
+    raise lisptype.LispProgramError(
+        f"CALL-METHOD: {spec!r} is not a method or a (MAKE-METHOD form) form")
+
+
+def eval_make_method(form, env):
+    """MAKE-METHOD (CLHS 7.6.6.2) is only meaningful as an operand of
+    CALL-METHOD, which reads it structurally without evaluating it. Reaching
+    it as a form means it was used somewhere it has no meaning."""
+    raise lisptype.LispProgramError(
+        "MAKE-METHOD is only valid as an argument to CALL-METHOD")

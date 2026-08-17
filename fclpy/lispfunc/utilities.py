@@ -107,7 +107,6 @@ __all__ = [
     'invoke_debugger',
     'store_value',
     'use_value',
-    'define_method_combination',
     'method_combination_error',
     'invalid_method_error',
     'package_error_package',

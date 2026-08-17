@@ -361,12 +361,21 @@ class Method:
 
 @dataclass(eq=False)
 class GenericFunction:
-    """A generic function: a name, a lambda-list, and a set of methods
-    dispatched via standard method combination (CLHS 7.6.6.2)."""
+    """A generic function: a name, a lambda-list, a set of methods, and the
+    method combination that decides how those methods are assembled into an
+    effective method (CLHS 7.6.6).
+
+    `method_combination` is None until DEFGENERIC's `:method-combination`
+    option supplies one, and None means *standard* combination -- not "no
+    combination". Resolving it lazily rather than storing STANDARD here
+    keeps `ensure_generic_function` free of an import cycle back into the
+    combination registry, which is populated after this class is defined.
+    """
     name: LispSymbol
     methods: List[Method] = field(default_factory=list)
     documentation: Optional[str] = None
     lambda_list: Optional[Any] = None
+    method_combination: Optional['MethodCombination'] = None
 
     def __repr__(self):
         return f"#<STANDARD-GENERIC-FUNCTION {self.name.name}>"
@@ -618,6 +627,29 @@ def _no_applicable_method(gf: GenericFunction, args: List[Any]):
     )
 
 
+class MakeMethod:
+    """The method `(MAKE-METHOD form)` denotes (CLHS 7.6.6.2): a method with
+    no qualifiers and no specializers whose body is one form.
+
+    Method combination uses it to splice a computed sub-combination into a
+    position that expects a method -- standard combination's before/primary/
+    after core is passed to the innermost :around method this way -- so
+    CALL-METHOD and the next-method chain have exactly *one* kind of thing
+    to call rather than "a method, or else the special core closure".
+    """
+    __slots__ = ('function', 'qualifiers', 'specializers', 'generic_function', 'lambda_list')
+
+    def __init__(self, function: Callable, generic_function: Optional[GenericFunction] = None):
+        self.function = function
+        self.qualifiers = []
+        self.specializers = []
+        self.generic_function = generic_function
+        self.lambda_list = None
+
+    def __repr__(self):
+        return "#<METHOD (MAKE-METHOD)>"
+
+
 # The dynamic (per-call, reentrant) CALL-NEXT-METHOD/NEXT-METHOD-P context:
 # a stack of frames, one per method currently executing, so a method that
 # itself triggers a nested generic-function call (directly, or by calling a
@@ -625,16 +657,31 @@ def _no_applicable_method(gf: GenericFunction, args: List[Any]):
 # frame on top rather than a sibling call's -- a single flat "last call's
 # next methods" slot (what this replaced) is exactly the kind of state a
 # single-threaded interpreter with recursive calls cannot share safely.
+#
+# A frame is `{'args', 'next', 'gf'}` and there is only one *kind* of it:
+# `next` is the ordered list of methods CALL-NEXT-METHOD may reach from
+# here, empty when there is none. It used to carry a `kind` discriminator
+# ('around'/'primary'/'none') with a separate `core` closure for the around
+# chain, which is why NEXT-METHOD-P answered T inside every :around method
+# whether or not anything remained, and why nothing but standard
+# combination could ever build a chain at all.
 _call_stack: List[Dict[str, Any]] = []
 
 
-def _invoke_method(method: Method, args: List[Any]) -> Any:
-    """Call one method with no next-method chain of its own -- used for
-    :before/:after methods, which CLHS runs once each rather than chaining
-    (a stray CALL-NEXT-METHOD inside one is therefore a "no next method"
-    error, not silently reaching an unrelated frame further down the
-    stack)."""
-    _call_stack.append({'kind': 'none', 'remaining': [], 'args': args, 'gf': method.generic_function})
+def call_method(method: Any, next_methods: List[Any], args: List[Any]) -> Any:
+    """CALL-METHOD's operator (CLHS 7.6.6.2): invoke one method with
+    `next_methods` as the chain CALL-NEXT-METHOD may walk from inside it.
+
+    **This is the one place a method is ever invoked.** Standard
+    combination, the short and long forms of DEFINE-METHOD-COMBINATION and
+    the CALL-METHOD operator itself all bottom out here, so the
+    next-method context cannot disagree between them.
+    """
+    _call_stack.append({
+        'args': args,
+        'next': list(next_methods),
+        'gf': getattr(method, 'generic_function', None),
+    })
     try:
         return method.function(*args)
     finally:
@@ -661,105 +708,373 @@ def register_default_method_installer(name, installer: Callable[[GenericFunction
     _default_method_installers[name_str] = installer
 
 
-def call_generic_function(gf: GenericFunction, args: List[Any]) -> Any:
-    """Call a generic function: compute applicable methods, then run them
-    via standard method combination (CLHS 7.6.6.2) -- :around methods
-    outermost, then :before methods most-specific-first, the most specific
-    applicable primary method (which may CALL-NEXT-METHOD into the rest),
-    then :after methods least-specific-first.
+def compute_applicable_methods(gf: GenericFunction, args: List[Any]) -> List[Method]:
+    """Every method of `gf` applicable to `args`, most-specific-first (CLHS
+    7.6.6.1) -- the one selection every caller uses, so COMPUTE-APPLICABLE-
+    METHODS cannot disagree with what a real call would invoke."""
+    if not isinstance(gf, GenericFunction):
+        # Reached from the COMPUTE-APPLICABLE-METHODS operator, which any
+        # value can be handed. Signalling beats letting Python's
+        # AttributeError surface as the form's value (standing rule 2).
+        raise LispProgramError(
+            f"COMPUTE-APPLICABLE-METHODS: {gf!r} is not a generic function")
+    applicable = [m for m in gf.methods if _matches_specializers(args, m.specializers)]
+    # Stable, so methods whose specificity this codebase cannot yet tell
+    # apart (see _specificity_key: there is no real class precedence list
+    # for the built-in classes) keep definition order rather than an
+    # arbitrary one.
+    applicable.sort(key=lambda m: _specificity_key(m.specializers), reverse=True)
+    return applicable
+
+
+class MethodCombinationError(LispProgramError):
+    """The condition METHOD-COMBINATION-ERROR names (CLHS 7.6.6.4): the
+    applicable methods cannot be assembled into an effective method -- an
+    unrecognized qualifier, or a required method group left empty."""
+
+
+# ==============================================================================
+# Method combination (CLHS 7.6.6)
+# ==============================================================================
+# A method combination *type* knows how to turn the applicable methods into
+# an effective method. A method combination *object* is that type plus the
+# options the generic function supplied in `(:method-combination name
+# . options)`. The generic function holds the object; the registry below
+# holds the types.
+#
+# Every type produces its effective method out of `call_method` above, so
+# CALL-NEXT-METHOD, NEXT-METHOD-P and CALL-METHOD behave identically no
+# matter which combination is in force. Standard combination assembles the
+# chain in Python because its shape is fixed; the DEFINE-METHOD-COMBINATION
+# forms assemble a Lisp *form* instead, because the operator they combine
+# with may be a macro whose evaluation order is part of the semantics --
+# `(and (call-method m1) (call-method m2))` must stop at the first NIL, and
+# ansi-test observes exactly that.
+
+
+class MethodCombinationType:
+    """Base class: a named way of combining methods."""
+
+    def __init__(self, name: LispSymbol, documentation: Optional[str] = None):
+        self.name = name
+        self.documentation = documentation
+
+    @property
+    def name_string(self) -> str:
+        return self.name.name if isinstance(self.name, LispSymbol) else str(self.name)
+
+    def invoke(self, gf: GenericFunction, applicable: List[Method],
+               args: List[Any], options: List[Any]) -> Any:
+        raise NotImplementedError
+
+    def __repr__(self):
+        return f"#<METHOD-COMBINATION {self.name_string}>"
+
+
+class MethodCombination:
+    """A method combination object: a type plus the (unevaluated) options
+    one generic function gave it."""
+    __slots__ = ('type', 'options')
+
+    def __init__(self, type_: MethodCombinationType, options: Optional[List[Any]] = None):
+        self.type = type_
+        self.options = list(options or [])
+
+    @property
+    def name(self):
+        return self.type.name
+
+    @property
+    def documentation(self):
+        return self.type.documentation
+
+    def invoke(self, gf: GenericFunction, applicable: List[Method], args: List[Any]) -> Any:
+        return self.type.invoke(gf, applicable, args, self.options)
+
+    def __repr__(self):
+        return f"#<METHOD-COMBINATION {self.type.name_string}>"
+
+
+class StandardMethodCombination(MethodCombinationType):
+    """CLHS 7.6.6.2: :around methods outermost, then :before methods
+    most-specific-first, the most specific applicable primary method (which
+    may CALL-NEXT-METHOD into the rest), then :after methods
+    least-specific-first."""
+
+    def invoke(self, gf, applicable, args, options):
+        primaries = [m for m in applicable if not m.qualifiers]
+        befores = [m for m in applicable if _qualifier_names(m) == {'BEFORE'}]
+        afters = [m for m in applicable if _qualifier_names(m) == {'AFTER'}]
+        arounds = [m for m in applicable if _qualifier_names(m) == {'AROUND'}]
+
+        recognized = ({'BEFORE'}, {'AFTER'}, {'AROUND'})
+        for m in applicable:
+            if m.qualifiers and _qualifier_names(m) not in recognized:
+                raise MethodCombinationError(
+                    f"{_gf_name(gf)}: standard method combination accepts only "
+                    f":BEFORE, :AFTER and :AROUND qualifiers, not "
+                    f"{[str(q) for q in m.qualifiers]}")
+
+        def run_core(*_args):
+            if not primaries:
+                _no_applicable_method(gf, args)
+            for m in befores:
+                call_method(m, [], args)
+            result = call_method(primaries[0], primaries[1:], args)
+            for m in reversed(afters):
+                call_method(m, [], args)
+            return result
+
+        if not arounds:
+            return run_core()
+        return call_method(arounds[0], arounds[1:] + [MakeMethod(run_core, gf)], args)
+
+
+def _gf_name(gf) -> str:
+    name = getattr(gf, 'name', gf)
+    return name.name if isinstance(name, LispSymbol) else str(name)
+
+
+def _order_option(options: List[Any], default: str = 'MOST-SPECIFIC-FIRST') -> str:
+    """The ordering a short-form combination was given in
+    `(:method-combination name [order])` -- :MOST-SPECIFIC-FIRST (the
+    default) or :MOST-SPECIFIC-LAST."""
+    for opt in options:
+        text = (opt.name if isinstance(opt, LispSymbol) else str(opt)).upper().lstrip(':')
+        if text in ('MOST-SPECIFIC-FIRST', 'MOST-SPECIFIC-LAST'):
+            return text
+    return default
+
+
+def _apply_order(methods: List[Any], order: str) -> List[Any]:
+    return list(reversed(methods)) if order == 'MOST-SPECIFIC-LAST' else list(methods)
+
+
+class ShortFormMethodCombination(MethodCombinationType):
+    """The short form of DEFINE-METHOD-COMBINATION (CLHS), and with it the
+    nine built-in combination types of CLHS 7.6.6.4.
+
+    Every applicable method must be qualified either with the combination's
+    own name (a *primary* method) or with :AROUND; the effective method is
+    `(operator (call-method p1) (call-method p2) ...)` wrapped in the
+    :AROUND chain. Building that as a real form rather than folding the
+    results in Python is what makes the AND and OR combinations short-
+    circuit, which is directly observable: ansi-test's
+    DEFGENERIC-METHOD-COMBINATION.AND.1 asserts that the methods after the
+    first NIL never run.
     """
+
+    def __init__(self, name, operator=None, identity_with_one_argument=False,
+                 documentation=None):
+        super().__init__(name, documentation)
+        self.operator = operator if operator is not None else name
+        self.identity_with_one_argument = identity_with_one_argument
+
+    def invoke(self, gf, applicable, args, options):
+        from fclpy.lispfunc.sequence_protocol import make_lisp_list
+
+        own = self.name_string.upper()
+        primaries, arounds = [], []
+        for m in applicable:
+            names = _qualifier_names(m)
+            if names == {own}:
+                primaries.append(m)
+            elif names == {'AROUND'}:
+                arounds.append(m)
+            else:
+                raise MethodCombinationError(
+                    f"{_gf_name(gf)}: the {own} method combination accepts only "
+                    f"{own} and :AROUND qualifiers, not {[str(q) for q in m.qualifiers]}")
+
+        if not primaries:
+            raise MethodCombinationError(
+                f"{_gf_name(gf)}: no applicable primary ({own}) method")
+
+        primaries = _apply_order(primaries, _order_option(options))
+        calls = [make_lisp_list([_CALL_METHOD_SYM, m]) for m in primaries]
+        if self.identity_with_one_argument and len(calls) == 1:
+            core = calls[0]
+        else:
+            core = make_lisp_list([self.operator] + calls)
+
+        return _run_effective_method(gf, core, arounds, args)
+
+
+class LongFormMethodCombination(MethodCombinationType):
+    """The long form of DEFINE-METHOD-COMBINATION: `builder(gf, applicable,
+    options)` answers `(form, env)`, the effective method the user's body
+    computed. Parsing the method-group specifiers and the combination's own
+    lambda list is the evaluator's job (see
+    `evaluation_special_forms.eval_define_method_combination`), so this
+    class holds no second copy of either."""
+
+    def __init__(self, name, builder: Callable, documentation=None):
+        super().__init__(name, documentation)
+        self.builder = builder
+
+    def invoke(self, gf, applicable, args, options):
+        from fclpy.lispfunc.evaluation_core import eval as _eval
+        form, env = self.builder(gf, applicable, options, args)
+        _effective_context.append({'gf': gf, 'args': args, 'env': env})
+        try:
+            return _eval(form, env)
+        finally:
+            _effective_context.pop()
+
+
+# The arguments of the generic-function call whose effective method *form*
+# is currently being evaluated. CALL-METHOD reads its arguments from here
+# rather than taking them as operands, because CLHS gives it none: an
+# effective method is a function of the original call's arguments, and the
+# combination that built the form does not name them.
+_effective_context: List[Dict[str, Any]] = []
+
+def _cl_symbol(name: str) -> LispSymbol:
+    """The interned COMMON-LISP symbol of this name. A form built out of
+    bare `LispSymbol(...)` objects would name *different* symbols from the
+    ones the environment binds -- function and variable lookup is by symbol
+    identity, not by name (see CLAUDE.md) -- so the `(PROGN ...)` an
+    effective method is made of has to be the real PROGN."""
+    from fclpy.lisptype import COMMON_LISP_PACKAGE
+    return COMMON_LISP_PACKAGE.intern_symbol(name)
+
+
+_CALL_METHOD_SYM = _cl_symbol('CALL-METHOD')
+
+
+def _run_effective_method(gf, core_form, arounds, args):
+    """Evaluate a combination-built effective method: `core_form` wrapped in
+    `arounds` (most-specific-first), which is the same :AROUND chain
+    standard combination builds -- one shape, not one per combination."""
+    from fclpy.lispfunc.evaluation_core import eval as _eval
+    import fclpy.state as _state
+
+    # The form names only the combination's operator and CALL-METHOD, so the
+    # global environment is the right (and only correct) place to resolve it
+    # -- a short-form combination's operator is looked up where the
+    # combination was defined, not wherever the call happens to originate.
+    env = _state.current_environment
+
+    def run_core(*call_args):
+        _effective_context.append({'gf': gf, 'args': list(call_args) or args, 'env': env})
+        try:
+            return _eval(core_form, env)
+        finally:
+            _effective_context.pop()
+
+    if not arounds:
+        return run_core(*args)
+    return call_method(arounds[0], arounds[1:] + [MakeMethod(run_core, gf)], args)
+
+
+# ------------------------------------------------------------------ registry
+
+_method_combination_types: Dict[str, MethodCombinationType] = {}
+
+
+def register_method_combination_type(type_: MethodCombinationType) -> MethodCombinationType:
+    """Install a method combination type under its name. DEFINE-METHOD-
+    COMBINATION redefining an existing name replaces it here, which is what
+    makes every generic function already using it pick the new definition
+    up (they hold the *object*, which holds the type by reference)."""
+    _method_combination_types[type_.name_string.upper()] = type_
+    return type_
+
+
+def find_method_combination_type(name) -> Optional[MethodCombinationType]:
+    key = (name.name if isinstance(name, LispSymbol) else str(name)).upper()
+    return _method_combination_types.get(key)
+
+
+STANDARD_METHOD_COMBINATION = StandardMethodCombination(_cl_symbol('STANDARD'))
+register_method_combination_type(STANDARD_METHOD_COMBINATION)
+
+# CLHS 7.6.6.4's built-in combination types, each defined as if by the short
+# form of DEFINE-METHOD-COMBINATION with itself as the operator. APPEND and
+# LIST are the two that are *not* :identity-with-one-argument, which is
+# observable: with a single applicable method, the LIST combination answers
+# `(x)` and not `x`.
+for _op, _identity in (('PROGN', True), ('AND', True), ('OR', True), ('+', True),
+                       ('MAX', True), ('MIN', True), ('NCONC', True),
+                       ('APPEND', False), ('LIST', False)):
+    register_method_combination_type(
+        ShortFormMethodCombination(_cl_symbol(_op), identity_with_one_argument=_identity))
+del _op, _identity
+
+
+def method_combination_of(gf: GenericFunction) -> MethodCombination:
+    """The method combination in force for `gf` -- standard unless
+    DEFGENERIC said otherwise."""
+    comb = getattr(gf, 'method_combination', None)
+    if comb is None:
+        return MethodCombination(STANDARD_METHOD_COMBINATION)
+    return comb
+
+
+def call_generic_function(gf: GenericFunction, args: List[Any]) -> Any:
+    """Call a generic function: compute the applicable methods, then let the
+    generic function's method combination assemble and run them (CLHS
+    7.6.6)."""
     if not gf.methods:
-        name_str = gf.name.name if isinstance(gf.name, LispSymbol) else str(gf.name)
-        installer = _default_method_installers.get(name_str)
+        installer = _default_method_installers.get(_gf_name(gf))
         if installer is not None:
             installer(gf)
 
-    applicable = [m for m in gf.methods if _matches_specializers(args, m.specializers)]
-
-    primaries = sorted((m for m in applicable if not m.qualifiers),
-                        key=lambda m: _specificity_key(m.specializers), reverse=True)
-    befores = sorted((m for m in applicable if _qualifier_names(m) == {'BEFORE'}),
-                      key=lambda m: _specificity_key(m.specializers), reverse=True)
-    afters = sorted((m for m in applicable if _qualifier_names(m) == {'AFTER'}),
-                     key=lambda m: _specificity_key(m.specializers), reverse=True)
-    arounds = sorted((m for m in applicable if _qualifier_names(m) == {'AROUND'}),
-                      key=lambda m: _specificity_key(m.specializers), reverse=True)
-
-    def run_core():
-        if not primaries:
-            _no_applicable_method(gf, args)
-        for m in befores:
-            _invoke_method(m, args)
-        frame = {'kind': 'primary', 'remaining': primaries[1:], 'args': args, 'gf': gf}
-        _call_stack.append(frame)
-        try:
-            result = primaries[0].function(*args)
-        finally:
-            _call_stack.pop()
-        for m in reversed(afters):
-            _invoke_method(m, args)
-        return result
-
-    if not arounds:
-        return run_core()
-
-    frame = {'kind': 'around', 'remaining': arounds[1:], 'args': args, 'gf': gf, 'core': run_core}
-    _call_stack.append(frame)
-    try:
-        return arounds[0].function(*args)
-    finally:
-        _call_stack.pop()
+    applicable = compute_applicable_methods(gf, args)
+    if not applicable:
+        # CLHS 7.6.6: no applicable methods is decided *before* the method
+        # combination is consulted, and is an error for every combination --
+        # not something a combination can answer by combining nothing. A
+        # long-form combination whose body maps over an empty method group
+        # otherwise happily produces `(vector)` and returns #().
+        _no_applicable_method(gf, args)
+    return method_combination_of(gf).invoke(gf, applicable, args)
 
 
 def call_next_method(*args) -> Any:
-    """CALL-NEXT-METHOD: call the next method in the current combination
-    chain -- the next less-specific :around, or (from the last :around)
-    the before/primary/after core, or the next less-specific primary method.
-    """
+    """CALL-NEXT-METHOD: call the next method in the chain the currently
+    executing method was given by CALL-METHOD."""
     if not _call_stack:
         raise LispProgramError(
             "CALL-NEXT-METHOD: no method is currently executing")
     frame = _call_stack[-1]
     call_args = list(args) if args else frame['args']
-
-    if frame['kind'] == 'around':
-        remaining = frame['remaining']
-        if remaining:
-            new_frame = {'kind': 'around', 'remaining': remaining[1:], 'args': call_args,
-                         'gf': frame['gf'], 'core': frame['core']}
-            _call_stack.append(new_frame)
-            try:
-                return remaining[0].function(*call_args)
-            finally:
-                _call_stack.pop()
-        return frame['core']()
-
-    if frame['kind'] == 'primary':
-        remaining = frame['remaining']
-        if not remaining:
-            gf_name = frame['gf'].name.name if isinstance(frame['gf'].name, LispSymbol) else str(frame['gf'].name)
-            raise LispProgramError(f"CALL-NEXT-METHOD: no next method for {gf_name}")
-        new_frame = {'kind': 'primary', 'remaining': remaining[1:], 'args': call_args, 'gf': frame['gf']}
-        _call_stack.append(new_frame)
-        try:
-            return remaining[0].function(*call_args)
-        finally:
-            _call_stack.pop()
-
-    raise LispProgramError(
-        "CALL-NEXT-METHOD: not applicable in this method (:before/:after methods have no next method)")
+    remaining = frame['next']
+    if not remaining:
+        raise LispProgramError(
+            f"CALL-NEXT-METHOD: no next method for {_gf_name(frame['gf'])}")
+    return call_method(remaining[0], remaining[1:], call_args)
 
 
 def next_method_p() -> bool:
     """NEXT-METHOD-P: would CALL-NEXT-METHOD succeed right now?"""
     if not _call_stack:
         return False
-    frame = _call_stack[-1]
-    if frame['kind'] == 'around':
-        return True  # the core (before/primary/after) is always reachable
-    if frame['kind'] == 'primary':
-        return bool(frame['remaining'])
-    return False
+    return bool(_call_stack[-1]['next'])
+
+
+def effective_method_arguments() -> List[Any]:
+    """The arguments of the generic-function call whose effective method
+    form is being evaluated -- CALL-METHOD's implicit operands."""
+    if not _effective_context:
+        raise LispProgramError(
+            "CALL-METHOD is only valid inside an effective method form")
+    return _effective_context[-1]['args']
+
+
+def make_method_from_thunk(run: Callable, generic_function=None) -> MakeMethod:
+    """Wrap `run(*args)` as the method `(MAKE-METHOD form)` denotes, with the
+    effective-method context established around it so a CALL-METHOD nested
+    inside that form still knows the original call's arguments."""
+    def invoke(*call_args):
+        _effective_context.append(
+            {'gf': generic_function, 'args': list(call_args), 'env': None})
+        try:
+            return run(*call_args)
+        finally:
+            _effective_context.pop()
+
+    return MakeMethod(invoke, generic_function)
 
 
 # ==============================================================================

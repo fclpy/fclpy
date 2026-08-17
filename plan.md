@@ -354,6 +354,7 @@ grep -cE "^FORMAT" ansi_results/failed.txt        # aggregate a family
 | **`PRINT.INTEGERS.*`** (`BASE` 84, `RADIX.BASE` 77) | **161** | 2.2% | yes — printer radix/base |
 | **`LOOP`** | **154** | 2.1% | remaining clauses, not the engine |
 | **CLOS** (`DEFGENERIC` 51, `SHARED-INITIALIZE` 41, `CHANGE-CLASS` 34) | **~150** | 2.0% | no — two implementations |
+| ~~**Method combination** (`DEFGENERIC-METHOD-COMBINATION` 95, `DEFINE-METHOD-COMBINATION` 20)~~ | ~~**115**~~ | ~~1.6%~~ | **yes — done 2026-08-18**, and the answer was "the operator did not exist" |
 | **`OPEN`** (`OPEN` 82, `PROBE` 36, `OUTPUT` 35, `IO` 35) | **188** | 2.6% | yes — stream/file model |
 | **Arrays** (`MAKE-ARRAY` 43, `DISPLACED` 31) | **~74** | 1.0% | residual, model is done |
 | **`SUBTYPEP`** (`MEMBER` 34, `INTEGER` 30) | **~64** | 0.9% | yes — no type lattice |
@@ -689,11 +690,33 @@ binding leak in [§5](#5-known-temporary-deviations) is fixed.
 
 #### C8. CLOS — `DEFGENERIC` / `DEFMETHOD` / `DEFCLASS` / `CHANGE-CLASS`
 
-**Evidence.** **291 failures** — `DEFGENERIC` 52, `SHARED-INITIALIZE` 41,
-`CHANGE-CLASS` 34, `DEFMETHOD` 26, `DEFCLASS` 22, `MAKE-INSTANCES-OBSOLETE` 8 —
-plus `RuntimeError: CALL-NEXT-METHOD: No next method available` (18) and
-`AttributeError: Slot A not found` (10). `objects/` is 610 failing of 825;
-`types-and-classes/` 262 of 545.
+**Method combination landed 2026-08-18** — see the [Changelog](#changelog).
+`run_ansi.py objects`: **298 → 413 passing of 862** (34.6% → 47.9%), 0
+regressions. The `DEFGENERIC-METHOD-COMBINATION.*` cluster went **95 → 4** and
+`DEFINE-METHOD-COMBINATION*` **20 → 0**. **The rest of C8 is untouched.**
+
+**Remaining evidence (2026-08-18, `run_ansi.py objects`).** 449 failures:
+`DEFGENERIC` 49, `DEFCLASS` 26, `DEFMETHOD` 26, `MAKE-LOAD-FORM` 26,
+`SHARED-INITIALIZE` 21, `CHANGE-CLASS` 20, `WITH-SLOTS` 16,
+`ENSURE-GENERIC-FUNCTION` 14, `WITH-ACCESSORS` 12, `REMOVE-METHOD` 11 — plus
+`RuntimeError: CALL-NEXT-METHOD: No next method available` (18) and
+`AttributeError: Slot A not found` (10). `types-and-classes/` 337 of 545.
+
+**Two things now block most of the remainder, and neither is "CLOS" as a
+whole:**
+
+- **There is no class precedence list.** `classes._specificity_key` orders
+  applicable methods by *ancestor count*, and the live `_init_builtin_classes`
+  makes every built-in class a direct subclass of `T` — so `INTEGER`,
+  `RATIONAL` and `NUMBER` are all equally specific and only the (stable)
+  definition order separates them. It is why the four residual
+  `DEFGENERIC-METHOD-COMBINATION.*.7` tests fail: they are the ones that
+  dispatch over the multiply-inheriting `dgmc-class-04 (dgmc-class-02
+  dgmc-class-03)`. A real C3 linearization plus a real built-in class
+  hierarchy is one mechanism serving [C14](#tier-2--subsystem-gaps)'s type
+  lattice as well, and it is the next-largest CLOS item on the evidence.
+- **`DEFGENERIC`'s lambda-list congruence is unchecked**, which is 18 of the
+  22 `DEFGENERIC.ERROR.*` tests. That is M3's lambda-list engine, not CLOS.
 
 **Two CLOS implementations still coexist** (Finding L). Consolidate before
 fixing, or fixes will silently fail to apply. **Owner:** M9.
@@ -1032,6 +1055,34 @@ these are ranked on measured evidence rather than on that premise.
     `objects/` is 28.0% and barely moved (+1.7) across a run that moved
     everything else. Two implementations still coexist (Finding L), so
     consolidate before fixing.
+    **First slice done 2026-08-18: method combination** (CLHS 7.6.6), which
+    was absent — `objects` **298 → 413 of 862**, 0 regressions. Details in
+    the [Changelog](#changelog).
+    **The disappeared-failures signal came back negative, and that is
+    honest rather than disappointing.** [§2](#the-development-loop) step 7
+    asks which failures moved that were *not* targeted; here, none did — all
+    115 are in the eleven files that test method combination. That is what
+    an *absent operator* looks like as opposed to a *broken shared
+    mechanism*: nothing else could have been depending on a combination
+    type that did not exist. The eleven files were still the right unit of
+    work — one mechanism, not 115 bugs — but this is [§3](#the-checklist)'s
+    "the distribution has flattened" playing out, and it is evidence for
+    the [policy-change trigger](#policy-change-trigger-under-3000-failures-and-under-100-files)
+    rather than against it.
+17a. **The class precedence list (new, and now the largest CLOS item).**
+    Ranked here on the evidence method combination exposed: with the
+    combination machinery correct, the four `DEFGENERIC-METHOD-COMBINATION.*.7`
+    tests that still fail are exactly the ones dispatching over a
+    multiply-inheriting class, and `classes._specificity_key` cannot order
+    them because the live `_init_builtin_classes` gives every built-in class
+    `T` as its only superclass. Two consequences worth ranking on: the
+    ordering of applicable methods is currently decided by *definition
+    order* wherever the ancestor counts tie (which is most of the time, and
+    is why so much of `objects/` passes by luck), and `SUBTYPEP` has no
+    lattice to consult either — so this is one mechanism serving
+    [C8](#c8-clos--defgeneric--defmethod--defclass--change-class) and
+    [C14](#tier-2--subsystem-gaps) at once. It also retires the duplicate
+    `_init_builtin_classes` (standing rule 3).
 18. **The reader ([C12](#tier-2--subsystem-gaps)), 21.8% and the worst rate in
     the suite.** Newly concrete: **ratios do not read** — `3/5` comes back as an
     unbound *variable*, not a number.
@@ -1067,6 +1118,8 @@ Anything knowingly non-ANSI, with the milestone that removes it. Empty means
 | `*PRINT-CIRCLE*` unimplemented; the printer instead cuts off at depth 256 | needs a labelling pass over the object graph | M10 |
 | `~&` sees only the column within its own control string, so a `~&` opening a control string cannot tell the stream is mid-line; `FRESH-LINE` is correct | FORMAT builds its whole output as a string before writing, and the column is not threaded through the eleven nested `_format_process_cursor` call sites | C2 |
 | `SUBTYPEP` string-pair table | no type lattice | M9 |
+| **No class precedence list.** `classes._specificity_key` orders applicable methods by *ancestor count*, and the live `_init_builtin_classes` gives every built-in class `T` as its only superclass — so `INTEGER`, `RATIONAL` and `NUMBER` are equally specific and ties are broken by *definition order* (a stable sort). Much of `objects/` therefore passes because ansi-test happens to define its methods most-specific-first | CLHS 7.6.6.1 wants the argument's class precedence list position, which needs a real C3 linearization *and* a real built-in class hierarchy; both are the same mechanism as C14's type lattice, so doing it here would be a second one | M9 / §4 item 17a |
+| `classes.py` defines `_init_builtin_classes` twice; the second wins and the first is dead | standing rule 3, unresolved — the two disagree about the class hierarchy, which is exactly why it matters | M9 / §4 item 17a |
 | The reader does not parse **ratios**: `3/5` reads as a symbol, so it evaluates as an unbound variable | found 2026-08-16 while probing `*mini-universe*`, whose ratio entry is therefore not a ratio | M10 / C12 |
 | `WITH-STANDARD-IO-SYNTAX` binds `*PRINT-PPRINT-DISPATCH*` to a dispatch table that dispatches nothing | the *object* now has one home (`io_write.standard_pprint_dispatch`) and the binding is correct, but `SET-PPRINT-DISPATCH`/`PPRINT-DISPATCH` are stubs, so `WITH-STANDARD-IO-SYNTAX.23` cannot pass. It is the pretty printer's absence, not the macro's | C2 / M10 |
 | `SET-SYNTAX-FROM-CHAR` returns T without doing anything, and there is no character *syntax type* model for it to act on | `Readtable` records macro characters and a case and nothing else; building syntax types is the bulk of what `reader/` still owes | M10 / C12 |
@@ -1270,6 +1323,67 @@ rather than discovering these one crash at a time.
 
 Condensed from the previous chronological plan. Each entry is a *mechanism*
 landed, not a test count.
+
+- **2026-08-18** — **Method combination exists (CLHS 7.6.6).** A generic
+  function had no method combination at all: `DEFGENERIC` parsed `:METHOD`
+  and `:DOCUMENTATION` and dropped every other option on the floor, and
+  `call_generic_function` hard-coded standard combination's four qualifier
+  buckets. So `(:method-combination progn)` silently produced a *standard*
+  generic function, and each of its `progn`-qualified methods matched none
+  of `{}`/`{BEFORE}`/`{AFTER}`/`{AROUND}` and was **discarded without a
+  diagnostic** — the call then failed with "no applicable method" naming
+  nothing that had gone wrong (standing rule 4, twice over).
+  `DEFINE-METHOD-COMBINATION` existed **twice** — a special form in
+  `evaluation_special_forms.py` and a `cl_function` in `utilities_errors.py`
+  — and neither copy defined anything: both built an anonymous Python object
+  and bound it as a *variable* under the combination's name (standing rules
+  2 and 3).
+  **The mechanism is a method-combination object with one invocation
+  primitive under it.** `classes.call_method(method, next_methods, args)` is
+  now the only place a method is ever invoked, and the frame it pushes is
+  the one `CALL-NEXT-METHOD`/`NEXT-METHOD-P` read. That replaced a frame
+  carrying a `kind` discriminator plus, for `:around`, its own `core`
+  closure — which is why `NEXT-METHOD-P` answered T inside *every* `:around`
+  method whether or not anything remained, and why nothing except standard
+  combination could build a chain at all. A generic function now holds a
+  `MethodCombination`; `None` means standard, not "none".
+  **The effective method is a *form*, and that is forced rather than
+  stylistic.** Standard combination assembles its chain in Python because its
+  shape is fixed, but the short form (CLHS 7.6.6.4's nine built-ins, plus
+  `DEFINE-METHOD-COMBINATION`'s short form) and the long form build
+  `(operator (call-method m1) (call-method m2) ...)` and evaluate it,
+  because the operator may be a **macro whose evaluation order is the
+  semantics**: `defgeneric-method-combination.and.1` asserts that the methods
+  after the first NIL never run. Folding the method results in Python gives
+  the right answer for `PROGN` and `LIST` and the wrong one for `AND`/`OR`.
+  That in turn required `CALL-METHOD` and `MAKE-METHOD` to become real
+  special operators — they were `cl_function`s that evaluated both operands
+  (one of which is an unevaluated method body) and then ignored
+  `next-method-list` entirely, i.e. the registry defect `CLAUDE.md` names, in
+  the one place where it makes CALL-NEXT-METHOD structurally impossible.
+  Building the form out of *interned* `COMMON-LISP` symbols matters for the
+  same reason it did in 08-16 (c): lookup is by symbol identity.
+  **Two defects surfaced only once the machinery worked**, both found by the
+  regression diff rather than by aiming at them: (1) "no applicable methods"
+  is decided **before** the combination is consulted (CLHS 7.6.6) — a
+  long-form body mapping over an empty method group otherwise cheerfully
+  returns `#()`; (2) CLHS's `:arguments` lambda list binds its variables to
+  **forms**, not values, so a `&rest` list of `(:z1 4)` spliced into the
+  effective method was evaluated as a call to the function `:Z1`. Each
+  variable is now bound in the body's environment to its own symbol, and
+  that symbol to the argument value in the environment the resulting form is
+  evaluated in.
+  **Measured, same runner both sides:** `run_ansi.py objects` **298 → 413
+  passing of 862** (34.6% → 47.9%), **0 regressions** verified by diffing
+  the passed sets across a `git stash` of the change.
+  `DEFGENERIC-METHOD-COMBINATION.*` **95 → 4**, `DEFINE-METHOD-COMBINATION*`
+  **20 → 0**, `DEFGENERIC.ERROR.*` 22 → 18 (the option-validation four;
+  the rest want lambda-list congruence, which is M3's).
+  **The disappeared-failures signal was negative** — every recovered test is
+  in the eleven files that test method combination — and
+  [§4 item 17](#re-derived-from-the-2026-08-16-run) records why that is the
+  expected shape for an *absent operator* rather than a reason to distrust
+  the fix.
 
 - **2026-08-16 (c)** — **`WITH-STANDARD-IO-SYNTAX` establishes its bindings,
   and a predicted gate turns out not to be one.** It was a `cl_function` whose

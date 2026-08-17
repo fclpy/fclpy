@@ -515,9 +515,17 @@ def remove_method(generic_function, method):
     return classes.remove_method(generic_function, method)
 
 
-@_registry.cl_function('MAKE-METHOD')
+@_registry.cl_special('MAKE-METHOD')
 def make_method(*args):
-    return None
+    """MAKE-METHOD (CLHS 7.6.6.2) is only meaningful inside an effective
+    method, where its argument is a *form* to be run as a method body --
+    evaluating that form as an ordinary argument (which is what the
+    `cl_function` registration this replaced did, before returning None
+    regardless) runs the method body at the wrong time and discards it.
+    The evaluator implements it; this registration exists so the symbol is
+    bound as a special operator."""
+    raise lisptype.LispNotImplementedError(
+        "MAKE-METHOD is a special operator handled by the evaluator")
 
 
 @_registry.cl_function('METHOD-FUNCTION')
@@ -563,12 +571,18 @@ def no_next_method(generic_function, method, *arguments):
     raise lisptype.LispError("No next method")
 
 
-@_registry.cl_function('CALL-METHOD')
-def call_method(method, next_methods, *args):
-    fn = getattr(method, 'function', None)
-    if callable(fn):
-        return fn(*args)
-    return None
+@_registry.cl_special('CALL-METHOD')
+def call_method(*args):
+    """CALL-METHOD (CLHS 7.6.6.2): `(call-method method [next-method-list])`
+    inside an effective method. Neither operand is evaluated -- the method
+    argument is a method *object* spliced in by the method combination, or
+    a `(make-method form)` form -- and the arguments the method receives
+    are the original generic-function call's, which the operands do not
+    name. Registering it as a `cl_function` (what this replaced) evaluated
+    both operands and then ignored `next-method-list` entirely, so
+    CALL-NEXT-METHOD had no chain to walk. The evaluator implements it."""
+    raise lisptype.LispNotImplementedError(
+        "CALL-METHOD is a special operator handled by the evaluator")
 
 
 @_registry.cl_function('CALL-NEXT-METHOD')
@@ -589,10 +603,7 @@ def compute_applicable_methods(generic_function, arguments):
     while _consp_internal(current):
         args_list.append(car(current))
         current = cdr(current)
-    applicable = [m for m in getattr(generic_function, 'methods', [])
-                  if classes._matches_specializers(args_list, m.specializers)]
-    applicable.sort(key=lambda m: classes._specificity_key(m.specializers), reverse=True)
-    return make_lisp_list(applicable)
+    return make_lisp_list(classes.compute_applicable_methods(generic_function, args_list))
 
 
 @_registry.cl_function('ENSURE-GENERIC-FUNCTION')

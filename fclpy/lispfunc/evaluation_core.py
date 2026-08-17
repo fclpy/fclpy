@@ -468,6 +468,7 @@ def eval(form, env=None):
         eval_macro_function, eval_lambda, eval_declare, eval_declaim,
         eval_defvar, eval_defparameter, eval_defconstant, eval_defstruct, eval_pop, eval_push,
         eval_incf, eval_decf, eval_defclass, eval_defgeneric, eval_defmethod, eval_define_method_combination,
+        eval_call_method, eval_make_method,
         eval_destructuring_bind, eval_psetq, eval_rotatef
     )
     from .evaluation_control_flow import (
@@ -1195,6 +1196,10 @@ def eval(form, env=None):
                 return eval_defmethod(form, env)
             elif operator.name == 'DEFINE-METHOD-COMBINATION':
                 return eval_define_method_combination(form, env)
+            elif operator.name == 'CALL-METHOD':
+                return eval_call_method(form, env)
+            elif operator.name == 'MAKE-METHOD':
+                return eval_make_method(form, env)
             elif operator.name == 'LOOP':
                 return eval_loop(form, env)
             elif operator.name == 'POP':

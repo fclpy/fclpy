@@ -218,6 +218,44 @@ passing as many of its tests as possible.
   `math_arithmetic.py` and `core.py`, where import order decided which ran.
   **`ADJUSTABLE-ARRAY-P`, `FILL-POINTER` and friends signal for a non-array
   argument** — answering NIL conflated "no fill pointer" with "not an array".
+- **CLOS**: `fclpy/classes.py` is the object model (`LispClass`, `LispInstance`,
+  `Method`, `GenericFunction`) and the dispatcher; `lispfunc/misc_clos.py`
+  registers the operators and the MOP generics' default methods;
+  `evaluation_special_forms.py` owns `DEFCLASS`/`DEFGENERIC`/`DEFMETHOD`/
+  `DEFINE-METHOD-COMBINATION`, which are special operators because none of
+  them may have their subforms evaluated. Three things in here have exactly
+  one home and must keep it:
+  - **`classes.call_method` is the only place a method is ever invoked.** It
+    pushes the frame `CALL-NEXT-METHOD`/`NEXT-METHOD-P` read — `{'args',
+    'next', 'gf'}`, where `next` is the chain reachable from that method and
+    empty when there is none. There is no second frame *kind*: the `'around'`
+    variant that used to carry its own `core` closure is why `NEXT-METHOD-P`
+    answered T inside every `:around` method whether or not anything remained.
+  - **A generic function's `method_combination` decides how its applicable
+    methods become an effective method (CLHS 7.6.6)**, and `None` means
+    *standard*, not "none". `StandardMethodCombination` assembles the chain in
+    Python because its shape is fixed; `ShortFormMethodCombination` (the nine
+    built-ins of CLHS 7.6.6.4 and `DEFINE-METHOD-COMBINATION`'s short form) and
+    `LongFormMethodCombination` build a Lisp **form** out of `CALL-METHOD`
+    instead, because the operator being combined with may be a macro whose
+    evaluation order is the semantics — `(and (call-method m1) (call-method
+    m2))` must stop at the first NIL, and ansi-test observes exactly that.
+    Folding the method results in Python gives the right answer for `PROGN`
+    and the wrong one for `AND`/`OR`. New combination types go in the registry
+    (`register_method_combination_type`); they do not go in
+    `call_generic_function`.
+  - **`CALL-METHOD` and `MAKE-METHOD` are special operators**, and their
+    arguments are read structurally, never evaluated: a method object the
+    combination spliced in, and an unevaluated body form. They were
+    `cl_function`s that evaluated both operands and discarded the
+    next-method list — the registry defect described above, in the one place
+    where it makes CALL-NEXT-METHOD structurally impossible.
+  Still absent: a real class precedence list. `_specificity_key` orders by
+  *ancestor count*, and `_init_builtin_classes` makes every built-in class a
+  direct subclass of `T`, so `INTEGER`, `RATIONAL` and `NUMBER` are all
+  equally specific and only the (stable) definition order separates them.
+  Note also that `classes.py` still defines `_init_builtin_classes` **twice**;
+  the second definition wins and the first is dead (standing rule 3).
 - **State**: `state.py` holds the few intentional cross-module globals
   (`packages`, `current_package`, `current_environment`, `restart_stack`,
   `handler_stack`). Don't add new ad-hoc globals elsewhere — put them here.
