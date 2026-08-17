@@ -161,7 +161,6 @@ __all__ = [
     'slot_value',
     'slot_missing',
     'find_method',
-    'add_method',
     'remove_method',
     'defmethod',
     'make_method',

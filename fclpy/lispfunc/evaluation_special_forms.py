@@ -2512,6 +2512,112 @@ def eval_defclass(form, env):
     return class_name
 
 
+def _resolve_specializer(param_type, env):
+    """Resolve one specialized-lambda-list parameter's type into a dispatch
+    specializer (CLHS 7.6.2): a `classes.LispClass`, a `classes.EqlSpecializer`
+    (its form is evaluated once, here, not on every dispatch), or None for
+    T/unspecialized. A type-name symbol that names no modeled class (e.g.
+    INTEGER has a class, but not every CLHS type does) is returned as-is;
+    `classes._arg_matches_specializer` asks TYPEP for those, so any CLHS
+    type name works as a specializer even though only DEFCLASS-defined and
+    the built-in classes are modeled as class objects.
+    """
+    import fclpy.classes as classes
+    if isinstance(param_type, lisptype.LispSymbol):
+        if param_type.name.upper() == 'T':
+            return None
+        found = classes.find_class(param_type.name)
+        return found if found is not None else param_type
+    if _consp_internal(param_type):
+        head = car(param_type)
+        if isinstance(head, lisptype.LispSymbol) and head.name.upper() == 'EQL':
+            from .evaluation_core import eval as _eval
+            value = _eval(car(cdr(param_type)), env)
+            return classes.EqlSpecializer(value)
+    return param_type
+
+
+def _parse_defmethod_tail(rest):
+    """Parse the (qualifier* specialized-lambda-list . body) tail shared by
+    DEFMETHOD and DEFGENERIC's inline :method option (CLHS 7.6.2, 7.7).
+
+    A qualifier is any non-NIL atom, not only a keyword: :before/:after/
+    :around happen to be keywords by convention for *standard* method
+    combination, but a built-in short-form combination's qualifier is an
+    ordinary symbol -- `(:method and ((x integer)) ...)` from CLHS 7.6.6's
+    AND/OR/PROGN/+/APPEND/NCONC/LIST/MAX/MIN combinations qualifies with
+    the bare symbol `AND`, not `:AND`. Treating only keywords as
+    qualifiers left that plain symbol as the "specialized lambda list"
+    instead, which is never a cons, so parsing it found no parameters at
+    all and fed the *real* lambda list in as the first body form -- where
+    it evaluated as a function call and raised "Undefined function" for
+    whatever symbol happened to be the parameter name.
+    """
+    qualifiers = []
+    while _consp_internal(rest):
+        first = car(rest)
+        if _consp_internal(first) or first is lisptype.NIL or isinstance(first, lisptype.lispNull):
+            break
+        qualifiers.append(first)
+        rest = cdr(rest)
+    if not _consp_internal(rest):
+        raise lisptype.LispNotImplementedError("DEFMETHOD requires a specialized lambda list")
+    specialized_lambda_list = car(rest)
+    body = cdr(rest)
+    return qualifiers, specialized_lambda_list, body
+
+
+def _parse_specialized_lambda_list(specialized_lambda_list, env):
+    """Parse a specialized-lambda-list into (params, specializers) (CLHS
+    7.6.2). Only required parameters may be specialized; anything at or
+    after a lambda-list keyword (&optional/&rest/&key/...) is bound
+    unspecialized, matching this codebase's existing (positional-only)
+    method parameter binding in `_make_method_function` -- the lambda-list
+    keyword symbol itself is not a parameter and is dropped rather than
+    bound, and an &optional/&key parameter's own `(var default...)` form is
+    unwrapped down to `var` rather than passed through whole (the defect
+    this replaced: binding the literal cons `(Y 10)` as if it were the
+    parameter name crashed the first time DEFMETHOD in a real ANSI test
+    used &optional, since `add_variable` requires a symbol).
+    """
+    params = []
+    specializers = []
+    current = specialized_lambda_list
+    seen_lambda_key = False
+    while _consp_internal(current):
+        param_spec = car(current)
+        if isinstance(param_spec, lisptype.LispSymbol) and param_spec.name.startswith('&'):
+            seen_lambda_key = True
+            current = cdr(current)
+            continue
+        if seen_lambda_key:
+            params.append(_lambda_list_param_name(param_spec))
+        elif _consp_internal(param_spec):
+            param_name = car(param_spec)
+            param_type = car(cdr(param_spec))
+            params.append(param_name)
+            specializers.append(_resolve_specializer(param_type, env))
+        else:
+            params.append(param_spec)
+            specializers.append(None)
+        current = cdr(current)
+    return params, specializers
+
+
+def _lambda_list_param_name(param_spec):
+    """The bindable variable name from one &optional/&key/&aux parameter
+    spec (CLHS 3.4.1): a bare symbol, `(var [default [supplied-p]])`, or
+    &key's `((keyword var) default...)`."""
+    if isinstance(param_spec, lisptype.LispSymbol):
+        return param_spec
+    if _consp_internal(param_spec):
+        head = car(param_spec)
+        if _consp_internal(head):
+            return car(cdr(head))
+        return head
+    return param_spec
+
+
 def _make_method_function(params, body, captured_env, block_name):
     """Build the callable behind one CLOS method (shared by DEFGENERIC's inline
     :method options and standalone DEFMETHOD -- these used to be two copies of
@@ -2545,358 +2651,111 @@ def _make_method_function(params, body, captured_env, block_name):
 
 
 def eval_defgeneric(form, env):
-    """Evaluate DEFGENERIC special form.
-    
-    DEFGENERIC defines a generic function - a function that can dispatch
-    on the types of its arguments. In FCLpy, we implement a simplified
-    version that:
-    
-    1. Creates a generic function object that stores methods
-    2. Supports :method options for inline method definitions
-    3. The generic function dispatches based on argument types
-    
+    """Evaluate DEFGENERIC special form (CLHS 7.7).
+
+    Builds directly on `fclpy.classes`'s one generic-function/method
+    mechanism (`ensure_generic_function`/`add_method`) instead of rolling a
+    second, disconnected GenericFunction implementation -- which is what
+    used to make CALL-NEXT-METHOD inside a DEFMETHOD-defined method raise
+    "No next method available" unconditionally: nothing populated the
+    next-method context `classes.call_next_method` reads, because the
+    dispatcher that actually ran the method never called into
+    `classes.call_generic_function` at all (plan.md Finding L).
+
     Syntax:
         (defgeneric name lambda-list [[option | method-description]]*)
-    
+
     Supported options:
         (:method qualifiers* specialized-lambda-list body)
         (:documentation string)
     """
-    from .evaluation_core import eval, parse_lambda_list
-    import fclpy.state as state
-    
+    import fclpy.classes as classes
+
     args = cdr(form)
     if not _consp_internal(args):
         raise lisptype.LispNotImplementedError("DEFGENERIC requires at least a name and lambda-list")
-    
+
     func_name = car(args)
     rest = cdr(args)
-    
+
     if not isinstance(func_name, lisptype.LispSymbol):
         raise lisptype.LispNotImplementedError("DEFGENERIC: function name must be a symbol")
-    
-    # Get lambda-list
+
     if not _consp_internal(rest):
         raise lisptype.LispNotImplementedError("DEFGENERIC requires a lambda-list")
-    
+
     lambda_list = car(rest)
     options = cdr(rest)
-    
-    # Parse the lambda list to get parameter names
-    parsed = parse_lambda_list(lambda_list)
-    required_params = parsed['required']
-    
-    # Collect methods and documentation
-    methods = []  # List of (specializers, function) tuples
+
     documentation = None
-    
-    # Process options
+    method_specs = []  # (qualifiers, specializers, params, body)
+
     current = options
     while _consp_internal(current):
         option = car(current)
         if _consp_internal(option):
             opt_name = car(option)
             if isinstance(opt_name, lisptype.lispKeyword) and opt_name.name == 'METHOD':
-                # Parse (:method specialized-lambda-list body...)
-                method_rest = cdr(option)
-                if _consp_internal(method_rest):
-                    specialized_lambda_list = car(method_rest)
-                    method_body = cdr(method_rest)
-                    
-                    # Extract specializers from specialized-lambda-list
-                    # e.g., ((x integer) (y integer) (z integer)) -> [integer, integer, integer]
-                    specializers = []
-                    params_for_method = []
-                    spec_current = specialized_lambda_list
-                    while _consp_internal(spec_current):
-                        param_spec = car(spec_current)
-                        
-                        # Skip lambda-list keywords like &KEY, &OPTIONAL, &REST, etc.
-                        if isinstance(param_spec, lisptype.LispSymbol):
-                            spec_keyword = param_spec.name.upper()
-                            if spec_keyword.startswith('&'):
-                                # Skip this keyword and consume the rest (which are key/value pairs or args)
-                                # For &KEY, we need to skip key-var pairs
-                                # For &OPTIONAL, &REST, we just move to the next element
-                                spec_current = cdr(spec_current)
-                                
-                                # If it's &KEY, skip the key-value pairs
-                                if spec_keyword == '&KEY':
-                                    while _consp_internal(spec_current):
-                                        next_item = car(spec_current)
-                                        # If it's a symbol starting with &, we hit another keyword, stop
-                                        if isinstance(next_item, lisptype.LispSymbol) and next_item.name.upper().startswith('&'):
-                                            break
-                                        # Otherwise skip the key variable
-                                        spec_current = cdr(spec_current)
-                                continue
-                        
-                        if _consp_internal(param_spec):
-                            # Specialized: (param-name type)
-                            param_name = car(param_spec)
-                            param_type = car(cdr(param_spec))
-                            
-                            # Try to resolve the type to a class
-                            # If param_type is a symbol, try to look it up as a class
-                            if isinstance(param_type, lisptype.LispSymbol):
-                                class_obj = None
-                                param_type_name = param_type.name.upper()
-                                
-                                # Handle T specially - it means unspecialized
-                                if param_type_name == 'T':
-                                    specializers.append(None)
-                                    params_for_method.append(param_name)
-                                    spec_current = cdr(spec_current)
-                                    continue
-                                
-                                # Try to find the class in the registry
-                                try:
-                                    import fclpy.classes
-                                    class_obj = fclpy.classes.find_class(param_type.name)
-                                except Exception:
-                                    pass
-                                
-                                if class_obj:
-                                    specializers.append(class_obj)
-                                else:
-                                    # Class not found - use None (unspecialized) as fallback
-                                    # This prevents errors when the class isn't in the registry yet
-                                    specializers.append(None)
-                            else:
-                                specializers.append(param_type)
-                            
-                            params_for_method.append(param_name)
-                        else:
-                            # Unspecialized: just param-name (matches any type)
-                            specializers.append(None)
-                            params_for_method.append(param_spec)
-                        spec_current = cdr(spec_current)
-                    
-                    # Create method function
-                    method_fn = _make_method_function(params_for_method, method_body, env, func_name)
-                    methods.append((specializers, method_fn))
-            
+                qualifiers, specialized_lambda_list, method_body = _parse_defmethod_tail(cdr(option))
+                params, specializers = _parse_specialized_lambda_list(specialized_lambda_list, env)
+                method_specs.append((qualifiers, specializers, params, method_body))
             elif isinstance(opt_name, lisptype.lispKeyword) and opt_name.name == 'DOCUMENTATION':
                 doc_rest = cdr(option)
                 if _consp_internal(doc_rest):
                     documentation = car(doc_rest)
         current = cdr(current)
-    
-    # Create the generic function
-    class GenericFunction:
-        """A generic function that dispatches on argument types."""
-        def __init__(self, name, lambda_list, methods):
-            self.name = name
-            self.lambda_list = lambda_list
-            self.methods = methods  # List of (specializers, function) tuples
-            self.__name__ = str(name)
-        
-        def add_method(self, specializers, function):
-            """Add a method to this generic function."""
-            self.methods.append((specializers, function))
-        
-        def find_applicable_method(self, args):
-            """Find the most specific applicable method for the given args."""
-            for specializers, method in self.methods:
-                if self._matches_specializers(args, specializers):
-                    return method
-            return None
-        
-        def _matches_specializers(self, args, specializers):
-            """Check if args match the specializers."""
-            for i, spec in enumerate(specializers):
-                if spec is None:
-                    continue  # Matches any type
-                if i >= len(args):
-                    return False
-                arg = args[i]
-                # Check type match
-                if isinstance(spec, lisptype.LispSymbol):
-                    spec_name = spec.name.upper()
-                    if spec_name == 'INTEGER':
-                        if not isinstance(arg, int):
-                            return False
-                    elif spec_name == 'FLOAT':
-                        if not isinstance(arg, float):
-                            return False
-                    elif spec_name == 'NUMBER':
-                        if not isinstance(arg, (int, float, complex)):
-                            return False
-                    elif spec_name == 'STRING':
-                        if not isinstance(arg, str):
-                            return False
-                    elif spec_name == 'T':
-                        pass  # T matches anything
-                    # Add more type checks as needed
-            return True
-        
-        def __call__(self, *args):
-            method = self.find_applicable_method(args)
-            if method is None:
-                raise lisptype.LispError(f"No applicable method for {self.name} with args {args}")
-            return method(*args)
-        
-        def __repr__(self):
-            return f"#<GENERIC-FUNCTION {self.name}>"
-    
-    gf = GenericFunction(func_name, lambda_list, methods)
-    
-    # Walk up to global environment
+
+    gf = classes.ensure_generic_function(func_name, documentation=documentation, lambda_list=lambda_list)
+
+    for qualifiers, specializers, params, method_body in method_specs:
+        method_fn = _make_method_function(params, method_body, env, func_name)
+        classes.add_method(gf, specializers, method_fn, qualifiers=qualifiers)
+
     global_env = env
     while global_env.parent is not None:
         global_env = global_env.parent
-    
-    # Bind the generic function in the global environment
     global_env.add_function(func_name, gf)
-    
+
     return func_name
 
 
 def eval_defmethod(form, env):
-    """Evaluate DEFMETHOD special form.
-    
-    DEFMETHOD adds a method to an existing generic function.
-    
+    """Evaluate DEFMETHOD special form (CLHS 7.6.2).
+
     Syntax:
-        (defmethod name specializers body...)
-        (defmethod name qualifiers specializers body...)
-    
+        (defmethod name specialized-lambda-list body...)
+        (defmethod name qualifier* specialized-lambda-list body...)
+
     Example:
         (defmethod is-similar* ((x number) (y number))
           (and (eq (class-of x) (class-of y))
                (= x y)))
     """
-    from .evaluation_core import eval
-    import fclpy.state as state
-    
+    import fclpy.classes as classes
+
     args = cdr(form)
     if not _consp_internal(args):
         raise lisptype.LispNotImplementedError("DEFMETHOD requires at least a name")
-    
+
     func_name = car(args)
     rest = cdr(args)
-    
+
     if not isinstance(func_name, lisptype.LispSymbol):
         raise lisptype.LispNotImplementedError("DEFMETHOD: function name must be a symbol")
-    
-    # Skip qualifiers if present (for now we ignore them)
-    # Qualifiers are symbols like :BEFORE, :AFTER, :AROUND
-    qualifiers = []
-    while _consp_internal(rest):
-        first = car(rest)
-        if isinstance(first, lisptype.lispKeyword):
-            qualifiers.append(first)
-            rest = cdr(rest)
-        else:
-            break
-    
-    # Get specialized lambda list
-    if not _consp_internal(rest):
-        raise lisptype.LispNotImplementedError("DEFMETHOD requires a specialized lambda list")
-    
-    specialized_lambda_list = car(rest)
-    method_body = cdr(rest)
-    
-    # Extract specializers and parameters from specialized-lambda-list
-    # e.g., ((x number) (y number)) -> specializers: [NUMBER, NUMBER], params: [x, y]
-    specializers = []
-    params = []
-    current = specialized_lambda_list
-    while _consp_internal(current):
-        param_spec = car(current)
-        if _consp_internal(param_spec):
-            # Specialized: (param-name type)
-            param_name = car(param_spec)
-            param_type = car(cdr(param_spec))
-            specializers.append(param_type)
-            params.append(param_name)
-        else:
-            # Unspecialized: just param-name (matches any type)
-            specializers.append(None)
-            params.append(param_spec)
-        current = cdr(current)
-    
-    # Create the method function
+
+    qualifiers, specialized_lambda_list, method_body = _parse_defmethod_tail(rest)
+    params, specializers = _parse_specialized_lambda_list(specialized_lambda_list, env)
+
     method_fn = _make_method_function(params, method_body, env, func_name)
-    
-    # Find the generic function and add the method
-    # Walk up to global environment
+
+    gf = classes.ensure_generic_function(func_name)
+    classes.add_method(gf, specializers, method_fn, qualifiers=qualifiers)
+
     global_env = env
     while global_env.parent is not None:
         global_env = global_env.parent
-    
-    gf = global_env.find_func(func_name)
-    if gf is None:
-        # Auto-create a generic function if it doesn't exist
-        class GenericFunction:
-            def __init__(self, name):
-                self.name = name
-                self.lambda_list = None
-                self.methods = []
-                self.__name__ = str(name)
-            
-            def add_method(self, spec, fn):
-                self.methods.append((spec, fn))
-            
-            def find_applicable_method(self, args):
-                for spec_list, method in self.methods:
-                    if self._matches_specializers(args, spec_list):
-                        return method
-                return None
-            
-            def _matches_specializers(self, args, spec_list):
-                for i, spec in enumerate(spec_list):
-                    if spec is None:
-                        continue
-                    if i >= len(args):
-                        return False
-                    arg = args[i]
-                    if isinstance(spec, lisptype.LispSymbol):
-                        spec_name = spec.name.upper()
-                        if spec_name == 'INTEGER':
-                            if not isinstance(arg, int):
-                                return False
-                        elif spec_name == 'NUMBER':
-                            if not isinstance(arg, (int, float, complex)):
-                                return False
-                        elif spec_name == 'FLOAT':
-                            if not isinstance(arg, float):
-                                return False
-                        elif spec_name == 'STRING':
-                            if not isinstance(arg, str):
-                                return False
-                        elif spec_name == 'CHARACTER':
-                            from fclpy.character import Character
-                            if not isinstance(arg, Character):
-                                return False
-                        elif spec_name == 'SYMBOL':
-                            if not isinstance(arg, lisptype.LispSymbol):
-                                return False
-                        elif spec_name == 'CONS':
-                            if not _consp_internal(arg):
-                                return False
-                        elif spec_name == 'T':
-                            pass  # T matches anything
-                return True
-            
-            def __call__(self, *args):
-                method = self.find_applicable_method(args)
-                if method is None:
-                    raise lisptype.LispError(f"No applicable method for {self.name} with args {args}")
-                return method(*args)
-            
-            def __repr__(self):
-                return f"#<GENERIC-FUNCTION {self.name}>"
-        
-        gf = GenericFunction(func_name)
-        global_env.add_function(func_name, gf)
-    
-    # Add the method to the generic function
-    if hasattr(gf, 'add_method'):
-        gf.add_method(specializers, method_fn)
-    elif hasattr(gf, 'methods'):
-        gf.methods.append((specializers, method_fn))
-    
+    global_env.add_function(func_name, gf)
+
     return func_name
 
 

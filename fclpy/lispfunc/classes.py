@@ -125,11 +125,30 @@ def defclass(name, direct_superclasses=None, slots=None, **options):
     
     # Handle documentation option
     documentation = options.get('documentation', None)
-    
+
+    # CLHS 7.1: standard-object is a superclass of every class defined via
+    # DEFCLASS that does not otherwise specify one. Without this, a class
+    # with no explicit superclass had *no* ancestors at all -- its own
+    # linearization was just itself -- so a DEFMETHOD specializing on
+    # STANDARD-OBJECT could never match its instances, even though
+    # `(typep instance 'standard-object)` already special-cases this true
+    # (see comparison.typep's STANDARD-OBJECT branch).
+    if not parsed_superclasses:
+        std_object = classes.find_class('STANDARD-OBJECT')
+        if std_object is not None:
+            parsed_superclasses = [std_object]
+
+    # Thread the defining environment through so a slot's :initform (stored
+    # unevaluated) can later be evaluated where DEFCLASS lexically saw it
+    # (CLHS 7.1.2), not wherever MAKE-INSTANCE happens to run.
+    definition_env = options.get('definition_env', None)
+    for slot_def in slot_defs:
+        slot_def.definition_env = definition_env
+
     # Create the class directly (don't use classes.defclass since we've already parsed)
     lisp_class = classes.make_class(
         name=name,
-        direct_superclasses=direct_superclasses,
+        direct_superclasses=parsed_superclasses,
         direct_slots=slot_defs,
         documentation=documentation
     )
@@ -143,84 +162,43 @@ def defclass(name, direct_superclasses=None, slots=None, **options):
 @_registry.cl_function('MAKE-INSTANCE')
 def make_instance(class_spec, *args, **kwargs):
     """MAKE-INSTANCE: Create an instance of a class.
-    
+
     Syntax: (MAKE-INSTANCE class-spec &key initarg*)
-    
+
     class-spec can be a class object or a symbol naming a class.
+
+    MAKE-INSTANCE is itself a standard generic function (CLHS 7.1) that
+    ansi-test's make-instance.lsp defines methods on directly -- including
+    one specialized on an *instance* passed as `class-spec`, to prove
+    dispatch on this argument works at all, not only the normal case -- so
+    a symbol/string designator is resolved to its class object before
+    dispatch (the ordinary case), but anything else is passed through
+    unresolved rather than rejected, so a method specializing on some other
+    type can still match it. The default method (installed in
+    misc_clos.py, alongside its ALLOCATE-INSTANCE/INITIALIZE-INSTANCE
+    siblings) is what actually rejects a non-class argument.
     """
-    # Get the class
-    if isinstance(class_spec, lisptype.LispSymbol):
-        class_name = class_spec.name
-        lisp_class = classes.find_class(class_name)
-        if lisp_class is None:
-            raise NameError(f"Class not found: {class_name}")
-    elif isinstance(class_spec, str):
-        # Handle string class names
-        lisp_class = classes.find_class(class_spec)
-        if lisp_class is None:
-            raise NameError(f"Class not found: {class_spec}")
-    elif isinstance(class_spec, classes.LispClass):
-        lisp_class = class_spec
-    else:
-        raise TypeError(f"MAKE-INSTANCE: Expected class or class name, got {class_spec}")
-    
-    # Parse initargs (keyword arguments)
-    initargs = {}
+    class_designator = classes.resolve_class_designator(class_spec)
+
+    # Build a flat initarg plist from both call conventions this function
+    # supports: ordinary Lisp calls pass alternating keyword/value *args;
+    # the Python-level test suite calls this directly with **kwargs (plain
+    # string keys, no leading colon).
+    initargs = []
     for key, value in kwargs.items():
-        # Convert Python kwargs to Lisp keyword format
-        if not key.startswith(':'):
-            key = ':' + key
-        initargs[key] = value
-    
-    # Also handle positional args if they're in keyword form
-    # This handles both (MAKE-INSTANCE 'MyClass :slot1 value1) style calls
+        initargs.append(key)
+        initargs.append(value)
     i = 0
     while i < len(args):
-        if isinstance(args[i], lisptype.lispKeyword):
-            key = args[i].name
-            if i + 1 < len(args):
-                value = args[i + 1]
-                initargs[key] = value
-                i += 2
-            else:
-                raise ValueError(f"Missing value for keyword {args[i]}")
+        if isinstance(args[i], lisptype.lispKeyword) and i + 1 < len(args):
+            initargs.append(args[i])
+            initargs.append(args[i + 1])
+            i += 2
         else:
             i += 1
-    
-    # Create the instance
-    instance = classes.LispInstance(lisp_class=lisp_class)
-    
-    # Get all slots
-    all_slots = lisp_class.get_all_slots()
-    
-    # Initialize slots
-    for slot_name, slot_def in all_slots.items():
-        value = None
-        
-        # Check if initarg was provided
-        if slot_def.initarg:
-            arg_key = slot_def.initarg.name if isinstance(slot_def.initarg, lisptype.LispSymbol) else slot_def.initarg
-            # Try with colon prefix
-            if ':' + arg_key in initargs:
-                value = initargs[':' + arg_key]
-            elif arg_key in initargs:
-                value = initargs[arg_key]
-        
-        # Also try matching the slot name directly (Common Lisp behavior)
-        if value is None:
-            if ':' + slot_name in initargs:
-                value = initargs[':' + slot_name]
-            elif slot_name in initargs:
-                value = initargs[slot_name]
-        
-        # Use initform if no value provided
-        if value is None and slot_def.initform is not None:
-            value = slot_def.initform
-        
-        # Store the value
-        instance.slot_values[slot_name] = value
-    
-    return instance
+
+    gf = classes.ensure_generic_function(lisptype.py_str_to_sym('MAKE-INSTANCE'))
+    return classes.call_generic_function(gf, [class_designator] + initargs)
 
 
 @_registry.cl_function('SLOT-VALUE')
@@ -355,13 +333,14 @@ def instancep(obj):
 
 @_registry.cl_function('CLASS-OF')
 def class_of(obj):
-    """CLASS-OF: Get the class of an object."""
-    if isinstance(obj, classes.LispInstance):
-        return obj.lisp_class
-    # For built-in types, return type-based classes
-    # (simplified - just return T)
-    # In full CLOS, every object would have a class
-    return lisptype.T
+    """CLASS-OF (CLHS 7.1.1): the class object naming obj's class -- every
+    object has one, not only CLOS instances. Delegates to
+    `classes.class_of`, which resolves any value's class via TYPE-OF rather
+    than answering the bare symbol T for anything that isn't a
+    LispInstance (a type error waiting to happen: callers of CLASS-OF want
+    a class object, and generic-function dispatch on a built-in type
+    specializer needs the real answer to match against)."""
+    return classes.class_of(obj)
 
 
 # Generic function support

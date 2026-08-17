@@ -10,7 +10,7 @@ This module implements a basic class system supporting:
 
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any, Callable
-from fclpy.lisptype import LispSymbol, T, NIL, is_truthy
+from fclpy.lisptype import LispSymbol, T, NIL, is_truthy, LispProgramError
 
 
 @dataclass
@@ -22,7 +22,14 @@ class SlotDefinition:
     initarg: Optional[LispSymbol] = None
     allocation: str = "instance"  # "instance" or "class"
     documentation: Optional[str] = None
-    
+    # The environment DEFCLASS was evaluated in, captured so a slot's
+    # initform (an unevaluated form) can later be evaluated the way CLHS
+    # 7.1.2 wants -- lexically where the class was defined, not wherever
+    # MAKE-INSTANCE/SHARED-INITIALIZE happen to run. None (the bootstrap
+    # case, and any caller that builds a SlotDefinition directly) falls
+    # back to the global environment when the initform is actually needed.
+    definition_env: Optional[Any] = None
+
     def __repr__(self):
         return f"SlotDefinition({self.name.name})"
 
@@ -145,6 +152,37 @@ def find_class(name: str) -> Optional[LispClass]:
     if isinstance(name, LispSymbol):
         name = name.name
     return _class_registry.find_class(name)
+
+
+def resolve_class_designator(spec: Any) -> Any:
+    """Resolve a MAKE-INSTANCE-style class designator (CLHS 7.1): a symbol
+    or string names a class and must resolve to one. Anything else --
+    already a class object, or any other value a DEFMETHOD chooses to
+    specialize MAKE-INSTANCE's first parameter on -- passes through
+    unchanged, so a method dispatching on some other type still matches
+    it (ansi-test's make-instance.lsp defines one specialized on an
+    *instance*, purely to exercise that dispatch on this argument works at
+    all).
+
+    Shared by `lispfunc.classes.make_instance` (the entry point for a
+    direct Python call, which the unit-test suite makes) and
+    `lispfunc.misc_clos._default_make_instance` (the entry point for every
+    ordinary Lisp-level `(make-instance ...)` call, since evaluating even
+    one DEFMETHOD on MAKE-INSTANCE replaces its *entire* environment
+    binding with the bare GenericFunction object -- see plan.md's CLOS
+    consolidation notes -- bypassing the Python wrapper from then on).
+    """
+    if isinstance(spec, LispSymbol):
+        cls = find_class(spec.name)
+        if cls is None:
+            raise NameError(f"Class not found: {spec.name}")
+        return cls
+    if isinstance(spec, str):
+        cls = find_class(spec)
+        if cls is None:
+            raise NameError(f"Class not found: {spec}")
+        return cls
+    return spec
 
 
 def make_class(
@@ -270,53 +308,98 @@ def set_slot_value(instance: LispInstance, slot_name: str, value: Any) -> Any:
 
 
 # Generic function support
+#
+# This is the *one* generic-function/method mechanism in fclpy. DEFGENERIC
+# and DEFMETHOD (fclpy/lispfunc/evaluation_special_forms.py) build directly
+# on ensure_generic_function/add_method/call_generic_function below, rather
+# than each rolling its own dispatcher -- they used to (plan.md Finding L:
+# "two CLOS implementations coexist"), which is also why CALL-NEXT-METHOD
+# used to raise "No next method available" unconditionally: the dispatcher
+# that actually ran a DEFMETHOD-defined method never populated the next-
+# method context this module's CALL-NEXT-METHOD reads.
 
-@dataclass
+
+class EqlSpecializer:
+    """An `(eql form)` specializer (CLHS 7.6.2): matches an argument by EQL
+    to one specific object, evaluated once when the method is defined."""
+    __slots__ = ('value',)
+
+    def __init__(self, value):
+        self.value = value
+
+    def __repr__(self):
+        return f"#<EQL-SPECIALIZER {self.value!r}>"
+
+
+@dataclass(eq=False)
 class Method:
     """A method in a generic function.
-    
-    Stores the specializers (type restrictions) and the actual function.
+
+    `specializers` holds one entry per specializable (required) parameter:
+    `None` for T/unspecialized, a `LispClass`, an `EqlSpecializer`, or a raw
+    type-name symbol that named no modeled class (matched via TYPEP).
+    `qualifiers` holds the method's raw qualifier objects (e.g. one
+    `:before` keyword) -- CLHS 7.6.6.2's standard method combination reads
+    their names to decide primary/before/after/around role.
+
+    `eq=False` keeps the dataclass's default (identity-based, hashable)
+    `__eq__`/`__hash__` instead of the field-wise ones `@dataclass` would
+    otherwise generate. A field-wise `__eq__` also makes a class unhashable
+    unless told not to (Python sets `__hash__ = None` alongside a generated
+    `__eq__`), and a GENERIC-FUNCTION's methods are ordinary Lisp function
+    values that the evaluator's `get_func_signature_info` caches keyed
+    partly on the callable object itself -- `TypeError: unhashable type` as
+    the value of *any* call to a method-carrying generic function is what
+    that produces, not a niche corner case.
     """
-    specializers: List[Optional[LispClass]]  # None means T (any type)
+    specializers: List[Any]
     function: Callable
+    qualifiers: List[Any] = field(default_factory=list)
+    generic_function: Optional['GenericFunction'] = None
+    lambda_list: Optional[Any] = None
 
 
-@dataclass
+@dataclass(eq=False)
 class GenericFunction:
-    """A generic function that dispatches based on argument types.
-    
-    Supports single dispatch on the first argument (simplified CLOS).
-    """
+    """A generic function: a name, a lambda-list, and a set of methods
+    dispatched via standard method combination (CLHS 7.6.6.2)."""
     name: LispSymbol
     methods: List[Method] = field(default_factory=list)
     documentation: Optional[str] = None
-    
+    lambda_list: Optional[Any] = None
+
     def __repr__(self):
         return f"#<STANDARD-GENERIC-FUNCTION {self.name.name}>"
+
+    def __call__(self, *args):
+        # Makes a GenericFunction usable anywhere an ordinary callable is
+        # (FUNCALL/APPLY, mapped over by MAPCAR, ...) instead of needing a
+        # separate "is this a generic function?" branch at every call site.
+        return call_generic_function(self, list(args))
 
 
 class GenericFunctionRegistry:
     """Global registry of generic functions."""
-    
+
     def __init__(self):
         self._generics: Dict[str, GenericFunction] = {}
-    
+
     def register_generic(self, gf: GenericFunction) -> GenericFunction:
         """Register a generic function."""
         self._generics[gf.name.name] = gf
         return gf
-    
+
     def find_generic(self, name: str) -> Optional[GenericFunction]:
         """Find a generic function by name."""
         return self._generics.get(name)
-    
+
     def get_generic_or_error(self, name: str) -> GenericFunction:
         """Find a generic function or raise error."""
         gf = self.find_generic(name)
         if gf is None:
             raise NameError(f"Generic function not found: {name}")
         return gf
-    
+
     def list_generics(self) -> List[GenericFunction]:
         """List all registered generic functions."""
         return list(self._generics.values())
@@ -328,144 +411,196 @@ _generic_registry = GenericFunctionRegistry()
 
 def ensure_generic_function(
     name: LispSymbol,
-    documentation: Optional[str] = None
+    documentation: Optional[str] = None,
+    lambda_list: Optional[Any] = None,
 ) -> GenericFunction:
     """ENSURE-GENERIC-FUNCTION: get or create a generic function.
-    
+
+    Keyed by name string rather than symbol identity, so a DEFMETHOD in one
+    package and a DEFGENERIC in another that both name the (inherited,
+    non-shadowed) standard symbol SHARED-INITIALIZE resolve to the same
+    generic function -- the way CALL-GENERIC-FUNCTION/ADD-METHOD already
+    expected before this function existed.
+
     Args:
         name: Symbol naming the generic function
-        documentation: Documentation string
-    
+        documentation: Documentation string, set only if provided
+        lambda_list: Lambda list, set only if provided (DEFGENERIC re-sets
+            it every time it runs; DEFMETHOD alone never supplies one)
+
     Returns:
         The generic function (newly created or existing)
     """
     name_str = name.name if isinstance(name, LispSymbol) else str(name)
-    
+
     gf = _generic_registry.find_generic(name_str)
-    if gf:
-        return gf
-    
-    gf = GenericFunction(name=name, documentation=documentation)
-    return _generic_registry.register_generic(gf)
+    if gf is None:
+        gf = GenericFunction(name=name)
+        _generic_registry.register_generic(gf)
+
+    if documentation is not None:
+        gf.documentation = documentation
+    if lambda_list is not None:
+        gf.lambda_list = lambda_list
+
+    return gf
+
+
+def _specializer_eq(a: Any, b: Any) -> bool:
+    """Congruence test for two specializers (CLHS 7.6.3): adding a method
+    whose qualifiers and specializers are congruent to an existing method
+    replaces it rather than adding a second, shadowed copy -- without this,
+    re-evaluating a DEFMETHOD (routine while iterating on one) piles up
+    duplicates that all still fire."""
+    if a is None or b is None:
+        return a is b
+    if isinstance(a, EqlSpecializer) and isinstance(b, EqlSpecializer):
+        from fclpy.lispfunc.comparison import eql as _eql
+        return _eql(a.value, b.value) is T
+    if isinstance(a, LispClass) and isinstance(b, LispClass):
+        return a is b
+    if isinstance(a, LispSymbol) and isinstance(b, LispSymbol):
+        return a.name.upper() == b.name.upper()
+    return a == b
+
+
+def _specializers_congruent(a_list: List[Any], b_list: List[Any]) -> bool:
+    if len(a_list) != len(b_list):
+        return False
+    return all(_specializer_eq(x, y) for x, y in zip(a_list, b_list))
+
+
+def _qualifier_names(method: 'Method') -> set:
+    """Upcased, colon-stripped qualifier names, used only to decide the
+    method's standard-method-combination role -- introspection
+    (METHOD-QUALIFIERS) reads `method.qualifiers` itself, unnormalized."""
+    names = set()
+    for q in method.qualifiers:
+        n = q.name if hasattr(q, 'name') else str(q)
+        names.add(n.upper().lstrip(':'))
+    return names
 
 
 def add_method(
     generic_function: GenericFunction,
-    specializers: List[Optional[LispClass]],
-    method_function: Callable
+    specializers: List[Any],
+    method_function: Callable,
+    qualifiers: Optional[List[Any]] = None,
 ) -> GenericFunction:
     """ADD-METHOD: add a method to a generic function.
-    
-    Methods are kept sorted by specificity (more specific first).
-    
+
+    Replaces any existing method with congruent qualifiers and specializers
+    (CLHS 7.6.3) instead of appending a duplicate. Methods are stored
+    unsorted; `call_generic_function` sorts applicable methods by
+    specificity at call time, since a class's specificity can change after
+    the method was added (a later DEFCLASS widening the hierarchy).
+
     Args:
         generic_function: The generic function to add to
-        specializers: List of class specializers for each argument
-                      (None means no restriction, i.e., all types)
+        specializers: One specializer per specializable parameter (None,
+            a LispClass, an EqlSpecializer, or a raw type-name symbol)
         method_function: The actual method function
-    
+        qualifiers: Method qualifiers, e.g. [:before] -- () for a primary
+            method
+
     Returns:
         The generic function
     """
-    method = Method(specializers=specializers, function=method_function)
-    generic_function.methods.append(method)
-    
-    # Sort methods by specificity (more specific first)
-    # A method is more specific if its specializers are more specific
-    generic_function.methods.sort(
-        key=lambda m: _method_specificity(m.specializers),
-        reverse=True
+    qualifiers = list(qualifiers or [])
+    new_method = Method(
+        specializers=specializers,
+        function=method_function,
+        qualifiers=qualifiers,
+        generic_function=generic_function,
     )
-    
+    for i, existing in enumerate(generic_function.methods):
+        if existing.qualifiers == qualifiers and _specializers_congruent(existing.specializers, specializers):
+            generic_function.methods[i] = new_method
+            return generic_function
+    generic_function.methods.append(new_method)
     return generic_function
 
 
-def _method_specificity(specializers: List[Optional[LispClass]]) -> tuple:
-    """Calculate specificity score for a method.
-    
-    More specific methods have higher scores.
-    None (T) specializers are least specific.
+def remove_method(generic_function: GenericFunction, method: Method) -> GenericFunction:
+    """REMOVE-METHOD: drop one method object from a generic function."""
+    generic_function.methods = [m for m in generic_function.methods if m is not method]
+    return generic_function
+
+
+def class_of(obj: Any) -> LispClass:
+    """CLASS-OF (CLHS 7.1.1): the class object naming obj's class.
+
+    Every object has a class, not only CLOS instances -- this used to
+    answer the bare symbol T for anything that was not a LispInstance
+    ("In full CLOS, every object would have a class" read the comment this
+    replaced), which is a type error waiting to be TYPEP'd and, for
+    specializer matching below, made it impossible to dispatch a method on
+    any built-in type. TYPE-OF already classifies any value correctly
+    (including compound array specifiers); this asks it for the type name
+    and resolves that to the matching built-in LispClass, falling back to T
+    only when the type has no modeled class at all.
     """
-    score = []
-    for spec in specializers:
-        # Count how deep in the inheritance hierarchy the class is
-        # Deeper classes are more specific
-        if spec is None:
-            score.append(0)  # T is least specific
-        else:
-            # Deeper classes get higher scores
-            depth = len(spec.get_linearized_superclasses())
-            score.append(depth)
-    return tuple(score)
-
-
-def call_generic_function(
-    gf: GenericFunction,
-    args: List[Any],
-    next_methods: Optional[List[Method]] = None
-) -> Any:
-    """Call a generic function with argument-based method dispatch.
-    
-    Selects the most specific matching method based on argument types.
-    
-    Args:
-        gf: The generic function to call
-        args: Arguments to pass to the method
-        next_methods: Internal: remaining methods for CALL-NEXT-METHOD
-    
-    Returns:
-        The return value from the selected method
-    """
-    if not args:
-        raise ValueError("Generic function requires at least one argument")
-    
-    # Find the first matching method
-    first_arg = args[0]
-    
-    for method in gf.methods:
-        if _matches_specializers(first_arg, method.specializers):
-            # Found a matching method
-            # Pass remaining methods for CALL-NEXT-METHOD support
-            remaining = [m for m in gf.methods if m is not method]
-            
-            # Call the method function
-            # Store next methods in a context for CALL-NEXT-METHOD
-            old_next_methods = getattr(call_generic_function, '_next_methods', None)
-            call_generic_function._next_methods = remaining
-            call_generic_function._current_gf = gf
-            
-            try:
-                return method.function(*args)
-            finally:
-                call_generic_function._next_methods = old_next_methods
-                call_generic_function._current_gf = None
-    
-    # No matching method found
-    raise TypeError(
-        f"No matching method for {gf.name.name} with arguments: {args}"
-    )
-
-
-def _matches_specializers(obj: Any, specializers: List[Optional[LispClass]]) -> bool:
-    """Check if an object matches a list of specializers.
-    
-    Returns True if the object is an instance of all specializers.
-    None specializers (T) always match.
-    """
-    # For now, only check the first specializer (single dispatch)
-    if not specializers:
-        return True
-    
-    first_spec = specializers[0]
-    if first_spec is None:
-        # No specializer means any type matches
-        return True
-    
-    # Check if obj is an instance of first_spec
     if isinstance(obj, LispInstance):
-        return _is_instance_of(obj, first_spec)
-    
-    return False
+        return obj.lisp_class
+    from fclpy.lispfunc.comparison import type_of as _type_of
+    from fclpy.lispfunc.core import _consp_internal, car as _car
+    result = _type_of(obj)
+    if _consp_internal(result):
+        result = _car(result)
+    name = result.name if isinstance(result, LispSymbol) else str(result)
+    return find_class(name) or find_class('T')
+
+
+def _arg_matches_specializer(arg: Any, spec: Any) -> bool:
+    """Does one argument satisfy one specializer (CLHS 7.6.2)?"""
+    if spec is None:
+        return True
+    if isinstance(spec, EqlSpecializer):
+        from fclpy.lispfunc.comparison import eql as _eql
+        return _eql(arg, spec.value) is T
+    if isinstance(spec, LispClass):
+        if isinstance(arg, LispInstance):
+            return _is_instance_of(arg, spec)
+        # A built-in-type specializer (INTEGER, STRING, ...) applied to a
+        # non-instance: TYPEP already knows every one of these, and asking
+        # it -- rather than walking this class's (approximate, non-CLOS)
+        # get_linearized_superclasses -- is one type-predicate mechanism
+        # instead of a second, competing one (plan.md Finding M).
+        from fclpy.lispfunc.comparison import typep as _typep
+        return _typep(arg, spec.name) is T
+    # A specializer symbol that named no modeled LispClass at all (a CLHS
+    # type this codebase has no class object for): still ask TYPEP, so any
+    # type name is usable as a specializer, not only the ones in
+    # _init_builtin_classes's list.
+    from fclpy.lispfunc.comparison import typep as _typep
+    return _typep(arg, spec) is T
+
+
+def _matches_specializers(args: List[Any], specializers: List[Any]) -> bool:
+    """Is a method with these specializers applicable to these call args?"""
+    if len(specializers) > len(args):
+        return False
+    return all(_arg_matches_specializer(arg, spec) for arg, spec in zip(args, specializers))
+
+
+def _specificity_key(specializers: List[Any]) -> tuple:
+    """Approximate specificity ordering (CLHS 7.6.6.1's true rule is the
+    argument's class precedence list position, which needs a real C3
+    linearization this codebase does not have -- get_linearized_superclasses
+    gives ancestor *count*, which agrees with CPL order for the single-
+    inheritance chains DEFCLASS mostly produces here). An EQL specializer is
+    always more specific than any class specializer, per CLHS."""
+    key = []
+    for spec in specializers:
+        if spec is None:
+            key.append(-1)
+        elif isinstance(spec, EqlSpecializer):
+            key.append(10_000)
+        elif isinstance(spec, LispClass):
+            key.append(len(spec.get_linearized_superclasses()))
+        else:
+            key.append(0)
+    return tuple(key)
 
 
 def _is_instance_of(instance: LispInstance, lisp_class: LispClass) -> bool:
@@ -476,36 +611,155 @@ def _is_instance_of(instance: LispInstance, lisp_class: LispClass) -> bool:
     return False
 
 
-def call_next_method(*args) -> Any:
-    """CALL-NEXT-METHOD: call the next method in the dispatch chain.
-    
-    Args:
-        *args: Arguments to pass to the next method (if empty, uses original args)
-    
-    Returns:
-        The return value from the next method
-    """
-    remaining_methods = getattr(call_generic_function, '_next_methods', None)
-    gf = getattr(call_generic_function, '_current_gf', None)
-    
-    if not remaining_methods or not gf:
-        raise RuntimeError("CALL-NEXT-METHOD: No next method available")
-    
-    # Get the first remaining method
-    if not remaining_methods:
-        raise RuntimeError("CALL-NEXT-METHOD: No next method available")
-    
-    method = remaining_methods[0]
-    remaining = remaining_methods[1:]
-    
-    # Store updated next methods
-    old_next_methods = getattr(call_generic_function, '_next_methods', None)
-    call_generic_function._next_methods = remaining
-    
+def _no_applicable_method(gf: GenericFunction, args: List[Any]):
+    gf_name = gf.name.name if isinstance(gf.name, LispSymbol) else str(gf.name)
+    raise LispProgramError(
+        f"No applicable method for {gf_name} with arguments: {args}"
+    )
+
+
+# The dynamic (per-call, reentrant) CALL-NEXT-METHOD/NEXT-METHOD-P context:
+# a stack of frames, one per method currently executing, so a method that
+# itself triggers a nested generic-function call (directly, or by calling a
+# different generic function that recurses back into this one) sees its own
+# frame on top rather than a sibling call's -- a single flat "last call's
+# next methods" slot (what this replaced) is exactly the kind of state a
+# single-threaded interpreter with recursive calls cannot share safely.
+_call_stack: List[Dict[str, Any]] = []
+
+
+def _invoke_method(method: Method, args: List[Any]) -> Any:
+    """Call one method with no next-method chain of its own -- used for
+    :before/:after methods, which CLHS runs once each rather than chaining
+    (a stray CALL-NEXT-METHOD inside one is therefore a "no next method"
+    error, not silently reaching an unrelated frame further down the
+    stack)."""
+    _call_stack.append({'kind': 'none', 'remaining': [], 'args': args, 'gf': method.generic_function})
     try:
-        return method.function(*args) if args else method.function()
+        return method.function(*args)
     finally:
-        call_generic_function._next_methods = old_next_methods
+        _call_stack.pop()
+
+
+# Some generic functions (the CLOS metaobject protocol's ALLOCATE-INSTANCE/
+# INITIALIZE-INSTANCE/SHARED-INITIALIZE/... -- see
+# fclpy/lispfunc/misc_clos.py) are supposed to always have a default
+# primary method installed by the module that owns them, not only a set of
+# user-added ones. `_generic_registry` is a bare module-level dict nothing
+# stops arbitrary code (deliberately, the unit-test suite, to isolate
+# user-defined generics between tests) from clearing or replacing wholesale,
+# which used to strand these "system" generic functions with no default
+# and no way to recover one. A generic function with no methods at all
+# self-heals here rather than at every call site that might reach it.
+_default_method_installers: Dict[str, Callable[[GenericFunction], None]] = {}
+
+
+def register_default_method_installer(name, installer: Callable[[GenericFunction], None]):
+    """Register `installer(gf)` to (re-)populate a generic function's
+    default method whenever it is found with none at all."""
+    name_str = name.name if isinstance(name, LispSymbol) else str(name)
+    _default_method_installers[name_str] = installer
+
+
+def call_generic_function(gf: GenericFunction, args: List[Any]) -> Any:
+    """Call a generic function: compute applicable methods, then run them
+    via standard method combination (CLHS 7.6.6.2) -- :around methods
+    outermost, then :before methods most-specific-first, the most specific
+    applicable primary method (which may CALL-NEXT-METHOD into the rest),
+    then :after methods least-specific-first.
+    """
+    if not gf.methods:
+        name_str = gf.name.name if isinstance(gf.name, LispSymbol) else str(gf.name)
+        installer = _default_method_installers.get(name_str)
+        if installer is not None:
+            installer(gf)
+
+    applicable = [m for m in gf.methods if _matches_specializers(args, m.specializers)]
+
+    primaries = sorted((m for m in applicable if not m.qualifiers),
+                        key=lambda m: _specificity_key(m.specializers), reverse=True)
+    befores = sorted((m for m in applicable if _qualifier_names(m) == {'BEFORE'}),
+                      key=lambda m: _specificity_key(m.specializers), reverse=True)
+    afters = sorted((m for m in applicable if _qualifier_names(m) == {'AFTER'}),
+                     key=lambda m: _specificity_key(m.specializers), reverse=True)
+    arounds = sorted((m for m in applicable if _qualifier_names(m) == {'AROUND'}),
+                      key=lambda m: _specificity_key(m.specializers), reverse=True)
+
+    def run_core():
+        if not primaries:
+            _no_applicable_method(gf, args)
+        for m in befores:
+            _invoke_method(m, args)
+        frame = {'kind': 'primary', 'remaining': primaries[1:], 'args': args, 'gf': gf}
+        _call_stack.append(frame)
+        try:
+            result = primaries[0].function(*args)
+        finally:
+            _call_stack.pop()
+        for m in reversed(afters):
+            _invoke_method(m, args)
+        return result
+
+    if not arounds:
+        return run_core()
+
+    frame = {'kind': 'around', 'remaining': arounds[1:], 'args': args, 'gf': gf, 'core': run_core}
+    _call_stack.append(frame)
+    try:
+        return arounds[0].function(*args)
+    finally:
+        _call_stack.pop()
+
+
+def call_next_method(*args) -> Any:
+    """CALL-NEXT-METHOD: call the next method in the current combination
+    chain -- the next less-specific :around, or (from the last :around)
+    the before/primary/after core, or the next less-specific primary method.
+    """
+    if not _call_stack:
+        raise LispProgramError(
+            "CALL-NEXT-METHOD: no method is currently executing")
+    frame = _call_stack[-1]
+    call_args = list(args) if args else frame['args']
+
+    if frame['kind'] == 'around':
+        remaining = frame['remaining']
+        if remaining:
+            new_frame = {'kind': 'around', 'remaining': remaining[1:], 'args': call_args,
+                         'gf': frame['gf'], 'core': frame['core']}
+            _call_stack.append(new_frame)
+            try:
+                return remaining[0].function(*call_args)
+            finally:
+                _call_stack.pop()
+        return frame['core']()
+
+    if frame['kind'] == 'primary':
+        remaining = frame['remaining']
+        if not remaining:
+            gf_name = frame['gf'].name.name if isinstance(frame['gf'].name, LispSymbol) else str(frame['gf'].name)
+            raise LispProgramError(f"CALL-NEXT-METHOD: no next method for {gf_name}")
+        new_frame = {'kind': 'primary', 'remaining': remaining[1:], 'args': call_args, 'gf': frame['gf']}
+        _call_stack.append(new_frame)
+        try:
+            return remaining[0].function(*call_args)
+        finally:
+            _call_stack.pop()
+
+    raise LispProgramError(
+        "CALL-NEXT-METHOD: not applicable in this method (:before/:after methods have no next method)")
+
+
+def next_method_p() -> bool:
+    """NEXT-METHOD-P: would CALL-NEXT-METHOD succeed right now?"""
+    if not _call_stack:
+        return False
+    frame = _call_stack[-1]
+    if frame['kind'] == 'around':
+        return True  # the core (before/primary/after) is always reachable
+    if frame['kind'] == 'primary':
+        return bool(frame['remaining'])
+    return False
 
 
 # ==============================================================================
