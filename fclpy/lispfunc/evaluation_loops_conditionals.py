@@ -2136,6 +2136,12 @@ def eval_loop(form, env):
             kind = driver['kind']
             if kind in ('for-in', 'for-on'):
                 driver['_cur'] = eval(driver['list'], loop_env)
+                # CLHS 6.1.2.1.3: BY names the step function (default CDR);
+                # `driver['step']` is unevaluated (e.g. `#'cddr`) exactly like
+                # every other driver's BY, and was never consulted here --
+                # `_step_driver` always stepped by CDR regardless.
+                step_form = driver.get('step')
+                driver['_step_fn'] = eval(step_form, loop_env) if step_form is not None else None
                 return True
             if kind == 'for-across':
                 driver['_seq'] = eval(driver['list'], loop_env)
@@ -2322,7 +2328,8 @@ def eval_loop(form, env):
         def _step_driver(loop_env, driver):
             kind = driver['kind']
             if kind in ('for-in', 'for-on'):
-                driver['_cur'] = cdr(driver['_cur'])
+                step_fn = driver.get('_step_fn')
+                driver['_cur'] = step_fn(driver['_cur']) if step_fn is not None else cdr(driver['_cur'])
                 return
             if kind == 'for-across':
                 driver['_idx'] = driver.get('_idx', 0) + 1

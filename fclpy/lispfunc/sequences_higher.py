@@ -27,7 +27,7 @@ def _matcher_contains(matcher, item, seq):
 
 # Association list operations
 @_registry.cl_function('ADJOIN')
-def adjoin(x, seq, test=None, test_not=None, key=None, **kwargs):
+def adjoin(x, seq, test=None, test_not=None, key=None):
     """Tests whether item is the same as an existing element of list.
 
     Supports :test/:test-not/:key like every other CLHS "two-argument
@@ -36,7 +36,10 @@ def adjoin(x, seq, test=None, test_not=None, key=None, **kwargs):
     because CLHS 14.2 says ADJOIN applies :key to `x` as well as to each
     element -- unlike MEMBER/FIND, where :key only ever applies to
     elements. PUSHNEW (`evaluation_special_forms.eval_pushnew`) is defined
-    directly in terms of this function.
+    directly in terms of this function. No trailing `**kwargs`: that used
+    to silently swallow any other keyword (recognized or not), which is
+    the opposite of CLHS 3.4.1.4 -- `split_keyword_args` now owns rejecting
+    an unrecognized one unless :allow-other-keys is true.
     """
     matcher = _make_matcher(test=test, test_not=test_not, key=key, key_item=True)
     seq_list = _cons_to_list(seq)
@@ -304,34 +307,36 @@ def _finish_list(pylist):
     return make_lisp_list(pylist)
 
 
-def _set_op_matcher(kwargs):
-    """Build the shared :test/:test-not/:key matcher for a set operation
-    from its **kwargs. All eleven set/list operations below (CLHS calls
-    them out as sharing one comparison protocol) previously ignored these
-    arguments completely and compared with bare Python `==`/`in`
-    (plan.md C5/X2/X3).
-    """
-    return _make_matcher(
-        test=kwargs.get('test'),
-        test_not=kwargs.get('test_not'),
-        key=kwargs.get('key'),
-    )
-
-
-# Set operations
+# Set operations. Each takes the shared :test/:test-not/:key triple as
+# named parameters -- not a `**kwargs` catch-all -- so `split_keyword_args`
+# (evaluation_core.py) can validate them itself the same way it does for
+# MEMBER/ASSOC/etc: an unrecognized keyword is a PROGRAM-ERROR unless
+# :allow-other-keys is true (CLHS 3.4.1.4). A `**kwargs` tail used to
+# swallow every keyword silently -- recognized or not, allowed or not --
+# which is what made `(union nil nil :bad t)` return an answer instead of
+# signalling (plan.md C5/X2/X3, and standing rule 4: no silent accept).
+#
+# `key_item=True`: CLHS 14.2 applies :key to elements of *both* lists for
+# every one of these -- unlike MEMBER/FIND, where a lone search item is
+# compared as-is against keyed candidates, a set operation compares two
+# list *elements* to each other, so :key must transform both sides.
+# `_make_matcher`'s default (`key_item=False`) left the search-item side
+# raw, so `(set-exclusive-or '((a . 1) (b . 2)) '((a . 10)) :key #'car)`
+# compared a whole `(A . 1)` pair against the keyed `A` and never matched
+# anything -- `set-exclusive-or.14` et al.
 @_registry.cl_function('INTERSECTION')
-def intersection(list1, list2, **kwargs):
+def intersection(list1, list2, test=None, test_not=None, key=None):
     """Set intersection."""
-    matcher = _set_op_matcher(kwargs)
+    matcher = _make_matcher(test=test, test_not=test_not, key=key, key_item=True)
     list2 = _cons_to_list(list2, 'INTERSECTION')
     return _finish_list([x for x in _cons_to_list(list1, 'INTERSECTION')
                          if _matcher_contains(matcher, x, list2)])
 
 
 @_registry.cl_function('UNION')
-def union(list1, list2, **kwargs):
+def union(list1, list2, test=None, test_not=None, key=None):
     """Set union."""
-    matcher = _set_op_matcher(kwargs)
+    matcher = _make_matcher(test=test, test_not=test_not, key=key, key_item=True)
     result = _cons_to_list(list1)
     for item in _cons_to_list(list2):
         if not _matcher_contains(matcher, item, result):
@@ -340,9 +345,9 @@ def union(list1, list2, **kwargs):
 
 
 @_registry.cl_function('NUNION')
-def nunion(list1, list2, **kwargs):
+def nunion(list1, list2, test=None, test_not=None, key=None):
     """Destructive set union."""
-    matcher = _set_op_matcher(kwargs)
+    matcher = _make_matcher(test=test, test_not=test_not, key=key, key_item=True)
     list1 = _cons_to_list(list1)
     for item in _cons_to_list(list2):
         if not _matcher_contains(matcher, item, list1):
@@ -351,27 +356,27 @@ def nunion(list1, list2, **kwargs):
 
 
 @_registry.cl_function('SET-DIFFERENCE')
-def set_difference(list1, list2, **kwargs):
+def set_difference(list1, list2, test=None, test_not=None, key=None):
     """Set difference."""
-    matcher = _set_op_matcher(kwargs)
+    matcher = _make_matcher(test=test, test_not=test_not, key=key, key_item=True)
     list2 = _cons_to_list(list2, 'SET-DIFFERENCE')
     return _finish_list([x for x in _cons_to_list(list1, 'SET-DIFFERENCE')
                          if not _matcher_contains(matcher, x, list2)])
 
 
 @_registry.cl_function('NSET-DIFFERENCE')
-def nset_difference(list1, list2, **kwargs):
+def nset_difference(list1, list2, test=None, test_not=None, key=None):
     """Destructive set difference."""
-    matcher = _set_op_matcher(kwargs)
+    matcher = _make_matcher(test=test, test_not=test_not, key=key, key_item=True)
     list1 = _cons_to_list(list1)
     list2 = _cons_to_list(list2)
     return _finish_list([x for x in list1 if not _matcher_contains(matcher, x, list2)])
 
 
 @_registry.cl_function('SET-EXCLUSIVE-OR')
-def set_exclusive_or(list1, list2, **kwargs):
+def set_exclusive_or(list1, list2, test=None, test_not=None, key=None):
     """Set exclusive or."""
-    matcher = _set_op_matcher(kwargs)
+    matcher = _make_matcher(test=test, test_not=test_not, key=key, key_item=True)
     list1 = _cons_to_list(list1)
     list2 = _cons_to_list(list2)
     return _finish_list(
@@ -381,15 +386,15 @@ def set_exclusive_or(list1, list2, **kwargs):
 
 
 @_registry.cl_function('NSET-EXCLUSIVE-OR')
-def nset_exclusive_or(list1, list2, **kwargs):
+def nset_exclusive_or(list1, list2, test=None, test_not=None, key=None):
     """Destructive set exclusive or."""
-    return set_exclusive_or(list1, list2, **kwargs)
+    return set_exclusive_or(list1, list2, test=test, test_not=test_not, key=key)
 
 
 @_registry.cl_function('SUBSETP')
-def subsetp(subset, set_arg, **kwargs):
+def subsetp(subset, set_arg, test=None, test_not=None, key=None):
     """Test if subset is a subset of set_arg."""
-    matcher = _set_op_matcher(kwargs)
+    matcher = _make_matcher(test=test, test_not=test_not, key=key, key_item=True)
     set_arg = _cons_to_list(set_arg)
     for item in _cons_to_list(subset):
         if not _matcher_contains(matcher, item, set_arg):
@@ -398,9 +403,9 @@ def subsetp(subset, set_arg, **kwargs):
 
 
 @_registry.cl_function('NINTERSECTION')
-def nintersection(list1, list2, **kwargs):
+def nintersection(list1, list2, test=None, test_not=None, key=None):
     """Destructive intersection."""
-    return intersection(list1, list2, **kwargs)
+    return intersection(list1, list2, test=test, test_not=test_not, key=key)
 
 
 # PUSH, POP and PUSHNEW are special forms (`evaluation_special_forms.py`'s

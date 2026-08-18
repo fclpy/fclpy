@@ -396,30 +396,57 @@ def rest(x):
 # Property list operations
 @_registry.cl_function('GETF')
 def getf(plist, indicator, default=None):
-    """Get property from property list."""
+    """Get property from property list (CLHS 5.1.2.3, 15.2).
+
+    An improper plist -- a dangling atom where the next indicator or its
+    value should be -- used to just `break` the walk and answer `default`,
+    silently treating a malformed argument as "property not found" instead
+    of the TYPE-ERROR `getf.error.4`/`.5` require (standing rule 4).
+    """
     current = plist
-    while current is not None and current != lisptype.NIL:
-        if not consp(current):
-            break
-        key = car(current)
-        if key == indicator:
-            return car(cdr(current)) if consp(cdr(current)) else default
-        current = cdr(cdr(current))
+    while _consp_internal(current):
+        if not _consp_internal(current.cdr):
+            raise _not_a_list('GETF', current.cdr)
+        if current.car is indicator:
+            return current.cdr.car
+        current = current.cdr.cdr
+    if not _null_internal(current):
+        raise _not_a_list('GETF', current)
     return default
 
 
 @_registry.cl_function('GET-PROPERTIES')
 def get_properties(plist, indicator_list):
-    """Get properties from property list."""
+    """Get properties from property list (CLHS 5.1.2.3, 15.2).
+
+    Returns three values -- CLHS: "returns three values... or three NILs".
+    Previously returned a bare Python tuple, which is not a Lisp value at
+    all (plan.md standing rule 2/Finding M): a `(get-properties ...)` call
+    in a single-value context answered the *tuple object* rather than its
+    first element, and `MULTIPLE-VALUE-BIND`/`(values ...)` callers saw
+    nothing sensible. `indicator_list` used Python `in` on a `lispCons`,
+    which has no `__contains__` (plan.md standing rule 4's class of bug --
+    it happened not to raise here only because `lispList.__iter__` made
+    `in` fall back to a linear scan, but an improper indicator list was
+    never checked at all).
+    """
+    indicators = []
+    cur = indicator_list
+    while _consp_internal(cur):
+        indicators.append(cur.car)
+        cur = cur.cdr
+    if not _null_internal(cur):
+        raise _not_a_list('GET-PROPERTIES', cur)
     current = plist
-    while current is not None and current != lisptype.NIL:
-        if not consp(current):
-            break
-        key = car(current)
-        if key in indicator_list:
-            return key, car(cdr(current)) if consp(cdr(current)) else None, current
-        current = cdr(cdr(current))
-    return None, None, None
+    while _consp_internal(current):
+        if not _consp_internal(current.cdr):
+            raise _not_a_list('GET-PROPERTIES', current.cdr)
+        if any(current.car is ind for ind in indicators):
+            return lisptype.MultipleValues(current.car, current.cdr.car, current)
+        current = current.cdr.cdr
+    if not _null_internal(current):
+        raise _not_a_list('GET-PROPERTIES', current)
+    return lisptype.MultipleValues(lisptype.NIL, lisptype.NIL, lisptype.NIL)
 
 
 @_registry.cl_function('PUTPROP')
@@ -568,13 +595,6 @@ def symbol_plist(*args):
             # Unknown plist format - return NIL
             return lisptype.NIL
     return lisptype.NIL
-
-
-@_registry.cl_function('REMF')
-def remf(place, indicator):
-    """Remove property from place."""
-    # For now, just return None - proper implementation later
-    return None
 
 
 # Final batch - type and special forms

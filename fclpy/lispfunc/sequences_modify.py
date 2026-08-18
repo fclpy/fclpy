@@ -327,15 +327,17 @@ def nsubstitute_if_not(newitem, test, sequence, **kwargs):
 
 
 @_registry.cl_function('SUBST')
-def subst(new, old, tree, test=None, test_not=None, key=None, **kwargs):
+def subst(new, old, tree, test=None, test_not=None, key=None):
     """Substitute old with new in tree.
 
     Per CLHS 15.4, the test is called with `old` as the first argument and
     the (possibly key-transformed) subexpression as the second -- this
     previously called `test(tree, old)`, the reversed order (plan.md X3).
-    `**kwargs` accepts (and ignores) `:allow-other-keys` -- without it, any
-    keyword argument at all raised a Python arity TypeError, since a
-    function with no `**kwargs` cannot receive one positionally either.
+    No trailing `**kwargs`: `split_keyword_args` (evaluation_core.py) itself
+    recognizes and consumes `:allow-other-keys` for a named-parameter
+    callee now, and a genuinely unrecognized keyword is a PROGRAM-ERROR
+    (CLHS 3.4.1.4) rather than the arity TypeError or silent no-op a
+    catch-all `**kwargs` produced.
     """
     matcher = _make_matcher(test=test, test_not=test_not, key=key)
 
@@ -349,12 +351,23 @@ def subst(new, old, tree, test=None, test_not=None, key=None, **kwargs):
 
 
 @_registry.cl_function('SUBST-IF')
-def subst_if(new, predicate, tree, key=None, **kwargs):
+def subst_if(new, predicate, tree, key=None):
     """Substitute with predicate (CLHS 15.4).
 
     `:key` is applied to each subexpression before testing it, previously
-    absent entirely; `**kwargs` tolerates `:allow-other-keys` the same way
-    SUBST does above.
+    absent entirely. No trailing `**kwargs` (see SUBST above): this fixes
+    `subst-if.error.4`/`.7` (an unrecognized keyword, with and without an
+    :allow-other-keys marker) at the cost of `.error.5` -- `(subst-if 'a
+    #'null nil :test)`, a dangling `:test` that matches none of this
+    function's actual keywords (only `:key` exists) and has no marker
+    either, so `split_keyword_args` has no evidence this call means
+    keyword-pair semantics and lets it fall through as an ordinary
+    positional value instead of raising for the odd count. That is the
+    same &optional/&key ambiguity `(intern "a" :cl-test)` depends on being
+    resolved the *other* way (plan.md M3: Python's `inspect.signature`
+    cannot tell "no more positions, only :key from here" from "one more
+    plain positional slot" apart). Net across the four SUBST-IF/SUBST-IF-NOT/
+    NSUBST-IF/NSUBST-IF-NOT `.error.4`/`.5`/`.7` trios this is +8/-4.
     """
     predicate = _coerce_function_designator(predicate)
     key = _coerce_function_designator(key)
@@ -369,21 +382,21 @@ def subst_if(new, predicate, tree, key=None, **kwargs):
 
 
 @_registry.cl_function('SUBST-IF-NOT')
-def subst_if_not(new, predicate, tree, key=None, **kwargs):
+def subst_if_not(new, predicate, tree, key=None):
     """Substitute with negated predicate."""
     predicate = _coerce_function_designator(predicate)
     return subst_if(new, lambda x: not _lisp_truthy(predicate(x)), tree, key=key)
 
 
 @_registry.cl_function('SUBLIS')
-def sublis(alist, tree, test=None, test_not=None, key=None, **kwargs):
+def sublis(alist, tree, test=None, test_not=None, key=None):
     """Substitute using association list.
 
     Per CLHS 15.4, :key is applied to each subexpression of `tree` (the
     candidate), and the test is called with the alist entry's key as the
     first argument -- this previously called `test(tree, pair[0])`, the
-    reversed order (plan.md X3), with no :key support at all. `**kwargs`
-    accepts (and ignores) `:allow-other-keys`, matching SUBST above.
+    reversed order (plan.md X3), with no :key support at all. No trailing
+    `**kwargs`, matching SUBST above.
     """
     matcher = _make_matcher(test=test, test_not=test_not, key=key)
 
@@ -406,35 +419,35 @@ def sublis(alist, tree, test=None, test_not=None, key=None, **kwargs):
 
 
 @_registry.cl_function('NSUBST')
-def nsubst(new, old, tree, **kwargs):
+def nsubst(new, old, tree, test=None, test_not=None, key=None):
     """Destructive substitute in tree (non-destructive for now).
 
     Previously discarded :test/:test-not/:key entirely by calling `subst`
     with none of `**kwargs` forwarded.
     """
-    return subst(new, old, tree, **kwargs)
+    return subst(new, old, tree, test=test, test_not=test_not, key=key)
 
 
 @_registry.cl_function('NSUBST-IF')
-def nsubst_if(new, predicate, tree, **kwargs):
+def nsubst_if(new, predicate, tree, key=None):
     """Destructive substitute if in tree (non-destructive for now)."""
-    return subst_if(new, predicate, tree, **kwargs)
+    return subst_if(new, predicate, tree, key=key)
 
 
 @_registry.cl_function('NSUBST-IF-NOT')
-def nsubst_if_not(new, predicate, tree, **kwargs):
+def nsubst_if_not(new, predicate, tree, key=None):
     """Destructive substitute if not in tree (non-destructive for now)."""
-    return subst_if_not(new, predicate, tree, **kwargs)
+    return subst_if_not(new, predicate, tree, key=key)
 
 
 @_registry.cl_function('NSUBLIS')
-def nsublis(alist, tree, **kwargs):
+def nsublis(alist, tree, test=None, test_not=None, key=None):
     """Destructive substitute using alist (non-destructive for now).
 
     Previously discarded :test/:test-not/:key entirely by calling `sublis`
     with none of `**kwargs` forwarded.
     """
-    return sublis(alist, tree, **kwargs)
+    return sublis(alist, tree, test=test, test_not=test_not, key=key)
 
 
 __all__ = [

@@ -116,30 +116,94 @@ def split_keyword_args(func, values):
     `**kwargs` and parses its own `&key` parameters from the positional
     stream, so `use_kwargs` is false for it and this is a no-op passthrough
     -- only built-in `**kwargs`-accepting callables are affected.
+
+    :ALLOW-OTHER-KEYS is itself always a recognized keyword once keyword
+    processing has started, whether or not the callee declares it by name,
+    and (CLHS 3.4.1.4) a true value for it -- its *leftmost* occurrence, per
+    3.4.1.4.1 -- suppresses the unrecognized-keyword-argument error for
+    every other pair in this same call, rather than the pair silently
+    becoming positional arguments (which is how an unrecognized keyword
+    used to turn into a spurious arity mismatch instead of the answer the
+    call actually asked for, or into no error at all). A callee with its
+    own `**kwargs` (`'*' in kwarg_param_names`) gets :ALLOW-OTHER-KEYS
+    forwarded like any other keyword instead of consumed here, because a
+    wildcard callee can't be validated from outside -- WRITE is exactly
+    this: its own finite printer-keyword set isn't visible to signature
+    introspection, so `io_write._print_keywords` does its own CLHS 3.4.1.4
+    check and needs to see the keyword itself.
+
+    A keyword-shaped value that matches none of the callee's declared
+    names is only ever treated as an *error* -- as opposed to falling
+    through to `pos_args`, as it always has -- once this same call is
+    already known to mean real keyword-argument pairing, i.e. it contains
+    a genuine :ALLOW-OTHER-KEYS pair somewhere (found by a prescan, since
+    CLHS 3.4.1.4.1 says the *leftmost* occurrence governs regardless of
+    where it falls) or the value itself matches a declared name. Python's
+    `inspect.signature` cannot tell an ANSI &key parameter from a trailing
+    &optional one -- both are merely "has a default" -- so an unrecognized
+    keyword-shaped value with no such evidence is left alone: it may be an
+    ordinary value landing in an &optional slot, e.g. `(intern "a"
+    :cl-test)`, where :CL-TEST is `package`'s designator, not a stray
+    keyword argument.
     """
     use_kwargs, kwarg_param_names, num_required_positionals = get_func_signature_info(func)
     pos_args = []
     kwargs = {}
     i = 0
     n = len(values)
+
+    is_wildcard = '*' in kwarg_param_names
+    allow_other_keys = False
+    saw_marker = False
+    if use_kwargs and not is_wildcard:
+        j = num_required_positionals
+        while j < n:
+            v = values[j]
+            if isinstance(v, lisptype.lispKeyword) and j + 1 < n:
+                if v.name == 'ALLOW-OTHER-KEYS':
+                    allow_other_keys = lisptype.is_truthy(values[j + 1])
+                    saw_marker = True
+                    break
+                j += 2
+                continue
+            break
+
     while i < n:
         value = values[i]
         if (use_kwargs and isinstance(value, lisptype.lispKeyword)
                 and len(pos_args) >= num_required_positionals):
             py_key = value.name.lower().replace('-', '_')
-            if py_key in kwarg_param_names or '*' in kwarg_param_names:
-                if i + 1 >= n:
-                    # CLHS 3.5.1.6: an odd number of keyword arguments is a
-                    # PROGRAM-ERROR.
-                    raise lisptype.LispProgramError(
-                        f"odd number of keyword arguments: {value.name} "
-                        f"has no value")
+            recognized = is_wildcard or py_key in kwarg_param_names
+            is_marker = value.name == 'ALLOW-OTHER-KEYS' and not is_wildcard
+            if not (recognized or is_marker or saw_marker):
+                # No evidence this call means keyword-pair semantics at
+                # this position -- fall through to positional, as ever.
+                pos_args.append(value)
+                i += 1
+                continue
+            if i + 1 >= n:
+                # CLHS 3.5.1.6: an odd number of keyword arguments is a
+                # PROGRAM-ERROR.
+                raise lisptype.LispProgramError(
+                    f"odd number of keyword arguments: {value.name} "
+                    f"has no value")
+            if is_marker:
+                # Consumed here unconditionally -- never forwarded to the
+                # callee and never treated as an unrecognized keyword.
+                i += 2
+                continue
+            if recognized:
                 # CLHS 3.4.1.4.1: when a keyword appears more than once,
                 # the *leftmost* pair is the one used.
                 if py_key not in kwargs:
                     kwargs[py_key] = values[i + 1]
                 i += 2
                 continue
+            if allow_other_keys:
+                i += 2
+                continue
+            raise lisptype.LispProgramError(
+                f"unrecognized keyword argument: {value.name}")
         pos_args.append(value)
         i += 1
     return pos_args, kwargs
@@ -545,7 +609,7 @@ def eval(form, env=None):
     from .evaluation_special_forms import (
         eval_if, eval_setq, eval_defun, eval_defmacro, eval_macroexpand_1,
         eval_macro_function, eval_lambda, eval_declare, eval_declaim,
-        eval_defvar, eval_defparameter, eval_defconstant, eval_defstruct, eval_pop, eval_push, eval_pushnew,
+        eval_defvar, eval_defparameter, eval_defconstant, eval_defstruct, eval_pop, eval_push, eval_pushnew, eval_remf,
         eval_incf, eval_decf, eval_defclass, eval_defgeneric, eval_defmethod, eval_define_method_combination,
         eval_call_method, eval_make_method,
         eval_destructuring_bind, eval_psetq, eval_rotatef
@@ -719,6 +783,7 @@ def eval(form, env=None):
                 # (SETF place value) or (SETF place1 value1 place2 value2 ...)
                 # For simple variable places, behave like SETQ
                 # For complex places (CAR, CDR, AREF, etc.), call appropriate setter
+                from . import evaluation_special_forms as _es_forms
                 args = cdr(form)
                 result = lisptype.NIL
                 
@@ -750,12 +815,6 @@ def eval(form, env=None):
                                     target.cdr = result
                                 else:
                                     raise lisptype.LispError("SETF CDR: target is not a cons")
-                            elif op_name == 'CADR':
-                                target = eval(car(place_args), env)
-                                if _consp_internal(target) and _consp_internal(cdr(target)):
-                                    cdr(target).car = result
-                                else:
-                                    raise lisptype.LispError("SETF CADR: invalid structure")
                             elif _arrays.is_array_place(op_name):
                                 # (SETF (AREF arr i j) val), (SETF (FILL-POINTER v) n), ...
                                 _arrays.array_place_write(
@@ -928,21 +987,17 @@ def eval(form, env=None):
                                     current.car = result
                                 else:
                                     raise lisptype.LispError(f"SETF {op_name}: list too short")
-                            elif op_name in ('CAAR', 'CDAR', 'CDDR', 'CAAAR', 'CAADR', 'CADAR', 'CADDR',
-                                            'CDAAR', 'CDADR', 'CDDAR', 'CDDDR'):
-                                # Compound CAR/CDR accessors
-                                target = eval(car(place_args), env)
-                                # Navigate to the target cons, then set
-                                for c in op_name[1:-1]:  # Skip first C and last R
-                                    if not _consp_internal(target):
-                                        raise lisptype.LispError(f"SETF {op_name}: invalid structure")
-                                    target = target.car if c == 'A' else target.cdr
-                                if not _consp_internal(target):
-                                    raise lisptype.LispError(f"SETF {op_name}: invalid structure")
-                                if op_name[-2] == 'A':
-                                    target.car = result
+                            elif _es_forms._CXR_RE.match(op_name):
+                                # Compound CAR/CDR accessors (CLHS 5.1.2.1),
+                                # 2-4 letters deep -- `_cxr_target` is the one
+                                # place that knows how to navigate them, shared
+                                # with PUSH/POP/INCF/ROTATEF's `_place_accessor`.
+                                obj = eval(car(place_args), env)
+                                parent, is_car = _es_forms._cxr_target(op_name, obj)
+                                if is_car:
+                                    parent.car = result
                                 else:
-                                    target.cdr = result
+                                    parent.cdr = result
                             elif op_name == 'GETF':
                                 # (SETF (GETF plist indicator [default]) val)
                                 # CLHS 5.1.2.6. Previously a bare `pass` --
@@ -1292,6 +1347,8 @@ def eval(form, env=None):
                 return eval_loop(form, env)
             elif operator.name == 'POP':
                 return eval_pop(form, env)
+            elif operator.name == 'REMF':
+                return eval_remf(form, env)
             elif operator.name == 'PUSH':
                 return eval_push(form, env)
             elif operator.name == 'PUSHNEW':

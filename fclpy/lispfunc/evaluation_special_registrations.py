@@ -277,6 +277,17 @@ def special_pop(*args):
     raise lisptype.LispNotImplementedError('POP (evaluated in evaluator)')
 
 
+@_registry.cl_special('REMF')
+def special_remf(*args):
+    """REMF special form (handled by evaluator).
+
+    Was a `cl_function` that received `place` already evaluated -- it
+    never wrote anywhere back, always returning NIL without removing
+    anything.
+    """
+    raise lisptype.LispNotImplementedError('REMF (evaluated in evaluator)')
+
+
 @_registry.cl_special('PUSH')
 def special_push(*args):
     """PUSH special form (handled by evaluator)."""

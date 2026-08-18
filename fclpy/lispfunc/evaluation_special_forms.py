@@ -13,9 +13,37 @@ from .binding import proclaim_special, root_environment
 from . import registry as _registry
 from . import arrays as _arrays
 import logging
+import re
 import sys
 
 logger = logging.getLogger(__name__)
+
+# CLHS 5.1.2.1's compound CAR/CDR accessors: cL1L2...LkR(x) = L1(L2(...Lk(x))),
+# 1-4 letters of A/D between the C and the final R (CAR/CDR are the 1-letter,
+# non-compound base case and are handled by their own place clauses).
+_CXR_RE = re.compile(r'^C([AD]{2,4})R$')
+
+
+def _cxr_target(op_name, obj):
+    """Navigate a CxxxR place (2-4 letters) to (parent-cons, is-car).
+
+    The innermost operation (the letter closest to R) is applied to `obj`
+    first; navigation stops one cons short of the outermost letter (closest
+    to C), which the caller mutates -- that outermost letter is what SETF
+    is actually assigning. Returns None if `op_name` is not a CxxxR name.
+    """
+    m = _CXR_RE.match(op_name)
+    if not m:
+        return None
+    letters = m.group(1)  # L1 (closest to C) .. Lk (closest to R)
+    target = obj
+    for c in reversed(letters[1:]):
+        if not _consp_internal(target):
+            raise lisptype.LispError(f"{op_name}: invalid structure")
+        target = target.car if c == 'A' else target.cdr
+    if not _consp_internal(target):
+        raise lisptype.LispError(f"{op_name}: invalid structure")
+    return target, letters[0] == 'A'
 
 
 def _extract_tail_symbol_from_rest(rest_param):
@@ -2310,6 +2338,56 @@ def eval_pop(form, env):
     return old_value.car
 
 
+def eval_remf(form, env):
+    """Evaluate REMF special form.
+
+    (REMF place indicator) -- CLHS 5.1.3: removes the indicator/value pair
+    named by `indicator` from the plist stored in `place`, returning a
+    generalized boolean (true if a pair was removed, NIL if the indicator
+    was not found). `place`'s subforms are evaluated exactly once, before
+    `indicator` (pinned by `remf.order.1`/`.2`), through `_place_accessor`
+    (shared with PUSH/POP/PUSHNEW/ROTATEF) so any place kind it supports
+    works here too.
+
+    Previously a `cl_function` that received `place` already evaluated to
+    a value and unconditionally returned NIL without removing anything --
+    a place designator is not a value, and REMF must be able to write the
+    shortened list back to arbitrary places, not just read one.
+    """
+    from .evaluation_core import eval
+
+    args = cdr(form)
+    if not _consp_internal(args) or not _consp_internal(cdr(args)):
+        raise lisptype.LispNotImplementedError("REMF requires a place and an indicator")
+
+    place = car(args)
+    getter, setter = _place_accessor(place, env)
+    indicator = eval(car(cdr(args)), env)
+
+    plist = getter()
+    if not _consp_internal(plist):
+        return lisptype.NIL
+    if plist.car is indicator:
+        if not _consp_internal(plist.cdr):
+            raise lisptype.LispError("REMF: odd-length property list")
+        setter(plist.cdr.cdr)
+        return lisptype.T
+
+    prev = plist
+    if not _consp_internal(prev.cdr):
+        raise lisptype.LispError("REMF: odd-length property list")
+    current = prev.cdr.cdr
+    while _consp_internal(current):
+        if not _consp_internal(current.cdr):
+            raise lisptype.LispError("REMF: odd-length property list")
+        if current.car is indicator:
+            prev.cdr.cdr = current.cdr.cdr
+            return lisptype.T
+        prev = current
+        current = current.cdr.cdr
+    return lisptype.NIL
+
+
 def _push_expander(item, place, *_rest):
     """PUSH macro expander: return an expansion form for (PUSH item place).
 
@@ -2446,12 +2524,12 @@ def _place_accessor(place_form, env):
                 raise lisptype.LispError(f"{op_name} place: target is not a cons")
             return (lambda: target.cdr, lambda v: setattr(target, 'cdr', v))
 
-        if op_name == 'CADR' and _consp_internal(place_args):
-            target = eval(car(place_args), env)
-            if not _consp_internal(target) or not _consp_internal(target.cdr):
-                raise lisptype.LispError("CADR place: invalid structure")
-            cell = target.cdr
-            return (lambda: cell.car, lambda v: setattr(cell, 'car', v))
+        if _CXR_RE.match(op_name) and _consp_internal(place_args):
+            obj = eval(car(place_args), env)
+            parent, is_car = _cxr_target(op_name, obj)
+            if is_car:
+                return (lambda: parent.car, lambda v: setattr(parent, 'car', v))
+            return (lambda: parent.cdr, lambda v: setattr(parent, 'cdr', v))
 
         if op_name == 'GETF' and _consp_internal(place_args):
             # (GETF plist indicator [default]) as a place, CLHS 5.1.2.6:
@@ -2460,11 +2538,17 @@ def _place_accessor(place_form, env):
             # writing either mutates an existing indicator's value cell in
             # place or prepends a fresh (indicator value) pair and writes
             # the new head back through the plist's own place.
+            # CLHS 5.1.3: a place's subforms are evaluated exactly once,
+            # left to right -- the plist place itself, then the indicator,
+            # then the default -- before the new-value form. This used to
+            # evaluate indicator and default *before* the place's own
+            # subforms, which `setf-getf.order.2` observes directly via a
+            # counter incremented in each subform.
             plist_place = car(place_args)
+            plist_getter, plist_setter = _place_accessor(plist_place, env)
             indicator = eval(car(cdr(place_args)), env)
             default_args = cdr(cdr(place_args))
             default = eval(car(default_args), env) if _consp_internal(default_args) else lisptype.NIL
-            plist_getter, plist_setter = _place_accessor(plist_place, env)
 
             def _getf_get():
                 current = plist_getter()
