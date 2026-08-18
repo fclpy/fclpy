@@ -979,7 +979,20 @@ def eval(form, env=None):
                             elif op_name == 'SLOT-VALUE':
                                 obj = eval(car(place_args), env)
                                 slot_name = eval(car(cdr(place_args)), env)
-                                if hasattr(obj, 'set_slot'):
+                                if isinstance(obj, classes.LispInstance):
+                                    # The one home of "write a CLOS instance's
+                                    # slot" is `lispfunc.classes.set_slot_value`,
+                                    # which writes `obj.slot_values[name]` --
+                                    # the same cell SLOT-VALUE's *read* and
+                                    # DEFCLASS's generated :reader/:writer/
+                                    # :accessor methods use. The generic
+                                    # `__dict__` fallback below writes a raw
+                                    # Python attribute instead (LispInstance
+                                    # has no `set_slot`), which SLOT-VALUE's
+                                    # reader then never sees.
+                                    from .classes import set_slot_value
+                                    set_slot_value(result, obj, slot_name)
+                                elif hasattr(obj, 'set_slot'):
                                     obj.set_slot(slot_name, result)
                                 elif hasattr(obj, '__dict__'):
                                     slot_key = slot_name.name if isinstance(slot_name, lisptype.LispSymbol) else str(slot_name)

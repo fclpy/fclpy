@@ -2723,13 +2723,18 @@ def eval_defclass(form, env):
                         documentation = car(opt_vals)
             current = cdr(current)
     
-    # Call the defclass function to create the class
+    # Call the defclass function to create the class. `definition_env` is
+    # threaded through so a slot's :initform is later evaluated where this
+    # DEFCLASS lexically appeared (CLHS 7.1.2), and so :reader/:writer/
+    # :accessor generic functions are bound in the right global environment
+    # rather than whatever `state.current_environment` happens to hold.
     result = defclass(
         class_name,
         direct_superclasses=superclasses_list,
         slots=slots_list,
         metaclass=metaclass,
-        documentation=documentation
+        documentation=documentation,
+        definition_env=env,
     )
     
     return class_name

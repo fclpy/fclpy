@@ -75,9 +75,9 @@ class TestClassDefinition:
         cls = classes.find_class('POINT')
         
         # Check initargs were set
-        assert cls.direct_slots[0].initarg is not None
+        assert cls.direct_slots[0].initargs
         assert cls.direct_slots[0].initform == 0
-        assert cls.direct_slots[1].initarg is not None
+        assert cls.direct_slots[1].initargs
         assert cls.direct_slots[1].initform == 0
     
     def test_class_has_slots_method(self):

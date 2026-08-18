@@ -82,11 +82,16 @@ def defclass(name, direct_superclasses=None, slots=None, **options):
                 raise TypeError(f"Slot name must be symbol, got {slot_name}")
             
             # Parse options
-            initarg = None
             initform = None
             allocation = "instance"
             documentation = None
-            
+            # CLHS 7.5.3: :initarg/:reader/:writer/:accessor may each
+            # appear more than once on the same slot, so these accumulate.
+            initargs = []
+            readers = []
+            writers = []
+            accessors = []
+
             i = 1
             while i < len(slot_spec):
                 key = slot_spec[i]
@@ -95,9 +100,9 @@ def defclass(name, direct_superclasses=None, slots=None, **options):
                     if i + 1 >= len(slot_spec):
                         raise ValueError(f"Missing value for {key}")
                     value = slot_spec[i + 1]
-                    
+
                     if key_name == 'INITARG':
-                        initarg = value
+                        initargs.append(value)
                     elif key_name == 'INITFORM':
                         initform = value
                     elif key_name == 'ALLOCATION':
@@ -106,18 +111,27 @@ def defclass(name, direct_superclasses=None, slots=None, **options):
                     elif key_name == 'DOCUMENTATION':
                         if isinstance(value, str):
                             documentation = value
-                    
+                    elif key_name == 'READER':
+                        readers.append(value)
+                    elif key_name == 'WRITER':
+                        writers.append(value)
+                    elif key_name == 'ACCESSOR':
+                        accessors.append(value)
+
                     i += 2
                 else:
                     i += 1
-            
+
             slot_defs.append(
                 classes.SlotDefinition(
                     name=slot_name,
-                    initarg=initarg,
+                    initargs=initargs,
                     initform=initform,
                     allocation=allocation,
-                    documentation=documentation
+                    documentation=documentation,
+                    readers=readers,
+                    writers=writers,
+                    accessors=accessors,
                 )
             )
         else:
@@ -152,11 +166,59 @@ def defclass(name, direct_superclasses=None, slots=None, **options):
         direct_slots=slot_defs,
         documentation=documentation
     )
-    
+
     # Register it and return the created class object
     lisp_class = classes.register_class(lisp_class)
+
+    _define_slot_accessors(lisp_class, slot_defs, definition_env)
+
     # Per expected runtime behavior, DEFCLASS returns the class name symbol
     return name
+
+
+def _define_slot_accessors(lisp_class, slot_defs, definition_env):
+    """CLHS 7.5.3: a slot's :reader/:writer/:accessor options each define a
+    generic function (creating it if this is its first mention anywhere)
+    and add a method on it specialized to the class being defined -- not a
+    plain Python function, or a later `(defmethod some-reader ...)` on the
+    same name could never join it, and `(typep #'reader 'generic-function)`
+    (CLASS-04.2/.3) would be false. A :writer's method has an *unspecialized*
+    new-value parameter (CLHS: "the second... is unspecialized"); :accessor
+    is exactly a :reader under its own name plus a :writer named
+    `(setf accessor)`, per CLHS's own wording, not a separate mechanism.
+    """
+    import fclpy.state as state
+
+    env = definition_env or state.current_environment
+    if env is None:
+        import fclpy.lispenv as lispenv
+        lispenv.setup_standard_environment()
+        env = state.current_environment
+    global_env = env
+    while global_env.parent is not None:
+        global_env = global_env.parent
+
+    def _bind_reader(gf_name, slot_name):
+        gf = classes.ensure_generic_function(gf_name)
+        classes.add_method(gf, [lisp_class], lambda instance: slot_value(instance, slot_name))
+        global_env.add_function(gf_name, gf)
+
+    def _bind_writer(gf_name, slot_name):
+        gf = classes.ensure_generic_function(gf_name)
+        classes.add_method(
+            gf, [None, lisp_class],
+            lambda new_value, instance: set_slot_value(new_value, instance, slot_name))
+        global_env.add_function(gf_name, gf)
+
+    for slot_def in slot_defs:
+        slot_name = slot_def.name
+        for reader_name in slot_def.readers:
+            _bind_reader(reader_name, slot_name)
+        for writer_name in slot_def.writers:
+            _bind_writer(writer_name, slot_name)
+        for accessor_name in slot_def.accessors:
+            _bind_reader(accessor_name, slot_name)
+            _bind_writer(lisptype.LispSymbol(f"(SETF {accessor_name.name})"), slot_name)
 
 
 @_registry.cl_function('MAKE-INSTANCE')
@@ -220,18 +282,22 @@ def slot_value(instance, slot_name):
 
 @_registry.cl_function('(SETF SLOT-VALUE)')
 def set_slot_value(value, instance, slot_name):
-    """(SETF SLOT-VALUE): Set the value of a slot in an instance."""
+    """(SETF SLOT-VALUE): Set the value of a slot in an instance (CLHS
+    7.5.2 / 7.7's writer protocol). This binds the slot whether or not it
+    already held a value -- SETF of an unbound slot is exactly how a slot
+    *becomes* bound, so gating the write on "already present in
+    slot_values" (the previous behavior) made it impossible to ever set a
+    slot's value for the first time outside of MAKE-INSTANCE's own
+    initarg/initform handling.
+    """
     if not isinstance(instance, classes.LispInstance):
         raise TypeError(f"Not an instance: {instance}")
-    
+
     if isinstance(slot_name, lisptype.LispSymbol):
         slot_name = slot_name.name
     elif not isinstance(slot_name, str):
         raise TypeError(f"Slot name must be symbol, got {slot_name}")
-    
-    if slot_name not in instance.slot_values:
-        raise AttributeError(f"Slot {slot_name} not found")
-    
+
     instance.slot_values[slot_name] = value
     return value
 

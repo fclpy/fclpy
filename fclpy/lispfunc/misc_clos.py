@@ -56,6 +56,25 @@ def _initargs_to_map(initargs):
     return m
 
 
+def _initargs_to_positions(initargs):
+    """First-occurrence position (by pair index) of each initarg keyword in
+    the call's argument list. CLHS 7.1.2: when a slot has *more than one*
+    declared initarg and the call supplies values under more than one of
+    those names, "the leftmost in the initialization argument list" wins --
+    leftmost in the *call*, not in the slot's own `:initarg` declaration
+    order (class-07.9 supplies `:s1b` before `:s1a`, both naming slot S1,
+    and requires :s1b's value, even though :s1a is declared first)."""
+    positions = {}
+    flat = list(initargs)
+    i = 0
+    while i + 1 < len(flat):
+        key = _initarg_key(flat[i])
+        if key not in positions:
+            positions[key] = i // 2
+        i += 2
+    return positions
+
+
 def _slot_names_selects(slot_names, name):
     """Does a SHARED-INITIALIZE `slot-names` argument (CLHS 7.1.2) select
     slot `name`: T selects every slot, NIL selects none, a list selects
@@ -130,13 +149,20 @@ def _default_allocate_instance(cls, *initargs):
 
 def _default_shared_initialize(instance, slot_names, *initargs):
     initarg_map = _initargs_to_map(initargs)
+    initarg_positions = _initargs_to_positions(initargs)
     for name, slot_def in instance.lisp_class.get_all_slots().items():
         supplied = False
-        if slot_def.initarg is not None:
-            key = _initarg_key(slot_def.initarg)
-            if key in initarg_map:
-                instance.slot_values[name] = initarg_map[key]
-                supplied = True
+        # CLHS 7.1.2: a slot may declare more than one :initarg. Of the
+        # ones actually supplied to this call, the one occurring leftmost
+        # in the *call's* argument list wins -- not the one declared first
+        # on the slot, which a single `initarg` field could only ever
+        # remember one of anyway.
+        supplied_keys = [_initarg_key(sym) for sym in slot_def.initargs]
+        supplied_keys = [k for k in supplied_keys if k in initarg_map]
+        if supplied_keys:
+            winner = min(supplied_keys, key=lambda k: initarg_positions[k])
+            instance.slot_values[name] = initarg_map[winner]
+            supplied = True
         # A slot with no declared :initarg still accepts a same-named
         # keyword as a convenience (predates this rewrite; no ANSI test
         # can rely on it, since real CLHS-conforming code always declares

@@ -19,9 +19,21 @@ class SlotDefinition:
     name: LispSymbol
     type_spec: Optional[Any] = None
     initform: Optional[Any] = None
-    initarg: Optional[LispSymbol] = None
+    # CLHS 7.5.3: a slot may declare more than one :initarg, and CLHS 7.1.2
+    # says the *leftmost* one supplied in the initialization argument list
+    # wins when more than one of a slot's declared initargs is given --
+    # storing only the last-parsed :initarg silently ignored every earlier
+    # one, so MAKE-INSTANCE calls using any but the last-declared name for
+    # a slot never initialized it.
+    initargs: List[LispSymbol] = field(default_factory=list)
     allocation: str = "instance"  # "instance" or "class"
     documentation: Optional[str] = None
+    # CLHS 7.5.3: a slot may name any number of :reader/:writer/:accessor
+    # generic functions -- each one is a separate DEFCLASS-time
+    # ADD-METHOD, not a single accessor per slot, so these are lists.
+    readers: List[LispSymbol] = field(default_factory=list)
+    writers: List[LispSymbol] = field(default_factory=list)
+    accessors: List[LispSymbol] = field(default_factory=list)
     # The environment DEFCLASS was evaluated in, captured so a slot's
     # initform (an unevaluated form) can later be evaluated the way CLHS
     # 7.1.2 wants -- lexically where the class was defined, not wherever
@@ -276,11 +288,12 @@ def make_instance(
     for slot_name, slot_def in all_slots.items():
         value = None
         
-        # Check if initarg was provided
-        if slot_def.initarg:
-            arg_name = slot_def.initarg.name if isinstance(slot_def.initarg, LispSymbol) else slot_def.initarg
+        # Check if initarg was provided (leftmost-declared wins, CLHS 7.1.2)
+        for initarg_sym in slot_def.initargs:
+            arg_name = initarg_sym.name if isinstance(initarg_sym, LispSymbol) else initarg_sym
             if arg_name in initargs:
                 value = initargs[arg_name]
+                break
         
         # Use initform if no value provided
         if value is None and slot_def.initform is not None:
