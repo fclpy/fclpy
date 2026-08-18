@@ -2897,9 +2897,12 @@ def _check_argument_precedence_order(func_name, lambda_list, order_tail):
     parameter of the generic function's lambda list exactly once.
 
     Only the *validation* is here. Dispatching in that order is a change to
-    method specificity ordering (`classes._specificity_key`), which has no
-    class precedence list to reorder yet -- see plan.md's discovered issues
-    rather than adding a second ordering mechanism beside it.
+    method specificity ordering (`classes._specificity_key`), which now has
+    a real class precedence list to rank against but always compares
+    parameter positions in the generic function's declared left-to-right
+    order, never the permutation this option validates -- see plan.md's
+    discovered issues rather than adding a second ordering mechanism beside
+    it.
     """
     required = []
     for param in _list_elements(lambda_list):

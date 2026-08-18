@@ -34,40 +34,71 @@ class SlotDefinition:
         return f"SlotDefinition({self.name.name})"
 
 
+def _merge_cpls(sequences: List[List['LispClass']]) -> List['LispClass']:
+    """The merge step of CLHS 4.3.5's class precedence list algorithm
+    (Barrett et al.'s C3, the same one Python's own MRO uses): repeatedly
+    take the first candidate that appears nowhere but at the head of the
+    sequences it is still in, in local-precedence order, or signal if none
+    qualifies.
+
+    This replaces a depth-first walk that only ever produced a *set* of
+    ancestors, not an order CLHS defines: for single inheritance the two
+    agree, but a diamond (`(defclass d (b c))` where `b` and `c` share a
+    parent) has no well-defined order under a DFS-with-first-occurrence
+    rule, and CLOS specificity (CLHS 7.6.6.1) is defined *by* that order.
+    """
+    sequences = [list(seq) for seq in sequences if seq]
+    result: List['LispClass'] = []
+    while sequences:
+        candidate = None
+        for seq in sequences:
+            head = seq[0]
+            if not any(head is cls for other in sequences for cls in other[1:]):
+                candidate = head
+                break
+        if candidate is None:
+            names = ", ".join(seq[0].name.name for seq in sequences)
+            raise LispProgramError(
+                f"Inconsistent class precedence list -- cannot linearize among: {names}")
+        result.append(candidate)
+        sequences = [[c for c in seq if c is not candidate] for seq in sequences]
+        sequences = [seq for seq in sequences if seq]
+    return result
+
+
 @dataclass
 class LispClass:
     """Represents a Common Lisp class object.
-    
+
     Stores slot definitions, parent classes, and class-level metadata.
-    Uses simplified linear inheritance order: parent -> grandparent -> ... -> T
     """
     name: LispSymbol
     direct_superclasses: List['LispClass'] = field(default_factory=list)
     direct_slots: List[SlotDefinition] = field(default_factory=list)
     class_slots: Dict[str, Any] = field(default_factory=dict)  # For class-allocated slots
     documentation: Optional[str] = None
-    
-    def __post_init__(self):
-        """Initialize class metadata."""
-        if not self.direct_superclasses:
-            # If no parent specified, use (T) as the ultimate parent
-            # We'll add implicit T parent later
-            pass
-    
+    # Memoized class precedence list (see get_linearized_superclasses). Not
+    # part of the class's identity or value -- excluded from __eq__ -- and
+    # never stale in practice because redefining a class (DEFCLASS re-run)
+    # builds a brand new LispClass object rather than mutating this one.
+    _cpl_cache: Optional[List['LispClass']] = field(
+        default=None, repr=False, compare=False)
+
     def get_linearized_superclasses(self) -> List['LispClass']:
-        """Get list of all superclasses in linear order.
-        
-        Returns classes in order: self -> parents -> grandparents -> ... -> T
+        """This class's class precedence list (CLHS 4.3.5), most specific
+        first: `self`, then its ancestors in C3 order. Real C3, not an
+        approximation -- callers (specificity ordering, slot inheritance,
+        SUBTYPEP's class cone) all depend on this being the actual CPL, not
+        merely the set of ancestors.
         """
-        result = [self]
-        for parent in self.direct_superclasses:
-            # Get parent's linearized list (excluding self)
-            parent_list = parent.get_linearized_superclasses()
-            # Add any new classes from parent's list
-            for cls in parent_list:
-                if cls not in result:
-                    result.append(cls)
-        return result
+        if self._cpl_cache is None:
+            if not self.direct_superclasses:
+                self._cpl_cache = [self]
+            else:
+                sequences = [p.get_linearized_superclasses() for p in self.direct_superclasses]
+                sequences.append(list(self.direct_superclasses))
+                self._cpl_cache = [self] + _merge_cpls(sequences)
+        return self._cpl_cache
     
     def get_all_slots(self) -> Dict[str, SlotDefinition]:
         """Get all slots (direct and inherited) as a dict by slot name.
@@ -418,6 +449,16 @@ class GenericFunctionRegistry:
 _generic_registry = GenericFunctionRegistry()
 
 
+def _required_param_count(lambda_list: Any) -> int:
+    """How many required (specializable) parameters a generic-function
+    lambda list declares. Shares the one lambda-list parser
+    (`evaluation_core.parse_lambda_list`) rather than re-walking the list
+    here, so this agrees with what DEFUN/DEFMACRO/DEFMETHOD already call
+    "required"."""
+    from fclpy.lispfunc.evaluation_core import parse_lambda_list
+    return len(parse_lambda_list(lambda_list).get('required', []))
+
+
 def ensure_generic_function(
     name: LispSymbol,
     documentation: Optional[str] = None,
@@ -450,6 +491,23 @@ def ensure_generic_function(
     if documentation is not None:
         gf.documentation = documentation
     if lambda_list is not None:
+        # CLHS 7.6.4: every method's specializers must be congruent with
+        # the generic function's own lambda list, in particular have one
+        # specializer per required parameter. Re-running DEFGENERIC with a
+        # lambda list whose required-parameter count differs from before
+        # (`(defgeneric g (x) ...)` then `(defgeneric g (x y) ...)`) makes
+        # every method added under the old arity incongruent with the new
+        # one -- there is no longer a correspondence between its
+        # specializers and the parameter list -- so it can no longer apply
+        # and is discarded, the same way a freshly created generic function
+        # would start with none. Without this, `add_method`'s specializer
+        # count and the call's argument count can permanently disagree, and
+        # `_matches_specializers`' "at least this many arguments" rule
+        # (needed for methods with &optional/&rest of their own) then lets
+        # the stale short method keep matching every call.
+        if gf.lambda_list is not None and gf.methods:
+            if _required_param_count(gf.lambda_list) != _required_param_count(lambda_list):
+                gf.methods = []
         gf.lambda_list = lambda_list
 
     return gf
@@ -592,24 +650,46 @@ def _matches_specializers(args: List[Any], specializers: List[Any]) -> bool:
     return all(_arg_matches_specializer(arg, spec) for arg, spec in zip(args, specializers))
 
 
-def _specificity_key(specializers: List[Any]) -> tuple:
-    """Approximate specificity ordering (CLHS 7.6.6.1's true rule is the
-    argument's class precedence list position, which needs a real C3
-    linearization this codebase does not have -- get_linearized_superclasses
-    gives ancestor *count*, which agrees with CPL order for the single-
-    inheritance chains DEFCLASS mostly produces here). An EQL specializer is
-    always more specific than any class specializer, per CLHS."""
-    key = []
-    for spec in specializers:
-        if spec is None:
-            key.append(-1)
-        elif isinstance(spec, EqlSpecializer):
-            key.append(10_000)
-        elif isinstance(spec, LispClass):
-            key.append(len(spec.get_linearized_superclasses()))
-        else:
-            key.append(0)
-    return tuple(key)
+def _specializer_rank(arg: Any, spec: Any) -> int:
+    """Where one specializer falls in specificity order for one call
+    argument (CLHS 7.6.6.1): lower sorts first, i.e. more specific.
+
+    For a `LispInstance` argument, the rule is exact: a class specializer's
+    rank is its *position in the argument's own class precedence list* --
+    not the specializer's own ancestor count, which cannot tell two classes
+    apart when they tie on ancestor count but differ in CPL order (a
+    diamond: `(defclass d (b c))` puts `b` before `c` in `d`'s CPL by local
+    precedence order even though `b` and `c` have identical ancestor
+    counts). For any other argument (numbers, conses, strings, ...) there
+    is no CLOS instance whose CPL to consult, so this falls back to the
+    specializer's own ancestor count as before -- an approximation, but the
+    same one already in use for those cases, not a new one.
+
+    An EQL specializer's rank must beat every class specializer's, no
+    matter how deep that class's ancestor chain is (the fallback branch's
+    scale is unbounded in principle), so it uses -inf/+inf sentinels rather
+    than a fixed number that a long enough hierarchy could exceed."""
+    if spec is None:
+        return float('inf')
+    if isinstance(spec, EqlSpecializer):
+        return float('-inf')
+    if isinstance(arg, LispInstance) and isinstance(spec, LispClass):
+        cpl = arg.lisp_class.get_linearized_superclasses()
+        for i, cls in enumerate(cpl):
+            if cls is spec:
+                return i
+        return len(cpl)
+    if isinstance(spec, LispClass):
+        return -len(spec.get_linearized_superclasses())
+    return 0
+
+
+def _specificity_key(args: List[Any], specializers: List[Any]) -> tuple:
+    """A method's specificity key for this particular call, ascending =
+    more specific first (CLHS 7.6.6.1): compare specializers position by
+    position, most-specific-required-parameter first, exactly as CLHS
+    defines method ordering."""
+    return tuple(_specializer_rank(arg, spec) for arg, spec in zip(args, specializers))
 
 
 def _is_instance_of(instance: LispInstance, lisp_class: LispClass) -> bool:
@@ -719,11 +799,11 @@ def compute_applicable_methods(gf: GenericFunction, args: List[Any]) -> List[Met
         raise LispProgramError(
             f"COMPUTE-APPLICABLE-METHODS: {gf!r} is not a generic function")
     applicable = [m for m in gf.methods if _matches_specializers(args, m.specializers)]
-    # Stable, so methods whose specificity this codebase cannot yet tell
-    # apart (see _specificity_key: there is no real class precedence list
-    # for the built-in classes) keep definition order rather than an
-    # arbitrary one.
-    applicable.sort(key=lambda m: _specificity_key(m.specializers), reverse=True)
+    # Ascending: _specificity_key ranks more-specific lower. Stable, so
+    # methods still tied after a real CPL comparison (e.g. two specializers
+    # on a built-in, non-instance type, which falls back to ancestor count)
+    # keep definition order rather than an arbitrary one.
+    applicable.sort(key=lambda m: _specificity_key(args, m.specializers))
     return applicable
 
 
@@ -1075,156 +1155,6 @@ def make_method_from_thunk(run: Callable, generic_function=None) -> MakeMethod:
             _effective_context.pop()
 
     return MakeMethod(invoke, generic_function)
-
-
-# ==============================================================================
-# Built-in Type Classes
-# ==============================================================================
-# Register the standard Common Lisp built-in type classes.
-# These are used for CLOS dispatch and FIND-CLASS.
-
-def _make_builtin_class(name: str) -> LispClass:
-    """Create and register a built-in type class."""
-    sym = LispSymbol(name)
-    cls = LispClass(name=sym)
-    return register_class(cls)
-
-
-def _init_builtin_classes():
-    """Initialize all built-in type classes.
-    
-    This is called lazily on first use to avoid circular import issues.
-    """
-    global _builtin_classes_initialized
-    if _builtin_classes_initialized:
-        return
-    
-    # Root class
-    _make_builtin_class('T')
-    
-    # Numeric types
-    _make_builtin_class('NUMBER')
-    _make_builtin_class('REAL')
-    _make_builtin_class('RATIONAL')
-    _make_builtin_class('INTEGER')
-    _make_builtin_class('FIXNUM')
-    _make_builtin_class('BIGNUM')
-    _make_builtin_class('RATIO')
-    _make_builtin_class('FLOAT')
-    _make_builtin_class('SHORT-FLOAT')
-    _make_builtin_class('SINGLE-FLOAT')
-    _make_builtin_class('DOUBLE-FLOAT')
-    _make_builtin_class('LONG-FLOAT')
-    _make_builtin_class('COMPLEX')
-    
-    # Sequence types
-    _make_builtin_class('SEQUENCE')
-    _make_builtin_class('LIST')
-    _make_builtin_class('CONS')
-    _make_builtin_class('NULL')
-    _make_builtin_class('VECTOR')
-    _make_builtin_class('STRING')
-    _make_builtin_class('SIMPLE-STRING')
-    _make_builtin_class('BASE-STRING')
-    _make_builtin_class('SIMPLE-BASE-STRING')
-    _make_builtin_class('BIT-VECTOR')
-    _make_builtin_class('SIMPLE-BIT-VECTOR')
-    _make_builtin_class('SIMPLE-VECTOR')
-    _make_builtin_class('ARRAY')
-    _make_builtin_class('SIMPLE-ARRAY')
-    
-    # Character type
-    _make_builtin_class('CHARACTER')
-    _make_builtin_class('BASE-CHAR')
-    _make_builtin_class('STANDARD-CHAR')
-    _make_builtin_class('EXTENDED-CHAR')
-    
-    # Symbol types
-    _make_builtin_class('SYMBOL')
-    _make_builtin_class('KEYWORD')
-    
-    # Function types
-    _make_builtin_class('FUNCTION')
-    _make_builtin_class('COMPILED-FUNCTION')
-    _make_builtin_class('GENERIC-FUNCTION')
-    _make_builtin_class('STANDARD-GENERIC-FUNCTION')
-    _make_builtin_class('METHOD')
-    _make_builtin_class('STANDARD-METHOD')
-    
-    # Class types
-    _make_builtin_class('CLASS')
-    _make_builtin_class('STANDARD-CLASS')
-    _make_builtin_class('BUILT-IN-CLASS')
-    _make_builtin_class('STRUCTURE-CLASS')
-    _make_builtin_class('STANDARD-OBJECT')
-    _make_builtin_class('STRUCTURE-OBJECT')
-    
-    # Stream types
-    _make_builtin_class('STREAM')
-    _make_builtin_class('BROADCAST-STREAM')
-    _make_builtin_class('CONCATENATED-STREAM')
-    _make_builtin_class('ECHO-STREAM')
-    _make_builtin_class('FILE-STREAM')
-    _make_builtin_class('STRING-STREAM')
-    _make_builtin_class('SYNONYM-STREAM')
-    _make_builtin_class('TWO-WAY-STREAM')
-    
-    # Hash table
-    _make_builtin_class('HASH-TABLE')
-    
-    # Pathname types
-    _make_builtin_class('PATHNAME')
-    _make_builtin_class('LOGICAL-PATHNAME')
-    
-    # Package
-    _make_builtin_class('PACKAGE')
-    
-    # Readtable
-    _make_builtin_class('READTABLE')
-    
-    # Random state
-    _make_builtin_class('RANDOM-STATE')
-    
-    # Condition types
-    _make_builtin_class('CONDITION')
-    _make_builtin_class('SERIOUS-CONDITION')
-    _make_builtin_class('ERROR')
-    _make_builtin_class('SIMPLE-ERROR')
-    _make_builtin_class('SIMPLE-CONDITION')
-    _make_builtin_class('WARNING')
-    _make_builtin_class('STYLE-WARNING')
-    _make_builtin_class('SIMPLE-WARNING')
-    _make_builtin_class('TYPE-ERROR')
-    _make_builtin_class('SIMPLE-TYPE-ERROR')
-    _make_builtin_class('CELL-ERROR')
-    _make_builtin_class('UNBOUND-VARIABLE')
-    _make_builtin_class('UNDEFINED-FUNCTION')
-    _make_builtin_class('UNBOUND-SLOT')
-    _make_builtin_class('CONTROL-ERROR')
-    _make_builtin_class('PROGRAM-ERROR')
-    _make_builtin_class('PACKAGE-ERROR')
-    _make_builtin_class('STREAM-ERROR')
-    _make_builtin_class('READER-ERROR')
-    _make_builtin_class('END-OF-FILE')
-    _make_builtin_class('FILE-ERROR')
-    _make_builtin_class('PARSE-ERROR')
-    _make_builtin_class('PRINT-NOT-READABLE')
-    _make_builtin_class('STORAGE-CONDITION')
-    _make_builtin_class('ARITHMETIC-ERROR')
-    _make_builtin_class('DIVISION-BY-ZERO')
-    _make_builtin_class('FLOATING-POINT-OVERFLOW')
-    _make_builtin_class('FLOATING-POINT-UNDERFLOW')
-    _make_builtin_class('FLOATING-POINT-INEXACT')
-    _make_builtin_class('FLOATING-POINT-INVALID-OPERATION')
-    
-    # Restart
-    _make_builtin_class('RESTART')
-    
-    # Other
-    _make_builtin_class('ATOM')
-    _make_builtin_class('NIL')
-    
-    _builtin_classes_initialized = True
 
 
 _builtin_classes_initialized = False
