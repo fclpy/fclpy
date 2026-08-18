@@ -554,13 +554,15 @@ def probe_file(pathname):
 
 @_registry.cl_function('DIRECTORY')
 def directory(pathname):
-    """List directory contents.
-    
-    Args:
-        pathname: Directory pathname (can include wildcards)
-    
-    Returns:
-        List of pathnames matching pattern
+    """The pathnames matching `pathname` (CLHS 20.2).
+
+    Returns a Lisp **list**, not a Python one: a Python list is this
+    implementation's *vector* (plan.md Finding M), so this used to hand back
+    something `(listp ...)` denied and `APPEND` could not walk. It went
+    unnoticed while APPEND read its arguments through `seq_elements`, which
+    accepts any sequence -- ansi-test's own `init.lsp` opens with
+    `(append (directory ...) (directory ...) (directory ...))`, so the harness
+    bootstrap was the first thing to break once APPEND required lists.
     """
     if isinstance(pathname, Pathname):
         path_str = pathname.original
@@ -579,7 +581,8 @@ def directory(pathname):
         else:
             matches = []
     
-    return [Pathname(match) for match in matches]
+    from .sequence_protocol import make_lisp_list
+    return make_lisp_list(Pathname(match) for match in matches)
 
 
 @_registry.cl_function('TRUENAME')

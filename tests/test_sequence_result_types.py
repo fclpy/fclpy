@@ -53,9 +53,22 @@ class TestElementAccess:
         vector = make_array(5, initial_element=0, fill_pointer=2)
         assert seq_elements(vector) == [0, 0]
 
-    def test_a_dotted_tail_is_not_dropped(self):
+    def test_a_dotted_list_is_not_a_proper_sequence(self):
+        # CLHS 17.1: a sequence function's argument must be a *proper*
+        # sequence.  This used to answer `[1, 2, 3]` -- the dotted terminator
+        # read as one more element, which is a wrong *value* and not merely a
+        # missing error: `(append '(a . b) '(z))` answered `(A B Z)`.
         dotted = lisptype.lispCons(1, lisptype.lispCons(2, 3))
-        assert seq_elements(dotted) == [1, 2, 3]
+        with pytest.raises(lisptype.LispTypeError):
+            seq_elements(dotted)
+
+    def test_a_dotted_list_may_be_walked_by_the_operators_defined_on_one(self):
+        # LAST/BUTLAST/NTHCDR/LDIFF/TAILP count conses, so they stop at the
+        # terminator rather than consuming it as an element.
+        from fclpy.lispfunc.sequence_protocol import list_elements, list_tail
+        dotted = lisptype.lispCons(1, lisptype.lispCons(2, 3))
+        assert list_elements(dotted, 'TEST', dotted='allow') == [1, 2]
+        assert list_tail(dotted, 'TEST') == 3
 
     def test_a_non_sequence_is_a_lisp_type_error(self):
         # Not a Python TypeError: that used to reach the test suite as the

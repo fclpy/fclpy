@@ -14,6 +14,7 @@ import fclpy.lispenv as lispenv  # environment setup utilities
 from fclpy.lisptype import resolve_environment, LispEnvironmentError
 import inspect
 from functools import lru_cache
+from typing import NamedTuple
 import sys
 from fclpy import classes
 
@@ -41,47 +42,86 @@ def is_arity_mismatch_message(error_str):
             or ('positional argument' in low))
 
 
+class LambdaListShape(NamedTuple):
+    """A builtin's ANSI lambda list, as read off its Python signature.
+
+    Python can express every part of a CLHS ordinary lambda list, and the
+    mapping is exact once you use the whole of Python's parameter model:
+
+    ==========================  ===========================================
+    ANSI                        Python
+    ==========================  ===========================================
+    required                    positional, no default
+    ``&optional``               positional-or-keyword **with** a default
+    ``&rest``                   ``*args``
+    ``&key``                    **keyword-only** with a default
+    ``&allow-other-keys``       ``**kwargs``
+    ==========================  ===========================================
+
+    The distinction that matters is the middle two rows, and conflating them
+    is what made `(union nil nil :bad t)` return an answer: this used to read
+    *every* defaulted parameter as a `&key` name, so it could not tell a
+    genuine `&key` function from one whose trailing arguments are `&optional`,
+    and had to *guess* whether a keyword-shaped value in a trailing position
+    was a keyword argument or an `&optional` value (`(intern "a" :cl-test)`
+    passes :CL-TEST as a package designator, not a stray keyword). Guessing
+    means the CLHS 3.4.1.4/3.5.1.5 conformance checks cannot be applied at
+    all: an unrecognized keyword became a positional argument instead of a
+    PROGRAM-ERROR.
+
+    `declared_keys` non-empty is therefore the question "can this call be
+    validated?". A builtin whose `&key` parameters are spelled keyword-only
+    has declared them exactly, and `split_keyword_args` enforces the standard
+    against that declaration. One that has not been migrated yet falls back to
+    the old inference -- see plan.md section 5; the families are being
+    converted cluster by cluster, and `legacy_keys` is what the unconverted
+    ones still match against.
+    """
+    num_required: int
+    num_optional: int
+    declared_keys: frozenset
+    legacy_keys: frozenset
+    wildcard: bool
+    has_var_positional: bool
+
+    @property
+    def accepted_keys(self):
+        return self.declared_keys | self.legacy_keys
+
+
+_NO_LAMBDA_LIST = LambdaListShape(0, 0, frozenset(), frozenset(), False, False)
+
+
 # Cache for function signature information to avoid repeated inspect.signature calls
 @lru_cache(maxsize=1024)
 def _get_func_signature_info(func_id: int, func):
-    """Get cached signature information for a function.
-    
-    Returns a tuple of (use_kwargs, kwarg_param_names_frozenset, num_required_positionals).
-    If kwarg_param_names contains '*', it means the function accepts **kwargs
-    and will accept any keyword argument.
-    """
+    """The cached `LambdaListShape` of a Python callable."""
     try:
-        sig = inspect.signature(func)
-        params = list(sig.parameters.values())
-        
-        # Check if function accepts varargs (*args)
-        has_var_positional = any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in params)
-        
-        # Check if function accepts **kwargs
-        has_var_keyword = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params)
-        
-        # Count required positional parameters (no default, not *args, not **kwargs)
-        num_required_positionals = 0
-        for p in params:
-            if (p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
-                and p.default is inspect.Parameter.empty):
-                num_required_positionals += 1
-        
-        # Collect the actual keyword parameter names for this function
-        kwarg_param_names = set()
-        for p in params:
-            if (p.kind in (inspect.Parameter.KEYWORD_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
-                and p.default is not inspect.Parameter.empty):
-                kwarg_param_names.add(p.name.lower())
-        
-        # If function accepts **kwargs, mark with '*' to accept any keyword
-        if has_var_keyword:
-            kwarg_param_names.add('*')
-        
-        use_kwargs = bool(kwarg_param_names) and not has_var_positional
-        return (use_kwargs, frozenset(kwarg_param_names), num_required_positionals)
+        params = list(inspect.signature(func).parameters.values())
     except (ValueError, TypeError):
-        return (False, frozenset(), 0)
+        return _NO_LAMBDA_LIST
+
+    positional = (inspect.Parameter.POSITIONAL_ONLY,
+                  inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    num_required = num_optional = 0
+    declared_keys = set()
+    legacy_keys = set()
+    wildcard = has_var_positional = False
+    for p in params:
+        if p.kind == inspect.Parameter.VAR_POSITIONAL:
+            has_var_positional = True
+        elif p.kind == inspect.Parameter.VAR_KEYWORD:
+            wildcard = True
+        elif p.kind == inspect.Parameter.KEYWORD_ONLY:
+            declared_keys.add(p.name.lower())
+        elif p.kind in positional:
+            if p.default is inspect.Parameter.empty:
+                num_required += 1
+            else:
+                num_optional += 1
+                legacy_keys.add(p.name.lower())
+    return LambdaListShape(num_required, num_optional, frozenset(declared_keys),
+                           frozenset(legacy_keys), wildcard, has_var_positional)
 
 
 
@@ -132,69 +172,150 @@ def split_keyword_args(func, values):
     introspection, so `io_write._print_keywords` does its own CLHS 3.4.1.4
     check and needs to see the keyword itself.
 
-    A keyword-shaped value that matches none of the callee's declared
-    names is only ever treated as an *error* -- as opposed to falling
-    through to `pos_args`, as it always has -- once this same call is
-    already known to mean real keyword-argument pairing, i.e. it contains
-    a genuine :ALLOW-OTHER-KEYS pair somewhere (found by a prescan, since
-    CLHS 3.4.1.4.1 says the *leftmost* occurrence governs regardless of
-    where it falls) or the value itself matches a declared name. Python's
-    `inspect.signature` cannot tell an ANSI &key parameter from a trailing
-    &optional one -- both are merely "has a default" -- so an unrecognized
-    keyword-shaped value with no such evidence is left alone: it may be an
-    ordinary value landing in an &optional slot, e.g. `(intern "a"
-    :cl-test)`, where :CL-TEST is `package`'s designator, not a stray
-    keyword argument.
-    """
-    use_kwargs, kwarg_param_names, num_required_positionals = get_func_signature_info(func)
-    pos_args = []
-    kwargs = {}
-    i = 0
-    n = len(values)
+    Where the keyword region *begins* is decided by the callee's lambda
+    list, not by what the arguments look like: it is after every required
+    and `&optional` parameter (`LambdaListShape`). That is what lets
+    `(intern "a" :cl-test)` pass :CL-TEST as `package`'s value -- INTERN's
+    `package` is `&optional`, so index 1 is still positional -- while
+    `(union nil nil :bad t)`, whose callee has only `&key` parameters after
+    its two required ones, is a PROGRAM-ERROR for the unrecognized :BAD.
+    Both used to be decided by a *guess* keyed on whether the call already
+    contained some recognizable keyword; the guess had to fail one way or
+    the other, and it failed by letting an unrecognized keyword become a
+    positional argument.
 
-    is_wildcard = '*' in kwarg_param_names
-    allow_other_keys = False
-    saw_marker = False
-    if use_kwargs and not is_wildcard:
-        j = num_required_positionals
-        while j < n:
-            v = values[j]
-            if isinstance(v, lisptype.lispKeyword) and j + 1 < n:
-                if v.name == 'ALLOW-OTHER-KEYS':
-                    allow_other_keys = lisptype.is_truthy(values[j + 1])
-                    saw_marker = True
-                    break
-                j += 2
-                continue
+    Inside the keyword region CLHS 3.4.1.4/3.5.1.5 applies in full:
+    every pair's name must be a **symbol** (not necessarily a keyword --
+    3.4.1.4.1.1 admits any symbol, which is why `(member 'b '(a b c)
+    :allow-other-keys 17 :allow-other-keys nil '#:x t)` is legal), an odd
+    count is a PROGRAM-ERROR, the *leftmost* pair wins for a repeated name
+    and for :ALLOW-OTHER-KEYS itself, and a name the callee does not
+    declare is a PROGRAM-ERROR unless :ALLOW-OTHER-KEYS is true.
+    """
+    shape = get_func_signature_info(func)
+    if shape.has_var_positional or not (shape.declared_keys or shape.wildcard
+                                        or shape.legacy_keys):
+        # &rest swallows everything, and a callee with no keyword parameters
+        # at all has nothing to pair -- either way this is a passthrough. A
+        # user-defined LAMBDA/DEFUN closure lands here and parses its own
+        # lambda list.
+        return list(values), {}
+    if shape.declared_keys:
+        return _split_declared_keywords(shape, values)
+    return _split_inferred_keywords(shape, values)
+
+
+def _keyword_region_name(value):
+    """The parameter name a value in a keyword position denotes, or None.
+
+    CLHS 3.4.1.4.1.1: with &allow-other-keys in play the name need only be a
+    *symbol*, so a keyword, an interned symbol (`'bad`) and an uninterned one
+    (`'#:x`) are all well-formed names here; only a non-symbol is malformed.
+    """
+    if isinstance(value, (lisptype.lispKeyword, lisptype.LispSymbol)):
+        return value.name
+    return None
+
+
+def _split_declared_keywords(shape, values):
+    """CLHS 3.4.1.4 against a callee that declared its `&key` parameters."""
+    n = len(values)
+    boundary = min(shape.num_required + shape.num_optional, n)
+    pos_args = list(values[:boundary])
+    rest = values[boundary:]
+    if len(rest) % 2:
+        # CLHS 3.5.1.6.
+        raise lisptype.LispProgramError(
+            f"odd number of keyword arguments: {rest[-1]!r} has no value")
+
+    pairs = [(rest[i], rest[i + 1]) for i in range(0, len(rest), 2)]
+    names = []
+    for name, _value in pairs:
+        spelling = _keyword_region_name(name)
+        if spelling is None:
+            raise lisptype.LispProgramError(
+                f"{name!r} is not a valid keyword argument name")
+        names.append(spelling)
+
+    # CLHS 3.4.1.4.1: the leftmost :ALLOW-OTHER-KEYS pair governs, wherever
+    # it appears -- so it is read before any other pair is judged.
+    allow_other_keys = shape.wildcard
+    for spelling, (_name, value) in zip(names, pairs):
+        if spelling == 'ALLOW-OTHER-KEYS':
+            allow_other_keys = lisptype.is_truthy(value)
             break
 
+    kwargs = {}
+    for spelling, (_name, value) in zip(names, pairs):
+        if spelling == 'ALLOW-OTHER-KEYS' and not shape.wildcard:
+            # Recognized whether or not the callee names it, and consumed
+            # rather than forwarded.
+            continue
+        py_key = spelling.lower().replace('-', '_')
+        if shape.wildcard or py_key in shape.declared_keys:
+            # Leftmost pair wins for a repeated name too.
+            kwargs.setdefault(py_key, value)
+        elif not allow_other_keys:
+            raise lisptype.LispProgramError(
+                f"unrecognized keyword argument: {spelling}")
+    return pos_args, kwargs
+
+
+def _split_inferred_keywords(shape, values):
+    """The pre-migration fallback for a callee whose `&key` parameters are
+    still spelled as defaulted *positional* parameters (plan.md section 5).
+
+    It cannot tell an unrecognized keyword from an `&optional` value, so it
+    treats a keyword-shaped value as a keyword argument only on evidence: a
+    genuine :ALLOW-OTHER-KEYS pair somewhere in the call, or a name the callee
+    actually accepts. Anything else falls through to positional, which is a
+    silently wrong answer where the standard wants a PROGRAM-ERROR -- the
+    reason the migration exists.
+    """
+    accepted = shape.accepted_keys
+    pos_args = []
+    kwargs = {}
+    n = len(values)
+
+    allow_other_keys = False
+    saw_marker = False
+    j = shape.num_required
+    while j < n and not shape.wildcard:
+        v = values[j]
+        if isinstance(v, lisptype.lispKeyword) and j + 1 < n:
+            if v.name == 'ALLOW-OTHER-KEYS':
+                allow_other_keys = lisptype.is_truthy(values[j + 1])
+                saw_marker = True
+                break
+            j += 2
+            continue
+        break
+
+    i = 0
     while i < n:
         value = values[i]
-        if (use_kwargs and isinstance(value, lisptype.lispKeyword)
-                and len(pos_args) >= num_required_positionals):
+        if (isinstance(value, lisptype.lispKeyword)
+                and len(pos_args) >= shape.num_required):
             py_key = value.name.lower().replace('-', '_')
-            recognized = is_wildcard or py_key in kwarg_param_names
-            is_marker = value.name == 'ALLOW-OTHER-KEYS' and not is_wildcard
+            # A `**kwargs` callee cannot be validated from outside -- its own
+            # keyword set is invisible to signature introspection -- so every
+            # keyword is forwarded, :ALLOW-OTHER-KEYS included, and the callee
+            # does its own CLHS 3.4.1.4 check (io_write._print_keywords).
+            recognized = shape.wildcard or py_key in accepted
+            is_marker = (value.name == 'ALLOW-OTHER-KEYS'
+                         and not shape.wildcard)
             if not (recognized or is_marker or saw_marker):
-                # No evidence this call means keyword-pair semantics at
-                # this position -- fall through to positional, as ever.
                 pos_args.append(value)
                 i += 1
                 continue
             if i + 1 >= n:
-                # CLHS 3.5.1.6: an odd number of keyword arguments is a
-                # PROGRAM-ERROR.
                 raise lisptype.LispProgramError(
                     f"odd number of keyword arguments: {value.name} "
                     f"has no value")
             if is_marker:
-                # Consumed here unconditionally -- never forwarded to the
-                # callee and never treated as an unrecognized keyword.
                 i += 2
                 continue
             if recognized:
-                # CLHS 3.4.1.4.1: when a keyword appears more than once,
-                # the *leftmost* pair is the one used.
                 if py_key not in kwargs:
                     kwargs[py_key] = values[i + 1]
                 i += 2
@@ -1938,9 +2059,7 @@ def eval(form, env=None):
         # Macro handling: if operator names a macro function, expand first
         if isinstance(operator, lisptype.LispSymbol):
             func_binding = env.find_func(operator)
-            # Unwrap MultipleValues in single-value context
-            if isinstance(func_binding, lisptype.MultipleValues):
-                func_binding = func_binding.get_primary()
+            func_binding = lisptype.primary_value(func_binding)
             if callable(func_binding) and getattr(func_binding, '__is_macro__', False):
                 # Gather raw args (without evaluating)
                 raw_args = []
@@ -2032,10 +2151,8 @@ def eval(form, env=None):
             # For non-symbol operators (e.g., lambda forms), evaluate to get function
             func = eval(operator, env)
         
-        # If the function result is MultipleValues, extract the primary value
-        # In Common Lisp, multiple values in single-value context reduce to the primary value
-        if isinstance(func, lisptype.MultipleValues):
-            func = func.get_primary()
+        # Multiple values in a single-value context reduce to the primary one.
+        func = lisptype.primary_value(func)
         
         # Verify we have a callable function before proceeding
         if func is None or not callable(func):
@@ -2053,11 +2170,7 @@ def eval(form, env=None):
         eval_args = []
         current = args
         while _consp_internal(current):
-            arg_val = eval(car(current), env)
-            if isinstance(arg_val, lisptype.MultipleValues):
-                _mv = arg_val.get_all()
-                arg_val = _mv[0] if _mv else lisptype.NIL
-            eval_args.append(arg_val)
+            eval_args.append(lisptype.primary_value(eval(car(current), env)))
             current = cdr(current)
 
         # Split evaluated arguments into positionals and &key pairs -- the

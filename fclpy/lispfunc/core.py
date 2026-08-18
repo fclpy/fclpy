@@ -36,6 +36,21 @@ def _not_a_list(operator, seq):
         expected_type="LIST", actual_value=seq)
 
 
+def _check_list(seq, operator):
+    """Signal unless `seq` is a list -- a cons or NIL (CLHS 14.1).
+
+    The entry check every list operator owes its argument, in one place next to
+    the predicate that defines the type. `sequence_protocol.check_list` is this
+    function, and `list_cells` applies it, so an operator that walks the list
+    through the protocol does not repeat it; TAILP and LDIFF call it directly
+    because they consume the dotted terminator themselves rather than through
+    a walker.
+    """
+    if not _listp_internal(seq):
+        raise _not_a_list(operator, seq)
+    return seq
+
+
 @_registry.cl_function('CAR')
 def car(seq):
     """The car of a list: its first element, or NIL for the empty list.
@@ -90,16 +105,21 @@ def _atom_internal(obj):
 
 
 def _tail_eq(a, b):
-    """True if `a` and `b` are the same tail: identical objects, or both a
-    representation of NIL (`_null_internal` covers the three spellings),
-    or `eql`-equal otherwise. Shared by TAILP and LDIFF -- both walk a
-    list's successive cdrs comparing each to a target tail.
+    """True if `a` and `b` are the same tail (CLHS 14.2: EQL).
+
+    Shared by TAILP and LDIFF -- both walk a list's successive cdrs comparing
+    each to a target tail. The comparison is EQL, and the Python `==` fallback
+    this used to end in is a *different* relation for exactly the objects these
+    two are tested with: `tailp.5` hands TAILP a string and a distinct copy of
+    that string as the list's tail, and `==` calls them the same tail while EQL
+    does not.
     """
     if a is b:
         return True
     if _null_internal(a) and _null_internal(b):
         return True
-    return a == b
+    from .comparison import eql
+    return eql(a, b) is lisptype.T
 
 
 def _build_list_ending_in(elements, final):
@@ -118,7 +138,12 @@ def tailp(object_, list_):
 
     Genuinely absent operator (plan.md C19): every `tailp.lsp` test was an
     `Undefined function` leak.
+
+    `list_` may be dotted -- its final atom is one of its tails -- but it must
+    be a list, so a non-list argument is a TYPE-ERROR rather than a walk that
+    terminates immediately with NIL.
     """
+    _check_list(list_, 'TAILP')
     current = list_
     while True:
         if _tail_eq(current, object_):
@@ -136,7 +161,11 @@ def ldiff(list_, sublist):
 
     Genuinely absent operator (plan.md C19): every `ldiff.lsp` test was an
     `Undefined function` leak.
+
+    Like TAILP, `list_` may be dotted but must be a list
+    (`ldiff.error.1`-`.5`).
     """
+    _check_list(list_, 'LDIFF')
     elements = []
     current = list_
     while _consp_internal(current):

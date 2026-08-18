@@ -1,7 +1,7 @@
 """Loops and conditionals: WHEN, COND, AND, OR, PROGN, LET, quasiquote."""
 
 import fclpy.lisptype as lisptype
-from .core import car, cdr, _consp_internal, cons
+from .core import car, cdr, _consp_internal, _null_internal, cons
 from . import registry as _registry
 from .binding import BindingFrame, body_specials, special_reference
 import time
@@ -1244,11 +1244,33 @@ def eval_quasiquote(form, env):
         if not _consp_internal(obj):
             return obj
 
-        # Otherwise obj is a cons/list: build a resulting list applying unquote rules
+        # Otherwise obj is a cons/list: build a resulting list applying unquote
+        # rules. `tail` is what the result's final cdr must be -- NIL for a
+        # proper template, the (quasiquoted) terminator for a dotted one. The
+        # loop used to end at a non-cons `cur` and build onto NIL, silently
+        # **dropping** the dotted tail: `` `(a . d) `` answered `(A)`, and
+        # ansi-test's `` `((a b) c) (,x . d)) `` idiom -- the standard way it
+        # builds alists -- lost every association's value (`assoc.11`).
         parts = []
         cur = obj
+        tail = lisptype.NIL
         while _consp_internal(cur):
-            item = car(cur)
+            # `` `(a . ,x) `` reads as the *proper* list `(A UNQUOTE X)`,
+            # because `. (unquote x)` is just `unquote x`. So an UNQUOTE
+            # *symbol* in a car position -- as opposed to a cons whose car is
+            # UNQUOTE, which is an element -- marks the rest of the template as
+            # the dotted tail rather than as two more elements.
+            head = car(cur)
+            if (isinstance(head, lisptype.LispSymbol) and head.name == 'UNQUOTE'
+                    and _consp_internal(cdr(cur))):
+                if level == 1:
+                    tail = eval(car(cdr(cur)), env)
+                else:
+                    tail = cons(head, cons(_quasi(car(cdr(cur)), level - 1),
+                                           lisptype.NIL))
+                cur = lisptype.NIL
+                break
+            item = head
             # Handle (UNQUOTE-SPLICING e)
             if _consp_internal(item) and isinstance(car(item), lisptype.LispSymbol):
                 name = car(item).name
@@ -1300,9 +1322,13 @@ def eval_quasiquote(form, env):
                 parts.append(item)
 
             cur = cdr(cur)
+        else:
+            # Fell off a dotted template: its terminator is quasiquoted like
+            # any other subform and becomes the result's final cdr.
+            if not _null_internal(cur):
+                tail = _quasi(cur, level)
 
-        # Convert parts to a lispCons chain
-        res = lisptype.NIL
+        res = tail
         for p in reversed(parts):
             res = lisptype.lispCons(p, res)
         return res

@@ -7,6 +7,7 @@ from .sequence_protocol import (
     seq_elements as _seq_to_list,
     seq_length as _seq_length,
     rebuild_like as _rebuild_sequence,
+    list_cells as _list_cells,
 )
 import fclpy.lisptype as lisptype
 
@@ -93,9 +94,16 @@ def _call_checked(fn, *call_args, caller_name='sequence function'):
     as a Lisp value (plan.md finding X1) -- e.g. `(pushnew 'c x :key #'cons)`
     calls the 2-argument CONS with 1 argument, and CLHS requires that be a
     PROGRAM-ERROR (`pushnew.error.1`-`.3`), not a raw Python exception.
+
+    A `:test`/`:key` is called in a *single-value* context, so its result is
+    reduced to its primary value here. Calling the Python callable directly --
+    which is what this does, rather than going back through the evaluator --
+    skipped the reduction every other call site applies, so a designator like
+    `#'(lambda (i) (floor (/ i 2)))` returned a `MultipleValues` object and the
+    comparison compared wrappers (`subsetp.5`).
     """
     try:
-        return fn(*call_args)
+        return lisptype.primary_value(fn(*call_args))
     except TypeError as e:
         from .evaluation_core import ConditionException, is_arity_mismatch_message
         error_str = str(e)
@@ -466,7 +474,7 @@ def mismatch(sequence1, sequence2, **kwargs):
     return lisptype.NIL if width1 == width2 else start1 + shared
 
 
-def _member_tail(list_seq, accepts):
+def _member_tail(list_seq, accepts, what):
     """The first tail of `list_seq` whose car satisfies `accepts`, else NIL.
 
     CLHS 14.2: MEMBER returns *the tail itself*, which must be a sublist of
@@ -475,40 +483,47 @@ def _member_tail(list_seq, accepts):
     flatten the list and return a Python slice, i.e. a fresh vector, located
     with `list.index(x)` -- so a duplicated element returned the tail at the
     *first* equal element rather than the one that matched.
+
+    The argument must be a *list*: `(member 'a "abcde")` is a TYPE-ERROR, not
+    NIL (`member.error.5`), and the `isinstance` walk this replaced answered
+    NIL for every non-list because the loop simply never entered. Traversal is
+    the protocol's, so a dotted tail signals only if the search actually
+    reaches it -- `(member 'a '(a . b))` still answers `(A . B)`.
     """
-    current = list_seq
-    while isinstance(current, lisptype.lispCons):
-        if accepts(current.car):
-            return current
-        current = current.cdr
+    for cell in _list_cells(list_seq, what):
+        if accepts(cell.car):
+            return cell
     return lisptype.NIL
 
 
 @_registry.cl_function('MEMBER')
-def member(item, list_seq, test=None, test_not=None, key=None):
+def member(item, list_seq, *, test=None, test_not=None, key=None):
     """The tail of the list beginning with the first element matching `item`."""
     matcher = _make_matcher(test=test, test_not=test_not, key=key)
-    return _member_tail(list_seq, lambda element: matcher(item, element))
+    return _member_tail(list_seq, lambda element: matcher(item, element),
+                        'MEMBER')
 
 
 @_registry.cl_function('MEMBER-IF')
-def member_if(predicate, list_seq, key=None):
+def member_if(predicate, list_seq, *, key=None):
     """The tail beginning with the first element satisfying `predicate`."""
     key = _coerce_function_designator(key)
     predicate = _coerce_function_designator(predicate)
     return _member_tail(
         list_seq,
-        lambda element: _lisp_truthy(predicate(key(element) if key else element)))
+        lambda element: _lisp_truthy(predicate(key(element) if key else element)),
+        'MEMBER-IF')
 
 
 @_registry.cl_function('MEMBER-IF-NOT')
-def member_if_not(predicate, list_seq, key=None):
+def member_if_not(predicate, list_seq, *, key=None):
     """The tail beginning with the first element failing `predicate`."""
     key = _coerce_function_designator(key)
     predicate = _coerce_function_designator(predicate)
     return _member_tail(
         list_seq,
-        lambda element: not _lisp_truthy(predicate(key(element) if key else element)))
+        lambda element: not _lisp_truthy(predicate(key(element) if key else element)),
+        'MEMBER-IF-NOT')
 
 
 def _pair_key(pair, index):
@@ -532,22 +547,22 @@ def _pair_key(pair, index):
     )
 
 
-def _alist_pairs(alist):
-    """Yield the pairs of an association list, whether it is a `lispCons`
-    list or a Python list/tuple.
+def _alist_pairs(alist, what):
+    """Yield the pairs of an association list (CLHS 14.2).
+
+    An alist is a *proper list* of conses, so the traversal is the protocol's:
+    a non-list alist and a dotted one are both TYPE-ERRORs
+    (`assoc.error.10`/`.12`), where the `hasattr`-guarded walk this replaced
+    stopped at either one and answered NIL. The Python-list branch went with
+    it -- a Python list is a *vector* here (plan.md Finding M), and ASSOC on a
+    vector is a type error, not a lookup.
     """
-    if hasattr(alist, 'car') and hasattr(alist, 'cdr'):
-        current = alist
-        while current is not None and current is not lisptype.NIL and hasattr(current, 'car'):
-            yield current.car
-            current = current.cdr
-    elif isinstance(alist, (list, tuple)):
-        for pair in alist:
-            yield pair
+    for cell in _list_cells(alist, what):
+        yield cell.car
 
 
 @_registry.cl_function('ASSOC')
-def assoc(item, alist, test=None, test_not=None, key=None):
+def assoc(item, alist, *, test=None, test_not=None, key=None):
     """Find association with key equal to item.
 
     Keyword arguments:
@@ -556,7 +571,7 @@ def assoc(item, alist, test=None, test_not=None, key=None):
     - :key - function/designator to apply to each pair's car before testing
     """
     matcher = _make_matcher(test=test, test_not=test_not, key=key)
-    for pair in _alist_pairs(alist):
+    for pair in _alist_pairs(alist, 'ASSOC'):
         if pair is None or pair is lisptype.NIL:
             continue
         if matcher(item, _pair_key(pair, 0)):
@@ -565,11 +580,11 @@ def assoc(item, alist, test=None, test_not=None, key=None):
 
 
 @_registry.cl_function('ASSOC-IF')
-def assoc_if(predicate, alist, key=None):
+def assoc_if(predicate, alist, *, key=None):
     """Find association whose key satisfies predicate."""
     key = _coerce_function_designator(key)
     predicate = _coerce_function_designator(predicate)
-    for pair in _alist_pairs(alist):
+    for pair in _alist_pairs(alist, 'ASSOC-IF'):
         if pair is None or pair is lisptype.NIL:
             continue
         value = _pair_key(pair, 0)
@@ -579,11 +594,11 @@ def assoc_if(predicate, alist, key=None):
 
 
 @_registry.cl_function('ASSOC-IF-NOT')
-def assoc_if_not(predicate, alist, key=None):
+def assoc_if_not(predicate, alist, *, key=None):
     """Find association whose key does not satisfy predicate."""
     key = _coerce_function_designator(key)
     predicate = _coerce_function_designator(predicate)
-    for pair in _alist_pairs(alist):
+    for pair in _alist_pairs(alist, 'ASSOC-IF-NOT'):
         if pair is None or pair is lisptype.NIL:
             continue
         value = _pair_key(pair, 0)
@@ -593,10 +608,10 @@ def assoc_if_not(predicate, alist, key=None):
 
 
 @_registry.cl_function('RASSOC')
-def rassoc(item, alist, test=None, test_not=None, key=None):
+def rassoc(item, alist, *, test=None, test_not=None, key=None):
     """Reverse association - find pair whose cdr matches item."""
     matcher = _make_matcher(test=test, test_not=test_not, key=key)
-    for pair in _alist_pairs(alist):
+    for pair in _alist_pairs(alist, 'RASSOC'):
         if pair is None or pair is lisptype.NIL:
             continue
         if matcher(item, _pair_key(pair, 1)):
@@ -605,11 +620,11 @@ def rassoc(item, alist, test=None, test_not=None, key=None):
 
 
 @_registry.cl_function('RASSOC-IF')
-def rassoc_if(predicate, alist, key=None):
+def rassoc_if(predicate, alist, *, key=None):
     """Reverse association with predicate applied to each pair's cdr."""
     key = _coerce_function_designator(key)
     predicate = _coerce_function_designator(predicate)
-    for pair in _alist_pairs(alist):
+    for pair in _alist_pairs(alist, 'RASSOC-IF'):
         if pair is None or pair is lisptype.NIL:
             continue
         value = _pair_key(pair, 1)
@@ -619,11 +634,11 @@ def rassoc_if(predicate, alist, key=None):
 
 
 @_registry.cl_function('RASSOC-IF-NOT')
-def rassoc_if_not(predicate, alist, key=None):
+def rassoc_if_not(predicate, alist, *, key=None):
     """Reverse association with negated predicate applied to each pair's cdr."""
     key = _coerce_function_designator(key)
     predicate = _coerce_function_designator(predicate)
-    for pair in _alist_pairs(alist):
+    for pair in _alist_pairs(alist, 'RASSOC-IF-NOT'):
         if pair is None or pair is lisptype.NIL:
             continue
         value = _pair_key(pair, 1)

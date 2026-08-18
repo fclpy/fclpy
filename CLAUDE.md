@@ -5,11 +5,14 @@ Lisp compliance**, measured by running the real ANSI test suite (`ansi-test/`, a
 sibling directory one level above this repo) to completion without crashing, and
 passing as many of its tests as possible.
 
-> **Current status (2026-08-16).** The suite runs to completion and is **two
-> thirds passing**: `COMPLETENESS: OK`, 22113/22113 accounted, 0 missing,
-> **14772 passing (66.8%)**, ~113 minutes. Crashes are no longer the constraint;
-> **semantics are**. (08-15: 11548, 52.2%. First complete run 2026-08-12: 8960
-> of 22036, 40.7%, ~7.5 hours.)
+> **Current status (2026-08-18).** The suite runs to completion and is **over
+> three quarters passing**: `COMPLETENESS: OK`, 22124/22124 accounted, 0 missing,
+> **17087 passing (77.2%)**, ~86 minutes. Crashes are no longer the constraint;
+> **semantics are**. (08-16: 14772, 66.8%, ~113 min. 08-15: 11548, 52.2%. First
+> complete run 2026-08-12: 8960 of 22036, 40.7%, ~7.5 hours.)
+>
+> `cons` is at 99.0% and `sequences` at 94.9%; `objects` (422 failures),
+> `streams` (319) and `printer` (302) are now the constraint.
 >
 > **Hang detection now lives in `fclpy/watchdog.py`, not in the loop forms.**
 > `LoopWatchdog` evaluates its 120s warning and 600s cap inside `tick()`, once
@@ -207,6 +210,22 @@ passing as many of its tests as possible.
     unevaluated arguments (macros, `DEFSETF`, `DEFPACKAGE`, ...) **must** be
     `cl_special` or `cl_macro` instead, or its arguments will be evaluated too
     early and it will crash or silently misbehave.
+  - **A builtin's ANSI lambda list is its Python signature**, read by
+    `evaluation_core.LambdaListShape` and enforced by `split_keyword_args` —
+    the one place CLHS 3.4.1.4/3.5.1.5 is applied, for direct calls, FUNCALL
+    and APPLY alike. The mapping is exact and **you must use the whole of
+    Python's parameter model for it to be**: required = positional without a
+    default, `&optional` = positional-*or-keyword* **with** a default, `&rest`
+    = `*args`, **`&key` = keyword-only** (`def union(l1, l2, *, test=None...)`),
+    `&allow-other-keys` = `**kwargs`. Writing an ANSI `&key` parameter as a
+    plain defaulted positional makes it indistinguishable from `&optional`, and
+    then the standard's checks are undecidable: that is why
+    `(union nil nil :bad t)` returned an answer instead of a PROGRAM-ERROR,
+    while `(intern "a" :cl-test)` must keep passing :CL-TEST as `package`'s
+    *value*. Builtins whose `&key` set is still inferred fall back to
+    `_split_inferred_keywords`; the families are being migrated cluster by
+    cluster (plan.md §5), so **when you touch a builtin, spell its `&key`
+    parameters keyword-only**.
 - **Packages**: `lispfunc/misc_packages.py` — `coerce_to_package` (the package
   *designator* rule, CLHS 11.1.1.1) and `package_symbols(pkg, kind)` for the
   accessible / present / external symbol sets. `DO-SYMBOLS`,
@@ -238,6 +257,32 @@ passing as many of its tests as possible.
   vector that printed convincingly as a list. If you are about to write
   `isinstance(x, list)` to mean "is a Lisp list", or to build a result with
   `[...]`, that is the defect (plan.md Finding M).
+- **List traversal**: the same module owns **`list_cells`, the one primitive
+  that walks a Lisp list** (with `list_elements` and `list_tail` over it, and
+  `core._check_list` — re-exported as `check_list` — as its entry check).
+  Before it there was no such primitive, so ~30 CLHS 14.2 operators each walked
+  a chain with their own `while isinstance(cur, lispCons)` and none of them
+  checked what they were walking. Three properties to keep:
+  - **A dotted list's terminator is never an element.** `seq_elements` used to
+    append it as one "so callers can detect it", which no caller did — so
+    `(append '(a . b) '(z))` answered `(A B Z)` and
+    `(pairlis '(a . b) '(c . d))` paired B with D. Those are wrong *values*,
+    not missing errors.
+  - **`dotted='error'` vs `dotted='allow'` is the CLHS distinction, not a
+    convenience.** A LIST argument (MEMBER, the set operations, the MAP*
+    family, PAIRLIS, LIST-LENGTH, APPEND's non-final arguments) requires a
+    *proper* list; LAST, BUTLAST/NBUTLAST, NTHCDR, LDIFF, TAILP and NCONC's
+    non-final arguments are *defined* on a dotted one because they count
+    conses.
+  - **Traversal is lazy, and that is semantic.** `(nthcdr 1 (cons 'a 'b))` is
+    `B` while `(nthcdr 3 (cons 'a 'b))` is a TYPE-ERROR, and
+    `(member 'a '(a . b))` returns before the terminator is reached. The
+    not-a-list check is raised eagerly, though, or an operator that abandons
+    its walker early never reaches it.
+  Note `seq_elements` accepts a *vector*, so it cannot express "this argument
+  must be a list" — that is why the CLHS 14.2 operators call `list_elements`
+  and the CLHS 17 ones call `seq_elements`. Choosing the wrong one makes
+  `(mapcar #'identity "ab")` answer instead of signalling.
 - **Arrays**: `lispfunc/arrays.py` — **the one array object model**, and the one
   home of every array operator. CLHS 15.1 gives an array five properties
   (dimensions, element type, adjustability, fill pointer, displacement) and
@@ -328,6 +373,22 @@ improvising. Summary:
 2. No refactoring beyond what the fix requires.
 3. Never leave debug `print()`/diagnostic code in a fix.
 4. Never commit automatically or with failing tests — commits are the user's call.
+
+### The one thing a targeted run cannot verify
+
+`scripts/run_ansi.py` starts at `gclload1.lsp`, so **nothing in the normal
+development loop ever loads `ansi-test/init.lsp`** — and `init.lsp` opens with
+`(mapc #'delete-file (append (directory ...) (directory ...) (directory ...)))`.
+A defect in APPEND, DIRECTORY, MAPC, MAKE-PATHNAME or COMPILE-FILE-PATHNAME
+therefore breaks the harness bootstrap in a way that only the ~86 minute full
+run reports, and it reports it as "0 tests ran", not as a failing test. This
+cost two full runs on 2026-08-18: `DIRECTORY` was returning a Python `list`,
+i.e. a *vector*, so the `APPEND` over it signalled once APPEND began requiring
+lists. If you touch any of those operators, evaluate that form first:
+
+```powershell
+pipenv run python -c "import sys; sys.path.insert(0,'.'); from fclpy import lispenv; from fclpy.lispfunc import eval_string; lispenv.setup_standard_environment(); print(eval_string('(listp (directory \"*.lsp\"))'))"
+```
 
 ## Secondary checks
 

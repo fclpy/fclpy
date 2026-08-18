@@ -11,7 +11,7 @@ history is preserved in condensed form in [Changelog](#changelog).
 > ### 📋 This plan observes `docs/ansi_checklist.md`
 >
 > That generated file is **the authority for what is failing and where** — all
-> 7341 failures grouped directory → file, each with the command to re-verify it.
+> 5037 failures grouped directory → file, each with the command to re-verify it.
 > This plan supplies the *why* and the *order*; the checklist supplies the *what*
 > and the *where*.
 >
@@ -26,107 +26,119 @@ history is preserved in condensed form in [Changelog](#changelog).
 
 ## 1. Status
 
-**Latest full run: 2026-08-16. Two thirds passing.**
+**Latest full run: 2026-08-18. Over three quarters passing.**
 
 ```
-COMPLETENESS: total=22113 passed=14772 failed=7341 accounted=22113 missing=0 extra=0
+COMPLETENESS: total=22124 passed=17087 failed=5037 accounted=22124 missing=0 extra=0
 COMPLETENESS: OK
 ```
 
-| | value | previous full run (2026-08-15) |
+| | value | previous full run (2026-08-16) |
 |---|---|---|
-| Registered tests | 22113 | 22113 |
-| Executed (`accounted`) | **22113 (100%)** | 22113 (100%) |
-| Passed | **14772 (66.8%)** | 11548 (52.2%) |
-| Failed | 7341 | 10565 |
+| Registered tests | 22124 | 22113 |
+| Executed (`accounted`) | **22124 (100%)** | 22113 (100%) |
+| Passed | **17087 (77.2%)** | 14772 (66.8%) |
+| Failed | 5037 | 7341 |
 | Never executed | **0** | 0 |
-| Wall time | **~113 minutes** (6760s) | ~67 minutes |
+| Wall time | **~86 minutes** (5163s) | ~113 minutes |
 
-**+3224 passing.** The dominant contribution is not a new feature but a
-*measurement* repair, and it is the third time this plan has recorded that shape
-([§4](#recommended-order) items 4, 6 and the COND fix): **LOOP's `unless`
-clause never evaluated its test**, and ansi-test's `check-type-error*` is built
-entirely on that clause, so for every `.ERROR` test that uses it the function
-under test *was never called* and the test passed vacuously. Fixing the clause
-converted a large block of false passes into real ones — and, on the way,
-exposed the hang described below. See the [Changelog](#changelog).
+**+2315 passing, and the wall time *fell* 113 → 86 minutes.** Both directions
+are the same cause and it is worth reading carefully, because it is the
+opposite of the 08-15 → 08-16 movement, where more real work made the run
+slower. Here the time was being spent on work that was not merely wasted but
+*destructive*: the printer had no bound on a circular structure, so a handful
+of forms in `printer/` burned minutes and gigabytes each before failing. Two
+runs before this one died outright — one at 10GB, one at 21GB — and neither was
+a new defect. See the [Changelog](#changelog).
 
-**Wall time rose ~67 → ~113 minutes, and that is the expected direction.** The
-old 67 minutes was partly cheap because work was being skipped: a
-`check-type-error` that never calls its function returns fast. Four loops now
-cross the 120s warning and all four resolve; none reaches the 600s cap.
+**This run spans four commits, not one.** `598af8d` (SUBTYPEP), `43fbffb`
+(CLOS), `6de426c` and `896d935` (cons/sequences) landed between the 08-16 run
+and this one, so the +2315 is their total and not attributable to any single
+change. The per-mechanism deltas in the Changelog are the ones measured with
+`run_ansi.py` on both sides of a specific change.
 
-> **The 08-15 run wedged and this one did not.** The 08-15 tree could not
-> complete a full run at all: it sat at 27GB of allocated memory for over half
-> an hour with no diagnostic. The cause was three defects stacked —
-> `TYPEP` not knowing the atomic `UNSIGNED-BYTE`, `MAKE-LIST` building
-> unboundedly, and **no runner having any hang detection that could see it**.
-> All three are fixed; the mechanism is in the [Changelog](#changelog) and the
-> new detector is [`fclpy/watchdog.py`](fclpy/watchdog.py).
+> **Three consecutive attempts at this run died before it completed, and none
+> of the three causes was a new defect.** Recorded because the *shape* keeps
+> recurring: an unbounded traversal in the printer is invisible to the
+> development loop and fatal to the scoreboard.
+>
+> 1. `DIRECTORY` returned a Python `list` — a *vector* here — and ansi-test's
+>    `init.lsp` opens with `(append (directory ...) ...)`. **No targeted run
+>    can catch this**: `run_ansi.py` starts at `gclload1.lsp` and never loads
+>    `init.lsp`. That asymmetry is now the one thing the targeted loop
+>    structurally cannot verify.
+> 2. The printer had no bound on a circular *cdr chain* (10GB).
+> 3. `PPRINT-FILL` and five siblings were stubs calling Python's `print()`,
+>    which rendered through `lispCons.__str__` — the pre-printer path, with no
+>    guards at all (21GB, then 11GB).
+>
+> All three are fixed. (2) and (3) had been latent for runs: `print.cons.random.2`
+> wires a **random** cons graph, so whether it cycles depends on the draw, which
+> is why earlier full runs completed with the same code.
 
 **These numbers are the last full run and move only on a full run.** The
 *checklist* is kept current between full runs by merging targeted runs into it
 (see [below](#keeping-the-checklist-current-without-a-full-run)); its header
 lists which runs it has been amended with. Do not copy an amended count here.
 
-**Registered tests rose 22036 → 22113 (+77).** As in the 08-12 run, a rise here
-is not new work appearing from nowhere: tests generated at load time only
-register once the code that generates them runs, so fixing a load-time failure
-*adds* tests. Treat `total` as an outcome, not a constant.
+**Registered tests rose 22113 → 22124 (+11).** As in the 08-12 and 08-16 runs, a
+rise here is not new work appearing from nowhere: tests generated at load time
+only register once the code that generates them runs, so fixing a load-time
+failure *adds* tests. Treat `total` as an outcome, not a constant.
 
-**`FORMAT`/`FORMATTER` remains the largest failing cluster**, and `printer/` has
-moved 137 → 386 passing (17.4% → 49.0%) without its directive engine being
-finished — [C2](#c2-format--formatter--largest-cluster-in-the-suite) is still
-the largest single body of failures.
+**`cons` is effectively finished (99.0%) and `sequences` is at 94.9%**, so the
+two directories this plan led with for three revisions are no longer the
+constraint. `objects` (422), `streams` (319) and `printer` (302) are, and
+between them they hold 21% of the remaining failures.
 
 ### Per-directory scoreboard (complete)
 
-Ordered by failures. `Δ rate` is against the 2026-08-15 full run.
+Ordered by failures. `Δ rate` is against the 2026-08-16 full run.
 
 | directory | failed | total | pass rate | Δ rate |
 |---|---|---|---|---|
-| cons | **647** | 1638 | 60.5% | +18.3 |
-| objects | **594** | 825 | 28.0% | +1.7 |
-| numbers | 400 | 1438 | 72.2% | +7.2 |
-| printer | 377 | 788 | 52.2% | +3.2 |
-| sequences | 352 | 3158 | **88.9%** | **+35.9** |
-| types-and-classes | 337 | 545 | 38.2% | −14.1 |
-| streams | 334 | 543 | 38.5% | −2.6 |
-| data-and-control-flow | 305 | 1420 | 78.5% | +6.2 |
-| strings | 203 | 501 | 59.5% | **+19.8** |
-| packages | 202 | 340 | 40.6% | +7.7 |
-| iteration | 160 | 838 | **80.9%** | **+30.8** |
-| pathnames | 140 | 215 | 34.9% | −1.8 |
-| conditions | 130 | 303 | 57.1% | **+17.8** |
-| reader | 129 | 165 | **21.8%** | −1.2 |
-| characters | 108 | 259 | 58.3% | +0.8 |
-| arrays | 101 | 1245 | **91.9%** | +0.8 |
-| structures | 101 | 115 | **12.2%** | 0 |
-| environment | 83 | 192 | 56.8% | −1.5 |
-| hash-tables | 73 | 158 | 53.8% | −2.5 |
+| objects | **422** | 825 | 48.8% | **+20.8** |
+| streams | **319** | 547 | 41.7% | +3.2 |
+| printer | **302** | 788 | 61.7% | +9.5 |
+| data-and-control-flow | 277 | 1420 | 80.5% | +2.0 |
+| numbers | 208 | 1438 | 85.5% | **+13.3** |
+| strings | 175 | 501 | 65.1% | +5.6 |
+| sequences | 161 | 3158 | **94.9%** | +6.0 |
+| iteration | 140 | 838 | 83.3% | +2.4 |
+| pathnames | 133 | 215 | 38.1% | +3.2 |
+| conditions | 131 | 303 | 56.8% | −0.3 |
+| structures | 102 | 115 | **11.3%** | −0.9 |
+| arrays | 98 | 1245 | **92.1%** | +0.2 |
+| reader | 95 | 165 | 42.4% | **+20.6** |
+| packages | 87 | 340 | 74.4% | **+33.8** |
+| environment | 83 | 192 | 56.8% | 0 |
+| hash-tables | 72 | 158 | 54.4% | +0.6 |
 | eval-and-compile | 70 | 318 | 78.0% | 0 |
-| misc | 70 | 740 | **90.5%** | +6.4 |
-| system-construction | 64 | 75 | **14.7%** | 0 |
-| files | 62 | 87 | 28.7% | +2.3 |
-| symbols | 40 | 1145 | **96.5%** | −0.7 |
+| system-construction | 63 | 75 | **16.0%** | +1.3 |
+| files | 58 | 87 | 33.3% | +4.6 |
+| types-and-classes | 56 | 545 | **89.7%** | **+51.5** |
+| misc | 39 | 740 | **94.7%** | +4.2 |
+| symbols | 37 | 1145 | **96.8%** | +0.3 |
+| cons | **16** | 1638 | **99.0%** | **+38.5** |
+| characters | 10 | 259 | **96.1%** | **+37.8** |
 
-**`sequences` and `iteration` are the run's story** — +35.9 and +30.8 points.
-Neither had a sequence- or iteration-specific change land; both moved because
-the `unless` clause and the type/number repairs are used *throughout* their
-assertions. That is the mechanism-versus-symptom signal this plan keeps asking
-for, and it is why the recommended order below leads with mechanisms rather than
-with the largest file.
+**`types-and-classes` recovered +51.5 points, which settles a question this
+section left open at 08-16.** That run recorded it as "the one directory that
+clearly went backwards" (−14.1) and offered a hypothesis — that the LOOP
+`unless` repair had converted vacuous passes into honest failures — explicitly
+flagged as **not yet verified**. The recovery came with the SUBTYPEP lattice and
+the CLOS work, so the −14.1 was a real gap being reported honestly rather than a
+measurement artifact. The hypothesis was wrong in its mechanism and right in its
+direction; either way it is now closed.
 
-**`types-and-classes` fell 14.1 points and is the one directory that clearly went
-backwards.** Do not absorb it into the total — it is tracked in
-[preventing regression](#preventing-regression). The likely reason is the same
-`unless` repair: tests that never ran their body now run it and fail honestly,
-which is a *reporting* correction rather than a code defect, but that is a
-hypothesis and it is **not yet verified**.
+**`characters` +37.8 and `cons` +38.5 are the two largest single-directory
+moves**, and `cons` at 16 failures of 1638 is the first directory to approach
+done. What remains there is not cons: five of the sixteen are the SETF place
+protocol ([M5](#4-milestones--re-scoped)), and the rest are a lambda-list arity
+check and `MAKE-LIST.ERROR.1`.
 
-`structures` (12.2%), `system-construction` (14.7%), `reader` (21.8%) and
-`objects` (28.0%) are unchanged or nearly so, and remain the subsystems where one
-absent mechanism fails everything downstream of it.
+`structures` (11.3%) and `system-construction` (16.0%) are unchanged and remain
+the subsystems where one absent mechanism fails everything downstream of it.
 
 ---
 
@@ -277,7 +289,7 @@ files containing failures, switch modes:**
 
 ### The checklist artifact
 
-**`docs/ansi_checklist.md`** is the working checklist: all 7341 failures grouped
+**`docs/ansi_checklist.md`** is the working checklist: all 5037 failures grouped
 **directory → file**, ordered by failure count, each with a checkbox and the
 exact command to re-verify it. Generated, never hand-edited.
 
@@ -341,7 +353,7 @@ Ranked by evidence from the **complete** run. **Tier 1 items are core
 mechanisms**: each is one defect behind many failures. The *command that produced
 each number* is given so it can be re-derived rather than trusted.
 
-### Cluster sizes (complete data, 7341 failures, 2026-08-16)
+### Cluster sizes (complete data, 7341 failures, 2026-08-16 — stale, see below)
 
 ```powershell
 sed 's/\.[0-9].*$//' ansi_results/failed.txt | sed 's/\.ERROR.*$//' | sort | uniq -c | sort -rn | head -40
@@ -582,9 +594,25 @@ implementation. **The current implementation is known to contain
 five total failures, i.e. those directives do not work *at all*.
 **Owner:** M10. **Verify:** `run_ansi.py printer`.
 
-#### C3. Sequence functions — `:test`/`:key` and designators
+#### C3. Sequence functions — **LARGELY DONE (2026-08-18 b)**
 
-**Evidence.** **1266 failures** across
+**`sequences/` is 2997 passing of 3158 (94.9%)**, from 990 (31.3%) when this
+section was written. X2/X3 were the bulk of it, and the list-traversal
+mechanism ([Changelog](#changelog) 08-18 b) took most of the remainder.
+
+**What is left is one specific, bounded thing: the `**kwargs` families have not
+declared their `&key` sets.** `FIND`/`POSITION`/`COUNT` and their `-IF`
+variants, `REMOVE`/`DELETE`/`SUBSTITUTE`/`NSUBSTITUTE` and theirs,
+`MISMATCH`/`SEARCH`/`REPLACE`/`MAKE-SEQUENCE`/`MERGE`/`REDUCE` all take
+`**kwargs`, so `split_keyword_args` cannot validate a keyword against them and
+their `.ERROR.3`-shaped tests (unrecognized keyword, dangling keyword,
+`:allow-other-keys` handling) cannot pass. Migrating them is mechanical —
+spell the `&key` parameters keyword-only — and it is the same edit that closes
+`strings/string-comparisons.lsp` (72 failing of 138, the second-largest failing
+file in the suite), whose `start1`/`end1`/`start2`/`end2` are ANSI `&key`.
+**This is the recommended next task.** **Owner:** M6.
+
+**Historical evidence below (2026-08-16).** **1266 failures** across
 `SORT`/`MERGE`/`CONCATENATE`/`FIND`/`POSITION`/`COUNT`/`REMOVE`/`SUBSTITUTE`;
 `sequences/` is 990 passing of 3158 (**31.3%**). Notable: `CONCATENATE` 39,
 `MERGE-STRING` 38, `FIND-VECTOR` 36.
@@ -616,14 +644,31 @@ which is exactly why the pass rate is 12%. **Owner:** M9.
 `structures/structures-02.lsp` 26/28, `structures/structures-04.lsp` 8/8.
 **Verify:** `run_ansi.py structures`.
 
-#### C5. Set and list operations
+#### C5. Set and list operations — **DONE (2026-08-18 b)**
 
-**Evidence.** **598 failures** — `UNION` 37, `NUNION` 34, `SET-EXCLUSIVE-OR` 30,
-`RASSOC` 30, `SET-DIFFERENCE` 26, `MEMBER` 26, `NSET-DIFFERENCE` 25,
-`INTERSECTION` 24, `ADJOIN` 24, `NINTERSECTION` 23, `SUBSETP` 21.
+**`cons` 217 → 16 failures of 1638 (99.0%)**, and `set-exclusive-or`,
+`nset-exclusive-or`, `union`, `nunion`, `intersection`, `nintersection`,
+`set-difference`, `nset-difference`, `subsetp`, `member`, `adjoin`, `assoc` and
+`rassoc` are all clean. Details in the [Changelog](#changelog).
 
-Eleven operators failing in near-identical proportion is the signature of **one
-shared `:test`/`:key` defect**, not eleven bugs — again X2 and X3. **Owner:** M6.
+**The "one shared `:test`/`:key` defect" reading was right about there being one
+mechanism and wrong about which.** X2/X3 had already landed by the time this was
+measured, and eleven operators were *still* failing in near-identical
+proportion — because the shared defect was not in the test protocol at all. It
+was that **nothing walked the list**: `seq_elements` folded a dotted list's
+terminator in as an element and no operator checked that its argument was a list
+at all, so `(union '(a b c) '(d e f . g))` answered a value and
+`(union '(a b c) 'x)` leaked a Python type name. The set operations did have one
+genuine test-protocol bug left, and it was narrower than X3: UNION/NUNION called
+the test with an element of `list-2` first, because they iterated `list2` asking
+whether each element was already present — the right *algorithm* and the wrong
+*call*, which `union.28`-`.31` detect by `RETURN-FROM`ing out of the whole form.
+
+**What remains in `cons` is not cons.** Five of the sixteen are the SETF place
+protocol (`PUSH.ERROR.1`, `POP.ERROR.1`, `REST-SET-1`, `SETF-GETF.ORDER.2`,
+`NTH.ORDER.1` — M5); `TREE-EQUAL.ERROR.6` needs a lambda list to reject a
+too-few-arguments call (M3); the rest are `MAKE-LIST.ERROR.1` and two randomized
+set tests. **Owner:** none — closed.
 
 #### C6. Arrays — **LARGELY DONE (2026-08-15 d)**
 
@@ -1106,6 +1151,10 @@ Anything knowingly non-ANSI, with the milestone that removes it. Empty means
 | LOOP `IT` (CLHS 6.1.2.1.4) and `ELSE`/`END` unimplemented | all three need the conditional clause to own its own body, which is the clause-order item below rather than a separate feature | C1 follow-up |
 | LOOP body/accumulation clauses execute in bucket order, not clause order | only WHILE/UNTIL are position-aware so far | C1 follow-up |
 | LOOP silently drops an unrecognized keyword once a driver exists | violates standing rule 4 | C1 follow-up |
+| **A builtin whose ANSI `&key` parameters are still spelled as defaulted *positional* parameters cannot be validated**, so `split_keyword_args` falls back to `_split_inferred_keywords` for it: an unrecognized keyword becomes a positional argument instead of a PROGRAM-ERROR | `inspect.signature` cannot tell `&key` from `&optional` unless `&key` is written keyword-only, and until a family is migrated the standard's checks are undecidable for it. The sequence/cons/set families are done; `FIND`/`POSITION`/`COUNT`/`REMOVE`/`SUBSTITUTE`/`MISMATCH`/`SEARCH`/`REPLACE`/`MAKE-SEQUENCE`/`MERGE`/`REDUCE` (all `**kwargs`) and `characters.py`'s string comparisons are not. **When you touch a builtin, spell its `&key` parameters keyword-only** | M3 / M6 |
+| **The `PPRINT-*` operators ignore `prefix`/`suffix`/`per-line-prefix`/`colon-p`** and print their argument on one line through the ordinary printer | there is no pretty printer to put a logical block in; implementing the delimiters here would be a second printer. They were stubs calling Python's `print()`, i.e. the wrong stream *and* the unguarded `lispCons.__str__`, which is strictly worse than a documented deviation | C2 / M10 |
+| **A circular structure prints as `...` rather than with `#1=`/`#1#` labels, and `PRINT_BUDGET` caps the aggregates one print may enter** | without `*PRINT-CIRCLE*` there is no label to emit, and cycle detection alone does not bound the work — a twenty-node cons graph has exponentially many simple paths. The budget is what guarantees the printer can never abort a run | C2 / M10 |
+| `CLASS-SLOTS`, `CLASS-DIRECT-SLOTS` and `COMPUTE-RESTARTS` return a Python `list`, i.e. a **vector**, where CLHS says list | plan.md Finding M, found 2026-08-18 by auditing every list-returning operator after `DIRECTORY` had the same defect and broke the harness bootstrap. These three are not reached by it | M8 / M9 |
 | `_run_handlers_on_unwind` + `_condition_matches` legacy branch | most raise sites bypass `SIGNAL` | M8 |
 | `DEFINE-CONDITION` creates no class | predates the class lattice | M8 |
 | `HANDLER-CASE` converts an uncaught `THROW` into `CONTROL-ERROR` | needs a catch-tag stack to decide at THROW time | M7 |
@@ -1205,13 +1254,41 @@ ecosystem," and **nothing in the ANSI suite tests it.**
 - CI runs the full suite; **any increase in failures is a build failure.** Commit
   the scoreboard so deltas are reviewable.
 
-#### Open regressions carried by the 2026-08-16 full run
+#### Open regressions carried by the 2026-08-18 (b) full run
 
-The 08-16 run is **+3224 overall but worse in 75 files** against
-`docs/ansi_checklist_baseline.json`. They are listed here rather than absorbed
-into the total, because refreshing the baseline is what makes a regression
-invisible — `--save-baseline` has **deliberately not been run**, so the gate
-still points at 08-12 and the evidence survives.
+**Four files, +12 tests, and none of them from the change this run measured.**
+`--save-baseline` *was* run this time, because the baseline had drifted three
+full runs behind and a gate that reports 75 stale files is noise rather than a
+gate. The four are recorded here so refreshing it did not erase them:
+
+| file | Δ | note |
+|---|---|---|
+| `streams/peek-char.lsp` | +4 | |
+| `numbers/parse-integer.lsp` | +4 | already the 5th-largest failing file at 54/56 |
+| `reader/read-from-string.lsp` | +3 | |
+| `streams/write-sequence.lsp` | +1 | |
+
+**Attributed, not assumed.** All four were re-run with `run_ansi.py` on this
+tree and on `HEAD` with the change stashed: **149 failures both sides, the same
+test names.** So they belong to the three intervening commits — `598af8d` is
+named "SUBTYPEP repairs with likely regressions" — and not to the list/keyword/
+printer work. That `git stash` diff is the instrument to use here; the
+per-file count in the baseline cannot attribute a regression to a commit,
+because it stores counts and not names.
+
+The three of them touching `PEEK-CHAR`, `READ-FROM-STRING` and `PARSE-INTEGER`
+is the shape of one shared defect in the reader's stream/index handling rather
+than three, and that is where to start.
+
+#### Open regressions carried by the 2026-08-16 full run (superseded)
+
+The 08-16 table below was written against the **08-12** baseline, which has now
+been replaced. It is kept for the diagnoses it records, not as a live gate.
+
+The 08-16 run was **+3224 overall but worse in 75 files** against the 08-12
+baseline. Those 75 are no longer a live count -- the baseline was refreshed from
+the 08-18 (b) run, which reports four -- but the diagnoses below are still the
+record of what was investigated and why.
 
 **Read the 75 with the baseline's age in mind.** The baseline is the **08-12**
 run — now *three* full runs old — so this count folds together the 19 files
@@ -1323,6 +1400,90 @@ rather than discovering these one crash at a time.
 
 Condensed from the previous chronological plan. Each entry is a *mechanism*
 landed, not a test count.
+
+- **2026-08-18 (b)** — **List traversal is one primitive; a builtin's `&key`
+  set is declared rather than guessed; and the printer cannot be made to
+  diverge.** `cons` **217 → 16** failures of 1638 (99.0%), `sequences`
+  171 → 161, and **+41 in seven directories that were never targeted**, 0
+  per-file regressions.
+
+  **1. There was no primitive that walked a Lisp list.** Roughly thirty CLHS
+  14.2 operators each open-coded `while isinstance(cur, lispCons)`, and not one
+  of them checked what it was walking, so `(member 'a 1)` answered NIL instead
+  of signalling. The expensive half was not the missing errors, though: a dotted
+  list's terminator was appended by `seq_elements` as **one more element**,
+  "so callers can detect it" — which no caller did. That is a wrong *value*, not
+  a missing signal, and it is why `(append '(a . b) '(z))` answered `(A B Z)`,
+  `(pairlis '(a . b) '(c . d))` paired B with D, and
+  `(list-length '(a b c d . e))` answered 4.
+  `sequence_protocol.list_cells` is that primitive. Three properties are load-
+  bearing and `CLAUDE.md` records them: the terminator is never an element; the
+  proper-vs-dotted policy is a CLHS distinction rather than a convenience (a
+  LIST argument requires a proper list, while LAST/BUTLAST/NTHCDR/LDIFF/TAILP
+  and NCONC's non-final arguments are *defined* on a dotted one because they
+  count conses); and traversal is **lazy**, because `(nthcdr 1 (cons 'a 'b))` is
+  `B` while `(nthcdr 3 (cons 'a 'b))` signals. `seq_elements` accepts a vector
+  and so cannot express "must be a list" — that is why CLHS 14.2 calls
+  `list_elements` and CLHS 17 calls `seq_elements`, and picking the wrong one
+  makes `(mapcar #'identity "ab")` answer instead of signal.
+  Consequences that fell out rather than being aimed at: NCONC had to become
+  genuinely destructive (`nconc.4` requires `(cdddr x)` to *be* the second
+  argument, `nconc.5` requires a circular result), NBUTLAST likewise, and
+  MAPCAN/MAPCON became `(apply #'nconc ...)` instead of folding results
+  themselves — `(mapcan (constantly 1) '(a))` is `1`, not `(1)`.
+
+  **2. A builtin's `&key` parameter set was undecidable, so CLHS 3.4.1.4 could
+  not be enforced.** `inspect.signature` was read as "every defaulted parameter
+  is a `&key` name", which cannot tell `(union nil nil :bad t)` — a
+  PROGRAM-ERROR — from `(intern "a" :cl-test)`, where :CL-TEST is `package`'s
+  *value*. `split_keyword_args` therefore had to **guess**, and guessed by
+  letting an unrecognized keyword fall through to a positional argument: a
+  silently wrong answer where the standard wants a signal (standing rule 4).
+  Python can express an ANSI ordinary lambda list exactly, but only if the whole
+  parameter model is used: `&optional` is positional-or-keyword *with* a
+  default, **`&key` is keyword-only**. `LambdaListShape` reads that off the
+  signature and is the one place 3.4.1.4/3.5.1.5 is applied, for direct calls,
+  FUNCALL and APPLY alike — including the rules that a name need only be a
+  *symbol* (3.4.1.4.1.1, so `'#:x` is well-formed) and that the **leftmost**
+  `:allow-other-keys` governs wherever it appears. Builtins whose `&key` set is
+  still inferred keep the old behaviour behind `_split_inferred_keywords`; the
+  sequence, cons and set families are migrated, the rest is
+  [§5](#5-known-temporary-deviations).
+
+  **3. Two more mechanisms surfaced from residual failures, and both had blast
+  radius well outside cons.** **Backquote dropped a dotted tail**: `` `(a . d) ``
+  answered `(A)`, because the expander walked the template with
+  `while consp(cur)` and built onto NIL. ansi-test constructs most of its
+  association lists as `` `((,x . d) (,y . e)) ``, so this was corrupting the
+  suite's own *test data* — `assoc.11` and `member-if.4` were failing on inputs
+  that had silently lost their values. (`` `(a . ,x) `` needs its own case: it
+  reads as the *proper* list `(A UNQUOTE X)`.) And a `:test`/`:key` designator's
+  result was not reduced to its **primary value**, because `_call_checked` calls
+  the Python callable directly and so skipped the reduction every other call
+  site applies: a key ending in `(floor (/ i 2))` handed the comparison a
+  `MultipleValues` *object* (standing rule 2). `lisptype.primary_value` is now
+  that rule's one home and the evaluator's four open-coded copies go through it.
+
+  **4. The printer could be made to diverge, and that is a *measurement*
+  defect.** `MAX_DEPTH = 256` was documented as the cutoff standing in for the
+  absent `*PRINT-CIRCLE*` — "an infinite recursion here aborts a whole ANSI
+  run" — but it bounded only *recursion*. A cdr cycle keeps `depth` constant, so
+  `_write_cons` appended forever and `(let ((a (list 17 nil))) (setf (cdr a) a) a)`
+  answered `MemoryError` **as the value of the form**; and a cycle through an
+  element re-enters the same path with each level re-walking its own cdr chain,
+  which is *exponential* rather than merely unbounded. Worse,
+  **`PPRINT-FILL` and five siblings were stubs calling Python's `print()`** —
+  wrong stream (so every `(with-output-to-string (s) (pprint-fill s obj))` in
+  `printer/` saw `""` regardless, the same measurement gate that hid the whole
+  printer before 08-14) *and* rendered through `lispCons.__str__`, the
+  pre-printer path with no guards. Fixed with per-chain cell tracking, a
+  path-based re-entry guard, and `PRINT_BUDGET`, since cutting cycles is not by
+  itself a termination proof — a twenty-node graph has exponentially many simple
+  paths. `printer/print-cons.lsp` **0/20 → 11/20**; `pprint-fill.lsp` went from
+  hanging to 10/20; the whole `printer` directory from 21GB to 132MB. The
+  `PPRINT-*` operators deliberately do **not** implement CLHS 22.2.2 — the
+  block-delimiter arguments are accepted and ignored, because building them
+  would be a second printer ([§5](#5-known-temporary-deviations)).
 
 - **2026-08-18** — **Method combination exists (CLHS 7.6.6).** A generic
   function had no method combination at all: `DEFGENERIC` parsed `:METHOD`

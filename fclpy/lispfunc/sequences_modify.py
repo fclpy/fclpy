@@ -6,7 +6,7 @@ import fclpy.lisptype as lisptype
 from .sequences_search import (
     iterate, _seq_length, _seq_to_list, _make_matcher, _coerce_function_designator,
     _lisp_truthy, _rebuild_sequence, _matched_positions, _two_sequence_matcher,
-    _alist_pairs, _pair_key,
+    _alist_pairs, _pair_key, _call_checked,
 )
 from .sequence_protocol import bounding_indices as _bounding_indices
 
@@ -327,7 +327,7 @@ def nsubstitute_if_not(newitem, test, sequence, **kwargs):
 
 
 @_registry.cl_function('SUBST')
-def subst(new, old, tree, test=None, test_not=None, key=None):
+def subst(new, old, tree, *, test=None, test_not=None, key=None):
     """Substitute old with new in tree.
 
     Per CLHS 15.4, the test is called with `old` as the first argument and
@@ -346,28 +346,23 @@ def subst(new, old, tree, test=None, test_not=None, key=None):
     elif atom(tree):
         return tree
     else:
-        return cons(subst(new, old, car(tree), test, test_not, key),
-                   subst(new, old, cdr(tree), test, test_not, key))
+        return cons(subst(new, old, car(tree), test=test, test_not=test_not, key=key),
+                    subst(new, old, cdr(tree), test=test, test_not=test_not, key=key))
 
 
 @_registry.cl_function('SUBST-IF')
-def subst_if(new, predicate, tree, key=None):
+def subst_if(new, predicate, tree, *, key=None):
     """Substitute with predicate (CLHS 15.4).
 
     `:key` is applied to each subexpression before testing it, previously
-    absent entirely. No trailing `**kwargs` (see SUBST above): this fixes
-    `subst-if.error.4`/`.7` (an unrecognized keyword, with and without an
-    :allow-other-keys marker) at the cost of `.error.5` -- `(subst-if 'a
-    #'null nil :test)`, a dangling `:test` that matches none of this
-    function's actual keywords (only `:key` exists) and has no marker
-    either, so `split_keyword_args` has no evidence this call means
-    keyword-pair semantics and lets it fall through as an ordinary
-    positional value instead of raising for the odd count. That is the
-    same &optional/&key ambiguity `(intern "a" :cl-test)` depends on being
-    resolved the *other* way (plan.md M3: Python's `inspect.signature`
-    cannot tell "no more positions, only :key from here" from "one more
-    plain positional slot" apart). Net across the four SUBST-IF/SUBST-IF-NOT/
-    NSUBST-IF/NSUBST-IF-NOT `.error.4`/`.5`/`.7` trios this is +8/-4.
+    absent entirely. `:key` is this function's *only* keyword, and declaring
+    it keyword-only is what lets `split_keyword_args` say so: `(subst-if 'a
+    #'null nil :test)` is now the PROGRAM-ERROR `subst-if.error.5` asks for
+    (a dangling `:test`, odd count, unrecognized name) instead of a fourth
+    positional argument. While the `&key` set was inferred from defaulted
+    positional parameters that could not be decided -- the same ambiguity
+    `(intern "a" :cl-test)` needs resolved the other way -- and `.error.5`
+    was a known deviation.
     """
     predicate = _coerce_function_designator(predicate)
     key = _coerce_function_designator(key)
@@ -382,44 +377,58 @@ def subst_if(new, predicate, tree, key=None):
 
 
 @_registry.cl_function('SUBST-IF-NOT')
-def subst_if_not(new, predicate, tree, key=None):
+def subst_if_not(new, predicate, tree, *, key=None):
     """Substitute with negated predicate."""
     predicate = _coerce_function_designator(predicate)
     return subst_if(new, lambda x: not _lisp_truthy(predicate(x)), tree, key=key)
 
 
 @_registry.cl_function('SUBLIS')
-def sublis(alist, tree, test=None, test_not=None, key=None):
-    """Substitute using association list.
+def sublis(alist, tree, *, test=None, test_not=None, key=None):
+    """Replace every subtree that `alist` has an entry for (CLHS 14.2).
 
-    Per CLHS 15.4, :key is applied to each subexpression of `tree` (the
-    candidate), and the test is called with the alist entry's key as the
-    first argument -- this previously called `test(tree, pair[0])`, the
-    reversed order (plan.md X3), with no :key support at all. No trailing
-    `**kwargs`, matching SUBST above.
+    Two things distinguish SUBLIS from SUBST, and this got both wrong:
+
+    * **Every subtree is a candidate, not only every atom.** It substituted
+      only in the `atom(tree)` branch, so `sublis.2`'s alist of *list* keys
+      (`((f1 a b) . (f2 a b))`) never matched anything. A subtree that *is*
+      replaced is not then descended into, which is why that same test does
+      not re-substitute its own result back again.
+    * **The test's first argument is the subtree, the second is the alist
+      key** -- SUBLIS looks each subtree *up* in the alist, exactly as ASSOC
+      does, so the subtree is the "item" of CLHS 17.2.1. `sublis.9` pins the
+      direction with an asymmetric test (`(< x y)` over `(0 3 8 20)` against
+      keys `1 5 10`): under the reverse order nothing matches at all. SUBST is
+      the other way round -- there `old` is the item (`subst.10`) -- and that
+      is why they cannot share one matcher call.
+
+    `:key` therefore applies to the subtree only, never to the alist key
+    (`sublis.7`'s key returns the car of a cons and `*not-present*` for an
+    atom, and the alist keys are raw strings), so it is applied here rather
+    than through `_make_matcher`, whose `key` transforms the *candidate*.
     """
-    matcher = _make_matcher(test=test, test_not=test_not, key=key)
+    # CLHS 14.2: each alist entry is a dotted pair `(old . new)`, not a
+    # 2-element list. `_alist_pairs`/`_pair_key` are ASSOC's shared alist-pair
+    # accessors (standing rule 3: reuse rather than re-derive).
+    pairs = [pair for pair in _alist_pairs(alist, 'SUBLIS')
+             if pair is not None and pair is not lisptype.NIL]
+    matcher = _make_matcher(test=test, test_not=test_not)
+    key = _coerce_function_designator(key)
 
-    if atom(tree):
-        # CLHS 15.4: each alist entry is a dotted pair `(old . new)`, not a
-        # 2-element list -- `len(pair) > 1`/`pair[1]` treated a cons as a
-        # Python sequence, which is 1 for a dotted pair (`__len__` counts
-        # cdr-chain conses, and the cdr here is an atom), so a match never
-        # fired. `_alist_pairs`/`_pair_key` are ASSOC's shared alist-pair
-        # accessors (plan.md standing rule 3: reuse rather than re-derive).
-        for pair in _alist_pairs(alist):
-            if pair is None or pair is lisptype.NIL:
-                continue
-            if matcher(_pair_key(pair, 0), tree):
+    def walk(subtree):
+        probe = _call_checked(key, subtree, caller_name=':KEY') if key else subtree
+        for pair in pairs:
+            if matcher(probe, _pair_key(pair, 0)):
                 return _pair_key(pair, 1)
-        return tree
-    else:
-        return cons(sublis(alist, car(tree), test, test_not, key),
-                   sublis(alist, cdr(tree), test, test_not, key))
+        if _consp_internal(subtree):
+            return cons(walk(subtree.car), walk(subtree.cdr))
+        return subtree
+
+    return walk(tree)
 
 
 @_registry.cl_function('NSUBST')
-def nsubst(new, old, tree, test=None, test_not=None, key=None):
+def nsubst(new, old, tree, *, test=None, test_not=None, key=None):
     """Destructive substitute in tree (non-destructive for now).
 
     Previously discarded :test/:test-not/:key entirely by calling `subst`
@@ -429,19 +438,19 @@ def nsubst(new, old, tree, test=None, test_not=None, key=None):
 
 
 @_registry.cl_function('NSUBST-IF')
-def nsubst_if(new, predicate, tree, key=None):
+def nsubst_if(new, predicate, tree, *, key=None):
     """Destructive substitute if in tree (non-destructive for now)."""
     return subst_if(new, predicate, tree, key=key)
 
 
 @_registry.cl_function('NSUBST-IF-NOT')
-def nsubst_if_not(new, predicate, tree, key=None):
+def nsubst_if_not(new, predicate, tree, *, key=None):
     """Destructive substitute if not in tree (non-destructive for now)."""
     return subst_if_not(new, predicate, tree, key=key)
 
 
 @_registry.cl_function('NSUBLIS')
-def nsublis(alist, tree, test=None, test_not=None, key=None):
+def nsublis(alist, tree, *, test=None, test_not=None, key=None):
     """Destructive substitute using alist (non-destructive for now).
 
     Previously discarded :test/:test-not/:key entirely by calling `sublis`

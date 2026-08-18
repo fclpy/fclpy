@@ -21,6 +21,7 @@ from fclpy import lispenv, lisptype
 from fclpy.lispfunc.evaluation_core import eval as lisp_eval
 from fclpy.lispreader import LispReader, LispStream
 from fclpy.readtable import get_current_readtable
+from fclpy.printer import prin1_to_string
 
 
 @pytest.fixture(autouse=True)
@@ -475,3 +476,79 @@ class TestFormatDirectivesUseThePrinter:
         assert evs('(let ((*print-base* 8)) (format nil "~A" 8))') == '10'
         assert evs("(let ((*print-case* :downcase)) (format nil \"~A\" 'foo))") == 'foo'
         assert evs("(let ((*print-length* 1)) (format nil \"~A\" '(1 2 3)))") == '(1 ...)'
+
+
+class TestCircularStructureTerminates:
+    """The printer must never be the thing that aborts a run.
+
+    `printer.MAX_DEPTH` was documented as the cutoff standing in for the absent
+    `*PRINT-CIRCLE*` -- "it must not recurse forever either: an infinite
+    recursion here aborts a whole ANSI run" -- but it bounded only *recursion*,
+    and a cons cycle has two other ways to run away:
+
+    * The **cdr chain is walked**, not recursed, so `depth` stays constant and
+      `_write_cons` appended to its parts list until the process ran out of
+      memory. `(let ((a (list 17 nil))) (setf (cdr a) a) a)` answered
+      `MemoryError` *as the value of the form* (standing rule 2).
+    * A cycle through an aggregate's **elements** re-enters the same path, and
+      since each level re-walks its own cdr chain the work is *exponential* in
+      the depth. `print.cons.random.2` wires twenty conses into a random cons
+      graph and held a full run at 10GB -- and because the graph is random, the
+      same test had completed on earlier runs.
+
+    Cutting cycles is not by itself a termination proof (simple paths through a
+    dense graph are exponentially many), so `PRINT_BUDGET` bounds the work too.
+    """
+
+    @staticmethod
+    def cons(car, cdr):
+        return lisptype.lispCons(car, cdr)
+
+    def test_a_self_referential_cdr_terminates(self):
+        cell = self.cons(17, lisptype.NIL)
+        cell.cdr = cell
+        assert prin1_to_string(cell) == '(17 ...)'
+
+    def test_a_cycle_further_down_the_chain_terminates(self):
+        third = self.cons(3, lisptype.NIL)
+        second = self.cons(2, third)
+        first = self.cons(1, second)
+        third.cdr = second
+        assert prin1_to_string(first) == '(1 2 3 ...)'
+
+    def test_a_cycle_through_a_car_terminates(self):
+        # The cons is its own car, so the car is the cycle: one level of
+        # parentheses, and the re-entry elides.
+        outer = self.cons(lisptype.NIL, lisptype.NIL)
+        outer.car = outer
+        assert prin1_to_string(outer) == '(...)'
+
+    def test_a_long_proper_list_is_not_truncated(self):
+        # The cutoff must not be a cap on element *count*: that would elide
+        # legitimate output. 400 elements, all present.
+        result = lisptype.NIL
+        for i in reversed(range(400)):
+            result = self.cons(i, result)
+        printed = prin1_to_string(result)
+        assert '...' not in printed
+        assert printed.startswith('(0 1 2 ') and printed.endswith(' 399)')
+
+    def test_shared_but_acyclic_structure_prints_at_both_occurrences(self):
+        # Only structure on the *current path* is a cycle. A shared tail is a
+        # DAG, and an implementation without *PRINT-CIRCLE* prints it twice --
+        # tracking every object ever seen would wrongly elide the second.
+        tail = self.cons(1, self.cons(2, lisptype.NIL))
+        assert prin1_to_string(self.cons(tail, self.cons(tail, lisptype.NIL))) \
+            == '((1 2) (1 2))'
+
+    def test_a_random_cons_graph_terminates(self):
+        # print.cons.random.2's exact shape, over enough draws that a lucky one
+        # cannot pass for a fix.
+        import random
+        for seed in range(60):
+            random.seed(seed)
+            cells = [self.cons(lisptype.NIL, lisptype.NIL) for _ in range(20)]
+            for cell in cells:
+                cell.car = cells[random.randrange(20)]
+                cell.cdr = cells[random.randrange(20)]
+            assert prin1_to_string(cells[0])

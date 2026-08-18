@@ -6,10 +6,11 @@ from . import registry as _registry
 from .arrays import LispArray, nonnegative_integer as _nonnegative_integer
 from .sequence_protocol import (
     seq_elements, seq_length, bounding_indices, make_lisp_list, rebuild_like,
-    build_sequence, seq_set,
+    build_sequence, seq_set, list_cells, list_elements, list_tail,
 )
 from .sequences_search import _coerce_function_designator, _lisp_truthy
 import fclpy.lisptype as lisptype
+from .core import _null_internal, _listp_internal
 
 
 # A sequence longer than this cannot be built on any machine this runs on, so
@@ -31,9 +32,22 @@ def _check_constructible(size, what):
             f"(exceeds this implementation's limit of {CONSTRUCTIBLE_LIMIT})")
 
 
+@_registry.cl_function('ENDP')
 def endp(x):
-    """Test if object is end of list (nil or empty)."""
-    return lisptype.lisp_bool(x is None or x == lisptype.NIL)
+    """True if `x` is NIL, false if it is a cons, TYPE-ERROR otherwise (CLHS 14.2).
+
+    ENDP is not `(null x)`: its whole point is that walking off the end of a
+    *dotted* list is an error rather than a quiet stop, which is why CLHS
+    specifies it as the list-iteration terminator. Answering NIL for a
+    non-list -- what this did, since it only tested for NIL -- makes
+    `(endp 1)` claim that 1 is a list with elements still to come.
+    """
+    if _null_internal(x):
+        return lisptype.T
+    if not _consp_internal(x):
+        raise lisptype.LispTypeError(
+            f"ENDP: {x!r} is not a list", expected_type="LIST", actual_value=x)
+    return lisptype.NIL
 
 
 @_registry.cl_function('LENGTH')
@@ -64,41 +78,51 @@ def nreverse(sequence):
     return rebuild_like(sequence, list(reversed(seq_elements(sequence, 'NREVERSE'))))
 
 
-def _append_onto(lists, tail, what):
-    """Copy every list in `lists` in front of `tail`, sharing `tail` itself.
+@_registry.cl_function('APPEND')
+def append(*args):
+    """Concatenate lists, sharing structure with the last one (CLHS 14.2).
 
-    CLHS 14.2: APPEND and NCONC copy all their arguments *except* the last,
-    whose structure the result shares -- which is why the last argument is
-    threaded through rather than flattened. Both used to flatten every
-    argument including the last, so the result never shared structure and a
-    non-list final argument (`(append '(1) 2)`, a legal dotted result) was
-    turned into a one-element list.
+    Every argument but the last must be a *proper* list -- `(append '(a . b)
+    '(z))` is a TYPE-ERROR (`append.error.1`) -- while the last is threaded
+    through untouched, so it need not be a list at all and `(append '(1) 2)`
+    is the dotted `(1 . 2)`. Flattening the last argument too, which this used
+    to do, lost both the sharing and that dotted result.
     """
-    result = tail if tail is not None else lisptype.NIL
-    for seq in reversed(lists):
-        for item in reversed(seq_elements(seq, what)):
+    if not args:
+        return lisptype.NIL
+    result = args[-1] if args[-1] is not None else lisptype.NIL
+    for seq in reversed(args[:-1]):
+        for item in reversed(list_elements(seq, 'APPEND')):
             result = lisptype.lispCons(item, result)
     return result
 
 
-@_registry.cl_function('APPEND')
-def append(*args):
-    """Concatenate lists, sharing structure with the last one (CLHS 14.2)."""
-    if not args:
-        return lisptype.NIL
-    return _append_onto(args[:-1], args[-1], 'APPEND')
-
-
 @_registry.cl_function('NCONC')
 def nconc(*lists):
-    """APPEND, permitted to destroy all but the last argument (CLHS 14.2).
+    """APPEND, destroying all but the last argument (CLHS 14.2).
 
-    Implemented non-destructively; only the *sharing* of the final argument
-    is observable in conforming code.
+    Genuinely destructive, and it has to be: `nconc.4` requires
+    `(cdddr x)` to *be* the second argument afterwards, and `nconc.5`
+    (`(nconc x x)`) requires the result to be circular. Splicing by RPLACD is
+    also what makes a dotted non-final argument legal -- its final cdr is
+    overwritten, so `(nconc '(a . b) '(c . d) 'foo)` is `(A C . FOO)`
+    (`nconc.7`) rather than the TYPE-ERROR the same shape earns from APPEND.
+
+    NIL arguments vanish (they have no cons to splice onto), and the *last*
+    argument is never traversed at all, so it may be any object.
     """
     if not lists:
         return lisptype.NIL
-    return _append_onto(lists[:-1], lists[-1], 'NCONC')
+    # The last argument is the tail: never walked, never checked.
+    spine = [lst for lst in lists[:-1] if not _null_internal(lst)]
+    result = lists[-1] if lists[-1] is not None else lisptype.NIL
+    for lst in reversed(spine):
+        last_cell = None
+        for last_cell in list_cells(lst, 'NCONC', dotted='allow'):
+            pass
+        last_cell.cdr = result
+        result = lst
+    return result
 
 
 @_registry.cl_function('NRECONC')
@@ -111,7 +135,7 @@ def nreconc(list1, list2):
     `(3)`.
     """
     result = list2 if list2 is not None else lisptype.NIL
-    for item in seq_elements(list1, 'NRECONC'):
+    for item in list_elements(list1, 'NRECONC'):
         result = lisptype.lispCons(item, result)
     return result
 
@@ -182,13 +206,13 @@ def _sort(sequence, predicate, key, what):
 
 
 @_registry.cl_function('SORT')
-def sort(sequence, predicate, key=None):
+def sort(sequence, predicate, *, key=None):
     """Sort a sequence with a two-argument predicate (CLHS 17.3)."""
     return _sort(sequence, predicate, key, 'SORT')
 
 
 @_registry.cl_function('STABLE-SORT')
-def stable_sort(sequence, predicate, key=None):
+def stable_sort(sequence, predicate, *, key=None):
     """Stable sort -- Python's `sorted` is already stable."""
     return _sort(sequence, predicate, key, 'STABLE-SORT')
 
@@ -245,25 +269,22 @@ def copy_list(list_seq):
     genuine lispCons chain, not a Python list, so downstream CONSP/EQUAL
     checks (and further destructive list ops) behave correctly.
     """
-    if not _consp_internal(list_seq):
-        return list_seq
-    items = []
-    current = list_seq
-    while _consp_internal(current):
-        items.append(car(current))
-        current = cdr(current)
-    result = current  # NIL for a proper list, or the dotted tail
-    for item in reversed(items):
-        result = cons(item, result)
+    result = list_tail(list_seq, 'COPY-LIST')
+    for cell in reversed(list(list_cells(list_seq, 'COPY-LIST', dotted='allow'))):
+        result = cons(cell.car, result)
     return result
 
 
 @_registry.cl_function('COPY-ALIST')
 def copy_alist(alist):
     """Copy an association list: the spine *and* each pair are fresh conses
-    (CLHS 14.2), while a non-cons element is shared."""
+    (CLHS 14.2), while a non-cons element is shared.
+
+    An alist is a *proper* list, so `(copy-alist '((a . b) . c))` is a
+    TYPE-ERROR; it used to copy the tail C in as a third entry.
+    """
     pairs = []
-    for pair in seq_elements(alist, 'COPY-ALIST'):
+    for pair in list_elements(alist, 'COPY-ALIST'):
         if isinstance(pair, lisptype.lispCons):
             pairs.append(lisptype.lispCons(pair.car, pair.cdr))
         else:
@@ -272,7 +293,7 @@ def copy_alist(alist):
 
 
 @_registry.cl_function('FILL')
-def fill(sequence, item, start=0, end=None):
+def fill(sequence, item, *, start=0, end=None):
     """Store `item` into a sequence, returning that same sequence (CLHS 17.3).
 
     Destructive, so it writes *through* the argument via the protocol's
@@ -307,70 +328,93 @@ def replace(sequence1, sequence2, **kwargs):
     return sequence1
 
 
-@_registry.cl_function('NBUTLAST')
-def nbutlast(seq, n=1):
-    """Return the list without its last `n` conses (CLHS 14.2)."""
-    elements = seq_elements(seq, 'NBUTLAST')
-    n = int(n)
-    return make_lisp_list(elements[:-n] if n else elements) if n <= len(elements) else lisptype.NIL
-
-
 @_registry.cl_function('BUTLAST')
 def butlast(seq, n=1):
-    """Return a fresh list without its last `n` conses (CLHS 14.2).
+    """A fresh copy of the list without its last `n` conses (CLHS 14.2).
 
-    Previously a `core.py` stub (`tuple(seq[:-1])`) that ignored `n`
-    entirely and returned a Python tuple -- a **vector** in this
-    architecture, not a Lisp list (plan.md Finding M) -- so `(listp
-    (butlast '(a b c)))` was NIL and any `n` other than the implicit 1 was
-    silently discarded. Shares NBUTLAST's element/list-building mechanism;
-    the two differ only in being permitted vs. required to share structure
-    with `seq`, which this implementation (building a fresh list either
-    way) satisfies for both.
+    A *dotted* list is legal here and its tail is not an element:
+    `(butlast '(a b c . d) 1)` is `(A B)`, because the operator counts conses.
+    Reading the elements with `seq_elements` folded the tail in as one, so the
+    count was one too high and `(butlast '(a b c . d) 1)` answered `(A B C)`.
     """
-    return nbutlast(seq, n)
+    n = _nonnegative_integer(n, 'BUTLAST')
+    cells = list(list_cells(seq, 'BUTLAST', dotted='allow'))
+    kept = cells[:len(cells) - n] if n <= len(cells) else []
+    return make_lisp_list([cell.car for cell in kept])
+
+
+@_registry.cl_function('NBUTLAST')
+def nbutlast(seq, n=1):
+    """BUTLAST, permitted to destroy the argument (CLHS 14.2).
+
+    Genuinely destructive, because `nbutlast.1`/`.4` require the result to be
+    EQ to the argument and its surviving conses to be the argument's own: it
+    RPLACDs the last surviving cons to NIL. Building a fresh list -- what
+    BUTLAST does and what this used to do as well -- is only correct for
+    BUTLAST, whose result must *not* share structure.
+    """
+    n = _nonnegative_integer(n, 'NBUTLAST')
+    cells = list(list_cells(seq, 'NBUTLAST', dotted='allow'))
+    if n >= len(cells):
+        return lisptype.NIL
+    if n:
+        cells[len(cells) - n - 1].cdr = lisptype.NIL
+    return seq
 
 
 @_registry.cl_function('LAST')
 def last(list_seq, n=1):
-    """Return the last `n` *conses* of a list (CLHS 14.2).
+    """The last `n` *conses* of a list (CLHS 14.2).
 
-    The result is a tail of the list, so it is a list -- `(last '(1 2 3))` is
-    `(3)`, not the vector `#(3)` this used to build out of a Python slice.
+    The result is a tail of the argument, so it is EQ to that tail rather than
+    a copy of it, and it inherits the argument's final cdr: `(last '(a b . c))`
+    is `(B . C)` and `(last (cons 'a 'b) 0)` is `B` -- the tail beyond the last
+    `n` conses, which for `n` = 0 is the dotted terminator itself. Both were
+    wrong while the element count came from `seq_elements`, which counted the
+    terminator as an element.
     """
-    n = int(n)
-    current = list_seq
-    if not isinstance(current, lisptype.lispCons):
-        return current if current is not None else lisptype.NIL
-    length = len(seq_elements(current, 'LAST'))
-    for _ in range(max(0, length - n)):
-        current = current.cdr
-    return current
+    n = _nonnegative_integer(n, 'LAST')
+    cells = list(list_cells(list_seq, 'LAST', dotted='allow'))
+    if n >= len(cells):
+        return list_seq if not _null_internal(list_seq) else lisptype.NIL
+    if n == 0:
+        return list_tail(list_seq, 'LAST')
+    return cells[len(cells) - n]
 
 
 @_registry.cl_function('NTHCDR')
 def nthcdr(n, list_seq):
-    """Get nth cdr."""
+    """The result of applying CDR to `list_seq` `n` times (CLHS 14.2).
+
+    `n` is an `unsigned-byte`, so a negative or non-integer `n` is a
+    TYPE-ERROR rather than a silently clamped loop count. Walking is lazy: a
+    dotted list may be entered but not stepped past, so
+    `(nthcdr 1 (cons 'a 'b))` is `B` while `(nthcdr 3 (cons 'a 'b))` signals
+    (`nthcdr.5` vs `nthcdr.error.10`).
+    """
+    n = _nonnegative_integer(n, 'NTHCDR')
     current = list_seq
     for _ in range(n):
-        if current is None or current == lisptype.NIL:
-            break
-        if isinstance(current, lisptype.lispCons):
-            current = current.cdr
-        else:
-            break
+        if _null_internal(current):
+            return lisptype.NIL
+        if not _consp_internal(current):
+            raise lisptype.LispTypeError(
+                f"NTHCDR: {current!r} is not a list",
+                expected_type="LIST", actual_value=current)
+        current = current.cdr
     return current
 
 
 @_registry.cl_function('NTH')
 def nth(n, list_seq):
-    """Get nth element (0-indexed)."""
+    """The `n`th element of a list, zero-indexed (CLHS 14.2).
+
+    `(nth n x)` is `(car (nthcdr n x))`, and sharing NTHCDR's walk is what
+    makes the type checks agree; the Python-list fallback this used to carry
+    made NTH the one list accessor that also indexed a *vector*.
+    """
     current = nthcdr(n, list_seq)
-    if current and isinstance(current, lisptype.lispCons):
-        return current.car
-    elif isinstance(list_seq, (list, tuple)) and n < len(list_seq):
-        return list_seq[n]
-    return None
+    return current.car if _consp_internal(current) else lisptype.NIL
 
 
 @_registry.cl_function('ELT')
@@ -392,7 +436,7 @@ def elt(sequence, index):
 
 
 @_registry.cl_function('MAKE-LIST')
-def make_list(size, initial_element=None):
+def make_list(size, *, initial_element=None):
     """Make list of given size (CLHS: make-list size &key initial-element).
 
     Previously returned a bare Python list, a second incompatible list
@@ -462,45 +506,52 @@ def list_fn(*args):
 
 
 @_registry.cl_function('TREE-EQUAL')
-def tree_equal(tree1, tree2, test=None):
-    """Test tree equality."""
-    if test is None:
-        test = lambda x, y: x == y
-    
-    if atom(tree1) and atom(tree2):
-        return lisptype.lisp_bool(test(tree1, tree2))
-    elif atom(tree1) or atom(tree2):
-        return lisptype.NIL
-    else:
-        # Combine sub-results and convert to Lisp boolean
-        left = tree_equal(car(tree1), car(tree2), test)
-        right = tree_equal(cdr(tree1), cdr(tree2), test)
-        return lisptype.lisp_bool(left == lisptype.T and right == lisptype.T)
+def tree_equal(tree1, tree2, *, test=None, test_not=None):
+    """Compare two trees, comparing their *leaves* with :test (CLHS 14.2).
+
+    The default test is EQL, not Python `==`. That distinction is the whole of
+    `tree-equal.16`: two separately-consed empty strings are `==` but not EQL,
+    and since a string is an atom here, TREE-EQUAL must answer NIL for them.
+    Sharing `_make_matcher` is what supplies EQL, :test-not and the
+    designator coercion, instead of a bare `lambda x, y: x == y`.
+    """
+    from .sequences_search import _make_matcher
+    matcher = _make_matcher(test=test, test_not=test_not)
+
+    def compare(a, b):
+        a_atom, b_atom = _atom(a), _atom(b)
+        if a_atom or b_atom:
+            return a_atom and b_atom and matcher(a, b)
+        return compare(car(a), car(b)) and compare(cdr(a), cdr(b))
+
+    return lisptype.lisp_bool(compare(tree1, tree2))
+
+
+def _atom(value):
+    """True for everything that is not a cons -- including NIL (CLHS 14.1)."""
+    return not _consp_internal(value)
 
 
 @_registry.cl_function('LIST-LENGTH')
 def list_length(list_seq):
-    """Get list length (proper or dotted)."""
-    if list_seq is None or list_seq == lisptype.NIL:
-        return 0
-    
+    """The length of a proper list, or NIL if it is circular (CLHS 14.2).
+
+    The two answers LIST-LENGTH may give are "a length" and "NIL, it is
+    circular" -- a *dotted* list is neither, it is a TYPE-ERROR, which is the
+    one shape this used to return a plausible number for
+    (`(list-length '(a b c d . e))` answered 4). Circularity is detected here
+    rather than in the shared walker because LIST-LENGTH is the only operator
+    CLHS requires to terminate on a circular list; every other one is
+    explicitly undefined on it, and paying for an identity set on every list
+    traversal to serve one operator is the wrong trade.
+    """
     count = 0
-    current = list_seq
     seen = set()
-    
-    while current is not None and current != lisptype.NIL:
-        if id(current) in seen:
-            # Circular list
-            return None
-        
-        if not isinstance(current, lisptype.lispCons):
-            # Dotted list
-            break
-        
-        seen.add(id(current))
+    for cell in list_cells(list_seq, 'LIST-LENGTH'):
+        if id(cell) in seen:
+            return lisptype.NIL
+        seen.add(id(cell))
         count += 1
-        current = current.cdr
-    
     return count
 
 

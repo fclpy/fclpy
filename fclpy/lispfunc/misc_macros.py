@@ -332,10 +332,22 @@ def type_fn(object):
 
 @_registry.cl_function('COPY-TREE')
 def copy_tree(obj):
-    """Deep copy tree structure."""
-    if isinstance(obj, list):
-        return [copy_tree(x) for x in obj]
-    return obj
+    """Copy every cons of a tree, sharing every leaf (CLHS 14.2).
+
+    It copied a Python `list` and returned everything else unchanged -- and a
+    Python list is a *vector* here (plan.md Finding M), so the one shape it
+    handled was the one shape a Lisp tree never has, and COPY-TREE was the
+    identity function on every actual cons tree. `copy-tree.1`/`.2` check that
+    no cons is shared with the original *and* that every atom is.
+
+    Recursion follows both car and cdr, which is what distinguishes COPY-TREE
+    from COPY-LIST: a dotted tail is a leaf and is shared, but a sublist in
+    either position is copied.
+    """
+    from .core import _consp_internal
+    if not _consp_internal(obj):
+        return obj
+    return lisptype.lispCons(copy_tree(obj.car), copy_tree(obj.cdr))
 
 
 # Note: INCF is now implemented as a special form in evaluation_special_forms.py
@@ -395,23 +407,40 @@ def get(*args):
         return default
 
 
+def _check_cons(value, operator):
+    """Signal unless `value` is a cons (CLHS 14.2).
+
+    RPLACA/RPLACD take a CONS, not a list: NIL has no car to replace, so
+    `(rplaca nil 1)` is a TYPE-ERROR just as `(rplaca 'a 1)` is.
+    """
+    from .core import _consp_internal
+    if not _consp_internal(value):
+        raise lisptype.LispTypeError(
+            f"{operator}: {value!r} is not a cons",
+            expected_type="CONS", actual_value=value)
+    return value
+
+
 @_registry.cl_function('RPLACA')
 def rplaca(cons, new_car):
-    """Replace CAR of cons cell."""
-    try:
-        cons.car = new_car
-    except Exception:
-        pass
+    """Replace the car of a cons, returning that cons (CLHS 14.2).
+
+    The `except Exception: pass` this replaced is standing rule 4 in its purest
+    form: for every non-cons argument the assignment failed, the failure was
+    discarded, and RPLACA returned the argument unchanged -- so
+    `(rplaca 'a 1)` answered A instead of signalling, and a caller had no way
+    to tell a successful mutation from a silently skipped one.
+    """
+    _check_cons(cons, 'RPLACA')
+    cons.car = new_car
     return cons
 
 
 @_registry.cl_function('RPLACD')
 def rplacd(cons, new_cdr):
-    """Replace CDR of cons cell."""
-    try:
-        cons.cdr = new_cdr
-    except Exception:
-        pass
+    """Replace the cdr of a cons, returning that cons (CLHS 14.2)."""
+    _check_cons(cons, 'RPLACD')
+    cons.cdr = new_cdr
     return cons
 
 

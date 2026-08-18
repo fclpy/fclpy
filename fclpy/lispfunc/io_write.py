@@ -459,11 +459,42 @@ def copy_pprint_dispatch(table=None):
         f"COPY-PPRINT-DISPATCH: not a pprint dispatch table: {table!r}")
 
 
+def _pprint_unpretty(object, stream):
+    """Write `object` to `stream` through the printer, without line breaking.
+
+    **The `PPRINT-*` operators were stubs that called Python's `print()`**, and
+    that is two separate defects rather than an honest gap:
+
+    * It writes to Python's stdout instead of the value of `*STANDARD-OUTPUT*`
+      or the stream argument. Every `printer/` test captures output as
+      `(with-output-to-string (s) (pprint-fill s obj))`, so all of them saw the
+      empty string no matter what -- the same *measurement* gate that hid the
+      whole printer before 2026-08-14 (plan.md C7), still in place here.
+    * `print(obj)` renders through `lispCons.__str__`, i.e. the pre-printer
+      representation, which knows nothing about the printer's control variables
+      **or its circularity guards**. `pprint-fill.13` prints a circular list, so
+      `PPRINT-FILL` recursed until the process held 11GB -- a stub aborting the
+      whole ANSI run (standing rule 4: a loud gap is measurable, a silent wrong
+      answer is not, and this one was neither).
+
+    **This does not implement CLHS 22.2.2.** There is no pretty printer: no
+    line breaking, no `*PRINT-RIGHT-MARGIN*`, no logical blocks, and the
+    `prefix`/`suffix`/`colon-p` arguments that decide a block's delimiters are
+    ignored, so a list arrives with the ordinary `(`...`)` the printer gives it.
+    Building any of that here would be a second printer, and the pretty printer
+    is its own milestone (plan.md C2/M10, recorded in section 5). What this
+    *does* fix is the two things that made the stubs actively harmful: output
+    goes to the stream the caller named, and a circular argument terminates.
+    """
+    write_text(_printer.prin1_to_string(object), stream)
+    return lisptype.NIL
+
+
 @_registry.cl_function('PPRINT')
 def pprint(object, stream=None):
-    """Pretty print object."""
-    print(object)
-    return None
+    """A newline, then the object printed with `*PRINT-PRETTY*` true (CLHS 22.3.1)."""
+    write_text('\n', stream)
+    return _pprint_unpretty(object, stream)
 
 
 @_registry.cl_function('PPRINT-DISPATCH')
@@ -486,23 +517,30 @@ def pprint_indent(relative_to, n, stream=None):
 
 @_registry.cl_function('PPRINT-LINEAR')
 def pprint_linear(stream, object, prefix=None, per_line_prefix=None, suffix=None):
-    """Linear pretty print (stub)."""
-    print(object)
-    return None
+    """The list on one line, in a `(`...`)` block (CLHS 22.2.2).
+
+    Linear style breaks either at every conditional newline or at none; with no
+    line breaking available this is the "at none" case, which is a legal
+    rendering for any list that fits. See `_pprint_unpretty`.
+    """
+    return _pprint_unpretty(object, stream)
 
 
 @_registry.cl_function('PPRINT-LOGICAL-BLOCK')
 def pprint_logical_block(stream, object, prefix=None, per_line_prefix=None, suffix=None):
-    """Logical block pretty print (stub)."""
-    print(object)
-    return None
+    """Print `object` as one logical block (CLHS 22.2.2)."""
+    return _pprint_unpretty(object, stream)
 
 
 @_registry.cl_function('PPRINT-NEWLINE')
 def pprint_newline(kind, stream=None):
-    """Pretty print newline (stub)."""
-    print()
-    return None
+    """A conditional newline (CLHS 22.2.2) -- nothing, with no line breaking.
+
+    It used to emit an *unconditional* newline to Python's stdout: wrong stream,
+    and wrong even on the right one, since every `kind` here is conditional and
+    all four conditions are "only if the enclosing block does not fit".
+    """
+    return lisptype.NIL
 
 
 @_registry.cl_function('PPRINT-POP')
@@ -518,17 +556,20 @@ def pprint_tab(kind, colnum, colinc, stream=None):
 
 
 @_registry.cl_function('PPRINT-TABULAR')
-def pprint_tabular(stream, object, prefix=None, per_line_prefix=None, suffix=None):
-    """Tabular pretty print (stub)."""
-    print(object)
-    return None
+def pprint_tabular(stream, object, prefix=None, per_line_prefix=None, suffix=None,
+                   tabsize=None):
+    """The list in tabular style (CLHS 22.2.2), on one line without column stops."""
+    return _pprint_unpretty(object, stream)
 
 
 @_registry.cl_function('PPRINT-FILL')
-def pprint_fill(stream, list_obj, colon_p=None, at_sign_p=None):
-    """Pretty print fill (stub)."""
-    print(list_obj)
-    return None
+def pprint_fill(stream, object, colon_p=None, at_sign_p=None):
+    """The list in fill style (CLHS 22.2.2), on one line.
+
+    `colon_p` (whether to parenthesize) is accepted and ignored, like every
+    other block-delimiter argument here -- see `_pprint_unpretty`.
+    """
+    return _pprint_unpretty(object, stream)
 
 
 @_registry.cl_function('SET-PPRINT-DISPATCH')

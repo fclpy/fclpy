@@ -23,7 +23,7 @@ __all__ = [
     'symbol_value', 'set_symbol_value', 'symbol_function',
     'set_symbol_function', 'symbol_plist', 'set_symbol_plist',
     'lisp_bool', 'is_truthy', 'lisp_str', 'lisp_repr',
-    'MultipleValues', 'py_str_map',
+    'MultipleValues', 'primary_value', 'py_str_map',
     'Binding', 'FunctionBinding', 'SpecialForm',
     # From lisptype_extended
     'Environment',

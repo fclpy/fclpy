@@ -135,6 +135,13 @@ def _level_exceeded(ctx, depth):
 #: *measurement* failure across unrelated directories.
 MAX_DEPTH = 256
 
+#: How many aggregates one printing operation may enter. Cycle detection alone
+#: does not bound the work: with cycles cut, a cons *graph* still enumerates its
+#: simple paths, of which a twenty-node out-degree-two graph has exponentially
+#: many -- `print.cons.random.2` builds exactly that. High enough that no real
+#: structure reaches it, low enough that no graph can outrun it.
+PRINT_BUDGET = 100_000
+
 
 def _false(value):
     """True when `value` is Lisp false.
@@ -224,7 +231,8 @@ class PrintContext:
     """
 
     __slots__ = ('escape', 'base', 'radix', 'case', 'level', 'length',
-                 'array', 'gensym', 'readably', 'pretty', 'circle')
+                 'array', 'gensym', 'readably', 'pretty', 'circle',
+                 'in_progress', 'budget')
 
     def __init__(self, **overrides):
         unknown = set(overrides) - set(WRITE_KEYWORD_VARIABLES)
@@ -237,6 +245,12 @@ class PrintContext:
             if keyword in overrides and overrides[keyword] is not _UNSUPPLIED:
                 return overrides[keyword]
             return resolve_control(variable)
+
+        # Circularity state, one per printing operation -- see `_in_progress`.
+        # `budget` is a one-element list so that `with_escape`'s clone shares
+        # the same counter by reference rather than getting a fresh one.
+        self.in_progress = set()
+        self.budget = [PRINT_BUDGET]
 
         self.escape = _true(value_of('escape'))
         self.radix = _true(value_of('radix'))
@@ -666,31 +680,98 @@ def _write_symbol(value, ctx):
 # Aggregates
 # ---------------------------------------------------------------------------
 
+def _in_progress(value, ctx, writer, depth):
+    """Print an aggregate, refusing to re-enter one already being printed.
+
+    **The other half of the circularity cutoff.** ``MAX_DEPTH`` bounds
+    *recursion*, and `_write_cons` now bounds the cdr *walk*, but neither
+    bounds a cycle that runs through an aggregate's **elements**: a cons whose
+    car is an ancestor of itself sends `_write` back down the same path, and
+    because each level then re-walks its own cdr chain the work is
+    *exponential* in the depth, not merely unbounded. That is how
+    `print.cons.random.2` -- twenty conses wired into a random cons graph, so
+    whether it cycles at all depends on the draw -- held a full ANSI run at
+    10GB with the depth guard doing nothing, and why the same run had
+    completed before: the test is randomized.
+
+    An aggregate on the current path is a genuine cycle, so it elides as
+    ``...``. Structure that is merely *shared* (a DAG) is still printed at each
+    of its occurrences, which is what an implementation without
+    ``*PRINT-CIRCLE*`` must do -- the labels ``#1=``/``#1#`` are the real fix
+    and belong to the printer's own milestone (plan.md section 5). Tracking the
+    path rather than every object seen is what keeps those two cases apart.
+
+    The set is keyed by ``id`` and carried on the context, whose lifetime is
+    exactly one printing operation. `PrintContext.with_escape` copies slots by
+    reference on purpose, so a ``~A`` nested inside a ``~S`` shares the path
+    rather than starting a fresh one and re-entering the cycle.
+
+    **Cutting cycles is still not a termination proof, so there is also a
+    budget.** Cycles removed, the traversal enumerates *simple paths*, and a
+    twenty-node graph of out-degree two has exponentially many of them --
+    measured, some `print.cons.random.2` draws take minutes with cycle
+    detection alone. `PRINT_BUDGET` caps the aggregates one printing operation
+    may enter, at a level no real program approaches (a 100,000-cons structure
+    prints in full) but which no graph can outrun. It is the same trade
+    ``MAX_DEPTH`` already makes, for the same stated reason: the printer must
+    never be the thing that aborts a run.
+    """
+    key = id(value)
+    if key in ctx.in_progress:
+        return '...'
+    if ctx.budget[0] <= 0:
+        return '...'
+    ctx.budget[0] -= 1
+    ctx.in_progress.add(key)
+    try:
+        return writer(value, ctx, depth)
+    finally:
+        ctx.in_progress.discard(key)
+
+
 def _write_cons(value, ctx, depth):
     """Print a list, honouring ``*PRINT-LEVEL*``, ``*PRINT-LENGTH*`` and dots.
 
     ``*PRINT-LENGTH*`` elides with ``...`` after that many elements, and a
     non-list tail is printed after a dot (CLHS 22.1.3.5).
+
+    **The cdr chain is walked, not recursed, so ``MAX_DEPTH`` does not bound
+    it.** That is one of the two halves of the circularity cutoff that were
+    missing (`_in_progress` is the other): `_write` guards *recursion* depth,
+    which covers a deeply nested car, but a cdr cycle keeps `depth` constant
+    forever and simply appended to `parts` until the process ran out of memory.
+    `(let ((a (list 17 nil))) (setf (cdr a) a) a)` answered `MemoryError` as
+    the value of the form.
+
+    The cells of *this* chain are tracked, and only for the length of this
+    call: a cycle elides as ``...`` (the same elision ``*PRINT-LENGTH*`` uses,
+    since without ``*PRINT-CIRCLE*`` there is no ``#1#`` label to emit), while
+    a tail legitimately **shared** between two lists still prints at both
+    occurrences. A cutoff on the element *count* would instead have truncated
+    every long proper list.
     """
     if _level_exceeded(ctx, depth):
         return '#'
     parts = []
     current = value
+    seen = set()
     count = 0
     while isinstance(current, lispCons):
         if ctx.length is not None and count >= ctx.length:
             parts.append('...')
-            current = lisptype.NIL
             break
+        seen.add(id(current))
         parts.append(_write(current.car, ctx, depth + 1))
         count += 1
         current = current.cdr
         if current is None or isinstance(current, lispNull):
-            current = lisptype.NIL
             break
         if not isinstance(current, lispCons):
             parts.append('.')
             parts.append(_write(current, ctx, depth + 1))
+            break
+        if id(current) in seen:
+            parts.append('...')
             break
     return '(' + ' '.join(parts) + ')'
 
@@ -882,20 +963,20 @@ def _write(value, ctx, depth):
         return _write_complex(value, ctx)
 
     if isinstance(value, lispCons):
-        return _write_cons(value, ctx, depth)
+        return _in_progress(value, ctx, _write_cons, depth)
 
     if hasattr(value, '_struct_type') and hasattr(value, '_slots'):
-        return _write_structure(value, ctx, depth)
+        return _in_progress(value, ctx, _write_structure, depth)
 
     from fclpy.lispfunc.arrays import LispArray, BIT_TYPE
     if isinstance(value, LispArray):
         if value.element_type is BIT_TYPE and value.rank == 1:
             return _write_bit_vector(value, ctx)
         if value.rank == 1:
-            return _write_vector(value, ctx, depth)
-        return _write_array(value, ctx, depth)
+            return _in_progress(value, ctx, _write_vector, depth)
+        return _in_progress(value, ctx, _write_array, depth)
     if isinstance(value, (list, tuple)):
-        return _write_vector(value, ctx, depth)
+        return _in_progress(value, ctx, _write_vector, depth)
 
     if isinstance(value, dict):
         return _write_hash_table_dict(value, ctx)

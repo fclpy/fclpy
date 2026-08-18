@@ -44,9 +44,99 @@ than testing for the class, so the two cannot disagree about what a vector is.
 import fclpy.lisptype as lisptype
 from . import arrays as _arrays
 from .arrays import LispArray, string_element
+from .core import _check_list as check_list, _consp_internal, _null_internal
 
 
 # ===== READING =====
+
+
+def list_cells(value, what='list function', dotted='error'):
+    """Yield each cons cell of a Lisp list, one step at a time.
+
+    **The one list-traversal path**, and the reason it yields *cells* rather
+    than elements is that the three things a CLHS list operator asks for are
+    all derivable from a cell and none of them is derivable from the other
+    two: MEMBER/ASSOC need the tail itself (it must be EQ to a sublist of the
+    argument), LAST/BUTLAST need to *count* conses, and everything else needs
+    the cars.
+
+    Traversal is lazy, and that is a semantic requirement rather than an
+    optimization: CLHS defines these operators on a dotted list up to the
+    point where they would have to walk past its tail, so the type check has
+    to happen at the step, not up front. `(nthcdr 1 (cons 'a 'b))` is `B`
+    while `(nthcdr 3 (cons 'a 'b))` is a TYPE-ERROR (`nthcdr.5` vs
+    `nthcdr.error.10`), and `(member 'a '(a . b))` finds A and returns before
+    the dotted tail is ever reached.
+
+    `dotted` selects the policy for a non-NIL, non-cons tail:
+
+    * ``'error'`` -- a *proper* list is required, so the tail is a TYPE-ERROR.
+      This is what CLHS 14.2's LIST arguments (MEMBER, the set operations, the
+      MAP* family, PAIRLIS, LIST-LENGTH) and CLHS 17.1's "proper sequence"
+      require, and it is what these operators previously did *not* do: the
+      dotted tail was read as one more **element**, so `(append '(a . b) '(z))`
+      answered `(A B Z)` -- a wrong value, not merely a missing error -- and
+      `(pairlis '(a . b) '(c . d))` paired B with D.
+    * ``'allow'`` -- stop at the tail. LAST, BUTLAST/NBUTLAST, NTHCDR, LDIFF
+      and TAILP are *defined* on dotted lists (`(last '(a b . c))` is
+      `(B . C)`), and for them the tail is still not an element.
+
+    A `value` that is not a list at all is a TYPE-ERROR either way, and that
+    one is raised *eagerly* rather than on the first `next()`: ansi-test's
+    `check-type-error` asserts a TYPE-ERROR for every object failing `listp`,
+    and an operator that gives up before consuming its walker (MAPLIST once
+    another argument runs out, MEMBER on the empty list) would otherwise never
+    reach it.
+    """
+    check_list(value, what)
+    return _walk_cells(value, what, dotted)
+
+
+def _walk_cells(value, what, dotted):
+    if _null_internal(value):
+        return
+    current = value
+    while True:
+        yield current
+        rest = current.cdr
+        if _null_internal(rest):
+            return
+        if not _consp_internal(rest):
+            if dotted == 'allow':
+                return
+            raise lisptype.LispTypeError(
+                f"{what}: {value!r} is not a proper list",
+                expected_type="proper LIST", actual_value=value)
+        current = rest
+
+
+def list_elements(value, what='list function', dotted='error'):
+    """The elements of a Lisp *list* argument (CLHS 14.2).
+
+    `seq_elements`' counterpart for the operators whose argument must be a
+    list rather than any sequence -- a vector handed to MEMBER or UNION is a
+    TYPE-ERROR, which is the half `seq_elements` cannot express because a
+    vector is a perfectly good sequence.
+    """
+    return [cell.car for cell in list_cells(value, what, dotted)]
+
+
+def list_tail(value, what='list function'):
+    """The atom a dotted list ends in, or NIL for a proper list.
+
+    Paired with ``list_cells(..., dotted='allow')``: an operator that copies a
+    dotted list (COPY-LIST, LDIFF's non-tail result) needs both the cells and
+    the terminator, and deriving the terminator by re-walking the chain is how
+    the two answers drift apart.
+    """
+    check_list(value, what)
+    if _null_internal(value):
+        return lisptype.NIL
+    current = value
+    while _consp_internal(current.cdr):
+        current = current.cdr
+    rest = current.cdr
+    return lisptype.NIL if _null_internal(rest) else rest
 
 
 def is_sequence(value):
@@ -81,11 +171,19 @@ def is_vector(value):
 def seq_elements(sequence, what='sequence function'):
     """Return the elements of any Lisp sequence as a Python list.
 
-    This is the *only* element-access path. It accepts every representation a
-    Lisp sequence has here -- `lispCons` chains (including a dotted tail, whose
-    final atom is included so callers can detect it), NIL, Python `list`/`tuple`
-    vectors, `LispArray` (respecting its fill pointer, via its own `__iter__`),
-    `str` and `LispString`.
+    This is the *only* element-access path for a CLHS 17 `sequence` argument.
+    It accepts every representation a Lisp sequence has here -- `lispCons`
+    chains, NIL, Python `list`/`tuple` vectors, `LispArray` (respecting its
+    fill pointer, via its own `__iter__`), `str` and `LispString`.
+
+    A dotted list is **not a proper sequence** (CLHS 17.1) and signals a
+    TYPE-ERROR. It used to have its final atom appended as one more *element*,
+    "so callers can detect it" -- which no caller did, so every sequence and
+    list operator silently answered with the tail folded in as data:
+    `(append '(a . b) '(z))` was `(A B Z)`. The operators that are genuinely
+    defined on a dotted list (LAST, BUTLAST, NTHCDR, LDIFF, TAILP) ask
+    `list_cells(..., dotted='allow')` instead, which stops at the tail rather
+    than consuming it.
 
     A non-sequence raises a Lisp `LispTypeError` rather than a Python
     `TypeError`: the old `iterate()` raised the latter and it surfaced as the
@@ -94,15 +192,7 @@ def seq_elements(sequence, what='sequence function'):
     if sequence is None or sequence is lisptype.NIL:
         return []
     if isinstance(sequence, lisptype.lispCons):
-        result = []
-        current = sequence
-        while isinstance(current, lisptype.lispCons):
-            result.append(current.car)
-            current = current.cdr
-        if current is not None and current is not lisptype.NIL:
-            # Dotted tail: include it rather than dropping it silently.
-            result.append(current)
-        return result
+        return list_elements(sequence, what)
     if isinstance(sequence, (list, tuple)):
         return list(sequence)
     if isinstance(sequence, (str, lisptype.LispString)):
@@ -405,7 +495,8 @@ def seq_set(sequence, index, value, what='sequence function'):
 
 
 __all__ = [
-    'is_sequence', 'is_vector', 'seq_elements', 'seq_length', 'bounding_indices',
+    'is_sequence', 'is_vector', 'check_list', 'list_cells', 'list_elements', 'list_tail',
+    'seq_elements', 'seq_length', 'bounding_indices',
     'make_lisp_list', 'make_string', 'make_vector', 'make_bit_vector', 'rebuild_like',
     'parse_sequence_type', 'build_sequence', 'seq_set',
 ]

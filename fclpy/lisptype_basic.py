@@ -689,7 +689,8 @@ class MultipleValues(lispT):
     def get_all(self):
         """Get all values as a tuple."""
         return self.values
-    
+
+
     def __len__(self):
         """Return number of values."""
         return len(self.values)
@@ -730,6 +731,24 @@ class MultipleValues(lispT):
             return MultipleValues(*values)
 
 
+def primary_value(value):
+    """Reduce a result to its primary value, for a single-value context.
+
+    CLHS 2.4.1 / 5.1.3: everywhere but an explicitly multiple-value context,
+    a form returning several values yields only the first, and one returning
+    *zero* values yields NIL. That rule has one home here rather than an
+    `isinstance(x, MultipleValues)` test at each site, because the sites that
+    forgot it let a `MultipleValues` **object** escape as a Lisp value
+    (standing rule 2): a `:key` function ending in `(floor (/ i 2))` handed
+    the comparison a `#<MULTIPLEVALUES>` instead of a number, so
+    `(subsetp '(1) '(0 2 3 4) :key ...)` compared two distinct wrapper objects
+    and answered NIL.
+    """
+    if isinstance(value, MultipleValues):
+        return value.get_primary()
+    return value
+
+
 __all__ = [
     # Exceptions
     'LispNotImplementedError', 'LispTypeError', 'LispError',
@@ -744,7 +763,7 @@ __all__ = [
     'set_symbol_function', 'symbol_plist', 'set_symbol_plist',
     # Utilities
     'lisp_bool', 'is_truthy', 'lisp_str', 'lisp_repr',
-    'MultipleValues', 'py_str_map',
+    'MultipleValues', 'primary_value', 'py_str_map',
     # Binding helpers (internal but useful)
     'Binding', 'FunctionBinding', 'SpecialForm'
 ]
