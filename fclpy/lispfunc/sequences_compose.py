@@ -315,6 +315,22 @@ def nbutlast(seq, n=1):
     return make_lisp_list(elements[:-n] if n else elements) if n <= len(elements) else lisptype.NIL
 
 
+@_registry.cl_function('BUTLAST')
+def butlast(seq, n=1):
+    """Return a fresh list without its last `n` conses (CLHS 14.2).
+
+    Previously a `core.py` stub (`tuple(seq[:-1])`) that ignored `n`
+    entirely and returned a Python tuple -- a **vector** in this
+    architecture, not a Lisp list (plan.md Finding M) -- so `(listp
+    (butlast '(a b c)))` was NIL and any `n` other than the implicit 1 was
+    silently discarded. Shares NBUTLAST's element/list-building mechanism;
+    the two differ only in being permitted vs. required to share structure
+    with `seq`, which this implementation (building a fresh list either
+    way) satisfies for both.
+    """
+    return nbutlast(seq, n)
+
+
 @_registry.cl_function('LAST')
 def last(list_seq, n=1):
     """Return the last `n` *conses* of a list (CLHS 14.2).
@@ -493,7 +509,7 @@ __all__ = [
     'append', 'nconc', 'nreconc', 'revappend', 'concatenate',
     'sort', 'stable_sort', 'merge',
     'subseq', 'copy_seq', 'copy_list', 'copy_alist',
-    'fill', 'replace', 'nbutlast', 'last',
+    'fill', 'replace', 'nbutlast', 'butlast', 'last',
     'nthcdr', 'nth', 'elt', 'make_list', 'make_sequence',
     'list_fn', 'tree_equal', 'list_length',
 ]

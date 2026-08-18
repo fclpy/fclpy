@@ -27,20 +27,26 @@ class TestSequenceIterator:
         assert items == [20, 30, 40]
     
     def test_iterate_string(self):
-        """Test iterating over a string."""
+        """Test iterating over a string.
+
+        Elements of a string are CHARACTERs (CLHS 15.1), not bare Python
+        `str` -- `arrays.string_element` is what every string-element
+        reader (AREF, LOOP `across`, and this iterator via `seq_elements`)
+        goes through.
+        """
         seq = "hello"
         iterator = iterate(seq)
-        
+
         items = list(iterator)
-        assert items == ['h', 'e', 'l', 'l', 'o']
-    
+        assert items == [lisptype.Character(c) for c in 'hello']
+
     def test_iterate_string_with_boundaries(self):
         """Test iterating over string with start/end."""
         seq = "hello"
         iterator = iterate(seq, start=1, end=4)
-        
+
         items = list(iterator)
-        assert items == ['e', 'l', 'l']
+        assert items == [lisptype.Character(c) for c in 'ell']
     
     def test_iterate_tuple(self):
         """Test iterating over a tuple."""
@@ -167,12 +173,12 @@ class TestSequenceProtocolIntegration:
         """Test protocol with strings."""
         seq = "abcde"
         iterator = iterate(seq, start=1, end=4)
-        
+
         results = []
         for item in iterator:
             results.append(item)
-        
-        assert ''.join(results) == "bcd"
+
+        assert ''.join(c.char for c in results) == "bcd"
     
     def test_nested_iteration(self):
         """Test multiple iterators on same sequence."""

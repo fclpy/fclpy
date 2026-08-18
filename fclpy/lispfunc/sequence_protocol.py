@@ -43,7 +43,7 @@ than testing for the class, so the two cannot disagree about what a vector is.
 
 import fclpy.lisptype as lisptype
 from . import arrays as _arrays
-from .arrays import LispArray
+from .arrays import LispArray, string_element
 
 
 # ===== READING =====
@@ -106,7 +106,12 @@ def seq_elements(sequence, what='sequence function'):
     if isinstance(sequence, (list, tuple)):
         return list(sequence)
     if isinstance(sequence, (str, lisptype.LispString)):
-        return list(sequence)
+        # Elements of a string are CHARACTERs (CLHS 15.1); both string
+        # representations index to a bare length-1 Python `str`, so every
+        # reader here must apply the same conversion `AREF`/`LOOP across` do
+        # (`arrays.string_element`) or FIND/POSITION/REDUCE/... hand back a
+        # raw `str` that the printer then shows as a one-character *string*.
+        return [string_element(sequence, c) for c in sequence]
     if isinstance(sequence, LispArray):
         # Only a *vector* is a sequence: an array of any other rank is an
         # array but not a sequence (CLHS 14.1), so it must be refused here
@@ -115,6 +120,9 @@ def seq_elements(sequence, what='sequence function'):
             raise lisptype.LispTypeError(
                 f"{what}: an array of rank {sequence.rank} is not a sequence",
                 expected_type="SEQUENCE", actual_value=sequence)
+        # `LispArray.__iter__` already yields through `row_major_get`, which
+        # applies `_present_element` -- a character-vector array hands back
+        # `Character` objects here without help.
         return list(sequence)
     raise lisptype.LispTypeError(
         f"{what}: {type(sequence).__name__} is not a sequence",

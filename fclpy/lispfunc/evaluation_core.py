@@ -105,6 +105,46 @@ def get_func_signature_info(func):
     return _get_func_signature_info(id(func), func)
 
 
+def split_keyword_args(func, values):
+    """Split already-evaluated call arguments into (positional_args, kwargs).
+
+    CLHS 3.4.1.4: a keyword/value pair is recognized once every required
+    positional parameter is filled, and applies identically whether the
+    call arrived as a direct function-call form, FUNCALL, or APPLY -- this
+    is the one place that decision is made, so all three call sites agree.
+    A user-defined LAMBDA/DEFUN closure takes `*call_args` with no
+    `**kwargs` and parses its own `&key` parameters from the positional
+    stream, so `use_kwargs` is false for it and this is a no-op passthrough
+    -- only built-in `**kwargs`-accepting callables are affected.
+    """
+    use_kwargs, kwarg_param_names, num_required_positionals = get_func_signature_info(func)
+    pos_args = []
+    kwargs = {}
+    i = 0
+    n = len(values)
+    while i < n:
+        value = values[i]
+        if (use_kwargs and isinstance(value, lisptype.lispKeyword)
+                and len(pos_args) >= num_required_positionals):
+            py_key = value.name.lower().replace('-', '_')
+            if py_key in kwarg_param_names or '*' in kwarg_param_names:
+                if i + 1 >= n:
+                    # CLHS 3.5.1.6: an odd number of keyword arguments is a
+                    # PROGRAM-ERROR.
+                    raise lisptype.LispProgramError(
+                        f"odd number of keyword arguments: {value.name} "
+                        f"has no value")
+                # CLHS 3.4.1.4.1: when a keyword appears more than once,
+                # the *leftmost* pair is the one used.
+                if py_key not in kwargs:
+                    kwargs[py_key] = values[i + 1]
+                i += 2
+                continue
+        pos_args.append(value)
+        i += 1
+    return pos_args, kwargs
+
+
 class ReturnFromException(Exception):
     """Exception raised by RETURN-FROM to exit a BLOCK."""
     def __init__(self, tag, value):
@@ -904,8 +944,17 @@ def eval(form, env=None):
                                 else:
                                     target.cdr = result
                             elif op_name == 'GETF':
-                                # (SETF (GETF plist indicator) val) - complex, just accept
-                                pass
+                                # (SETF (GETF plist indicator [default]) val)
+                                # CLHS 5.1.2.6. Previously a bare `pass` --
+                                # the assignment was silently discarded
+                                # (plan.md standing rule 4). `_place_accessor`
+                                # (shared with PUSH/PUSHNEW/INCF/ROTATEF) is
+                                # the one home of this place's read/write
+                                # pair, including rewriting the plist's own
+                                # place when the indicator is new.
+                                from .evaluation_special_forms import _place_accessor
+                                _, getf_setter = _place_accessor(place, env)
+                                getf_setter(result)
                             elif op_name == 'LDB':
                                 # (SETF (LDB bytespec int) val) - byte manipulation, skip
                                 pass
@@ -1941,63 +1990,25 @@ def eval(form, env=None):
                 raise ConditionException(cond, recoverable=False)
             raise lisptype.LispError(f"Not a function: {operator}")
         
-        # Get cached signature info for keyword argument handling
-        use_kwargs, kwarg_param_names, num_required_positionals = get_func_signature_info(func)
-        
-        # Evaluate arguments
+        # Evaluate arguments left to right. Ordinary function-call arguments
+        # are single-value contexts: a MultipleValues result reduces to its
+        # primary value (NIL if it returned zero values), per ANSI.
         eval_args = []
-        kwargs = {}
         current = args
-        
         while _consp_internal(current):
             arg_val = eval(car(current), env)
-            # Ordinary function-call arguments are single-value contexts:
-            # a MultipleValues result is reduced to its primary value (NIL
-            # if it returned zero values), per ANSI.
             if isinstance(arg_val, lisptype.MultipleValues):
                 _mv = arg_val.get_all()
                 arg_val = _mv[0] if _mv else lisptype.NIL
-
-            # Only treat a keyword as a Python kwarg if:
-            # 1. The function accepts kwargs
-            # 2. We've already filled all required positional parameters
-            # 3. The keyword name matches an actual parameter name, OR function has **kwargs
-            if (use_kwargs and isinstance(arg_val, lisptype.lispKeyword) 
-                and len(eval_args) >= num_required_positionals):
-                # Convert keyword name to Python kwarg name format
-                py_key = arg_val.name.lower().replace('-', '_')
-                
-                # Treat as kwarg if this matches a function parameter OR function accepts **kwargs ('*')
-                if py_key in kwarg_param_names or '*' in kwarg_param_names:
-                    # Get the next argument as the value
-                    current = cdr(current)
-                    if _consp_internal(current):
-                        key_val = eval(car(current), env)
-                        # CLHS 3.4.1.4.1: when a keyword appears more than
-                        # once, the *leftmost* pair is the one used. Plain
-                        # assignment kept the rightmost, so
-                        # `:allow-other-keys t :allow-other-keys nil` --
-                        # which ansi-test uses precisely to check this rule
-                        # -- took the NIL.
-                        if py_key not in kwargs:
-                            kwargs[py_key] = key_val
-                    else:
-                        # CLHS 3.5.1.6: an odd number of keyword arguments is
-                        # a PROGRAM-ERROR. Passing the dangling keyword on as
-                        # a positional argument instead produced a Python
-                        # TypeError from the callee -- a Python exception as
-                        # the value of the form (standing rule 2).
-                        raise lisptype.LispProgramError(
-                            f"odd number of keyword arguments: {arg_val.name} "
-                            f"has no value")
-                else:
-                    # Keyword doesn't match a param, pass as positional value
-                    eval_args.append(arg_val)
-            else:
-                eval_args.append(arg_val)
-            
+            eval_args.append(arg_val)
             current = cdr(current)
-        
+
+        # Split evaluated arguments into positionals and &key pairs -- the
+        # one shared decision (split_keyword_args), also used by APPLY and
+        # FUNCALL so an indirect call recognizes keywords the same way a
+        # direct one does.
+        eval_args, kwargs = split_keyword_args(func, eval_args)
+
         # Call function with exception handling
         try:
             if kwargs:
@@ -2117,9 +2128,12 @@ def apply(function, *args):
         if args and hasattr(args[-1], '__iter__'):
             # Last argument is a list of arguments
             all_args = list(args[:-1]) + list(args[-1])
-            return function(*all_args)
         else:
-            return function(*args)
+            all_args = list(args)
+        # CLHS 3.4.1.4: recognize &key pairs in the flattened argument list
+        # the same way a direct call would -- see split_keyword_args.
+        pos_args, kwargs = split_keyword_args(function, all_args)
+        return function(*pos_args, **kwargs)
     except ConditionException:
         # Re-raise Lisp conditions without wrapping them
         raise
@@ -2167,7 +2181,10 @@ def funcall(function, *args):
     function = coerce_to_function(function, 'FUNCALL')
 
     try:
-        return function(*args)
+        # CLHS 3.4.1.4: recognize &key pairs among the call arguments the
+        # same way a direct call would -- see split_keyword_args.
+        pos_args, kwargs = split_keyword_args(function, list(args))
+        return function(*pos_args, **kwargs)
     except ConditionException:
         # Re-raise Lisp conditions without wrapping them
         raise

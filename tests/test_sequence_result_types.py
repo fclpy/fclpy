@@ -43,8 +43,8 @@ class TestElementAccess:
         (lisptype.NIL, []),
         (None, []),
         ([1, 2, 3], [1, 2, 3]),
-        (lisptype.LispString('abc'), ['a', 'b', 'c']),
-        ('abc', ['a', 'b', 'c']),
+        (lisptype.LispString('abc'), [lisptype.Character('a'), lisptype.Character('b'), lisptype.Character('c')]),
+        ('abc', [lisptype.Character('a'), lisptype.Character('b'), lisptype.Character('c')]),
     ])
     def test_reads_every_representation(self, sequence, expected):
         assert seq_elements(sequence) == expected
@@ -101,7 +101,7 @@ class TestSameTypeResults:
                           lisptype.lispCons)
         assert isinstance(seq.sort([3, 1, 2], lambda a, b: a < b), list)
         assert str(seq.sort(lisptype.LispString('cba'),
-                            lambda a, b: a < b)) == 'abc'
+                            lambda a, b: a.char < b.char)) == 'abc'
 
     def test_reverse_preserves_each_sequence_type(self):
         assert isinstance(seq.reverse(lisp_list(1, 2)), lisptype.lispCons)
@@ -147,11 +147,11 @@ class TestResultTypeArgument:
 
     def test_concatenate_iterates_its_arguments(self):
         result = seq.concatenate('LIST', lisptype.LispString('ab'), [1, 2])
-        assert elements(result) == ['a', 'b', 1, 2]
+        assert elements(result) == [lisptype.Character('a'), lisptype.Character('b'), 1, 2]
         assert isinstance(result, lisptype.lispCons)
 
     def test_map_honours_a_string_result_type(self):
-        result = seq.map_fn('STRING', lambda c: c.upper(),
+        result = seq.map_fn('STRING', lambda c: c.char.upper(),
                             lisptype.LispString('abc'))
         assert str(result) == 'ABC'
 

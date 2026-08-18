@@ -36,9 +36,13 @@ class TestFindFunction:
         assert find(10, seq) is lisptype.NIL
     
     def test_find_in_string(self):
-        """Test finding character in string."""
+        """Test finding character in string.
+
+        FIND returns an element of the sequence it is given, and the
+        elements of a string are CHARACTERs (CLHS 15.1), not bare `str`.
+        """
         seq = "hello"
-        assert find('l', seq) == 'l'
+        assert find('l', seq) == lisptype.Character('l')
         assert find('x', seq) is lisptype.NIL
     
     def test_find_with_key(self):

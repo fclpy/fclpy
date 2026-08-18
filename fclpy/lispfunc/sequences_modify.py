@@ -6,6 +6,7 @@ import fclpy.lisptype as lisptype
 from .sequences_search import (
     iterate, _seq_length, _seq_to_list, _make_matcher, _coerce_function_designator,
     _lisp_truthy, _rebuild_sequence, _matched_positions, _two_sequence_matcher,
+    _alist_pairs, _pair_key,
 )
 from .sequence_protocol import bounding_indices as _bounding_indices
 
@@ -326,12 +327,15 @@ def nsubstitute_if_not(newitem, test, sequence, **kwargs):
 
 
 @_registry.cl_function('SUBST')
-def subst(new, old, tree, test=None, test_not=None, key=None):
+def subst(new, old, tree, test=None, test_not=None, key=None, **kwargs):
     """Substitute old with new in tree.
 
     Per CLHS 15.4, the test is called with `old` as the first argument and
     the (possibly key-transformed) subexpression as the second -- this
     previously called `test(tree, old)`, the reversed order (plan.md X3).
+    `**kwargs` accepts (and ignores) `:allow-other-keys` -- without it, any
+    keyword argument at all raised a Python arity TypeError, since a
+    function with no `**kwargs` cannot receive one positionally either.
     """
     matcher = _make_matcher(test=test, test_not=test_not, key=key)
 
@@ -345,40 +349,56 @@ def subst(new, old, tree, test=None, test_not=None, key=None):
 
 
 @_registry.cl_function('SUBST-IF')
-def subst_if(new, predicate, tree):
-    """Substitute with predicate."""
+def subst_if(new, predicate, tree, key=None, **kwargs):
+    """Substitute with predicate (CLHS 15.4).
+
+    `:key` is applied to each subexpression before testing it, previously
+    absent entirely; `**kwargs` tolerates `:allow-other-keys` the same way
+    SUBST does above.
+    """
     predicate = _coerce_function_designator(predicate)
-    if _lisp_truthy(predicate(tree)):
+    key = _coerce_function_designator(key)
+    target = key(tree) if key else tree
+    if _lisp_truthy(predicate(target)):
         return new
     elif atom(tree):
         return tree
     else:
-        return cons(subst_if(new, predicate, car(tree)),
-                   subst_if(new, predicate, cdr(tree)))
+        return cons(subst_if(new, predicate, car(tree), key=key),
+                   subst_if(new, predicate, cdr(tree), key=key))
 
 
 @_registry.cl_function('SUBST-IF-NOT')
-def subst_if_not(new, predicate, tree):
+def subst_if_not(new, predicate, tree, key=None, **kwargs):
     """Substitute with negated predicate."""
     predicate = _coerce_function_designator(predicate)
-    return subst_if(new, lambda x: not _lisp_truthy(predicate(x)), tree)
+    return subst_if(new, lambda x: not _lisp_truthy(predicate(x)), tree, key=key)
 
 
 @_registry.cl_function('SUBLIS')
-def sublis(alist, tree, test=None, test_not=None, key=None):
+def sublis(alist, tree, test=None, test_not=None, key=None, **kwargs):
     """Substitute using association list.
 
     Per CLHS 15.4, :key is applied to each subexpression of `tree` (the
     candidate), and the test is called with the alist entry's key as the
     first argument -- this previously called `test(tree, pair[0])`, the
-    reversed order (plan.md X3), with no :key support at all.
+    reversed order (plan.md X3), with no :key support at all. `**kwargs`
+    accepts (and ignores) `:allow-other-keys`, matching SUBST above.
     """
     matcher = _make_matcher(test=test, test_not=test_not, key=key)
 
     if atom(tree):
-        for pair in alist:
-            if pair and len(pair) > 1 and matcher(pair[0], tree):
-                return pair[1]
+        # CLHS 15.4: each alist entry is a dotted pair `(old . new)`, not a
+        # 2-element list -- `len(pair) > 1`/`pair[1]` treated a cons as a
+        # Python sequence, which is 1 for a dotted pair (`__len__` counts
+        # cdr-chain conses, and the cdr here is an atom), so a match never
+        # fired. `_alist_pairs`/`_pair_key` are ASSOC's shared alist-pair
+        # accessors (plan.md standing rule 3: reuse rather than re-derive).
+        for pair in _alist_pairs(alist):
+            if pair is None or pair is lisptype.NIL:
+                continue
+            if matcher(_pair_key(pair, 0), tree):
+                return _pair_key(pair, 1)
         return tree
     else:
         return cons(sublis(alist, car(tree), test, test_not, key),
@@ -387,26 +407,34 @@ def sublis(alist, tree, test=None, test_not=None, key=None):
 
 @_registry.cl_function('NSUBST')
 def nsubst(new, old, tree, **kwargs):
-    """Destructive substitute in tree."""
-    return subst(new, old, tree)  # Non-destructive for now
+    """Destructive substitute in tree (non-destructive for now).
+
+    Previously discarded :test/:test-not/:key entirely by calling `subst`
+    with none of `**kwargs` forwarded.
+    """
+    return subst(new, old, tree, **kwargs)
 
 
 @_registry.cl_function('NSUBST-IF')
 def nsubst_if(new, predicate, tree, **kwargs):
-    """Destructive substitute if in tree."""
-    return subst_if(new, predicate, tree)  # Non-destructive for now
+    """Destructive substitute if in tree (non-destructive for now)."""
+    return subst_if(new, predicate, tree, **kwargs)
 
 
 @_registry.cl_function('NSUBST-IF-NOT')
 def nsubst_if_not(new, predicate, tree, **kwargs):
-    """Destructive substitute if not in tree."""
-    return subst_if_not(new, predicate, tree)  # Non-destructive for now
+    """Destructive substitute if not in tree (non-destructive for now)."""
+    return subst_if_not(new, predicate, tree, **kwargs)
 
 
 @_registry.cl_function('NSUBLIS')
 def nsublis(alist, tree, **kwargs):
-    """Destructive substitute using alist."""
-    return sublis(alist, tree)  # Non-destructive for now
+    """Destructive substitute using alist (non-destructive for now).
+
+    Previously discarded :test/:test-not/:key entirely by calling `sublis`
+    with none of `**kwargs` forwarded.
+    """
+    return sublis(alist, tree, **kwargs)
 
 
 __all__ = [

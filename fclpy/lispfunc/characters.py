@@ -2,108 +2,207 @@
 
 import fclpy.lisptype as lisptype
 from fclpy.lispfunc import registry as _registry
+from . import arrays as _arrays
+
+
+# CLHS 13.1.7's standard character names. `NAME-CHAR` parses a name
+# case-insensitively (several names, e.g. NEWLINE/LINEFEED, may share a
+# character); `CHAR-NAME` must answer with the exact spelling ansi-test
+# checks via `(string= (char-name #\Space) "Space")` -- capitalized, not
+# upper-case -- so it is not simply the other table's key.
+_NAMED_CHAR_TEXT = {
+    "SPACE": " ", "NEWLINE": "\n", "LINEFEED": "\n", "TAB": "\t",
+    "RETURN": "\r", "PAGE": "\f", "BACKSPACE": "\b", "RUBOUT": chr(127),
+    "NULL": chr(0), "NUL": chr(0), "BELL": chr(7), "BEL": chr(7),
+    "ESCAPE": chr(27), "ESC": chr(27),
+}
+_CHAR_DISPLAY_NAME = {
+    " ": "Space", "\n": "Newline", "\t": "Tab", "\r": "Return",
+    "\f": "Page", "\b": "Backspace", chr(127): "Rubout",
+    chr(0): "Null", chr(7): "Bell", chr(27): "Escape",
+}
+
+
+def _char_text(character):
+    """The one-character text of a Lisp CHARACTER argument, or None.
+
+    A character here is `lisptype.Character` -- what the reader's `#\\`
+    syntax and CODE-CHAR/DIGIT-CHAR/CHAR-UPCASE/... construct -- or a bare
+    length-1 Python `str`, which is what a string index yielded before
+    `arrays.string_element` existed and what a few callers still pass
+    directly. Every predicate/comparison below has to accept both or "the
+    same" character disagrees with itself depending on where it came from:
+    before this, every function here tested `isinstance(character, str)`
+    only, so a `Character` argument -- the normal shape once FIND/POSITION/
+    LOOP-across on a string wrap their elements via `string_element` --
+    silently fell through as "not a character" (a predicate false, an
+    accessor unchanged, an ordering comparison a bare Python `TypeError`
+    between two `Character`s leaking as the value of the Lisp form).
+    """
+    if isinstance(character, lisptype.Character):
+        return character.char
+    if isinstance(character, str) and len(character) == 1:
+        return character
+    return None
+
+
+def _require_char_text(character, name):
+    """`_char_text`, signalling TYPE-ERROR instead of returning None.
+
+    ansi-test's `char-type-error-check` (used by ALPHA-CHAR-P, BOTH-CASE-P,
+    GRAPHIC-CHAR-P, {UPPER,LOWER}-CASE-P, STANDARD-CHAR-P, CHAR-NAME) drives
+    every object in `*universe*` through the predicate and asserts a
+    TYPE-ERROR for each non-character -- so these can't stay merely
+    permissive-false the way a CLHS "consequences are undefined" reading
+    would allow.
+    """
+    text = _char_text(character)
+    if text is None:
+        raise lisptype.LispTypeError(
+            f"{name}: {character!r} is not a character",
+            expected_type="CHARACTER", actual_value=character)
+    return text
+
+
+def _char_texts(characters, name):
+    """`_char_text` over every argument of a variadic character function.
+
+    CLHS 5.3's comparison functions have the lambda list `(character
+    &rest more-characters)` -- at least one argument is required, so zero
+    arguments is a PROGRAM-ERROR rather than the vacuous-true these used to
+    return for "fewer than two".
+    """
+    if not characters:
+        raise lisptype.LispProgramError(
+            f"{name}: at least one argument is required")
+    texts = []
+    for c in characters:
+        text = _char_text(c)
+        if text is None:
+            raise lisptype.LispTypeError(
+                f"{name}: {c!r} is not a character",
+                expected_type="CHARACTER", actual_value=c)
+        texts.append(text)
+    return texts
 
 
 @_registry.cl_function('ALPHA-CHAR-P')
 def alpha_char_p(character):
     """Test if character is alphabetic."""
-    result = isinstance(character, str) and len(character) == 1 and character.isalpha()
-    return lisptype.lisp_bool(result)
+    text = _require_char_text(character, 'ALPHA-CHAR-P')
+    return lisptype.lisp_bool(text.isalpha())
 
 
 @_registry.cl_function('ALPHANUMERICP')
 def alphanumericp(character):
     """Test if character is alphanumeric."""
-    result = isinstance(character, str) and len(character) == 1 and character.isalnum()
-    return lisptype.lisp_bool(result)
+    text = _require_char_text(character, 'ALPHANUMERICP')
+    return lisptype.lisp_bool(text.isalnum())
 
 
 @_registry.cl_function('BOTH-CASE-P')
 def both_case_p(character):
     """Test if character has both cases."""
-    if not isinstance(character, str) or len(character) != 1:
-        return lisptype.NIL
-    result = character.upper() != character.lower()
-    return lisptype.lisp_bool(result)
+    text = _require_char_text(character, 'BOTH-CASE-P')
+    return lisptype.lisp_bool(text.upper() != text.lower())
 
 
 @_registry.cl_function('CHAR-CODE')
 def char_code(character):
     """Get character code."""
-    if isinstance(character, str) and len(character) == 1:
-        return ord(character)
-    raise lisptype.LispTypeError("CHAR-CODE: argument must be a character", 
-                                expected_type="CHARACTER", 
+    text = _char_text(character)
+    if text is not None:
+        return ord(text)
+    raise lisptype.LispTypeError("CHAR-CODE: argument must be a character",
+                                expected_type="CHARACTER",
                                 actual_value=character)
+
+
+def _single_char_case_map(text, mapped):
+    """`mapped` if it is still one character, else `text` unchanged.
+
+    CLHS 13.1.1's case mapping is between individual characters; Python's
+    `str.lower()`/`.upper()` is a locale mapping and not length-preserving
+    (`'ß'.upper()` is the two characters `'SS'`), so a character with no
+    single-character case partner has no case conversion to perform.
+    """
+    return mapped if len(mapped) == 1 else text
 
 
 @_registry.cl_function('CHAR-DOWNCASE')
 def char_downcase(character):
     """Convert character to lowercase."""
-    if isinstance(character, str) and len(character) == 1:
-        return character.lower()
-    return character
+    text = _char_text(character)
+    if text is None:
+        raise lisptype.LispTypeError("CHAR-DOWNCASE: argument must be a character",
+                                    expected_type="CHARACTER", actual_value=character)
+    return lisptype.Character(_single_char_case_map(text, text.lower()))
 
 
 @_registry.cl_function('CHAR-UPCASE')
 def char_upcase(character):
     """Convert character to uppercase."""
-    if isinstance(character, str) and len(character) == 1:
-        return character.upper()
-    return character
+    text = _char_text(character)
+    if text is None:
+        raise lisptype.LispTypeError("CHAR-UPCASE: argument must be a character",
+                                    expected_type="CHARACTER", actual_value=character)
+    return lisptype.Character(_single_char_case_map(text, text.upper()))
+
+
+def _fold_case(text):
+    """Upper-case one character for a case-insensitive comparison.
+
+    Shares `_single_char_case_map`'s guard against `str.upper()`'s locale
+    expansions (`'ß'.upper()` is two characters, `'SS'`): folding must
+    never change how many characters are being compared, or a single
+    sharp-s would sort as greater than every single-character neighbor
+    instead of comparing by code point.
+    """
+    return _single_char_case_map(text, text.upper())
 
 
 @_registry.cl_function('CHAR=')
 def char_equal(*characters):
     """Test character equality (case sensitive)."""
-    if len(characters) < 2:
-        return lisptype.T
-    result = all(c == characters[0] for c in characters[1:])
-    return lisptype.lisp_bool(result)
+    texts = _char_texts(characters, 'CHAR=')
+    return lisptype.lisp_bool(all(t == texts[0] for t in texts[1:]))
 
 
 @_registry.cl_function('CHAR-EQUAL')
 def char_equal_ignore_case(*characters):
     """Test character equality (case insensitive)."""
-    if len(characters) < 2:
-        return lisptype.T
-    chars = [c.upper() if isinstance(c, str) else c for c in characters]
-    return lisptype.lisp_bool(all(c == chars[0] for c in chars[1:]))
+    texts = [_fold_case(t) for t in _char_texts(characters, 'CHAR-EQUAL')]
+    return lisptype.lisp_bool(all(t == texts[0] for t in texts[1:]))
 
 @_registry.cl_function('CHAR-GREATERP')
 def char_greaterp(*characters):
     """Test character greater than (case insensitive)."""
-    if len(characters) < 2:
-        return lisptype.T
-    chars = [c.upper() if isinstance(c, str) else c for c in characters]
-    return lisptype.lisp_bool(all(chars[i] > chars[i+1] for i in range(len(chars)-1)))
+    texts = [_fold_case(t) for t in _char_texts(characters, 'CHAR-GREATERP')]
+    return lisptype.lisp_bool(all(texts[i] > texts[i+1] for i in range(len(texts)-1)))
 
 @_registry.cl_function('CHAR-LESSP')
 def char_lessp(*characters):
     """Test character less than (case insensitive)."""
-    if len(characters) < 2:
-        return lisptype.T
-    chars = [c.upper() if isinstance(c, str) else c for c in characters]
-    return lisptype.lisp_bool(all(chars[i] < chars[i+1] for i in range(len(chars)-1)))
-
-def char_not_equal(*characters):
-    """Internal helper: inequality (case sensitive)."""
-    return lisptype.lisp_bool(not (char_equal(*characters)) is lisptype.T)
+    texts = [_fold_case(t) for t in _char_texts(characters, 'CHAR-LESSP')]
+    return lisptype.lisp_bool(all(texts[i] < texts[i+1] for i in range(len(texts)-1)))
 
 @_registry.cl_function('CHAR-NOT-EQUAL')
 def char_not_equal_ignore_case(*characters):
-    """Test character inequality (case insensitive)."""
-    return lisptype.lisp_bool(char_equal_ignore_case(*characters) is lisptype.NIL)
+    """Test that no two characters are the same (case insensitive)."""
+    texts = [_fold_case(t) for t in _char_texts(characters, 'CHAR-NOT-EQUAL')]
+    return lisptype.lisp_bool(len(set(texts)) == len(texts))
 
 @_registry.cl_function('CHAR-NOT-GREATERP')
 def char_not_greaterp(*characters):
-    """Test character not greater than (case insensitive)."""
-    return lisptype.lisp_bool(char_greaterp(*characters) is lisptype.NIL)
+    """Test characters are monotonically nondecreasing (case insensitive)."""
+    texts = [_fold_case(t) for t in _char_texts(characters, 'CHAR-NOT-GREATERP')]
+    return lisptype.lisp_bool(all(texts[i] <= texts[i+1] for i in range(len(texts)-1)))
 
 @_registry.cl_function('CHAR-NOT-LESSP')
 def char_not_lessp(*characters):
-    """Test character not less than (case insensitive)."""
-    return lisptype.lisp_bool(char_lessp(*characters) is lisptype.NIL)
+    """Test characters are monotonically nonincreasing (case insensitive)."""
+    texts = [_fold_case(t) for t in _char_texts(characters, 'CHAR-NOT-LESSP')]
+    return lisptype.lisp_bool(all(texts[i] >= texts[i+1] for i in range(len(texts)-1)))
 
 @_registry.cl_function('CHAR-INT')
 def char_int(character):
@@ -112,53 +211,40 @@ def char_int(character):
 
 @_registry.cl_function('CHAR-NAME')
 def char_name(character):
-    """Get character name."""
-    if isinstance(character, str) and len(character) == 1:
-        if character == ' ':
-            return "SPACE"
-        elif character == '\n':
-            return "NEWLINE"
-        elif character == '\t':
-            return "TAB"
-        elif character == '\r':
-            return "RETURN"
-        elif character == '\f':
-            return "PAGE"
-        elif character == '\b':
-            return "BACKSPACE"
-        elif character.isprintable():
-            return None  # Printable characters don't have names
-        else:
-            return f"CHAR-{ord(character)}"
-    return None
+    """Get character name (CLHS 13.1.7's names, spelled as ansi-test's
+    `(string= (char-name #\\Space) "Space")` expects -- capitalized, not
+    upper-case).
+
+    Only a character with a name in `_CHAR_DISPLAY_NAME` gets one back: a
+    made-up name for every other unprintable character (this used to
+    return `f"CHAR-{code}"`) cannot round-trip through NAME-CHAR, and
+    `char-name.1.fn` checks exactly that round trip for every character
+    in the implementation's code range.
+    """
+    text = _require_char_text(character, 'CHAR-NAME')
+    return _CHAR_DISPLAY_NAME.get(text)
 
 
 # Case sensitive character comparisons
 @_registry.cl_function('CHAR/=')  # case-sensitive inequality
 def char_ne(*characters):
-    """Test character inequality (case sensitive)."""
-    if len(characters) < 2:
-        return lisptype.NIL
-    result = not all(c == characters[0] for c in characters[1:])
-    return lisptype.lisp_bool(result)
+    """Test that no two characters are the same (case sensitive)."""
+    texts = _char_texts(characters, 'CHAR/=')
+    return lisptype.lisp_bool(len(set(texts)) == len(texts))
 
 
 @_registry.cl_function('CHAR<')
 def char_lt(*characters):
     """Test character less than (case sensitive)."""
-    if len(characters) < 2:
-        return lisptype.T
-    result = all(characters[i] < characters[i+1] for i in range(len(characters)-1))
-    return lisptype.lisp_bool(result)
+    texts = _char_texts(characters, 'CHAR<')
+    return lisptype.lisp_bool(all(texts[i] < texts[i+1] for i in range(len(texts)-1)))
 
 
 @_registry.cl_function('CHAR<=')
 def char_le(*characters):
     """Test character less than or equal (case sensitive)."""
-    if len(characters) < 2:
-        return lisptype.T
-    result = all(characters[i] <= characters[i+1] for i in range(len(characters)-1))
-    return lisptype.lisp_bool(result)
+    texts = _char_texts(characters, 'CHAR<=')
+    return lisptype.lisp_bool(all(texts[i] <= texts[i+1] for i in range(len(texts)-1)))
 
 
 def char_eq(*characters):  # alias (no decorator)
@@ -168,19 +254,15 @@ def char_eq(*characters):  # alias (no decorator)
 @_registry.cl_function('CHAR>')
 def char_gt(*characters):
     """Test character greater than (case sensitive)."""
-    if len(characters) < 2:
-        return lisptype.T
-    result = all(characters[i] > characters[i+1] for i in range(len(characters)-1))
-    return lisptype.lisp_bool(result)
+    texts = _char_texts(characters, 'CHAR>')
+    return lisptype.lisp_bool(all(texts[i] > texts[i+1] for i in range(len(texts)-1)))
 
 
 @_registry.cl_function('CHAR>=')
 def char_ge(*characters):
     """Test character greater than or equal (case sensitive)."""
-    if len(characters) < 2:
-        return lisptype.T
-    result = all(characters[i] >= characters[i+1] for i in range(len(characters)-1))
-    return lisptype.lisp_bool(result)
+    texts = _char_texts(characters, 'CHAR>=')
+    return lisptype.lisp_bool(all(texts[i] >= texts[i+1] for i in range(len(texts)-1)))
 
 
 def char_less(*characters):  # alias
@@ -201,42 +283,25 @@ def char_greater_equal(*characters):  # alias
 
 @_registry.cl_function('CHARACTER')
 def character(designator):
-    """Convert to character."""
-    # Convert LispString to Python string for processing
+    """Convert a character designator to a CHARACTER (CLHS 5.3)."""
+    if isinstance(designator, lisptype.Character):
+        return designator
     if isinstance(designator, lisptype.LispString):
         designator = str(designator)
-    
+
     if isinstance(designator, str):
         if len(designator) == 1:
-            return designator
-        else:
-            # Try to convert from character name
-            name_up = designator.upper()
-            if name_up == "SPACE":
-                return " "
-            elif name_up == "NEWLINE" or name_up == "LINEFEED":
-                return "\n"
-            elif name_up == "TAB":
-                return "\t"
-            elif name_up == "RETURN":
-                return "\r"
-            elif name_up == "PAGE":
-                return "\f"
-            elif name_up == "BACKSPACE":
-                return "\b"
-            elif name_up == "RUBOUT":
-                return chr(127)  # DEL character
-            elif name_up == "NULL" or name_up == "NUL":
-                return chr(0)
-            elif name_up == "BELL" or name_up == "BEL":
-                return chr(7)
-            elif name_up == "ESCAPE" or name_up == "ESC":
-                return chr(27)
-    elif isinstance(designator, int):
-        return chr(designator)
-    elif isinstance(designator, lisptype.Character):
-        return designator.char
-    
+            return lisptype.Character(designator)
+        name_up = designator.upper()
+        if name_up in _NAMED_CHAR_TEXT:
+            return lisptype.Character(_NAMED_CHAR_TEXT[name_up])
+    elif isinstance(designator, lisptype.LispSymbol):
+        name_up = designator.name.upper()
+        if len(designator.name) == 1:
+            return lisptype.Character(designator.name)
+        if name_up in _NAMED_CHAR_TEXT:
+            return lisptype.Character(_NAMED_CHAR_TEXT[name_up])
+
     raise lisptype.LispTypeError(f"CHARACTER: cannot convert {designator} to character",
                                 expected_type="CHARACTER-DESIGNATOR",
                                 actual_value=designator)
@@ -262,7 +327,7 @@ def characterp(object):
 def code_char(code):
     """Convert code to character."""
     try:
-        return chr(code)
+        return lisptype.Character(chr(code))
     except ValueError:
         return None
 
@@ -272,54 +337,58 @@ def digit_char(weight, radix=10):
     """Convert digit weight to character."""
     if 0 <= weight < radix:
         if weight < 10:
-            return str(weight)
+            return lisptype.Character(str(weight))
         elif weight < 36:
-            return chr(ord('A') + weight - 10)
+            return lisptype.Character(chr(ord('A') + weight - 10))
     return None
 
 
 @_registry.cl_function('DIGIT-CHAR-P')
 def digit_char_p(character, radix=10):
     """Test if character is digit and return weight."""
-    if not isinstance(character, str) or len(character) != 1:
+    text = _char_text(character)
+    if text is None:
         return None
-    
-    if '0' <= character <= '9':
-        weight = ord(character) - ord('0')
-    elif 'A' <= character.upper() <= 'Z':
-        weight = ord(character.upper()) - ord('A') + 10
+
+    if '0' <= text <= '9':
+        weight = ord(text) - ord('0')
+    elif 'A' <= text.upper() <= 'Z':
+        weight = ord(text.upper()) - ord('A') + 10
     else:
         return None
-    
+
     return weight if weight < radix else None
 
 
 @_registry.cl_function('GRAPHIC-CHAR-P')
 def graphic_char_p(character):
     """Test if character is graphic."""
-    result = isinstance(character, str) and len(character) == 1 and character.isprintable()
-    return lisptype.lisp_bool(result)
+    text = _require_char_text(character, 'GRAPHIC-CHAR-P')
+    return lisptype.lisp_bool(text.isprintable())
 
 
 @_registry.cl_function('LOWER-CASE-P')
 def lower_case_p(character):
     """Test if character is lowercase."""
-    result = isinstance(character, str) and len(character) == 1 and character.islower()
-    return lisptype.lisp_bool(result)
+    text = _require_char_text(character, 'LOWER-CASE-P')
+    return lisptype.lisp_bool(text.islower())
 
 
 @_registry.cl_function('UPPER-CASE-P')
 def upper_case_p(character):
     """Test if character is uppercase."""
-    result = isinstance(character, str) and len(character) == 1 and character.isupper()
-    return lisptype.lisp_bool(result)
+    text = _require_char_text(character, 'UPPER-CASE-P')
+    return lisptype.lisp_bool(text.isupper())
 
 
 @_registry.cl_function('NAME-CHAR')
 def name_char(name):
     """Get character by name."""
-    if isinstance(name, str):
-        return character(name)
+    if isinstance(name, (str, lisptype.LispString, lisptype.LispSymbol)):
+        try:
+            return character(name)
+        except lisptype.LispTypeError:
+            return None
     return None
 
 
@@ -327,7 +396,7 @@ def name_char(name):
 def int_char(integer):
     """Convert integer to character."""
     try:
-        return chr(integer)
+        return lisptype.Character(chr(integer))
     except ValueError:
         return None
 
@@ -335,15 +404,14 @@ def int_char(integer):
 @_registry.cl_function('STANDARD-CHAR-P')
 def standard_char_p(character):
     """Test if character is standard."""
-    if not isinstance(character, str) or len(character) != 1:
-        return lisptype.NIL
-    
+    text = _require_char_text(character, 'STANDARD-CHAR-P')
+
     # Standard characters include space, newline, and graphic characters
     # in the basic Latin alphabet
-    if character == ' ' or character == '\n':
+    if text == ' ' or text == '\n':
         return lisptype.T
-    
-    code = ord(character)
+
+    code = ord(text)
     result = (33 <= code <= 126)  # Printable ASCII
     return lisptype.lisp_bool(result)
 
@@ -352,20 +420,14 @@ def standard_char_p(character):
 @_registry.cl_function('CHAR')
 def char(string, index):
     """Get character at index in string."""
-    if isinstance(string, lisptype.LispString):
+    if isinstance(string, (lisptype.LispString, str)):
         if 0 <= index < len(string):
-            return string[index]
-        else:
-            raise lisptype.LispError(f"CHAR: index {index} out of bounds for string of length {len(string)}")
-    elif isinstance(string, str) and 0 <= index < len(string):
-        return string[index]
-    
-    if not isinstance(string, (str, lisptype.LispString)):
-        raise lisptype.LispTypeError("CHAR: first argument must be a string",
-                                    expected_type="STRING",
-                                    actual_value=string)
-    else:
+            return _arrays.string_element(string, string[index])
         raise lisptype.LispError(f"CHAR: index {index} out of bounds for string of length {len(string)}")
+
+    raise lisptype.LispTypeError("CHAR: first argument must be a string",
+                                expected_type="STRING",
+                                actual_value=string)
 
 
 def schar(string, index):
@@ -375,11 +437,14 @@ def schar(string, index):
 
 @_registry.cl_function('STRING')
 def string_fn(designator):
-    """Convert to string."""
+    """Convert a string designator to a string (CLHS 16.2: a string,
+    a character, or a symbol -- denoting its name)."""
     if isinstance(designator, lisptype.LispString):
         return designator  # Already a mutable string
     elif isinstance(designator, str):
         return lisptype.LispString(designator)
+    elif isinstance(designator, lisptype.Character):
+        return lisptype.LispString(designator.char)
     elif isinstance(designator, (list, tuple)):
         return lisptype.LispString(''.join(str(x) for x in designator))
     else:

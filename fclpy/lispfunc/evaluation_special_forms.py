@@ -226,7 +226,20 @@ def eval_incf(form, env):
             _arrays.array_place_write(op_name, values, new_value)
             return new_value
 
-    raise lisptype.LispNotImplementedError(f"INCF: complex places not yet supported: {place}")
+    # Any other place `_place_accessor` knows (CAR/CDR/CADR/GETF/...) --
+    # shared with PUSH/PUSHNEW/ROTATEF, so a place newly supported there
+    # (e.g. GETF, plan.md C16) works for INCF too instead of needing its
+    # own copy of the same place logic.
+    getter, setter = _place_accessor(place, env)
+    current_value = getter()
+    try:
+        new_value = current_value + delta
+    except TypeError:
+        raise lisptype.LispTypeError(
+            actual_value=current_value, expected_type='number',
+            message="INCF: cannot add delta to place value")
+    setter(new_value)
+    return new_value
 
 
 def eval_decf(form, env):
@@ -284,7 +297,19 @@ def eval_decf(form, env):
             _arrays.array_place_write(op_name, values, new_value)
             return new_value
 
-    raise lisptype.LispNotImplementedError(f"DECF: complex places not yet supported: {place}")
+    # Any other place `_place_accessor` knows (CAR/CDR/CADR/GETF/...) --
+    # shared with PUSH/PUSHNEW/ROTATEF/INCF, so a place newly supported
+    # there works for DECF too instead of needing its own copy.
+    getter, setter = _place_accessor(place, env)
+    current_value = getter()
+    try:
+        new_value = current_value - delta
+    except TypeError:
+        raise lisptype.LispTypeError(
+            actual_value=current_value, expected_type='number',
+            message="DECF: cannot subtract delta from place value")
+    setter(new_value)
+    return new_value
 
 
 @_registry.cl_macro('WITH-OPEN-FILE', documentation='WITH-OPEN-FILE macro expander')
@@ -2395,8 +2420,9 @@ def _place_accessor(place_form, env):
     (get, set) pair of closures for reading/writing it.
 
     Supports plain variables and (CAR x), (CDR x), (AREF arr idx),
-    (SVREF arr idx) place forms -- enough for ROTATEF/SHIFTF's common
-    cases. Other place kinds raise LispNotImplementedError.
+    (SVREF arr idx), (GETF plist indicator [default]) place forms --
+    enough for ROTATEF/SHIFTF/PUSH/PUSHNEW/INCF's common cases. Other
+    place kinds raise LispNotImplementedError.
     """
     from .evaluation_core import eval
 
@@ -2426,6 +2452,39 @@ def _place_accessor(place_form, env):
                 raise lisptype.LispError("CADR place: invalid structure")
             cell = target.cdr
             return (lambda: cell.car, lambda v: setattr(cell, 'car', v))
+
+        if op_name == 'GETF' and _consp_internal(place_args):
+            # (GETF plist indicator [default]) as a place, CLHS 5.1.2.6:
+            # the plist is itself a nested place (recurse through
+            # `_place_accessor` rather than assuming a bare variable), and
+            # writing either mutates an existing indicator's value cell in
+            # place or prepends a fresh (indicator value) pair and writes
+            # the new head back through the plist's own place.
+            plist_place = car(place_args)
+            indicator = eval(car(cdr(place_args)), env)
+            default_args = cdr(cdr(place_args))
+            default = eval(car(default_args), env) if _consp_internal(default_args) else lisptype.NIL
+            plist_getter, plist_setter = _place_accessor(plist_place, env)
+
+            def _getf_get():
+                current = plist_getter()
+                while _consp_internal(current) and _consp_internal(cdr(current)):
+                    if car(current) == indicator:
+                        return cdr(current).car
+                    current = cdr(cdr(current))
+                return default
+
+            def _getf_set(v):
+                plist = plist_getter()
+                current = plist
+                while _consp_internal(current) and _consp_internal(cdr(current)):
+                    if car(current) == indicator:
+                        cdr(current).car = v
+                        return
+                    current = cdr(cdr(current))
+                plist_setter(lisptype.lispCons(indicator, lisptype.lispCons(v, plist)))
+
+            return (_getf_get, _getf_set)
 
         if _arrays.is_array_place(op_name) and _consp_internal(place_args):
             from .evaluation_core import _eval_args

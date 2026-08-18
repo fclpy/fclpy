@@ -89,6 +89,65 @@ def _atom_internal(obj):
     return type(obj) is not lisptype.lispCons
 
 
+def _tail_eq(a, b):
+    """True if `a` and `b` are the same tail: identical objects, or both a
+    representation of NIL (`_null_internal` covers the three spellings),
+    or `eql`-equal otherwise. Shared by TAILP and LDIFF -- both walk a
+    list's successive cdrs comparing each to a target tail.
+    """
+    if a is b:
+        return True
+    if _null_internal(a) and _null_internal(b):
+        return True
+    return a == b
+
+
+def _build_list_ending_in(elements, final):
+    """Cons a fresh list of `elements` onto `final` (NIL for a proper list,
+    an atom for a dotted one).
+    """
+    result = final
+    for e in reversed(elements):
+        result = lisptype.lispCons(e, result)
+    return result
+
+
+@_registry.cl_function('TAILP')
+def tailp(object_, list_):
+    """True if `object_` is the same as some tail of `list_` (CLHS 14.2).
+
+    Genuinely absent operator (plan.md C19): every `tailp.lsp` test was an
+    `Undefined function` leak.
+    """
+    current = list_
+    while True:
+        if _tail_eq(current, object_):
+            return lisptype.T
+        if not _consp_internal(current):
+            return lisptype.NIL
+        current = current.cdr
+
+
+@_registry.cl_function('LDIFF')
+def ldiff(list_, sublist):
+    """Copy of `list_` up to (not including) the tail `sublist` (CLHS
+    14.2); if `sublist` is not a tail of `list_`, a copy of the whole of
+    `list_`.
+
+    Genuinely absent operator (plan.md C19): every `ldiff.lsp` test was an
+    `Undefined function` leak.
+    """
+    elements = []
+    current = list_
+    while _consp_internal(current):
+        if _tail_eq(current, sublist):
+            return _build_list_ending_in(elements, lisptype.NIL)
+        elements.append(current.car)
+        current = current.cdr
+    final = lisptype.NIL if _tail_eq(current, sublist) else current
+    return _build_list_ending_in(elements, final)
+
+
 def acons(x, v, seq):
     """Creates a fresh cons, the cdr of which is alist and the car of which is 
     another fresh cons, the car of which is key and the cdr of which is 
@@ -332,20 +391,6 @@ def tenth(seq):
 def rest(x):
     """Return the rest of list x (same as cdr)"""
     return cdr(x)
-
-
-@_registry.cl_function('BUTLAST')
-def butlast(*args):
-    """Return all but the last element of SEQ (stub using Python slicing)."""
-    if len(args) < 1 or len(args) > 2:
-        raise lisptype.LispProgramError(
-            f"BUTLAST: wrong number of arguments (got {len(args)}, expected 1-2)"
-        )
-    seq = args[0]
-    try:
-        return tuple(seq[:-1])
-    except Exception:
-        return ()
 
 
 # Property list operations

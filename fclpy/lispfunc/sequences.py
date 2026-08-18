@@ -37,7 +37,7 @@ __all__ = [
     'append', 'nconc', 'nreconc', 'revappend', 'concatenate',
     'sort', 'stable_sort', 'merge',
     'subseq', 'copy_seq', 'copy_list', 'copy_alist',
-    'fill', 'replace', 'nbutlast', 'last',
+    'fill', 'replace', 'nbutlast', 'butlast', 'last',
     'nthcdr', 'nth', 'elt', 'make_list', 'make_sequence',
     'list_fn', 'tree_equal', 'list_length',
     # From sequences_higher
