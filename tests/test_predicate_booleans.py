@@ -35,10 +35,15 @@ def test_predicates_return_lisp_booleans():
     # pathname_match_p should compare names using lisp_bool
     assert pathname_match_p("a","a") == lisptype.T
 
-    # streamp: our simple heuristic will return T for StringIO-like objects
+    # STREAMP asks the one stream object model (streams.Stream) directly
+    # (CLHS 21.1) rather than guessing from a `read`/`write`/`flush`
+    # attribute -- a bare Python io.StringIO is never a value Lisp code
+    # would see as a stream, so it must answer NIL, not T.
     import io as _io
+    from fclpy.lispfunc.streams import Stream
     s = _io.StringIO()
-    assert streamp(s) == lisptype.T
+    assert streamp(s) == lisptype.NIL
+    assert streamp(Stream("<test>", s, 'io')) == lisptype.T
 
     # ARRAY-HAS-FILL-POINTER-P answers a Lisp boolean for an array, and
     # signals for anything else: its argument must be an array (CLHS 15.2.16),

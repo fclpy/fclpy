@@ -420,6 +420,10 @@ def _condition_matches(handler_type, error):
         return handler_type_name in ('PROGRAM-ERROR', 'ERROR', 'CONDITION', 'T')
     elif isinstance(error, lisptype.LispTypeError):
         return handler_type_name in ('TYPE-ERROR', 'ERROR', 'CONDITION', 'T')
+    elif isinstance(error, lisptype.LispEndOfFileError):
+        return handler_type_name in ('END-OF-FILE', 'STREAM-ERROR', 'ERROR', 'CONDITION', 'T')
+    elif isinstance(error, lisptype.LispStreamError):
+        return handler_type_name in ('STREAM-ERROR', 'ERROR', 'CONDITION', 'T')
     elif isinstance(error, lisptype.LispError):
         return handler_type_name in ('ERROR', 'CONDITION', 'T')
     return False

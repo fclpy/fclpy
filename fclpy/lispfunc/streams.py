@@ -25,7 +25,7 @@ class Stream:
     
     def __init__(self, name, file_obj, direction, element_type='character'):
         """Initialize a stream.
-        
+
         Args:
             name: Name/path of the stream (string)
             file_obj: Python file object or io.IOBase
@@ -38,42 +38,109 @@ class Stream:
         self.element_type = element_type
         self.open_p = True
         self.position = 0  # Track current position
-    
+        # LIFO pushback buffer for PEEK-CHAR/UNREAD-CHAR/LISTEN. CLHS only
+        # requires depth 1, but a stack costs nothing extra and lets a
+        # reader-bridge drain more than one character back onto the stream
+        # (see io_read.py's READ) without a special case.
+        self._pending = []
+
     def read_char(self):
         """Read a single character."""
         if not self.open_p:
-            raise ValueError(f"Stream {self.name} is closed")
+            raise lisptype.LispStreamError(stream=self, message=f"Stream {self.name} is closed")
         if self.direction not in ('input', 'io'):
-            raise ValueError(f"Stream {self.name} is not open for input")
-        
+            raise lisptype.LispStreamError(stream=self, message=f"Stream {self.name} is not open for input")
+
+        if self._pending:
+            self.position += 1
+            return self._pending.pop()
         char = self.file_obj.read(1)
         if char:
             self.position += 1
             return char
         return None
-    
-    def read_line(self):
-        """Read a line (up to newline, not including it)."""
+
+    def peek_char(self):
+        """Look at the next character without consuming it (CLHS 21.2)."""
         if not self.open_p:
-            raise ValueError(f"Stream {self.name} is closed")
+            raise lisptype.LispStreamError(stream=self, message=f"Stream {self.name} is closed")
         if self.direction not in ('input', 'io'):
-            raise ValueError(f"Stream {self.name} is not open for input")
-        
-        line = self.file_obj.readline()
-        if line:
-            # Remove trailing newline if present
-            if line.endswith('\n'):
-                line = line[:-1]
-            self.position += len(line) + 1
-            return line
+            raise lisptype.LispStreamError(stream=self, message=f"Stream {self.name} is not open for input")
+
+        if self._pending:
+            return self._pending[-1]
+        char = self.file_obj.read(1)
+        if char:
+            self._pending.append(char)
+            return char
         return None
+
+    def unread_char(self, char):
+        """Push `char` back so the next READ-CHAR returns it again (CLHS 21.2)."""
+        self._pending.append(char)
+        self.position = max(0, self.position - 1)
+
+    def listen(self):
+        """T if a character is available without blocking (CLHS 21.2).
+
+        There is no real asynchronous I/O here, so "available" means the
+        underlying object can answer a read without blocking -- true for a
+        seekable file or a string buffer, which is everything the ANSI
+        suite actually drives through LISTEN. A non-seekable stream (e.g. a
+        real TTY) has no non-blocking primitive available, so it is assumed
+        ready rather than risking a hang.
+        """
+        if not self.open_p or self.direction not in ('input', 'io'):
+            return False
+        if self._pending:
+            return True
+        if not getattr(self.file_obj, 'seekable', lambda: False)():
+            return True
+        char = self.file_obj.read(1)
+        if char:
+            self._pending.append(char)
+            return True
+        return False
+
+    def read_line(self):
+        """Read a line, discarding the terminating newline (CLHS 21.2).
+
+        Returns `(text, missing_newline_p)`, or `None` at end of file with
+        nothing read at all -- `missing_newline_p` is true exactly when the
+        stream ended before a newline was seen, which READ-LINE must return
+        as its second value.
+        """
+        if not self.open_p:
+            raise lisptype.LispStreamError(stream=self, message=f"Stream {self.name} is closed")
+        if self.direction not in ('input', 'io'):
+            raise lisptype.LispStreamError(stream=self, message=f"Stream {self.name} is not open for input")
+
+        chars = []
+        if self._pending:
+            first = self._pending.pop()
+            self.position += 1
+            if first == '\n':
+                return ('', False)
+            chars.append(first)
+
+        while True:
+            char = self.file_obj.read(1)
+            if not char:
+                if not chars:
+                    return None
+                self.position += len(chars)
+                return (''.join(chars), True)
+            self.position += 1
+            if char == '\n':
+                return (''.join(chars), False)
+            chars.append(char)
     
     def read_sequence(self, n=None):
         """Read n characters or until EOF."""
         if not self.open_p:
-            raise ValueError(f"Stream {self.name} is closed")
+            raise lisptype.LispStreamError(stream=self, message=f"Stream {self.name} is closed")
         if self.direction not in ('input', 'io'):
-            raise ValueError(f"Stream {self.name} is not open for input")
+            raise lisptype.LispStreamError(stream=self, message=f"Stream {self.name} is not open for input")
         
         if n is None:
             text = self.file_obj.read()
@@ -86,9 +153,9 @@ class Stream:
     def write_char(self, char):
         """Write a single character."""
         if not self.open_p:
-            raise ValueError(f"Stream {self.name} is closed")
+            raise lisptype.LispStreamError(stream=self, message=f"Stream {self.name} is closed")
         if self.direction not in ('output', 'io'):
-            raise ValueError(f"Stream {self.name} is not open for output")
+            raise lisptype.LispStreamError(stream=self, message=f"Stream {self.name} is not open for output")
         
         if not isinstance(char, str) or len(char) != 1:
             raise ValueError(f"Expected single character, got {char}")
@@ -100,9 +167,9 @@ class Stream:
     def write_sequence(self, sequence):
         """Write a sequence of characters/bytes."""
         if not self.open_p:
-            raise ValueError(f"Stream {self.name} is closed")
+            raise lisptype.LispStreamError(stream=self, message=f"Stream {self.name} is closed")
         if self.direction not in ('output', 'io'):
-            raise ValueError(f"Stream {self.name} is not open for output")
+            raise lisptype.LispStreamError(stream=self, message=f"Stream {self.name} is not open for output")
         
         if isinstance(sequence, str):
             self.file_obj.write(sequence)
@@ -119,9 +186,9 @@ class Stream:
     def write_line(self, line):
         """Write a line with newline."""
         if not self.open_p:
-            raise ValueError(f"Stream {self.name} is closed")
+            raise lisptype.LispStreamError(stream=self, message=f"Stream {self.name} is closed")
         if self.direction not in ('output', 'io'):
-            raise ValueError(f"Stream {self.name} is not open for output")
+            raise lisptype.LispStreamError(stream=self, message=f"Stream {self.name} is not open for output")
         
         self.file_obj.write(str(line) + '\n')
         self.position += len(str(line)) + 1
@@ -147,6 +214,33 @@ class Stream:
     def get_position(self):
         """Get current position in stream."""
         return self.position
+
+
+def resolve_input_stream(designator):
+    """Resolve an input stream designator (CLHS 21.1.3).
+
+    NIL -- what a missing stream argument defaults to -- designates the
+    current value of `*STANDARD-INPUT*`, and T designates `*TERMINAL-IO*`.
+    Every input operator has to come through here: they used to read from
+    Python's `sys.stdin`/`input()` directly, ignoring both an explicit
+    stream argument and any `*STANDARD-INPUT*` binding (e.g. from
+    WITH-INPUT-FROM-STRING) -- the same defect `write_text`/
+    `resolve_output_stream` (io_write.py) replaced on the output side.
+    """
+    import fclpy.state as state
+
+    if designator is True or designator is lisptype.T:
+        name = '*TERMINAL-IO*'
+    elif designator is None or designator is lisptype.NIL:
+        name = '*STANDARD-INPUT*'
+    else:
+        return designator
+
+    env = getattr(state, 'current_environment', None)
+    symbol = lisptype.COMMON_LISP_PACKAGE.intern_symbol(name)
+    if env is not None and env.has_variable(symbol):
+        return env.find_variable(symbol)
+    return getattr(symbol, 'value', None)
 
 
 # Keep track of open streams
@@ -287,134 +381,27 @@ def close_stream(stream, abort=False):
     return lisptype.T
 
 
-@_registry.cl_function('READ-CHAR')
-def read_char_stream(stream=None, eof_error_p=True, eof_value=None, recursive_p=None):
-    """Read a character from a stream.
-    
-    Args:
-        stream: Stream to read from (default: *standard-input*)
-        eof_error_p: If True, error on EOF; else return eof_value
-        eof_value: Value to return on EOF (default: NIL)
-        recursive_p: For recursive read (unused for now)
-    
-    Returns:
-        Character string or eof_value
-    """
-    if stream is None:
-        # Use stdin
-        try:
-            import sys
-            char = sys.stdin.read(1)
-            return char if char else (eof_value if not eof_error_p else None)
-        except EOFError:
-            if eof_error_p:
-                raise lisptype.LispEndOfFileError("*standard-input*", "READ-CHAR")
-            return eof_value
-    
-    if not isinstance(stream, Stream):
-        raise TypeError(f"Expected Stream, got {type(stream)}")
-    
-    char = stream.read_char()
-    if char is None:
-        if eof_error_p:
-            raise lisptype.LispEndOfFileError(stream.name, "READ-CHAR")
-        return eof_value
-    return char
-
-
-@_registry.cl_function('READ-LINE')
-def read_line_stream(stream=None, eof_error_p=True, eof_value=None, recursive_p=None):
-    """Read a line from a stream.
-    
-    Args:
-        stream: Stream to read from (default: *standard-input*)
-        eof_error_p: If True, error on EOF; else return eof_value
-        eof_value: Value to return on EOF (default: NIL)
-    
-    Returns:
-        Line string (without newline) or eof_value
-    """
-    if stream is None:
-        # Use stdin
-        try:
-            line = input()
-            return line
-        except EOFError:
-            if eof_error_p:
-                raise lisptype.LispEndOfFileError("*standard-input*", "READ-LINE")
-            return eof_value
-    
-    if not isinstance(stream, Stream):
-        raise TypeError(f"Expected Stream, got {type(stream)}")
-    
-    line = stream.read_line()
-    if line is None:
-        if eof_error_p:
-            raise lisptype.LispEndOfFileError(stream.name, "READ-LINE")
-        return eof_value
-    return line
-
-
-@_registry.cl_function('WRITE-CHAR')
-def write_char_stream(character, stream=None):
-    """Write a character to a stream.
-    
-    Args:
-        character: Character to write (string of length 1)
-        stream: Stream to write to (default: *standard-output*)
-    
-    Returns:
-        character
-    """
-    if not isinstance(character, str) or len(character) != 1:
-        raise TypeError(f"Expected single character, got {character}")
-    
-    if stream is None:
-        # Write to stdout
-        import sys
-        sys.stdout.write(character)
-        return character
-    
-    if not isinstance(stream, Stream):
-        raise TypeError(f"Expected Stream, got {type(stream)}")
-    
-    return stream.write_char(character)
-
-
-@_registry.cl_function('WRITE-LINE')
-def write_line_stream(line, stream=None):
-    """Write a line to a stream with newline.
-    
-    Args:
-        line: Line to write
-        stream: Stream to write to (default: *standard-output*)
-    
-    Returns:
-        NIL
-    """
-    if stream is None:
-        # Write to stdout
-        print(line)
-        return lisptype.NIL
-    
-    if not isinstance(stream, Stream):
-        raise TypeError(f"Expected Stream, got {type(stream)}")
-    
-    return stream.write_line(line)
+# READ-CHAR, READ-LINE, WRITE-CHAR and WRITE-LINE used to be registered
+# here too, each ignoring both an explicit stream argument default and any
+# `*STANDARD-INPUT*`/`*STANDARD-OUTPUT*` binding in favour of Python's
+# `sys.stdin`/`input()`/`sys.stdout`. io_read.py and io_write.py already
+# defined the *other* copy of each -- io_write.py's WRITE-CHAR/WRITE-LINE
+# went through `resolve_output_stream` correctly, and (because that module
+# is imported after this one) silently won the registry, leaving these dead;
+# io_read.py's READ-CHAR/READ-LINE were the broken stdin-only copies and
+# *they* won instead. Two names, two winners, neither predictable -- standing
+# rule 3. There is now one home for each: io_write.py for the writers,
+# io_read.py for the readers, both funnelling through `resolve_input_stream`/
+# `resolve_output_stream`.
 
 
 @_registry.cl_function('WRITE-SEQUENCE')
 def write_sequence_stream(sequence, stream=None, start=0, end=None):
-    """Write a sequence to a stream.
-    
-    Args:
-        sequence: String or list of characters
-        stream: Stream to write to (default: *standard-output*)
-        start: Starting index
-        end: Ending index (exclusive)
-    
-    Returns:
-        sequence
+    """WRITE-SEQUENCE: write elements of `sequence` to `stream` (CLHS 21.2).
+
+    Routed through `write_text` so a NIL/T/omitted `stream` resolves to
+    `*STANDARD-OUTPUT*`/`*TERMINAL-IO*` like every other output operator,
+    instead of writing to Python's `sys.stdout` unconditionally.
     """
     if isinstance(sequence, str):
         if end is None:
@@ -426,16 +413,9 @@ def write_sequence_stream(sequence, stream=None, start=0, end=None):
         text = ''.join(str(c) for c in sequence[start:end])
     else:
         raise TypeError(f"Expected string or list, got {type(sequence)}")
-    
-    if stream is None:
-        import sys
-        sys.stdout.write(text)
-        return sequence
-    
-    if not isinstance(stream, Stream):
-        raise TypeError(f"Expected Stream, got {type(stream)}")
-    
-    stream.write_sequence(text)
+
+    from .io_write import write_text
+    write_text(text, stream)
     return sequence
 
 
@@ -607,7 +587,27 @@ class StringInputStream(Stream):
     def listen(self):
         """Check if characters are available."""
         return self.position < len(self.string)
-    
+
+    def read_line(self):
+        """Read a line, discarding the newline (CLHS 21.2).
+
+        Overridden rather than inherited: the base `Stream.read_line`
+        reads through `self.file_obj`, a *second* cursor into the same
+        text that this class's `read_char`/`peek_char`/`unread_char`
+        never touch -- interleaving the two would desynchronize them.
+        Returns `(text, missing_newline_p)`, or `None` at end of file.
+        """
+        if self.position >= len(self.string):
+            return None
+        newline_at = self.string.find('\n', self.position)
+        if newline_at == -1:
+            text = self.string[self.position:]
+            self.position = len(self.string)
+            return (text, True)
+        text = self.string[self.position:newline_at]
+        self.position = newline_at + 1
+        return (text, False)
+
     def __repr__(self):
         return f"<StringInputStream pos={self.position} len={len(self.string)}>"
 

@@ -36,6 +36,14 @@ class LispEndOfFileError(LispError):
         self.stream = stream
 
 
+class LispStreamError(LispError):
+    """Exception for Common Lisp STREAM-ERROR conditions (CLHS 21.1) --
+    e.g. reading from a stream not open for input, or one that is closed."""
+    def __init__(self, stream=None, message="Stream error"):
+        super().__init__(message)
+        self.stream = stream
+
+
 class LispEnvironmentError(LispError):
     """Raised when an operation requiring an active Lisp environment is invoked without one.
 
@@ -752,7 +760,7 @@ def primary_value(value):
 __all__ = [
     # Exceptions
     'LispNotImplementedError', 'LispTypeError', 'LispError',
-    'LispEndOfFileError', 'LispEnvironmentError', 'LispProgramError',
+    'LispEndOfFileError', 'LispStreamError', 'LispEnvironmentError', 'LispProgramError',
     # Core Types
     'lispT', 'lispSequence', 'lispList', 'lispNull', 'LispSymbol',
     'lispKeyword', 'Character', 'LispString', 'lispCons', 'lispConsIterator',

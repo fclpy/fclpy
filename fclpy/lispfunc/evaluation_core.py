@@ -2221,6 +2221,17 @@ def eval(form, env=None):
             # Convert not implemented errors to appropriate condition
             condition = lisptype.Error(message=f"Not implemented: {str(e)}")
             raise ConditionException(condition, recoverable=False)
+        except lisptype.LispEndOfFileError as e:
+            # Convert to END-OF-FILE, not the generic ERROR the LispError
+            # branch below would give it -- END-OF-FILE is a STREAM-ERROR
+            # subtype (CLHS Figure 9-1) that ansi-test's `signals-error*`
+            # checks for by name, so it must survive as that specific type.
+            condition = lisptype.EndOfFile(stream=getattr(e, 'stream', None), message=str(e))
+            raise ConditionException(condition, recoverable=False)
+        except lisptype.LispStreamError as e:
+            # Convert to STREAM-ERROR (CLHS 21.1), same reasoning as EOF above.
+            condition = lisptype.StreamError(stream=getattr(e, 'stream', None), message=str(e))
+            raise ConditionException(condition, recoverable=False)
         except lisptype.LispError as e:
             # Convert other Lisp errors to Error condition
             condition = lisptype.Error(message=str(e))
@@ -2331,6 +2342,15 @@ def apply(function, *args):
         # Convert Python-level LispTypeError into Lisp TYPE-ERROR condition
         condition = lisptype.TypeError(datum=getattr(e, 'actual_value', None), expected_type=getattr(e, 'expected_type', None), message=str(e))
         raise ConditionException(condition, recoverable=False)
+    except lisptype.LispEndOfFileError as e:
+        # END-OF-FILE, not the generic ERROR the LispError branch below
+        # would give it -- it is a distinct STREAM-ERROR subtype (CLHS
+        # Figure 9-1) that ansi-test's `signals-error*` checks by name.
+        condition = lisptype.EndOfFile(stream=getattr(e, 'stream', None), message=str(e))
+        raise ConditionException(condition, recoverable=False)
+    except lisptype.LispStreamError as e:
+        condition = lisptype.StreamError(stream=getattr(e, 'stream', None), message=str(e))
+        raise ConditionException(condition, recoverable=False)
     except lisptype.LispError as e:
         # Convert other Lisp errors to Error condition
         condition = lisptype.Error(message=str(e))
@@ -2380,6 +2400,15 @@ def funcall(function, *args):
         raise ConditionException(condition, recoverable=False)
     except lisptype.LispTypeError as e:
         condition = lisptype.TypeError(datum=getattr(e, 'actual_value', None), expected_type=getattr(e, 'expected_type', None), message=str(e))
+        raise ConditionException(condition, recoverable=False)
+    except lisptype.LispEndOfFileError as e:
+        # END-OF-FILE, not the generic ERROR the LispError branch below
+        # would give it -- it is a distinct STREAM-ERROR subtype (CLHS
+        # Figure 9-1) that ansi-test's `signals-error*` checks by name.
+        condition = lisptype.EndOfFile(stream=getattr(e, 'stream', None), message=str(e))
+        raise ConditionException(condition, recoverable=False)
+    except lisptype.LispStreamError as e:
+        condition = lisptype.StreamError(stream=getattr(e, 'stream', None), message=str(e))
         raise ConditionException(condition, recoverable=False)
     except lisptype.LispError as e:
         # Convert other Lisp errors to Error condition

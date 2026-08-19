@@ -2,7 +2,9 @@
 
 import fclpy.lisptype as lisptype
 import fclpy.readtable as _rt
+import fclpy.lispreader as _lispreader
 from . import registry as _registry
+from .streams import Stream, resolve_input_stream
 
 
 # === Reader Control Variables ===
@@ -57,119 +59,281 @@ def readtablep(obj):
 
 @_registry.cl_function('STREAMP')
 def streamp(obj):
-    """Return True if obj behaves like a Common Lisp stream.
+    """STREAMP: is `obj` a stream (CLHS 21.1)?
 
-    Criteria (inclusive heuristic):
-    - Instance of io.IOBase (covers open file handles, StringIO, BytesIO, etc.)
-    - OR has any typical stream method: read / write / readline / readinto / flush.
-    This keeps the predicate flexible for user-defined stream-like objects while
-    still catching all standard Python I/O objects.
+    This answered an inclusive Python heuristic ("has a `read`/`write`/
+    `flush` attribute") that happened to catch fclpy `Stream` objects only
+    by accident -- `Stream` has a `flush` method, so `hasattr(obj, 'flush')`
+    was true, but the heuristic could just as easily answer T for an
+    unrelated object that merely happens to define one of those names.
+    `Stream` is the one stream object model (streams.py); STREAMP asks it
+    directly rather than guessing from shape.
     """
-    import io as _io
-    if isinstance(obj, _io.IOBase):
-        return lisptype.T
-    stream_attrs = ("read", "write", "readline", "readinto", "flush")
-    return lisptype.lisp_bool(any(hasattr(obj, a) for a in stream_attrs))
+    return lisptype.lisp_bool(isinstance(obj, Stream))
 
 
 @_registry.cl_function('INPUT-STREAM-P')
 def input_stream_p(stream):
-    """Test if stream is input stream."""
-    return lisptype.T  # Simplified
+    """INPUT-STREAM-P: can `stream` be used for input (CLHS 21.1)?"""
+    if isinstance(stream, Stream):
+        return lisptype.lisp_bool(stream.direction in ('input', 'io'))
+    return lisptype.NIL
 
 
 @_registry.cl_function('INTERACTIVE-STREAM-P')
 def interactive_stream_p(stream):
-    """Test if stream is interactive."""
-    return lisptype.T  # Simplified
+    """INTERACTIVE-STREAM-P: is `stream` connected to an interactive terminal (CLHS 21.1)?"""
+    if isinstance(stream, Stream):
+        isatty = getattr(stream.file_obj, 'isatty', None)
+        return lisptype.lisp_bool(bool(isatty and isatty()))
+    return lisptype.NIL
+
+
+class _StreamFileAdapter:
+    """Presents a `streams.Stream` as the `.read(1)`-shaped object
+    `lispreader.LispStream` expects, so the reader machinery can read
+    through the *same* stream object (and its pushback buffer) that
+    READ-CHAR/PEEK-CHAR/UNREAD-CHAR operate on, rather than a third,
+    independent character source.
+    """
+    __slots__ = ('_stream',)
+
+    def __init__(self, stream):
+        self._stream = stream
+
+    def read(self, n=1):
+        char = self._stream.read_char()
+        return char if char is not None else ''
+
+
+def _reader_bridge(target):
+    """A `lispreader.LispStream` reading from input designator `target`."""
+    if isinstance(target, Stream):
+        return _lispreader.LispStream(_StreamFileAdapter(target))
+    if target is not None and hasattr(target, 'read'):
+        return _lispreader.LispStream(target)
+    return _lispreader.STDIN
+
+
+def _read_via_reader(stream, eof_error_p, eof_value, what):
+    """READ / READ-PRESERVING-WHITESPACE's shared body: resolve the stream
+    designator, read one form through the existing reader machinery
+    (`lispreader.LispReader`), and hand any character it looked ahead past
+    the form's end back to the stream so a second call sees it.
+    """
+    target = resolve_input_stream(stream)
+    bridge = _reader_bridge(target)
+    readtable = _rt.get_current_readtable()
+    reader = _lispreader.LispReader(readtable.get_macro_character, bridge)
+    try:
+        result = reader.read_1()
+    except EOFError:
+        result = None
+    if isinstance(target, Stream):
+        while bridge.buff:
+            target.unread_char(bridge.buff.pop())
+    if result is None:
+        if _supplied_true(eof_error_p):
+            raise lisptype.LispEndOfFileError(target, what)
+        return eof_value
+    return result
 
 
 # I/O read operations
 @_registry.cl_function('READ-LINE')
 def read_line(stream=None, eof_error_p=True, eof_value=None, recursive_p=None):
-    """Read line from stream."""
-    # Simplified implementation
-    try:
-        line = input()
-        return line
-    except EOFError:
-        if eof_error_p:
-            raise lisptype.LispEndOfFileError(stream, "READ-LINE: encountered end of file")
-        return eof_value
+    """READ-LINE: read up to (and discard) the next newline (CLHS 21.2).
+
+    Returns two values -- the line, and whether the stream ended before a
+    newline was found -- per CLHS, not just the text.
+    """
+    target = resolve_input_stream(stream)
+    if isinstance(target, Stream):
+        result = target.read_line()
+    elif target is not None and hasattr(target, 'readline'):
+        raw = target.readline()
+        result = None if not raw else (
+            (raw[:-1], False) if raw.endswith('\n') else (raw, True))
+    else:
+        result = None
+
+    if result is None:
+        if _supplied_true(eof_error_p):
+            raise lisptype.LispEndOfFileError(target, "READ-LINE")
+        return lisptype.MultipleValues(eof_value, lisptype.T)
+
+    text, missing_newline_p = result
+    return lisptype.MultipleValues(
+        lisptype.LispString(text), lisptype.lisp_bool(missing_newline_p))
 
 
 @_registry.cl_function('READ-CHAR')
 def read_char(stream=None, eof_error_p=True, eof_value=None, recursive_p=None):
-    """Read character from stream."""
-    try:
-        import sys
-        char = sys.stdin.read(1)
-        return char if char else (eof_value if not eof_error_p else None)
-    except:
-        if eof_error_p:
-            raise lisptype.LispEndOfFileError(stream, "READ-CHAR: encountered end of file")
+    """READ-CHAR: the next character from `stream` (CLHS 21.2)."""
+    target = resolve_input_stream(stream)
+    if isinstance(target, Stream):
+        char = target.read_char()
+    elif target is not None and hasattr(target, 'read'):
+        char = target.read(1) or None
+    else:
+        char = None
+
+    if char is None:
+        if _supplied_true(eof_error_p):
+            raise lisptype.LispEndOfFileError(target, "READ-CHAR")
         return eof_value
+    return lisptype.Character(char)
 
 
 @_registry.cl_function('READ-BYTE')
 def read_byte(stream, eof_error_p=True, eof_value=None):
-    """Read byte from stream."""
-    try:
-        # Simplified - just return 0
-        return 0
-    except:
-        if eof_error_p:
-            raise lisptype.LispEndOfFileError(stream, "READ-BYTE: encountered end of file")
-        return eof_value
+    """READ-BYTE (CLHS 21.2).
+
+    fclpy's `OPEN` does not yet honour `:element-type` for a binary stream
+    (every file is opened in text mode -- plan.md C11), so there is no real
+    byte source to read from here yet; this at least resolves the stream
+    designator and honours end-of-file handling instead of unconditionally
+    returning 0.
+    """
+    target = resolve_input_stream(stream)
+    if isinstance(target, Stream) and target.element_type not in ('character', 'base-char'):
+        raw = target.file_obj.read(1)
+        if raw:
+            return raw[0] if isinstance(raw, bytes) else ord(raw)
+    if _supplied_true(eof_error_p):
+        raise lisptype.LispEndOfFileError(target, "READ-BYTE")
+    return eof_value
 
 
 @_registry.cl_function('PEEK-CHAR')
 def peek_char(peek_type=None, stream=None, eof_error_p=True, eof_value=None, recursive_p=None):
-    """Peek at character in stream."""
-    # Simplified implementation
-    return ' '  # Return space for now
+    """PEEK-CHAR: look at, without consuming, an upcoming character (CLHS 21.2).
+
+    `peek_type` NIL peeks the very next character; T discards leading
+    whitespace first; a character discards input up to and including the
+    first occurrence of that character.
+    """
+    target = resolve_input_stream(stream)
+
+    def _peek():
+        if isinstance(target, Stream):
+            return target.peek_char()
+        return None
+
+    def _consume():
+        if isinstance(target, Stream):
+            target.read_char()
+
+    def _eof():
+        if _supplied_true(eof_error_p):
+            raise lisptype.LispEndOfFileError(target, "PEEK-CHAR")
+        return eof_value
+
+    skip_char = None
+    if isinstance(peek_type, lisptype.Character):
+        skip_char = peek_type.char
+    elif isinstance(peek_type, str) and len(peek_type) == 1:
+        skip_char = peek_type
+
+    if skip_char is not None:
+        while True:
+            ch = _peek()
+            if ch is None:
+                return _eof()
+            if ch == skip_char:
+                return lisptype.Character(ch)
+            _consume()
+    elif _supplied_true(peek_type):
+        while True:
+            ch = _peek()
+            if ch is None:
+                return _eof()
+            if not ch.isspace():
+                return lisptype.Character(ch)
+            _consume()
+    else:
+        ch = _peek()
+        if ch is None:
+            return _eof()
+        return lisptype.Character(ch)
 
 
 @_registry.cl_function('UNREAD-CHAR')
 def unread_char(character, stream=None):
-    """Unread character to stream."""
-    # Simplified implementation
-    return None
+    """UNREAD-CHAR: push the most recently read character back (CLHS 21.2)."""
+    target = resolve_input_stream(stream)
+    char = character.char if isinstance(character, lisptype.Character) else str(character)[:1]
+    if isinstance(target, Stream):
+        target.unread_char(char)
+    return lisptype.NIL
 
 
 @_registry.cl_function('LISTEN')
 def listen(stream=None):
-    """Test if input is available."""
-    return lisptype.T  # Simplified
+    """LISTEN: T if a character is immediately available (CLHS 21.2)."""
+    target = resolve_input_stream(stream)
+    if isinstance(target, Stream):
+        return lisptype.lisp_bool(target.listen())
+    return lisptype.T
 
 
 @_registry.cl_function('CLEAR-INPUT')
 def clear_input(stream=None):
-    """Clear input from stream."""
-    return None
+    """CLEAR-INPUT: discard any buffered input (CLHS 21.2)."""
+    target = resolve_input_stream(stream)
+    if isinstance(target, Stream):
+        target._pending = []
+    return lisptype.NIL
 
 
 @_registry.cl_function('READ')
 def read(stream=None, eof_error_p=True, eof_value=None, recursive_p=None):
-    """Read object from stream."""
-    try:
-        return input()  # Simplified
-    except EOFError:
-        if eof_error_p:
-            raise lisptype.LispEndOfFileError(stream, "READ: encountered end of file")
-        return eof_value
+    """READ: parse one object from `stream` (CLHS 2.1, 23.1)."""
+    return _read_via_reader(stream, eof_error_p, eof_value, "READ")
 
 
 @_registry.cl_function('READ-CHAR-NO-HANG')
 def read_char_no_hang(stream=None, eof_error_p=True, eof_value=None, recursive_p=None):
-    """READ-CHAR-NO-HANG: Non-blocking read of a single character or returns eof_value/None."""
-    return None  # Simplified placeholder
+    """READ-CHAR-NO-HANG (CLHS 21.2).
+
+    None of fclpy's streams are asynchronous, so "would this block" is
+    exactly LISTEN's question: a character available is returned
+    immediately, and a genuinely exhausted stream degrades to READ-CHAR's
+    ordinary end-of-file handling -- never a NIL for a stream partway
+    through, which the CLHS-defined NIL-for-"none ready yet" would be if
+    there were real asynchronous input to distinguish it from.
+    """
+    target = resolve_input_stream(stream)
+    if isinstance(target, Stream) and target.listen():
+        return lisptype.Character(target.read_char())
+    if _supplied_true(eof_error_p):
+        raise lisptype.LispEndOfFileError(target, "READ-CHAR-NO-HANG")
+    return eof_value
 
 
 @_registry.cl_function('READ-DELIMITED-LIST')
 def read_delimited_list(char, stream=None, recursive_p=None):
-    """READ-DELIMITED-LIST: Read forms until delimiter char (simplified stub)."""
-    return []  # Simplified placeholder
+    """READ-DELIMITED-LIST: read forms up to and consuming `char` (CLHS 22.4.7)."""
+    target = resolve_input_stream(stream)
+    delim = char.char if isinstance(char, lisptype.Character) else str(char)[:1]
+    readtable = _rt.get_current_readtable()
+    forms = []
+    while True:
+        ch = target.peek_char() if isinstance(target, Stream) else None
+        if ch is None:
+            raise lisptype.LispEndOfFileError(target, "READ-DELIMITED-LIST")
+        if ch == delim:
+            target.read_char()
+            break
+        bridge = _reader_bridge(target)
+        reader = _lispreader.LispReader(readtable.get_macro_character, bridge)
+        forms.append(reader.read_1())
+        while bridge.buff:
+            target.unread_char(bridge.buff.pop())
+    result = lisptype.NIL
+    for form in reversed(forms):
+        result = lisptype.lispCons(form, result)
+    return result
 
 
 @_registry.cl_function('READ-FROM-STRING')
@@ -223,13 +387,16 @@ def read_from_string(string, eof_error_p=True, eof_value=None, start=0, end=None
 
 @_registry.cl_function('READ-PRESERVING-WHITESPACE')
 def read_preserving_whitespace(stream=None, eof_error_p=True, eof_value=None, recursive_p=None):
-    """READ-PRESERVING-WHITESPACE: Like READ but preserves whitespace (stub)."""
-    try:
-        return input()  # Simplified
-    except EOFError:
-        if eof_error_p:
-            raise lisptype.LispEndOfFileError(stream, "READ-PRESERVING-WHITESPACE: encountered end of file")
-        return eof_value
+    """READ-PRESERVING-WHITESPACE (CLHS 2.1, 23.1.2).
+
+    Shares READ's reader-bridge plumbing. It does not yet implement the one
+    thing that distinguishes it from READ -- leaving the single whitespace
+    character that terminates a token unconsumed -- because the reader has
+    no signal for "this whitespace ended the token" versus "this whitespace
+    was skipped looking for the token to start" (plan.md C12: no character
+    syntax-type model yet).
+    """
+    return _read_via_reader(stream, eof_error_p, eof_value, "READ-PRESERVING-WHITESPACE")
 
 
 @_registry.cl_function('MAKE-STRING-INPUT-STREAM')

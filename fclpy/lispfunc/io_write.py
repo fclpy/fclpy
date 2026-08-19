@@ -2,7 +2,7 @@
 
 import fclpy.lisptype as lisptype
 from . import registry as _registry
-from .streams import open_file as open_fn, close_stream as close_fn
+from .streams import open_file as open_fn, close_stream as close_fn, open_stream_p
 
 
 # === The printer, and where output goes ===
@@ -25,14 +25,36 @@ from fclpy import printer as _printer
 from fclpy.printer import write_object as _write_object
 
 
+@_registry.cl_function('STREAM-ELEMENT-TYPE')
 def stream_element_type(stream):
-    """Get stream element type (simple fallback)."""
-    return 'CHARACTER'
+    """STREAM-ELEMENT-TYPE (CLHS 21.1).
+
+    This returned a raw Python string -- a Python object standing in for a
+    Lisp value (standing rule 2), so `(eq (stream-element-type s) 'character)`
+    was false regardless of the stream. Byte streams are not modelled yet
+    (`OPEN` always opens in text mode -- plan.md C11), so every stream
+    answers `CHARACTER`; that is honest for what actually exists rather
+    than claiming a byte type this implementation cannot back up.
+
+    Explicitly decorated rather than left to `register_module`'s auto
+    registration: that heuristic strips a trailing "-TYPE" as an assumed
+    Python-naming artifact (as it should for e.g. `array_element_type`'s
+    callers that already spell the CLHS name without it), which silently
+    registered this one under the wrong name, `STREAM-ELEMENT` -- CLHS's
+    name for this operator, unlike `ARRAY-ELEMENT-TYPE`, ends in TYPE for
+    real.
+    """
+    from .streams import Stream
+    if not isinstance(stream, Stream):
+        raise lisptype.LispTypeError(
+            f"STREAM-ELEMENT-TYPE: not a stream: {stream!r}",
+            expected_type="STREAM", actual_value=stream)
+    return lisptype.COMMON_LISP_PACKAGE.intern_symbol('CHARACTER')
 
 
 def stream_external_format(stream):
-    """Get stream external format (simple fallback)."""
-    return 'UTF-8'
+    """STREAM-EXTERNAL-FORMAT (CLHS 21.1.2, implementation-defined)."""
+    return lisptype.intern_keyword('UTF-8')
 
 
 def resolve_output_stream(designator):
@@ -152,14 +174,17 @@ def clear_output(stream=None):
 
 @_registry.cl_function('OUTPUT-STREAM-P')
 def output_stream_p(stream):
-    """Test if stream is output stream."""
-    return lisptype.T  # Simplified
+    """OUTPUT-STREAM-P: can `stream` be used for output (CLHS 21.1)?"""
+    from .streams import Stream
+    if isinstance(stream, Stream):
+        return lisptype.lisp_bool(stream.direction in ('output', 'io'))
+    return lisptype.NIL
 
 
-@_registry.cl_function('OPEN-STREAM-P')
-def open_stream_p(stream):
-    """Test if stream is open."""
-    return lisptype.T  # Simplified
+# OPEN-STREAM-P is streams.py's, not registered a second time here: that
+# copy already asks `stream.is_open()`, but being imported *after*
+# streams.py meant a stub here that always answered T used to win the
+# registry regardless (standing rule 3).
 
 
 # I/O write operations
