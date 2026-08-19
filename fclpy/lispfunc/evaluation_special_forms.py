@@ -8,8 +8,8 @@ DEFSTRUCT: Accept keywords as structure names (v2).
 
 import fclpy.lisptype as lisptype
 import fclpy.state as state
-from fclpy.lispfunc.core import car, cdr, _consp_internal, cons
-from .binding import proclaim_special, root_environment
+from fclpy.lispfunc.core import car, cdr, _consp_internal, cons, _null_internal
+from .binding import proclaim_special, root_environment, BindingFrame
 from . import registry as _registry
 from . import arrays as _arrays
 import logging
@@ -713,6 +713,120 @@ def with_standard_io_syntax_macro(*body):
     return _cons_from(
         [lisptype.LispSymbol('LET'), _cons_from(bindings)] + list(body)
     )
+
+
+def eval_pprint_logical_block(form, env):
+    """PPRINT-LOGICAL-BLOCK special form (CLHS 22.2.2).
+
+    (PPRINT-LOGICAL-BLOCK (stream-symbol object-form
+                           &key prefix per-line-prefix suffix)
+      declaration* form*)
+
+    `stream-symbol` is a syntactic position, not a form to evaluate -- either
+    a symbol already bound (in the enclosing environment) to a stream, which
+    gets a fresh binding to a (possibly per-line-prefix-wrapped) stream for
+    the body's dynamic extent, or the literal designator T/NIL. A
+    `cl_function` stub used to be registered under this name: since a
+    `cl_function`'s arguments are evaluated eagerly, `(pprint-logical-block
+    (os 1))` evaluated `(os 1)` as a call to a function named OS -- the same
+    registry defect CLAUDE.md documents for WITH-STANDARD-IO-SYNTAX, and for
+    the same reason: a form whose first "argument" is unevaluated syntax
+    cannot be a plain function.
+
+    Everything but the binding and the body's implicit `BLOCK NIL` is
+    `io_write.pprint_logical_block_setup`'s job (the "not a list" bypass,
+    `*PRINT-LEVEL*` truncation, and prefix/per-line-prefix output), so it is
+    not duplicated between this call site and PPRINT-POP/
+    PPRINT-EXIT-IF-LIST-EXHAUSTED, which consult the same frame stack.
+    """
+    from .evaluation_core import eval, ReturnFromException
+    from . import io_write as _io_write
+    import fclpy.state as _state
+
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispProgramError("PPRINT-LOGICAL-BLOCK requires a binding list")
+
+    spec = car(args)
+    body = cdr(args)
+
+    var, rest = _binding_parts(spec)
+    if not rest:
+        raise lisptype.LispProgramError("PPRINT-LOGICAL-BLOCK requires an object form")
+    object_form = rest[0]
+    plist = rest[1:]
+
+    prefix_form = per_line_prefix_form = suffix_form = lisptype.NIL
+    prefix_given = per_line_prefix_given = suffix_given = False
+    i = 0
+    while i < len(plist) - 1:
+        key, value = plist[i], plist[i + 1]
+        if isinstance(key, lisptype.LispSymbol):
+            if key.name == 'PREFIX':
+                prefix_form, prefix_given = value, True
+            elif key.name == 'PER-LINE-PREFIX':
+                per_line_prefix_form, per_line_prefix_given = value, True
+            elif key.name == 'SUFFIX':
+                suffix_form, suffix_given = value, True
+        i += 2
+
+    if prefix_given and per_line_prefix_given:
+        # CLHS 22.2.2: at most one of :PREFIX, :PER-LINE-PREFIX may be given.
+        raise lisptype.LispProgramError(
+            "PPRINT-LOGICAL-BLOCK: :PREFIX and :PER-LINE-PREFIX are mutually exclusive")
+
+    object_value = eval(object_form, env)
+
+    if _null_internal(var):
+        stream_designator = lisptype.NIL
+        bind_var = None
+    elif var is lisptype.T or (isinstance(var, lisptype.LispSymbol) and var.name == 'T'):
+        stream_designator = lisptype.T
+        bind_var = None
+    else:
+        stream_designator = eval(var, env)
+        bind_var = var
+
+    prefix_value = eval(prefix_form, env)
+    per_line_prefix_value = eval(per_line_prefix_form, env)
+    suffix_value = eval(suffix_form, env)
+
+    kind, stream, frame, suffix_text = _io_write.pprint_logical_block_setup(
+        stream_designator, object_value, prefix_value, per_line_prefix_value, suffix_value,
+        prefix_given=prefix_given, per_line_prefix_given=per_line_prefix_given,
+        suffix_given=suffix_given)
+
+    if kind == 'atom':
+        _io_write.write_text(_io_write._write_object(object_value), stream)
+        return lisptype.NIL
+    if kind == 'level-exceeded':
+        _io_write.write_text('#', stream)
+        return lisptype.NIL
+
+    block_env = lisptype.Environment(env)
+    bound_vars = [bind_var] if bind_var is not None else []
+    bf = BindingFrame(block_env, body=body, bound_vars=bound_vars)
+    if bind_var is not None:
+        bf.bind(bind_var, frame.stream)
+
+    old_env = _state.current_environment
+    _state.current_environment = block_env
+    _state.pprint_stack.append(frame)
+    try:
+        try:
+            current = body
+            while _consp_internal(current):
+                eval(car(current), block_env)
+                current = cdr(current)
+        except ReturnFromException as e:
+            if not _null_internal(e.tag):
+                raise
+        _io_write.write_text(suffix_text, frame.stream)
+        return lisptype.NIL
+    finally:
+        _state.pprint_stack.pop()
+        _state.current_environment = old_env
+        bf.unwind()
 
 
 def _bind_ordinary_lambda_list_tail(parsed, call_args, arg_index, func_env, eval_fn):

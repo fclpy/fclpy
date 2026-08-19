@@ -75,6 +75,19 @@ def special_defvar(*args):
     raise lisptype.LispNotImplementedError('DEFVAR (evaluated in evaluator)')
 
 
+@_registry.cl_special('PPRINT-LOGICAL-BLOCK')
+def special_pprint_logical_block(*args):
+    """PPRINT-LOGICAL-BLOCK special form (handled by evaluator).
+
+    Was a `cl_function` in io_write.py -- since a `cl_function`'s arguments
+    are evaluated eagerly, `(pprint-logical-block (os 1))` evaluated `(os 1)`
+    as a call to a function named OS. The unevaluated stream-symbol/keyword
+    syntax and the body's implicit BLOCK NIL need this to be a special form,
+    like WITH-STANDARD-IO-SYNTAX needing to be a macro.
+    """
+    raise lisptype.LispNotImplementedError('PPRINT-LOGICAL-BLOCK (evaluated in evaluator)')
+
+
 @_registry.cl_special('LET')
 def special_let(*args):
     """LET special form (handled by evaluator)."""

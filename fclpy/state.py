@@ -34,3 +34,10 @@ restart_stack = []
 # established there (plan.md Finding E). Pushed/popped by the establishing
 # forms in lispfunc/evaluation_conditions.py; walked by signal_condition().
 handler_stack = []
+
+# PPRINT-LOGICAL-BLOCK frame stack (CLHS 22.2.2), innermost last. Each entry
+# is an io_write.PPrintFrame; PPRINT-POP and PPRINT-EXIT-IF-LIST-EXHAUSTED
+# consult the top one, and *PRINT-LEVEL* nesting depth is this stack's length
+# at entry, so both live here rather than as a scalar counter one call could
+# forget to restore on a non-local exit.
+pprint_stack = []

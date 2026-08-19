@@ -3,6 +3,7 @@
 import fclpy.lisptype as lisptype
 from . import registry as _registry
 from .streams import open_file as open_fn, close_stream as close_fn, open_stream_p
+from .core import _null_internal, _consp_internal, _listp_internal
 
 
 # === The printer, and where output goes ===
@@ -484,6 +485,70 @@ def copy_pprint_dispatch(table=None):
         f"COPY-PPRINT-DISPATCH: not a pprint dispatch table: {table!r}")
 
 
+class _PrettyStream:
+    """Wraps a stream, re-emitting a per-line prefix after every newline.
+
+    CLHS 22.2.1: `:per-line-prefix`, unlike `:prefix`, is not printed once --
+    it begins *every* line the logical block outputs, including ones produced
+    by an ordinary `TERPRI` inside the body (`pprint-logical-block.12`). A
+    thin wrapper bound to the block's stream-symbol for the block's dynamic
+    extent is enough: `write_text` already funnels every output call (WRITE,
+    WRITE-CHAR, TERPRI, ...) through one place, so intercepting `.write` here
+    covers all of them without a second output path.
+    """
+
+    def __init__(self, target, prefix_text):
+        self._target = target
+        self._prefix_text = prefix_text
+
+    def write(self, text):
+        if not text:
+            return
+        write_text(text.replace('\n', '\n' + self._prefix_text), self._target)
+
+
+def _pprint_block_text(value, argument_name):
+    """Coerce a `:prefix`/`:per-line-prefix`/`:suffix` argument to text.
+
+    CLHS requires a string designator here in the general-array sense (CLHS
+    14.1's `string` includes any character vector, fill-pointered or
+    displaced, not only `LispString`) -- `pprint-logical-block.7`'s
+    zero-length `(array nil (0))` and `.8`'s fill-pointered/adjustable
+    character arrays as `:prefix`/`:suffix` both rely on this, so a bare
+    `isinstance(x, LispString)` is too narrow. Reuses `sequence_protocol`'s
+    one element-accessor rather than a second array-walking copy.
+    """
+    if isinstance(value, lisptype.LispString):
+        # Not `str(value)`: `LispString.__str__` returns the whole backing
+        # buffer, ignoring `fill_pointer` -- `.8`'s 10-character array with a
+        # fill pointer of 3 as `:prefix` needs just "abc". `__iter__` is the
+        # one place on this class that already stops at the fill pointer.
+        return ''.join(value)
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (list, tuple)) and all(isinstance(c, lisptype.Character) for c in value):
+        # A zero-length `(array nil (0))` reaches here as a plain empty
+        # Python list (`arrays.py`'s general-vector representation), which is
+        # a string of length 0 per CLHS -- `.7`'s empty-array prefix/suffix.
+        # Gated on every element being a CHARACTER: a general vector holding
+        # anything else (e.g. `#(nil nil)`) is not a string and must still
+        # fall through to the TYPE-ERROR below.
+        return ''.join(c.char for c in value)
+    from . import arrays as _arrays
+    if isinstance(value, _arrays.LispArray) and _arrays.array_rank_of(value) == 1:
+        et = _arrays.element_type_of(value)
+        et_name = et.name if isinstance(et, lisptype.LispSymbol) else str(et)
+        if et_name.upper() in ('CHARACTER', 'BASE-CHAR', 'STANDARD-CHAR', 'NIL'):
+            from .sequence_protocol import seq_elements
+            chars = seq_elements(value, argument_name)
+            return ''.join(c.char if isinstance(c, lisptype.Character) else str(c)
+                           for c in chars)
+    raise lisptype.LispTypeError(
+        f"PPRINT-LOGICAL-BLOCK: {argument_name} must be a string, not "
+        f"{_write_object(value, escape=True)}",
+        expected_type='STRING', actual_value=value)
+
+
 def _pprint_unpretty(object, stream):
     """Write `object` to `stream` through the printer, without line breaking.
 
@@ -528,10 +593,185 @@ def pprint_dispatch(object, table=None):
     return print, lisptype.NIL  # Simplified
 
 
+class PPrintFrame:
+    """One dynamic extent of `PPRINT-LOGICAL-BLOCK` (CLHS 22.2.2).
+
+    `remaining` is the tail still to be consumed by `PPRINT-POP`; `count` is
+    the number of `PPRINT-POP` calls already made against this frame, checked
+    against `*PRINT-LENGTH*`; `started_as_nil` distinguishes an `object` that
+    was `NIL` from the very start from one that *became* `NIL` by being fully
+    popped -- only the latter is the "natural end" that `*PRINT-LENGTH*` must
+    not also elide as `...` (`pprint-pop.5`'s length-5 case on a 5-element
+    list vs. `pprint-pop.1`'s length-0 case on `NIL` itself: the same
+    "remaining is NIL" state means something different in each).
+    """
+
+    __slots__ = ('remaining', 'stream', 'count', 'started_as_nil')
+
+    def __init__(self, remaining, stream):
+        self.remaining = remaining
+        self.stream = stream
+        self.count = 0
+        self.started_as_nil = _null_internal(remaining)
+
+
+def _current_pprint_frame(operator_name):
+    """The innermost open `PPRINT-LOGICAL-BLOCK` frame, or a PROGRAM-ERROR.
+
+    `PPRINT-POP`/`PPRINT-EXIT-IF-LIST-EXHAUSTED` are only meaningful inside
+    one (CLHS 22.2.2); `pprint-pop.error.1` and
+    `pprint-exit-if-list-exhausted.error.1` call them at top level and require
+    an error rather than a Python `IndexError` leaking as the result.
+    """
+    import fclpy.state as state
+    stack = getattr(state, 'pprint_stack', None)
+    if not stack:
+        raise lisptype.LispProgramError(
+            f"{operator_name}: not inside a PPRINT-LOGICAL-BLOCK")
+    return stack[-1]
+
+
+def pprint_logical_block_setup(stream_designator, object, prefix, per_line_prefix, suffix,
+                                 prefix_given=False, per_line_prefix_given=False, suffix_given=False):
+    """Resolve a `PPRINT-LOGICAL-BLOCK` call before its body runs (CLHS 22.2.2).
+
+    The special form (`evaluation_special_forms.eval_pprint_logical_block`)
+    handles the unevaluated stream-symbol binding and the body's `BLOCK NIL`;
+    everything else -- the "not a list" bypass, `*PRINT-LEVEL*` truncation,
+    prefix/per-line-prefix output and the pretty-stream wrapper -- lives here
+    so it is not duplicated between that call site and any future one.
+
+    Returns a `(kind, stream, frame, suffix_text)` tuple:
+
+    * `kind='atom'` -- `object` is not a list (CLHS: printed as if by `WRITE`,
+      with prefix/suffix/body all omitted -- `pprint-logical-block.16`).
+    * `kind='level-exceeded'` -- nesting has reached `*PRINT-LEVEL*`; print
+      `#` and skip the body (`pprint-logical-block.9`/`.10`, which apply even
+      when `*PRINT-PRETTY*` is NIL: `.13`).
+    * `kind='run'` -- push `frame` onto `state.pprint_stack`, evaluate the
+      body, then write `suffix_text` and pop the frame.
+    """
+    import fclpy.state as state
+
+    stream = resolve_output_stream(stream_designator)
+
+    if not _listp_internal(object):
+        return ('atom', stream, None, None)
+
+    depth = len(getattr(state, 'pprint_stack', []) or [])
+    level = _printer._as_count(_printer.resolve_control('*PRINT-LEVEL*'))
+    if level is not None and depth >= level:
+        return ('level-exceeded', stream, None, None)
+
+    # Gated on whether the keyword was syntactically *given*, not on whether
+    # its value is NIL: `:prefix nil` is a supplied non-string value and must
+    # fail `_pprint_block_text`'s check (`pprint-logical-block.error.1`),
+    # whereas an omitted `:prefix` defaults to "" with no validation at all.
+    prefix_text = _pprint_block_text(prefix, ':PREFIX') if prefix_given else ''
+    per_line_text = (_pprint_block_text(per_line_prefix, ':PER-LINE-PREFIX')
+                      if per_line_prefix_given else None)
+    suffix_text = _pprint_block_text(suffix, ':SUFFIX') if suffix_given else ''
+
+    if per_line_text is not None:
+        write_text(per_line_text, stream)
+        body_stream = _PrettyStream(stream, per_line_text)
+    else:
+        write_text(prefix_text, stream)
+        body_stream = stream
+
+    frame = PPrintFrame(object, body_stream)
+    return ('run', body_stream, frame, suffix_text)
+
+
+def _pprint_exit_nil():
+    """Raise the implicit `(RETURN-FROM NIL)` CLHS 22.2.2 gives both macros.
+
+    Reusing `ReturnFromException` rather than a private exception type means
+    `PPRINT-LOGICAL-BLOCK`'s own `BLOCK NIL` catches this exactly like any
+    other `RETURN-FROM`, with no second non-local-exit mechanism to keep in
+    sync with `evaluation_core`'s pass-through tuples.
+    """
+    from .evaluation_core import ReturnFromException
+    raise ReturnFromException(lisptype.NIL, lisptype.NIL)
+
+
+def _pprint_length():
+    return _printer._as_count(_printer.resolve_control('*PRINT-LENGTH*'))
+
+
 @_registry.cl_function('PPRINT-EXIT-IF-LIST-EXHAUSTED')
 def pprint_exit_if_list_exhausted():
-    """Exit if list exhausted (stub)."""
-    return None
+    """Exit the enclosing `PPRINT-LOGICAL-BLOCK` if its list is used up (CLHS 22.2.2).
+
+    Three outcomes, checked in this order against the innermost frame's
+    remaining tail:
+
+    1. `NIL` (a proper list genuinely exhausted, or an `object` that was `NIL`
+       to begin with) -- exit with no output. `pprint-exit-if-list-exhausted.1`
+       pins this ahead of the `*PRINT-LENGTH*` check: it is what makes
+       `pprint-pop.5`'s length-5 case print no `...` for a 5-element list.
+    2. A cons whose element count already reached `*PRINT-LENGTH*` -- print
+       `...` and exit. Gated on `is_cons` because a dotted tail is not a
+       "next element" for `*PRINT-LENGTH*` to truncate (`pprint-pop.6`'s
+       length-2 case reaches the dot, not `...`, even though the count matches).
+    3. Otherwise (a cons under the length limit, or a dotted atom tail) --
+       return `NIL` and let the body continue; a dotted atom's own `. `
+       rendering is `PPRINT-POP`'s job (`pprint-exit-if-list-exhausted.3`'s
+       own assertion requires *this* call to return normally at that point).
+
+    The usual calling convention is `(pprint-exit-if-list-exhausted) (write
+    #\\Space) (write (pprint-pop))` inside a `LOOP`, so when case 2 fires
+    after at least one element has already been printed, the space that
+    would have separated it from the next element never gets written -- the
+    loop exits before reaching it. `...` stands in for the whole "separator +
+    element" pair that was elided, not just the element, so it needs that
+    leading space itself (`pprint-pop.5`/`.6`'s length-1 cases: `"{1 ...}"`,
+    not `"{1...}"`). At `count == 0` there is nothing to separate from.
+    """
+    frame = _current_pprint_frame('PPRINT-EXIT-IF-LIST-EXHAUSTED')
+    remaining = frame.remaining
+    if _null_internal(remaining):
+        _pprint_exit_nil()
+    is_cons = _consp_internal(remaining)
+    length = _pprint_length()
+    if is_cons and length is not None and frame.count >= length:
+        write_text(' ...' if frame.count > 0 else '...', frame.stream)
+        _pprint_exit_nil()
+    return lisptype.NIL
+
+
+@_registry.cl_function('PPRINT-POP')
+def pprint_pop():
+    """Pop the next element from the enclosing `PPRINT-LOGICAL-BLOCK`'s list (CLHS 22.2.2).
+
+    Unlike `PPRINT-EXIT-IF-LIST-EXHAUSTED`, the `*PRINT-LENGTH*` check here
+    fires *before* the "remaining is NIL" check, but only when either the
+    remaining tail is still a real cons (there is a genuine next element being
+    elided) or the frame's `object` was `NIL` from the start (`started_as_nil`)
+    -- `pprint-pop.1`/`pprint-pop.9`'s zero/one-length cases on a `NIL` object
+    require `...` even though `remaining` has been `NIL` all along, which is
+    exactly the case `PPRINT-EXIT-IF-LIST-EXHAUSTED`'s ordering must *not*
+    elide for a list that was genuinely consumed down to its natural end.
+    """
+    frame = _current_pprint_frame('PPRINT-POP')
+    remaining = frame.remaining
+    is_cons = _consp_internal(remaining)
+    is_nil = _null_internal(remaining)
+    length = _pprint_length()
+    if length is not None and frame.count >= length and (is_cons or (is_nil and frame.started_as_nil)):
+        write_text('...', frame.stream)
+        _pprint_exit_nil()
+    frame.count += 1
+    if is_nil:
+        return lisptype.NIL
+    if not is_cons:
+        # A dotted tail: PPRINT-EXIT-IF-LIST-EXHAUSTED let it through as "not
+        # yet exhausted", so rendering the terminator is this call's job.
+        write_text('. ' + _write_object(remaining), frame.stream)
+        _pprint_exit_nil()
+    value = remaining.car
+    frame.remaining = remaining.cdr
+    return value
 
 
 @_registry.cl_function('PPRINT-INDENT')
@@ -551,12 +791,6 @@ def pprint_linear(stream, object, prefix=None, per_line_prefix=None, suffix=None
     return _pprint_unpretty(object, stream)
 
 
-@_registry.cl_function('PPRINT-LOGICAL-BLOCK')
-def pprint_logical_block(stream, object, prefix=None, per_line_prefix=None, suffix=None):
-    """Print `object` as one logical block (CLHS 22.2.2)."""
-    return _pprint_unpretty(object, stream)
-
-
 @_registry.cl_function('PPRINT-NEWLINE')
 def pprint_newline(kind, stream=None):
     """A conditional newline (CLHS 22.2.2) -- nothing, with no line breaking.
@@ -566,12 +800,6 @@ def pprint_newline(kind, stream=None):
     all four conditions are "only if the enclosing block does not fit".
     """
     return lisptype.NIL
-
-
-@_registry.cl_function('PPRINT-POP')
-def pprint_pop():
-    """Pretty print pop (stub)."""
-    return None
 
 
 @_registry.cl_function('PPRINT-TAB')
@@ -2353,7 +2581,7 @@ __all__ = [
     # Pretty printing
     'copy_pprint_dispatch', 'pprint', 'pprint_dispatch',
     'pprint_exit_if_list_exhausted', 'pprint_indent', 'pprint_linear',
-    'pprint_logical_block', 'pprint_newline', 'pprint_pop', 'pprint_tab',
+    'pprint_logical_block_setup', 'pprint_newline', 'pprint_pop', 'pprint_tab',
     'pprint_tabular', 'pprint_fill', 'set_pprint_dispatch',
     # Format operations
     'format_fn', 'formatter',

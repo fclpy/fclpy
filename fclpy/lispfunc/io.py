@@ -34,7 +34,7 @@ __all__ = [
     'make_string_output_stream', 'get_output_stream_string',
     'make_broadcast_stream', 'make_concatenated_stream',
     'make_echo_stream', 'make_synonym_stream', 'make_two_way_stream',
-    'pprint', 'pprint_dispatch', 'pprint_logical_block', 'pprint_newline',
+    'pprint', 'pprint_dispatch', 'pprint_newline',
     'pprint_fill', 'pprint_exit_if_list_exhausted', 'pprint_indent',
     'pprint_linear', 'pprint_pop', 'pprint_tab', 'pprint_tabular',
     'set_pprint_dispatch', 'copy_pprint_dispatch',

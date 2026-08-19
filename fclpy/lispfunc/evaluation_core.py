@@ -733,7 +733,7 @@ def eval(form, env=None):
         eval_defvar, eval_defparameter, eval_defconstant, eval_defstruct, eval_pop, eval_push, eval_pushnew, eval_remf,
         eval_incf, eval_decf, eval_defclass, eval_defgeneric, eval_defmethod, eval_define_method_combination,
         eval_call_method, eval_make_method,
-        eval_destructuring_bind, eval_psetq, eval_rotatef
+        eval_destructuring_bind, eval_psetq, eval_rotatef, eval_pprint_logical_block
     )
     from .evaluation_control_flow import (
         eval_block, eval_return_from, eval_catch, eval_throw,
@@ -1508,6 +1508,8 @@ def eval(form, env=None):
                 return eval_macroexpand_1(form, env)
             elif operator.name == 'MACRO-FUNCTION':
                 return eval_macro_function(form, env)
+            elif operator.name == 'PPRINT-LOGICAL-BLOCK':
+                return eval_pprint_logical_block(form, env)
             elif operator.name == 'BLOCK':
                 return eval_block(form, env)
             elif operator.name == 'RETURN-FROM':
