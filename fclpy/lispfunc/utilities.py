@@ -158,6 +158,7 @@ __all__ = [
     'slot_makunbound',
     'slot_unbound',
     'slot_value',
+    'set_slot_value',
     'slot_missing',
     'find_method',
     'remove_method',

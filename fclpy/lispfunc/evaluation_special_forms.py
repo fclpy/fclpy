@@ -715,6 +715,164 @@ def with_standard_io_syntax_macro(*body):
     )
 
 
+def _bind_ordinary_lambda_list_tail(parsed, call_args, arg_index, func_env, eval_fn):
+    """Bind &optional/&rest/&key/&aux parameters (CLHS 3.4.1) into `func_env`
+    from `call_args`, starting at `arg_index` -- i.e. after any required
+    parameters already bound positionally by the caller. Shared by DEFUN's
+    ordinary lambda list and DEFMETHOD/DEFGENERIC's specialized lambda list,
+    whose &optional/&rest/&key/&aux tail is itself ordinary (CLHS 7.6.2:
+    only required parameters may be specialized) -- before this was
+    extracted, a specialized lambda list's tail was flattened to bare
+    parameter names and bound positionally with a NIL fallback, so a method
+    with `&optional (x 1)` bound X to NIL instead of 1 when omitted, a
+    supplied-p variable was never bound at all (raising Unbound variable on
+    first read), and &key/&rest/&aux were not supported in a method lambda
+    list at all.
+    """
+    optional_params = parsed['optional']
+    rest_param = parsed['rest']
+    keyword_params = parsed['keyword']
+    aux_params = parsed.get('aux', [])
+
+    # Bind optional parameters (support supplied-p variable)
+    for param_spec in optional_params:
+        if _consp_internal(param_spec):
+            param = car(param_spec)
+            rest = cdr(param_spec)
+            default_form = car(rest) if _consp_internal(rest) else None
+            rest2 = cdr(rest) if _consp_internal(rest) else None
+            supplied_p = car(rest2) if _consp_internal(rest2) else None
+        else:
+            param = param_spec
+            default_form = None
+            supplied_p = None
+
+        if arg_index < len(call_args):
+            func_env.add_variable(param, call_args[arg_index])
+            if supplied_p is not None:
+                func_env.add_variable(supplied_p, lisptype.T)
+            arg_index += 1
+        else:
+            # Use default value if provided, otherwise NIL
+            if default_form is not None:
+                default_value = eval_fn(default_form, func_env)
+                func_env.add_variable(param, default_value)
+            else:
+                func_env.add_variable(param, lisptype.NIL)
+            if supplied_p is not None:
+                func_env.add_variable(supplied_p, lisptype.NIL)
+
+    # Collect remaining positional arguments for &rest
+    remaining_positional = []
+
+    # Find where keyword arguments start
+    keyword_start = arg_index
+    for i in range(arg_index, len(call_args)):
+        if isinstance(call_args[i], lisptype.lispKeyword):
+            keyword_start = i
+            break
+        remaining_positional.append(call_args[i])
+        keyword_start = i + 1
+
+    # Bind &rest parameter if present
+    if rest_param:
+        # Rest gets all remaining positional args as a list
+        if remaining_positional:
+            rest_list = lisptype.NIL
+            for item in reversed(remaining_positional):
+                rest_list = lisptype.lispCons(item, rest_list)
+        else:
+            rest_list = lisptype.NIL
+
+        # Support destructuring rest spec: either a symbol or a cons
+        if isinstance(rest_param, lisptype.LispSymbol):
+            func_env.add_variable(rest_param, rest_list)
+        elif _consp_internal(rest_param):
+            # Dotted pair like (head . tail): bind head to first element,
+            # tail to the cdr (list) of the rest_list.
+            head = car(rest_param)
+            tail = rest_param.cdr
+            if _consp_internal(rest_list):
+                first = car(rest_list)
+                rest_tail = cdr(rest_list)
+            else:
+                first = lisptype.NIL
+                rest_tail = lisptype.NIL
+
+            if isinstance(head, lisptype.LispSymbol):
+                func_env.add_variable(head, first)
+            if isinstance(tail, lisptype.LispSymbol):
+                func_env.add_variable(tail, rest_tail)
+            else:
+                # If tail isn't a symbol, bind the whole rest_list
+                func_env.add_variable(rest_param, rest_list)
+
+    # Bind keyword parameters
+    # First, initialize all keyword params to their defaults and supplied-p to NIL
+    for param_spec in keyword_params:
+        if _consp_internal(param_spec):
+            param = car(param_spec)
+            rest = cdr(param_spec)
+            default_form = car(rest) if _consp_internal(rest) else None
+            # Check for supplied-p parameter (third element)
+            rest2 = cdr(rest) if _consp_internal(rest) else None
+            supplied_p = car(rest2) if _consp_internal(rest2) else None
+        else:
+            param = param_spec
+            default_form = None
+            supplied_p = None
+
+        # Default value
+        if default_form is not None:
+            default_value = eval_fn(default_form, func_env)
+            func_env.add_variable(param, default_value)
+        else:
+            func_env.add_variable(param, lisptype.NIL)
+
+        # Initialize supplied-p to NIL (not supplied yet)
+        if supplied_p is not None:
+            func_env.add_variable(supplied_p, lisptype.NIL)
+
+    # Now process actual keyword arguments from the call
+    i = keyword_start
+    while i < len(call_args) - 1:
+        key = call_args[i]
+        value = call_args[i + 1]
+
+        if isinstance(key, lisptype.lispKeyword):
+            key_name = key.name.upper()
+            # Find matching parameter
+            for param_spec in keyword_params:
+                if _consp_internal(param_spec):
+                    param = car(param_spec)
+                    rest = cdr(param_spec)
+                    rest2 = cdr(rest) if _consp_internal(rest) else None
+                    supplied_p = car(rest2) if _consp_internal(rest2) else None
+                else:
+                    param = param_spec
+                    supplied_p = None
+
+                if isinstance(param, lisptype.LispSymbol) and param.name.upper() == key_name:
+                    func_env.add_variable(param, value)
+                    # Set supplied-p to T when keyword is provided
+                    if supplied_p is not None:
+                        func_env.add_variable(supplied_p, lisptype.T)
+                    break
+            i += 2
+        else:
+            i += 1
+
+    # Bind &aux parameters
+    for param_spec in aux_params:
+        if _consp_internal(param_spec):
+            param = car(param_spec)
+            init_form = car(cdr(param_spec))
+            init_value = eval_fn(init_form, func_env)
+            func_env.add_variable(param, init_value)
+        else:
+            func_env.add_variable(param_spec, lisptype.NIL)
+
+
 def eval_defun(form, env):
     """Evaluate DEFUN special form.
     
@@ -778,11 +936,7 @@ def eval_defun(form, env):
     # Parse the lambda list
     parsed = parse_lambda_list(param_list)
     required_params = parsed['required']
-    optional_params = parsed['optional']
-    rest_param = parsed['rest']
-    keyword_params = parsed['keyword']
-    aux_params = parsed.get('aux', [])
-    
+
     # Create function closure
     # The closure captures the current lexical environment for variable lookups
     def user_function(*call_args):
@@ -799,144 +953,10 @@ def eval_defun(form, env):
             else:
                 func_env.add_variable(param, lisptype.NIL)
         
-        # Bind optional parameters (support supplied-p variable)
-        for param_spec in optional_params:
-            if _consp_internal(param_spec):
-                param = car(param_spec)
-                rest = cdr(param_spec)
-                default_form = car(rest) if _consp_internal(rest) else None
-                rest2 = cdr(rest) if _consp_internal(rest) else None
-                supplied_p = car(rest2) if _consp_internal(rest2) else None
-            else:
-                param = param_spec
-                default_form = None
-                supplied_p = None
+        # Bind &optional/&rest/&key/&aux (CLHS 3.4.1), shared with
+        # DEFMETHOD/DEFGENERIC's specialized-lambda-list tail.
+        _bind_ordinary_lambda_list_tail(parsed, call_args, arg_index, func_env, eval)
 
-            if arg_index < len(call_args):
-                func_env.add_variable(param, call_args[arg_index])
-                if supplied_p is not None:
-                    func_env.add_variable(supplied_p, lisptype.T)
-                arg_index += 1
-            else:
-                # Use default value if provided, otherwise NIL
-                if default_form is not None:
-                    default_value = eval(default_form, func_env)
-                    func_env.add_variable(param, default_value)
-                else:
-                    func_env.add_variable(param, lisptype.NIL)
-                if supplied_p is not None:
-                    func_env.add_variable(supplied_p, lisptype.NIL)
-        
-        # Collect remaining positional arguments for &rest
-        remaining_positional = []
-        
-        # Find where keyword arguments start
-        keyword_start = arg_index
-        for i in range(arg_index, len(call_args)):
-            if isinstance(call_args[i], lisptype.lispKeyword):
-                keyword_start = i
-                break
-            remaining_positional.append(call_args[i])
-            arg_index = i + 1
-        
-        # Bind &rest parameter if present
-        if rest_param:
-            # Rest gets all remaining positional args as a list
-            if remaining_positional:
-                rest_list = lisptype.NIL
-                for item in reversed(remaining_positional):
-                    rest_list = lisptype.lispCons(item, rest_list)
-            else:
-                rest_list = lisptype.NIL
-
-            # Support destructuring rest spec: either a symbol or a cons
-            if isinstance(rest_param, lisptype.LispSymbol):
-                func_env.add_variable(rest_param, rest_list)
-            elif _consp_internal(rest_param):
-                # Dotted pair like (head . tail): bind head to first element,
-                # tail to the cdr (list) of the rest_list.
-                head = car(rest_param)
-                tail = rest_param.cdr
-                if _consp_internal(rest_list):
-                    first = car(rest_list)
-                    rest_tail = cdr(rest_list)
-                else:
-                    first = lisptype.NIL
-                    rest_tail = lisptype.NIL
-
-                if isinstance(head, lisptype.LispSymbol):
-                    func_env.add_variable(head, first)
-                if isinstance(tail, lisptype.LispSymbol):
-                    func_env.add_variable(tail, rest_tail)
-                else:
-                    # If tail isn't a symbol, bind the whole rest_list
-                    func_env.add_variable(rest_param, rest_list)
-        
-        # Bind keyword parameters
-        # First, initialize all keyword params to their defaults and supplied-p to NIL
-        for param_spec in keyword_params:
-            if _consp_internal(param_spec):
-                param = car(param_spec)
-                rest = cdr(param_spec)
-                default_form = car(rest) if _consp_internal(rest) else None
-                # Check for supplied-p parameter (third element)
-                rest2 = cdr(rest) if _consp_internal(rest) else None
-                supplied_p = car(rest2) if _consp_internal(rest2) else None
-            else:
-                param = param_spec
-                default_form = None
-                supplied_p = None
-            
-            # Default value
-            if default_form is not None:
-                default_value = eval(default_form, func_env)
-                func_env.add_variable(param, default_value)
-            else:
-                func_env.add_variable(param, lisptype.NIL)
-            
-            # Initialize supplied-p to NIL (not supplied yet)
-            if supplied_p is not None:
-                func_env.add_variable(supplied_p, lisptype.NIL)
-        
-        # Now process actual keyword arguments from the call
-        i = keyword_start
-        while i < len(call_args) - 1:
-            key = call_args[i]
-            value = call_args[i + 1]
-            
-            if isinstance(key, lisptype.lispKeyword):
-                key_name = key.name.upper()
-                # Find matching parameter
-                for param_spec in keyword_params:
-                    if _consp_internal(param_spec):
-                        param = car(param_spec)
-                        rest = cdr(param_spec)
-                        rest2 = cdr(rest) if _consp_internal(rest) else None
-                        supplied_p = car(rest2) if _consp_internal(rest2) else None
-                    else:
-                        param = param_spec
-                        supplied_p = None
-                    
-                    if isinstance(param, lisptype.LispSymbol) and param.name.upper() == key_name:
-                        func_env.add_variable(param, value)
-                        # Set supplied-p to T when keyword is provided
-                        if supplied_p is not None:
-                            func_env.add_variable(supplied_p, lisptype.T)
-                        break
-                i += 2
-            else:
-                i += 1
-        
-        # Bind &aux parameters
-        for param_spec in aux_params:
-            if _consp_internal(param_spec):
-                param = car(param_spec)
-                init_form = car(cdr(param_spec))
-                init_value = eval(init_form, func_env)
-                func_env.add_variable(param, init_value)
-            else:
-                func_env.add_variable(param_spec, lisptype.NIL)
-        
         # Execute body, enclosed in the implicit block DEFUN establishes
         # around the function body (named after the function).
         result = None
@@ -2634,6 +2654,7 @@ def eval_defclass(form, env):
     Options:
         (:metaclass class)
         (:documentation string)
+        (:default-initargs initarg-name form*)
     """
     from .evaluation_core import eval
     import fclpy.classes
@@ -2708,6 +2729,7 @@ def eval_defclass(form, env):
     # Parse options
     metaclass = None
     documentation = None
+    default_initargs = []
     if _consp_internal(options_rest):
         current = options_rest
         while _consp_internal(current):
@@ -2721,6 +2743,20 @@ def eval_defclass(form, env):
                         metaclass = car(opt_vals)
                     elif opt_name == 'documentation' and _consp_internal(opt_vals):
                         documentation = car(opt_vals)
+                    elif opt_name == 'default-initargs':
+                        # CLHS 7.1.8: an alternating initarg-name/form plist,
+                        # stored unevaluated -- each default-value-form is
+                        # evaluated fresh by MAKE-INSTANCE, only when the
+                        # initarg it names was not supplied to that call.
+                        dinit_current = opt_vals
+                        while _consp_internal(dinit_current):
+                            initarg_key = car(dinit_current)
+                            dinit_rest = cdr(dinit_current)
+                            if not _consp_internal(dinit_rest):
+                                break
+                            initarg_form = car(dinit_rest)
+                            default_initargs.append((initarg_key, initarg_form))
+                            dinit_current = cdr(dinit_rest)
             current = cdr(current)
     
     # Call the defclass function to create the class. `definition_env` is
@@ -2735,6 +2771,7 @@ def eval_defclass(form, env):
         metaclass=metaclass,
         documentation=documentation,
         definition_env=env,
+        default_initargs=default_initargs,
     )
     
     return class_name
@@ -2796,40 +2833,42 @@ def _parse_defmethod_tail(rest):
 
 
 def _parse_specialized_lambda_list(specialized_lambda_list, env):
-    """Parse a specialized-lambda-list into (params, specializers) (CLHS
-    7.6.2). Only required parameters may be specialized; anything at or
-    after a lambda-list keyword (&optional/&rest/&key/...) is bound
-    unspecialized, matching this codebase's existing (positional-only)
-    method parameter binding in `_make_method_function` -- the lambda-list
-    keyword symbol itself is not a parameter and is dropped rather than
-    bound, and an &optional/&key parameter's own `(var default...)` form is
-    unwrapped down to `var` rather than passed through whole (the defect
-    this replaced: binding the literal cons `(Y 10)` as if it were the
-    parameter name crashed the first time DEFMETHOD in a real ANSI test
-    used &optional, since `add_variable` requires a symbol).
+    """Parse a specialized-lambda-list (CLHS 7.6.2) into
+    `(required_params, specializers, optional_lambda_list)`: only required
+    parameters may be specialized, so everything from the first lambda-list
+    keyword (&optional/&rest/&key/&aux) onward is an *ordinary* lambda-list
+    tail -- parsed here by the same `parse_lambda_list` DEFUN uses, and
+    later bound by the same `_bind_ordinary_lambda_list_tail` (CLHS 3.4.1).
+
+    This replaced flattening that tail to bare parameter names bound
+    positionally with a NIL fallback: it silently discarded every
+    &optional/&key default form, never bound a supplied-p variable at all
+    (`Unbound variable` the first time a method body read one), and did not
+    support &rest/&key/&aux in a method lambda list at all -- ansi-test's
+    slot-missing.lsp methods all declare `&optional (new-value nil
+    new-value-p)`.
     """
-    params = []
+    from .evaluation_core import parse_lambda_list
+
+    required_params = []
     specializers = []
     current = specialized_lambda_list
-    seen_lambda_key = False
     while _consp_internal(current):
         param_spec = car(current)
         if isinstance(param_spec, lisptype.LispSymbol) and param_spec.name.startswith('&'):
-            seen_lambda_key = True
-            current = cdr(current)
-            continue
-        if seen_lambda_key:
-            params.append(_lambda_list_param_name(param_spec))
-        elif _consp_internal(param_spec):
+            break
+        if _consp_internal(param_spec):
             param_name = car(param_spec)
             param_type = car(cdr(param_spec))
-            params.append(param_name)
+            required_params.append(param_name)
             specializers.append(_resolve_specializer(param_type, env))
         else:
-            params.append(param_spec)
+            required_params.append(param_spec)
             specializers.append(None)
         current = cdr(current)
-    return params, specializers
+
+    optional_lambda_list = parse_lambda_list(current)
+    return required_params, specializers, optional_lambda_list
 
 
 def _lambda_list_param_name(param_spec):
@@ -2846,10 +2885,17 @@ def _lambda_list_param_name(param_spec):
     return param_spec
 
 
-def _make_method_function(params, body, captured_env, block_name):
+def _make_method_function(required_params, optional_lambda_list, body, captured_env, block_name):
     """Build the callable behind one CLOS method (shared by DEFGENERIC's inline
     :method options and standalone DEFMETHOD -- these used to be two copies of
     identical logic).
+
+    `required_params` bind positionally (CLHS 7.6.2: dispatch already
+    checked their specializers). `optional_lambda_list` -- the parsed
+    &optional/&rest/&key/&aux tail, ordinary per that same section -- binds
+    through `_bind_ordinary_lambda_list_tail`, the same CLHS 3.4.1 mechanism
+    DEFUN uses, rather than a second copy that only this method-function
+    path had.
 
     CLHS 7.6.5: each method has an implicit block named after its generic
     function, so a bare (RETURN-FROM gf-name ...) inside the method body
@@ -2860,11 +2906,15 @@ def _make_method_function(params, body, captured_env, block_name):
 
     def method_func(*call_args):
         method_env = lisptype.Environment(captured_env)
-        for i, param in enumerate(params):
-            if i < len(call_args):
-                method_env.add_variable(param, call_args[i])
+        arg_index = 0
+        for param in required_params:
+            if arg_index < len(call_args):
+                method_env.add_variable(param, call_args[arg_index])
+                arg_index += 1
             else:
                 method_env.add_variable(param, lisptype.NIL)
+
+        _bind_ordinary_lambda_list_tail(optional_lambda_list, call_args, arg_index, method_env, eval)
 
         def _run_body():
             result = lisptype.NIL
@@ -2988,8 +3038,9 @@ def eval_defgeneric(form, env):
         opt_name = _keyword_name(car(option))
         if opt_name == 'METHOD':
             qualifiers, specialized_lambda_list, method_body = _parse_defmethod_tail(cdr(option))
-            params, specializers = _parse_specialized_lambda_list(specialized_lambda_list, env)
-            method_specs.append((qualifiers, specializers, params, method_body))
+            required_params, specializers, optional_lambda_list = _parse_specialized_lambda_list(
+                specialized_lambda_list, env)
+            method_specs.append((qualifiers, specializers, required_params, optional_lambda_list, method_body))
             continue
 
         # CLHS 7.7 names exactly which options may appear at most once.
@@ -3025,8 +3076,8 @@ def eval_defgeneric(form, env):
     gf = classes.ensure_generic_function(func_name, documentation=documentation, lambda_list=lambda_list)
     gf.method_combination = method_combination
 
-    for qualifiers, specializers, params, method_body in method_specs:
-        method_fn = _make_method_function(params, method_body, env, func_name)
+    for qualifiers, specializers, required_params, optional_lambda_list, method_body in method_specs:
+        method_fn = _make_method_function(required_params, optional_lambda_list, method_body, env, func_name)
         classes.add_method(gf, specializers, method_fn, qualifiers=qualifiers)
 
     global_env = env
@@ -3062,9 +3113,10 @@ def eval_defmethod(form, env):
         raise lisptype.LispNotImplementedError("DEFMETHOD: function name must be a symbol")
 
     qualifiers, specialized_lambda_list, method_body = _parse_defmethod_tail(rest)
-    params, specializers = _parse_specialized_lambda_list(specialized_lambda_list, env)
+    required_params, specializers, optional_lambda_list = _parse_specialized_lambda_list(
+        specialized_lambda_list, env)
 
-    method_fn = _make_method_function(params, method_body, env, func_name)
+    method_fn = _make_method_function(required_params, optional_lambda_list, method_body, env, func_name)
 
     gf = classes.ensure_generic_function(func_name)
     classes.add_method(gf, specializers, method_fn, qualifiers=qualifiers)

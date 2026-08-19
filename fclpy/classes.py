@@ -89,6 +89,12 @@ class LispClass:
     direct_slots: List[SlotDefinition] = field(default_factory=list)
     class_slots: Dict[str, Any] = field(default_factory=dict)  # For class-allocated slots
     documentation: Optional[str] = None
+    # CLHS 7.1.8: this class's own :default-initargs, as (initarg-name-symbol,
+    # unevaluated-form, definition-env) triples. Never memoized to a value --
+    # the form is evaluated fresh every MAKE-INSTANCE call that needs it (see
+    # class-28 in objects/defclass-01.lsp, whose default form is `(incf y)`),
+    # and only for an initarg name the call did not itself supply.
+    direct_default_initargs: List[Any] = field(default_factory=list)
     # Memoized class precedence list (see get_linearized_superclasses). Not
     # part of the class's identity or value -- excluded from __eq__ -- and
     # never stale in practice because redefining a class (DEFCLASS re-run)
@@ -131,9 +137,29 @@ class LispClass:
         # Add direct slots (these override parent slots)
         for slot in self.direct_slots:
             slots[slot.name.name] = slot
-        
+
         return slots
-    
+
+    def get_all_default_initargs(self) -> Dict[str, Any]:
+        """CLHS 7.1.8 point 2: the default initargs in effect for this class
+        are the union, over the class precedence list, of each class's own
+        `direct_default_initargs` -- when the same initarg name is declared
+        by more than one class in the list, the one belonging to the *most
+        specific* class wins. `get_linearized_superclasses()` is already
+        most-specific-first (`self` is its own first element), so a plain
+        first-occurrence-wins fold over it is that rule.
+
+        Returns:
+            Dict mapping initarg name -> (initarg-symbol, form, definition_env)
+        """
+        result: Dict[str, Any] = {}
+        for cls in self.get_linearized_superclasses():
+            for initarg_sym, form, def_env in cls.direct_default_initargs:
+                key = initarg_sym.name if isinstance(initarg_sym, LispSymbol) else str(initarg_sym)
+                if key not in result:
+                    result[key] = (initarg_sym, form, def_env)
+        return result
+
     def __repr__(self):
         return f"#<STANDARD-CLASS {self.name.name}>"
 
@@ -232,16 +258,19 @@ def make_class(
     name: LispSymbol,
     direct_superclasses: Optional[List[LispClass]] = None,
     direct_slots: Optional[List[SlotDefinition]] = None,
-    documentation: Optional[str] = None
+    documentation: Optional[str] = None,
+    direct_default_initargs: Optional[List[Any]] = None
 ) -> LispClass:
     """Create a new class.
-    
+
     Args:
         name: Symbol naming the class
         direct_superclasses: List of parent classes
         direct_slots: List of SlotDefinition objects
         documentation: Documentation string
-    
+        direct_default_initargs: List of (initarg-symbol, form, definition_env)
+            triples from this class's own :default-initargs option (CLHS 7.1.8)
+
     Returns:
         The created LispClass object
     """
@@ -249,14 +278,17 @@ def make_class(
         direct_superclasses = []
     if direct_slots is None:
         direct_slots = []
-    
+    if direct_default_initargs is None:
+        direct_default_initargs = []
+
     cls = LispClass(
         name=name,
         direct_superclasses=direct_superclasses,
         direct_slots=direct_slots,
-        documentation=documentation
+        documentation=documentation,
+        direct_default_initargs=direct_default_initargs
     )
-    
+
     return cls
 
 
@@ -303,52 +335,6 @@ def make_instance(
         instance.slot_values[slot_name] = value
     
     return instance
-
-
-def slot_value(instance: LispInstance, slot_name: str) -> Any:
-    """Get the value of a slot in an instance.
-    
-    Args:
-        instance: A LispInstance object
-        slot_name: Name of the slot (as string or symbol)
-    
-    Returns:
-        The slot value
-    """
-    if isinstance(slot_name, LispSymbol):
-        slot_name = slot_name.name
-    
-    if not isinstance(instance, LispInstance):
-        raise TypeError(f"Not an instance: {instance}")
-    
-    if slot_name not in instance.slot_values:
-        raise AttributeError(f"Slot {slot_name} not found in {instance}")
-    
-    return instance.slot_values[slot_name]
-
-
-def set_slot_value(instance: LispInstance, slot_name: str, value: Any) -> Any:
-    """Set the value of a slot in an instance.
-    
-    Args:
-        instance: A LispInstance object
-        slot_name: Name of the slot (as string or symbol)
-        value: The new value
-    
-    Returns:
-        The value that was set
-    """
-    if isinstance(slot_name, LispSymbol):
-        slot_name = slot_name.name
-    
-    if not isinstance(instance, LispInstance):
-        raise TypeError(f"Not an instance: {instance}")
-    
-    if slot_name not in instance.slot_values:
-        raise AttributeError(f"Slot {slot_name} not found in {instance}")
-    
-    instance.slot_values[slot_name] = value
-    return value
 
 
 # Generic function support

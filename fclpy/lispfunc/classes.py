@@ -159,12 +159,19 @@ def defclass(name, direct_superclasses=None, slots=None, **options):
     for slot_def in slot_defs:
         slot_def.definition_env = definition_env
 
+    # CLHS 7.1.8: :default-initargs, threaded from eval_defclass as a list of
+    # (initarg-keyword, unevaluated-form) pairs -- the environment attaches
+    # here for the same reason a slot's :initform does, above.
+    default_initargs_raw = options.get('default_initargs', None) or []
+    default_initargs = [(key, form, definition_env) for (key, form) in default_initargs_raw]
+
     # Create the class directly (don't use classes.defclass since we've already parsed)
     lisp_class = classes.make_class(
         name=name,
         direct_superclasses=parsed_superclasses,
         direct_slots=slot_defs,
-        documentation=documentation
+        documentation=documentation,
+        direct_default_initargs=default_initargs
     )
 
     # Register it and return the created class object
@@ -199,11 +206,18 @@ def _define_slot_accessors(lisp_class, slot_defs, definition_env):
         global_env = global_env.parent
 
     def _bind_reader(gf_name, slot_name):
+        # Deferred import: `misc_clos` is the one home of SLOT-VALUE's real
+        # CLHS 7.5.3/7.5.5 protocol (SLOT-MISSING/SLOT-UNBOUND dispatch), and
+        # a reader-generated method must go through exactly that, not a
+        # second copy -- ansi-test's slot-unbound.lsp calls readers directly
+        # (sunb-a, sunb-b) and requires SLOT-UNBOUND to fire through them.
+        from fclpy.lispfunc.misc_clos import slot_value
         gf = classes.ensure_generic_function(gf_name)
         classes.add_method(gf, [lisp_class], lambda instance: slot_value(instance, slot_name))
         global_env.add_function(gf_name, gf)
 
     def _bind_writer(gf_name, slot_name):
+        from fclpy.lispfunc.misc_clos import set_slot_value
         gf = classes.ensure_generic_function(gf_name)
         classes.add_method(
             gf, [None, lisp_class],
@@ -263,43 +277,14 @@ def make_instance(class_spec, *args, **kwargs):
     return classes.call_generic_function(gf, [class_designator] + initargs)
 
 
-@_registry.cl_function('SLOT-VALUE')
-def slot_value(instance, slot_name):
-    """SLOT-VALUE: Get the value of a slot in an instance."""
-    if not isinstance(instance, classes.LispInstance):
-        raise TypeError(f"Not an instance: {instance}")
-    
-    if isinstance(slot_name, lisptype.LispSymbol):
-        slot_name = slot_name.name
-    elif not isinstance(slot_name, str):
-        raise TypeError(f"Slot name must be symbol, got {slot_name}")
-    
-    if slot_name not in instance.slot_values:
-        raise AttributeError(f"Slot {slot_name} not found")
-    
-    return instance.slot_values[slot_name]
-
-
-@_registry.cl_function('(SETF SLOT-VALUE)')
-def set_slot_value(value, instance, slot_name):
-    """(SETF SLOT-VALUE): Set the value of a slot in an instance (CLHS
-    7.5.2 / 7.7's writer protocol). This binds the slot whether or not it
-    already held a value -- SETF of an unbound slot is exactly how a slot
-    *becomes* bound, so gating the write on "already present in
-    slot_values" (the previous behavior) made it impossible to ever set a
-    slot's value for the first time outside of MAKE-INSTANCE's own
-    initarg/initform handling.
-    """
-    if not isinstance(instance, classes.LispInstance):
-        raise TypeError(f"Not an instance: {instance}")
-
-    if isinstance(slot_name, lisptype.LispSymbol):
-        slot_name = slot_name.name
-    elif not isinstance(slot_name, str):
-        raise TypeError(f"Slot name must be symbol, got {slot_name}")
-
-    instance.slot_values[slot_name] = value
-    return value
+# SLOT-VALUE, (SETF SLOT-VALUE), SLOT-BOUNDP and SLOT-MAKUNBOUND live in
+# `misc_clos.py` -- the one place that implements their full CLHS 7.5.3
+# protocol (SLOT-MISSING for a slot the class doesn't define, SLOT-UNBOUND
+# for one that's defined but has no value). This module used to carry a
+# second copy of SLOT-VALUE/(SETF SLOT-VALUE) that skipped both and raised
+# a bare Python AttributeError on a missing slot -- and, because both
+# modules registered the same Lisp name, import order silently decided
+# which one every caller got.
 
 
 @_registry.cl_function('CLASS-NAME')

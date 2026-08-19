@@ -400,15 +400,19 @@ class TestClassSystemErrors:
             lispfunc.make_instance('UNDEFINED-CLASS')
     
     def test_slot_value_nonexistent_slot(self):
-        """Test SLOT-VALUE on nonexistent slot raises error."""
+        """Test SLOT-VALUE on a slot the class doesn't define invokes
+        SLOT-MISSING (CLHS 7.5.3), whose default method signals a Lisp-level
+        error -- not a bare Python AttributeError, which would be a Python
+        exception leaking as a Lisp value the moment this same code path
+        runs from a Lisp-level (slot-value ...) call."""
         classes._class_registry._classes.clear()
-        
+
         name = lisptype.LispSymbol('THING')
         lispfunc.defclass(name, [], [lisptype.LispSymbol('A')])
-        
+
         instance = lispfunc.make_instance('THING')
-        
-        with pytest.raises(AttributeError):
+
+        with pytest.raises(lisptype.LispError):
             lispfunc.slot_value(instance, 'NONEXISTENT')
     
     def test_defclass_duplicate_registration(self):

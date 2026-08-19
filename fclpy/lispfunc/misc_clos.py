@@ -94,20 +94,48 @@ def _slot_names_selects(slot_names, name):
     return False
 
 
-def _eval_initform(slot_def):
+def _eval_in_definition_env(form, definition_env):
+    """Evaluate a stored-unevaluated DEFCLASS form (a slot's :initform, or a
+    :default-initargs default-value-form) in the environment DEFCLASS
+    lexically saw, falling back to the global environment for the two cases
+    with no such environment recorded: the bootstrap's own built-in classes,
+    and MAKE-INSTANCE running before any environment has been set up at all
+    (the unit-test suite calls it directly, without the bootstrap
+    `run_all_tests.py`/`run_ansi.py` always do first --
+    `setup_standard_environment()` is idempotent, so this is free once a
+    real environment already exists).
+    """
     from fclpy.lispfunc.evaluation_core import eval as _eval
     import fclpy.state as state
-    env = slot_def.definition_env or state.current_environment
+    env = definition_env or state.current_environment
     if env is None:
-        # Only reachable when MAKE-INSTANCE runs before any environment has
-        # ever been set up (the unit-test suite calls it directly, without
-        # the bootstrap `run_all_tests.py`/`run_ansi.py` always do first) --
-        # setup_standard_environment() is idempotent, so this is free once
-        # a real environment already exists.
         import fclpy.lispenv as lispenv
         lispenv.setup_standard_environment()
         env = state.current_environment
-    return _eval(slot_def.initform, env)
+    return _eval(form, env)
+
+
+def _eval_initform(slot_def):
+    return _eval_in_definition_env(slot_def.initform, slot_def.definition_env)
+
+
+def _merge_default_initargs(cls, initargs):
+    """CLHS 7.1.8: default initargs supply additional initialization
+    arguments as if the caller had passed them, but only for an initarg
+    name the call did not itself supply -- and each default-value-form is
+    evaluated fresh here, at most once per MAKE-INSTANCE call, never
+    memoized (ansi-test's class-28 default form is `(incf y)`, so
+    evaluating it when the caller *did* supply `:s2` explicitly, or more
+    than once, is directly observable).
+    """
+    initargs = list(initargs)
+    supplied = {_initarg_key(k) for k in initargs[0::2]}
+    for key, (initarg_sym, form, def_env) in cls.get_all_default_initargs().items():
+        if key in supplied:
+            continue
+        initargs.append(initarg_sym)
+        initargs.append(_eval_in_definition_env(form, def_env))
+    return initargs
 
 
 # --- The instance-creation/reinitialization protocol (CLHS 7.1) ---
@@ -138,6 +166,11 @@ def _default_make_instance(class_obj, *initargs):
     class_obj = classes.resolve_class_designator(class_obj)
     if not isinstance(class_obj, classes.LispClass):
         raise lisptype.LispTypeError(f"MAKE-INSTANCE: expected a class or class name, got {class_obj}")
+    # CLHS 7.1.8: default-initargs are merged in here, once, by MAKE-INSTANCE
+    # itself -- before ALLOCATE-INSTANCE/INITIALIZE-INSTANCE run -- so every
+    # later step in the protocol (including a user :around method) sees them
+    # exactly as if the caller had supplied them.
+    initargs = _merge_default_initargs(class_obj, initargs)
     instance = classes.call_generic_function(_protocol_gf('ALLOCATE-INSTANCE'), [class_obj] + list(initargs))
     classes.call_generic_function(_protocol_gf('INITIALIZE-INSTANCE'), [instance] + list(initargs))
     return instance
@@ -236,6 +269,15 @@ def _default_slot_unbound(class_obj, instance, slot_name):
     raise lisptype.LispError(f"Slot unbound: {slot_name}")
 
 
+def _default_slot_missing(class_obj, instance, slot_name, operation, *new_value):
+    """SLOT-MISSING's default method (CLHS 7.5.3): called by SLOT-VALUE,
+    (SETF SLOT-VALUE), SLOT-BOUNDP and SLOT-MAKUNBOUND when slot-name does
+    not name any slot the instance's class defines at all -- distinct from
+    SLOT-UNBOUND, where the slot is defined but simply has no value yet.
+    The standard requires the default method to signal an error."""
+    raise lisptype.LispError(f"The slot {slot_name} is missing from {instance}.")
+
+
 # Specialized on T (None), not STANDARD-OBJECT: any user method
 # specializing on the instance's own class is still more specific and
 # still wins ordinary dispatch (T scores lowest in
@@ -271,6 +313,7 @@ _PROTOCOL_DEFAULTS = [
     ('UPDATE-INSTANCE-FOR-REDEFINED-CLASS', [None], _default_update_instance_for_redefined_class),
     ('CHANGE-CLASS', [None, None], _default_change_class),
     ('SLOT-UNBOUND', [None, None, None], _default_slot_unbound),
+    ('SLOT-MISSING', [None, None, None, None], _default_slot_missing),
 ]
 def _make_installer(specializers, fn):
     return lambda gf: classes.add_method(gf, specializers, fn)
@@ -405,15 +448,121 @@ def structure_object():
 
 
 # --- Slot operations ---
+#
+# SLOT-VALUE, (SETF SLOT-VALUE), SLOT-BOUNDP and SLOT-MAKUNBOUND (CLHS 7.5.3)
+# all resolve `slot-name` against the instance's *class* first: a name that
+# names no slot the class defines invokes SLOT-MISSING, itself a standard
+# generic function a DEFMETHOD can extend (ansi-test's slot-missing.lsp
+# does). SLOT-VALUE additionally invokes SLOT-UNBOUND (CLHS 7.5.5) when the
+# name is a real slot with no value yet. Both invocations return exactly
+# what the generic function call returns -- not a fixed condition -- because
+# a user SLOT-MISSING/SLOT-UNBOUND method may return normally instead of
+# signaling (slot-unbound.lsp's `(values)` and `(values 1 2 3)` methods).
+#
+# (SETF SLOT-VALUE) is the one exception: CLHS 7.5.3 says
+# `(setf (slot-value o s) v)` always yields `v`, so it calls SLOT-MISSING
+# only for effect and still returns `value`; SLOT-MAKUNBOUND likewise always
+# returns `instance` regardless of what SLOT-MISSING returns.
+def _slot_name_str(slot_name):
+    return slot_name.name if hasattr(slot_name, 'name') else slot_name
+
+
+def _op_sym(name):
+    """The symbol CLHS 7.5.3 passes as SLOT-MISSING's `operation` argument
+    -- one of SLOT-VALUE, SETF, SLOT-BOUNDP or SLOT-MAKUNBOUND -- fetched
+    from the COMMON-LISP package so it is EQL to the same symbol ansi-test's
+    `(operation (eql 'slot-boundp))`-style specializers read (a
+    freshly-built symbol of the same name would not be)."""
+    return lisptype.intern_symbol(name, 'COMMON-LISP')
+
+
+@_registry.cl_function('SLOT-VALUE')
+def slot_value(instance, slot_name):
+    """SLOT-VALUE (CLHS 7.5.3, 7.5.5): read a slot's value directly.
+    SLOT-VALUE itself has exactly one return value, so a SLOT-MISSING or
+    SLOT-UNBOUND method returning several (slot-unbound.lsp has one
+    returning `(values 1 2 3)`) is reduced to its primary value here, the
+    same rule `primary_value` applies at every other single-value context.
+    """
+    if not isinstance(instance, classes.LispInstance):
+        raise lisptype.LispTypeError(f"SLOT-VALUE: not an instance: {instance}")
+    name = _slot_name_str(slot_name)
+    cls = instance.lisp_class
+    if name not in cls.get_all_slots():
+        return lisptype.primary_value(classes.call_generic_function(
+            _protocol_gf('SLOT-MISSING'),
+            [cls, instance, slot_name, _op_sym('SLOT-VALUE')]))
+    if name not in instance.slot_values:
+        return lisptype.primary_value(classes.call_generic_function(
+            _protocol_gf('SLOT-UNBOUND'), [cls, instance, slot_name]))
+    return instance.slot_values[name]
+
+
+@_registry.cl_function('(SETF SLOT-VALUE)')
+def set_slot_value(value, instance, slot_name):
+    """(SETF SLOT-VALUE) (CLHS 7.5.3). Binds the slot whether or not it
+    already held a value -- SETF of an unbound slot is exactly how a slot
+    *becomes* bound. A slot-name naming no slot at all invokes SLOT-MISSING
+    for effect only; the setf form's value is always `value` regardless.
+    """
+    if not isinstance(instance, classes.LispInstance):
+        raise lisptype.LispTypeError(f"SLOT-VALUE: not an instance: {instance}")
+    name = _slot_name_str(slot_name)
+    cls = instance.lisp_class
+    if name not in cls.get_all_slots():
+        classes.call_generic_function(
+            _protocol_gf('SLOT-MISSING'),
+            [cls, instance, slot_name, _op_sym('SETF'), value])
+    else:
+        instance.slot_values[name] = value
+    return value
+
+
 @_registry.cl_function('SLOT-BOUNDP')
 def slot_boundp(instance, slot_name):
-    try:
-        if isinstance(instance, classes.LispInstance):
-            name = slot_name.name if hasattr(slot_name, 'name') else slot_name
-            return lisptype.T if name in instance.slot_values else lisptype.NIL
-    except Exception:
-        pass
-    return lisptype.NIL
+    if not isinstance(instance, classes.LispInstance):
+        return lisptype.NIL
+    name = _slot_name_str(slot_name)
+    cls = instance.lisp_class
+    if name not in cls.get_all_slots():
+        return lisptype.primary_value(classes.call_generic_function(
+            _protocol_gf('SLOT-MISSING'),
+            [cls, instance, slot_name, _op_sym('SLOT-BOUNDP')]))
+    return lisptype.T if name in instance.slot_values else lisptype.NIL
+
+
+@_registry.cl_function('SLOT-MAKUNBOUND')
+def slot_makunbound(instance, slot_name):
+    if isinstance(instance, classes.LispInstance):
+        name = _slot_name_str(slot_name)
+        cls = instance.lisp_class
+        if name not in cls.get_all_slots():
+            classes.call_generic_function(
+                _protocol_gf('SLOT-MISSING'),
+                [cls, instance, slot_name, _op_sym('SLOT-MAKUNBOUND')])
+        else:
+            instance.slot_values.pop(name, None)
+    return instance
+
+
+@_registry.cl_function('SLOT-UNBOUND')
+def slot_unbound(class_obj, instance, slot_name):
+    """SLOT-UNBOUND is itself a standard generic function (CLHS 7.5.5,
+    called by SLOT-VALUE when a defined slot has no value) -- the same
+    shape as MAKE-INSTANCE/CHANGE-CLASS above: ansi-test's
+    slot-unbound.lsp defines a DEFMETHOD on it directly."""
+    return classes.call_generic_function(_protocol_gf('SLOT-UNBOUND'), [class_obj, instance, slot_name])
+
+
+@_registry.cl_function('SLOT-MISSING')
+def slot_missing(class_obj, instance, slot_name, operation, *new_value):
+    """SLOT-MISSING is itself a standard generic function (CLHS 7.5.3,
+    called by SLOT-VALUE/(SETF SLOT-VALUE)/SLOT-BOUNDP/SLOT-MAKUNBOUND when
+    slot-name names no slot the class defines) -- the same shape as
+    SLOT-UNBOUND above: ansi-test's slot-missing.lsp defines a DEFMETHOD on
+    it directly."""
+    return classes.call_generic_function(
+        _protocol_gf('SLOT-MISSING'), [class_obj, instance, slot_name, operation] + list(new_value))
 
 
 @_registry.cl_function('SLOT-EXISTS-P')
@@ -435,41 +584,6 @@ def slot_exists_p(instance, slot_name):
     except Exception:
         pass
     return lisptype.NIL
-
-
-@_registry.cl_function('SLOT-MAKUNBOUND')
-def slot_makunbound(instance, slot_name):
-    try:
-        if isinstance(instance, classes.LispInstance):
-            name = slot_name.name if hasattr(slot_name, 'name') else slot_name
-            if name in instance.slot_values:
-                instance.slot_values.pop(name, None)
-    except Exception:
-        pass
-    return instance
-
-
-@_registry.cl_function('SLOT-UNBOUND')
-def slot_unbound(class_obj, instance, slot_name):
-    """SLOT-UNBOUND is itself a standard generic function (CLHS 7.5.5,
-    called by SLOT-VALUE et al. when a slot has no value) -- the same
-    shape as MAKE-INSTANCE/CHANGE-CLASS above: ansi-test's
-    slot-unbound.lsp defines a DEFMETHOD on it directly."""
-    return classes.call_generic_function(_protocol_gf('SLOT-UNBOUND'), [class_obj, instance, slot_name])
-
-
-@_registry.cl_function('SLOT-VALUE')
-def slot_value(instance, slot_name):
-    try:
-        name = slot_name.name if hasattr(slot_name, 'name') else slot_name
-        return classes.slot_value(instance, name)
-    except Exception as e:
-        raise lisptype.LispError(str(e))
-
-
-@_registry.cl_function('SLOT-MISSING')
-def slot_missing(class_obj, instance, slot_name, operation, *args):
-    raise lisptype.LispError(f"Missing slot {slot_name} on {instance}")
 
 
 # --- Method operations ---
