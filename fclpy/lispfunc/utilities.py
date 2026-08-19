@@ -264,7 +264,6 @@ __all__ = [
     'defconstant',
     'defgeneric',
     'defpackage',
-    'defstruct',
     'deftype',
     'defparameter',
     'echo_stream_p',

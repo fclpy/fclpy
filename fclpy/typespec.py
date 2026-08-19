@@ -1190,8 +1190,31 @@ def _class_cone(node):
         for child, parents in _CLASS_PARENTS.items():
             if node in parents:
                 cells |= _class_cone(child)
-        if node == 'STANDARD-OBJECT':
-            cells |= _clos_cells()
+        if node in ('STANDARD-OBJECT', 'STRUCTURE-OBJECT'):
+            # Both roots are real registered `classes.LispClass` objects
+            # (classes.py's `_init_builtin_classes`), not just cells in
+            # this string-keyed table -- so which CLOS classes actually
+            # descend from *this* root is a real ancestry question, not
+            # "every CLOS class there is". Before DEFSTRUCT grew its own
+            # LispClass hierarchy rooted at STRUCTURE-OBJECT, every CLOS
+            # class *did* descend from STANDARD-OBJECT (`defclass` adds it
+            # when no superclass is given), so the old blanket
+            # `cells |= _clos_cells()` happened to agree with this; once a
+            # structure class exists, unioning in every CLOS cell here
+            # would also mark it a STANDARD-OBJECT subtype, and vice versa
+            # for STRUCTURE-OBJECT, when the two are meant to be disjoint
+            # (structures/structure-00.lsp's *disjoint-types-list* check
+            # via `subtypep`).
+            from fclpy import classes as _classes
+            root_class = _classes.find_class(node)
+            if root_class is not None:
+                for candidate in _clos_classes():
+                    try:
+                        supers = candidate.get_linearized_superclasses()
+                    except Exception:
+                        continue
+                    if any(sup is root_class for sup in supers):
+                        cells.add(_cell_key(candidate))
         return cells
     if isinstance(node, type):
         seen = {node}

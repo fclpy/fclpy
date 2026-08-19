@@ -413,7 +413,25 @@ def typep(object, type_specifier):
         # (e.g. #<STANDARD-CLASS SYMBOL>), so fall back to checking the
         # class's name as an ordinary type-specifier symbol.
         return typep(object, type_specifier.name)
-    
+
+    # A class *object* itself as the object being tested, e.g.
+    # `(typep (find-class 'foo) 'structure-class)`
+    # (structures/structure-00.lsp test 14) -- a question about which
+    # metaobject class `object` is an instance of, not about `object`'s own
+    # instances, so it is answered separately from the LispClass-as-type_specifier
+    # branch above.
+    if isinstance(object, classes.LispClass):
+        obj_type_name = (type_specifier.upper() if isinstance(type_specifier, str)
+                          else type_specifier.name.upper() if hasattr(type_specifier, 'name')
+                          else str(type_specifier).upper())
+        if obj_type_name == 'T':
+            return lisptype.T
+        from fclpy import typespec
+        if obj_type_name in typespec._BUILTIN_CLASS_NAMES:
+            return lisptype.lisp_bool(
+                getattr(object, 'metaclass_name', 'STANDARD-CLASS') in typespec._class_cone(obj_type_name))
+        return lisptype.NIL
+
     # Handle string or symbol type specifiers
     if isinstance(type_specifier, str):
         type_name = type_specifier.upper()

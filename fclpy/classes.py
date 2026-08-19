@@ -34,6 +34,11 @@ class SlotDefinition:
     readers: List[LispSymbol] = field(default_factory=list)
     writers: List[LispSymbol] = field(default_factory=list)
     accessors: List[LispSymbol] = field(default_factory=list)
+    # CLHS 7.2 (DEFSTRUCT slots only -- ordinary CLOS slots have no such
+    # concept): true if this slot has no SETF-able place at all, not just
+    # a missing writer function. structures/structure-00.lsp's test 12
+    # checks `(fboundp '(setf accessor))` is NIL for one of these.
+    read_only: bool = False
     # The environment DEFCLASS was evaluated in, captured so a slot's
     # initform (an unevaluated form) can later be evaluated the way CLHS
     # 7.1.2 wants -- lexically where the class was defined, not wherever
@@ -101,6 +106,14 @@ class LispClass:
     # builds a brand new LispClass object rather than mutating this one.
     _cpl_cache: Optional[List['LispClass']] = field(
         default=None, repr=False, compare=False)
+    # CLHS 4.3.7: which metaobject class this class object is itself an
+    # instance of -- 'STANDARD-CLASS' for an ordinary DEFCLASS,
+    # 'STRUCTURE-CLASS' for DEFSTRUCT. Answers `(typep (find-class 'x)
+    # 'structure-class)` (structure-00.lsp test 14), which is a question
+    # about the class *object*, not about its instances -- TYPEP's
+    # existing LispClass/LispInstance branches only ever answer the
+    # latter.
+    metaclass_name: str = 'STANDARD-CLASS'
 
     def get_linearized_superclasses(self) -> List['LispClass']:
         """This class's class precedence list (CLHS 4.3.5), most specific
@@ -259,7 +272,8 @@ def make_class(
     direct_superclasses: Optional[List[LispClass]] = None,
     direct_slots: Optional[List[SlotDefinition]] = None,
     documentation: Optional[str] = None,
-    direct_default_initargs: Optional[List[Any]] = None
+    direct_default_initargs: Optional[List[Any]] = None,
+    metaclass_name: str = 'STANDARD-CLASS'
 ) -> LispClass:
     """Create a new class.
 
@@ -270,6 +284,8 @@ def make_class(
         documentation: Documentation string
         direct_default_initargs: List of (initarg-symbol, form, definition_env)
             triples from this class's own :default-initargs option (CLHS 7.1.8)
+        metaclass_name: 'STANDARD-CLASS' (DEFCLASS) or 'STRUCTURE-CLASS'
+            (DEFSTRUCT) -- see LispClass.metaclass_name.
 
     Returns:
         The created LispClass object
@@ -286,7 +302,8 @@ def make_class(
         direct_superclasses=direct_superclasses,
         direct_slots=direct_slots,
         documentation=documentation,
-        direct_default_initargs=direct_default_initargs
+        direct_default_initargs=direct_default_initargs,
+        metaclass_name=metaclass_name
     )
 
     return cls

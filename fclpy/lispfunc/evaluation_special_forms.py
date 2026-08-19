@@ -2151,254 +2151,321 @@ def eval_defconstant(form, env):
 
 
 def eval_defstruct(form, env):
-    """Evaluate DEFSTRUCT special form.
-    
+    """Evaluate DEFSTRUCT special form (CLHS 3.4.6, 7.2).
+
     (DEFSTRUCT name slot...)
     (DEFSTRUCT (name option...) slot...)
-    
-    DEFSTRUCT does not evaluate its arguments - they are literal specifications.
-    DEFSTRUCT creates GLOBAL function bindings like DEFUN does.
+
+    DEFSTRUCT does not evaluate its arguments -- they are literal
+    specifications. It defines a real `classes.LispClass` (metaclass
+    STRUCTURE-CLASS, rooted at STRUCTURE-OBJECT or at the :INCLUDE parent's
+    class) and its constructors build real `classes.LispInstance` objects,
+    so TYPEP/SUBTYPEP/FIND-CLASS/COPY-STRUCTURE all see structures through
+    the one class/instance model CLOS already uses -- rather than a second,
+    unregistered Python class nothing else in the language could see at
+    all. structures/structure-00.lsp's generated battery (tests 1, 13-17,
+    20 per DEFSTRUCT) depends on exactly this: `(typep obj name)`,
+    `(typep obj (find-class name))`, `(typep (find-class name)
+    'structure-class)`, `(typep obj 'structure-object)`, disjointness with
+    every other built-in type via SUBTYPEP, and a working `copy-structure`.
+
+    BOA constructors (`:constructor name (boa-lambda-list)`) are parsed
+    only far enough to recover the constructor's *name*; the lambda list
+    itself is not bound, so a BOA constructor still behaves as a keyword
+    constructor (pre-existing behavior, not a regression). Structures with
+    only keyword constructors are unaffected. See plan.md for BOA
+    constructors as the next mechanism.
     """
-    import fclpy.state as state
-    
-    # Get current package for interning accessor symbols
+    import fclpy.classes as classes
+    from .evaluation_core import eval as _eval
+    from .misc_clos import _eval_initform
+
     current_pkg = getattr(state, 'current_package', None) or lisptype.COMMON_LISP_USER_PACKAGE
-    
-    # Find the global/root environment for defining functions
-    # DEFSTRUCT always creates global function bindings (like DEFUN)
+
     global_env = env
     while global_env.parent is not None:
         global_env = global_env.parent
-    
+
     args = cdr(form)
     if not _consp_internal(args):
         raise lisptype.LispNotImplementedError("DEFSTRUCT requires a name")
-    
+
     name_and_options = car(args)
-    slot_specs = cdr(args)
-    
-    # Parse name and options
-    if isinstance(name_and_options, lisptype.lispKeyword):
-        # Accept keywords as structure names and use their name
+    rest_forms = cdr(args)
+
+    def _sym_name(x):
+        if isinstance(x, (lisptype.LispSymbol, lisptype.lispKeyword)):
+            return x.name
+        return str(x)
+
+    def _is_nil_value(v):
+        return (v is None or v is lisptype.NIL or
+                (isinstance(v, lisptype.LispSymbol) and v.name == 'NIL'))
+
+    doc_string = None
+    if _consp_internal(rest_forms) and isinstance(car(rest_forms), (str, lisptype.LispString)):
+        doc_string = str(car(rest_forms))
+        rest_forms = cdr(rest_forms)
+    slot_specs = rest_forms
+
+    # Sentinels for :copier/:predicate, which -- unlike :constructor -- take
+    # at most one name each: `_DEFAULT` means the option was given with no
+    # name of its own (bare `:copier`, or `(:copier)`), which still affirms
+    # the *default* name, distinct from never mentioning the option at all
+    # (also the default) and from an explicit `(:copier nil)` (suppressed).
+    _DEFAULT = object()
+    _SUPPRESSED = object()
+
+    conc_name_explicit = None
+    constructors = []              # [(name-or-None, boa-lambda-list-or-None), ...]
+    constructors_specified = False
+    copier_name = _DEFAULT
+    predicate_name = _DEFAULT
+    include_parent_name = None
+    include_overrides = []         # raw override slot-spec forms
+
+    if isinstance(name_and_options, (lisptype.LispSymbol, lisptype.lispKeyword)):
         struct_name = name_and_options
-        conc_name = struct_name.name + '-'
-        constructor_name = 'MAKE-' + struct_name.name
-        copier_name = 'COPY-' + struct_name.name
-        predicate_name = struct_name.name + '-P'
-        include_parent = None
-    elif isinstance(name_and_options, lisptype.LispSymbol):
-        struct_name = name_and_options
-        conc_name = struct_name.name + '-'
-        constructor_name = 'MAKE-' + struct_name.name
-        copier_name = 'COPY-' + struct_name.name
-        predicate_name = struct_name.name + '-P'
-        include_parent = None
     elif _consp_internal(name_and_options):
         struct_name = car(name_and_options)
-        # Validate that struct_name is a symbol or keyword
-        if isinstance(struct_name, lisptype.lispKeyword):
-            # Accept keywords and use their name
-            pass
-        elif not isinstance(struct_name, lisptype.LispSymbol):
-            raise lisptype.LispNotImplementedError(f"DEFSTRUCT: structure name must be a symbol, got {type(struct_name)}")
-        conc_name = struct_name.name + '-'  # Default prefix
-        constructor_name = 'MAKE-' + struct_name.name
-        copier_name = 'COPY-' + struct_name.name
-        predicate_name = struct_name.name + '-P'
-        include_parent = None
-        
-        # Parse options
+        if not isinstance(struct_name, (lisptype.LispSymbol, lisptype.lispKeyword)):
+            raise lisptype.LispNotImplementedError(
+                f"DEFSTRUCT: structure name must be a symbol, got {type(struct_name)}")
+
         options = cdr(name_and_options)
         while _consp_internal(options):
             opt = car(options)
             if _consp_internal(opt):
                 opt_name = car(opt)
-                opt_value = car(cdr(opt)) if _consp_internal(cdr(opt)) else None
-                
-                if isinstance(opt_name, lisptype.LispSymbol):
-                    opt_name_str = opt_name.name.upper()
-                elif isinstance(opt_name, lisptype.lispKeyword):
-                    opt_name_str = opt_name.name.upper()
-                else:
-                    opt_name_str = str(opt_name).upper()
-                
-                if opt_name_str == 'CONC-NAME' or opt_name_str == ':CONC-NAME':
-                    # Check for NIL value (can be None, the NIL constant, or a symbol named "NIL")
-                    is_nil = (opt_value is None or 
-                              opt_value == lisptype.NIL or
-                              (isinstance(opt_value, lisptype.LispSymbol) and opt_value.name == 'NIL'))
-                    if is_nil:
-                        conc_name = ''  # No prefix
-                    elif isinstance(opt_value, lisptype.LispSymbol):
-                        conc_name = opt_value.name
+                opt_name_str = _sym_name(opt_name).upper()
+                opt_rest = cdr(opt)
+                opt_value = car(opt_rest) if _consp_internal(opt_rest) else None
+
+                if opt_name_str == 'CONC-NAME':
+                    conc_name_explicit = '' if _is_nil_value(opt_value) else _sym_name(opt_value)
+                elif opt_name_str == 'CONSTRUCTOR':
+                    constructors_specified = True
+                    if opt_value is None:
+                        # (:constructor) with no name -- affirms the default.
+                        constructors.append((None, None))
+                    elif not _is_nil_value(opt_value):
+                        boa_ll = None
+                        opt_rest2 = cdr(opt_rest)
+                        if _consp_internal(opt_rest2):
+                            boa_ll = car(opt_rest2)
+                        constructors.append((_sym_name(opt_value), boa_ll))
+                    # (:constructor nil) -- explicitly suppressed, add nothing.
+                elif opt_name_str == 'COPIER':
+                    if opt_value is None:
+                        copier_name = _DEFAULT
+                    elif _is_nil_value(opt_value):
+                        copier_name = _SUPPRESSED
                     else:
-                        conc_name = str(opt_value)
-                elif opt_name_str == 'CONSTRUCTOR' or opt_name_str == ':CONSTRUCTOR':
-                    is_nil = (opt_value is None or 
-                              opt_value == lisptype.NIL or
-                              (isinstance(opt_value, lisptype.LispSymbol) and opt_value.name == 'NIL'))
-                    if is_nil:
-                        constructor_name = None
-                    elif isinstance(opt_value, lisptype.LispSymbol):
-                        constructor_name = opt_value.name
-                elif opt_name_str == 'COPIER' or opt_name_str == ':COPIER':
-                    is_nil = (opt_value is None or 
-                              opt_value == lisptype.NIL or
-                              (isinstance(opt_value, lisptype.LispSymbol) and opt_value.name == 'NIL'))
-                    if is_nil:
-                        copier_name = None
-                    elif isinstance(opt_value, lisptype.LispSymbol):
-                        copier_name = opt_value.name
-                elif opt_name_str == 'PREDICATE' or opt_name_str == ':PREDICATE':
-                    is_nil = (opt_value is None or 
-                              opt_value == lisptype.NIL or
-                              (isinstance(opt_value, lisptype.LispSymbol) and opt_value.name == 'NIL'))
-                    if is_nil:
-                        predicate_name = None
-                    elif isinstance(opt_value, lisptype.LispSymbol):
-                        predicate_name = opt_value.name
-                elif opt_name_str == 'INCLUDE' or opt_name_str == ':INCLUDE':
-                    if isinstance(opt_value, lisptype.LispSymbol):
-                        include_parent = opt_value.name
+                        copier_name = _sym_name(opt_value)
+                elif opt_name_str == 'PREDICATE':
+                    if opt_value is None:
+                        predicate_name = _DEFAULT
+                    elif _is_nil_value(opt_value):
+                        predicate_name = _SUPPRESSED
+                    else:
+                        predicate_name = _sym_name(opt_value)
+                elif opt_name_str == 'INCLUDE':
+                    include_parent_name = _sym_name(opt_value)
+                    ov = cdr(opt_rest)
+                    while _consp_internal(ov):
+                        include_overrides.append(car(ov))
+                        ov = cdr(ov)
+                # :TYPE, :NAMED and :INITIAL-OFFSET (the list/vector
+                # structure representations) are not modeled -- left
+                # unhandled, matching prior behavior.
+            elif isinstance(opt, (lisptype.LispSymbol, lisptype.lispKeyword)):
+                bare = _sym_name(opt).upper()
+                if bare == 'CONSTRUCTOR':
+                    constructors_specified = True
+                    constructors.append((None, None))
+                elif bare == 'COPIER':
+                    copier_name = _DEFAULT
+                elif bare == 'PREDICATE':
+                    predicate_name = _DEFAULT
             options = cdr(options)
     else:
         struct_name = name_and_options
-        conc_name = str(struct_name) + '-'
-        constructor_name = 'MAKE-' + str(struct_name)
-        copier_name = 'COPY-' + str(struct_name)
-        predicate_name = str(struct_name) + '-P'
-        include_parent = None
-    
-    struct_class_name = struct_name.name if isinstance(struct_name, lisptype.LispSymbol) else str(struct_name)
-    
-    # Parse slot definitions
-    slot_defs = []  # List of (slot_name, default_value)
-    while _consp_internal(slot_specs):
-        slot = car(slot_specs)
-        if isinstance(slot, lisptype.LispSymbol):
-            slot_defs.append((slot.name, lisptype.NIL))
-        elif _consp_internal(slot):
-            slot_name = car(slot)
-            if isinstance(slot_name, lisptype.LispSymbol):
-                slot_name_str = slot_name.name
-            else:
-                slot_name_str = str(slot_name)
-            default_value = car(cdr(slot)) if _consp_internal(cdr(slot)) else lisptype.NIL
-            slot_defs.append((slot_name_str, default_value))
-        else:
-            slot_defs.append((str(slot), lisptype.NIL))
-        slot_specs = cdr(slot_specs)
-    
-    # Create the structure class
-    class StructureInstance:
-        def __init__(self, struct_type=struct_class_name, slot_defaults=None, **kwargs):
-            self._struct_type = struct_type
-            self._slots = {}
-            # Initialize with defaults
-            if slot_defaults is None:
-                slot_defaults = slot_defs
-            for slot_name, default_val in slot_defaults:
-                self._slots[slot_name] = default_val
-            # Override with provided values
-            for key, value in kwargs.items():
-                key_upper = key.upper()
-                for slot_name, _ in slot_defaults:
-                    if slot_name.upper() == key_upper:
-                        self._slots[slot_name] = value
-                        break
-        
-        def __repr__(self):
-            slot_values = ' '.join(f':{k} {v}' for k, v in self._slots.items())
-            return f'#S({self._struct_type} {slot_values})'
-        
-        def get_slot(self, name):
-            return self._slots.get(name, lisptype.NIL)
-        
-        def set_slot(self, name, value):
-            self._slots[name] = value
-    
-    # Store the structure class in a registry
-    if not hasattr(state, '_structure_classes'):
-        state._structure_classes = {}
-    state._structure_classes[struct_class_name] = {
-        'class': StructureInstance,
-        'slots': slot_defs,
-        'conc_name': conc_name
-    }
-    
-    # Create constructor function
-    if constructor_name:
-        def constructor_wrapper(*args, **kwargs):
-            # Convert keyword symbol arguments to kwargs
-            result_kwargs = dict(kwargs)
+
+    struct_class_name = _sym_name(struct_name)
+    conc_name = conc_name_explicit if conc_name_explicit is not None else struct_class_name + '-'
+
+    if not constructors_specified:
+        constructors = [('MAKE-' + struct_class_name, None)]
+    else:
+        constructors = [(nm if nm is not None else 'MAKE-' + struct_class_name, boa)
+                         for nm, boa in constructors]
+    copier_name = ('COPY-' + struct_class_name if copier_name is _DEFAULT
+                   else None if copier_name is _SUPPRESSED else copier_name)
+    predicate_name = (struct_class_name + '-P' if predicate_name is _DEFAULT
+                      else None if predicate_name is _SUPPRESSED else predicate_name)
+
+    def _parse_slot_spec(spec):
+        """(name [default-form [:type type-spec] [:read-only ro-form]]) or a bare name."""
+        if not _consp_internal(spec):
+            return _sym_name(spec), lisptype.NIL, None, False
+        slot_name_str = _sym_name(car(spec))
+        tail = cdr(spec)
+        default_form = lisptype.NIL
+        if _consp_internal(tail):
+            default_form = car(tail)
+            tail = cdr(tail)
+        type_spec = None
+        read_only = False
+        while _consp_internal(tail) and _consp_internal(cdr(tail)):
+            key_str = _sym_name(car(tail)).upper()
+            val = car(cdr(tail))
+            if key_str == 'TYPE':
+                type_spec = val
+            elif key_str == 'READ-ONLY':
+                read_only = not _is_nil_value(val)
+            tail = cdr(cdr(tail))
+        return slot_name_str, default_form, type_spec, read_only
+
+    # Resolve superclass: the :INCLUDE parent's class, or STRUCTURE-OBJECT.
+    if include_parent_name is not None:
+        parent_class = classes.find_class(include_parent_name)
+        if parent_class is None:
+            raise lisptype.LispError(
+                f"DEFSTRUCT: :INCLUDE parent not found: {include_parent_name}")
+    else:
+        parent_class = classes.find_class('STRUCTURE-OBJECT')
+
+    # This DEFSTRUCT's own direct slots: :INCLUDE overrides (of inherited
+    # slots) first, matching structure-00.lsp's insertion-order-preserving
+    # dict overlay in `LispClass.get_all_slots`, then this form's own new
+    # body slots.
+    direct_slots = []
+    if include_parent_name is not None:
+        parent_slot_names = set(parent_class.get_all_slots().keys())
+        for override_spec in include_overrides:
+            name_str, default_form, type_spec, read_only = _parse_slot_spec(override_spec)
+            if name_str not in parent_slot_names:
+                raise lisptype.LispError(
+                    f"DEFSTRUCT :INCLUDE: {name_str} does not name a slot of {include_parent_name}")
+            direct_slots.append(classes.SlotDefinition(
+                name=lisptype.LispSymbol(name_str), initform=default_form,
+                type_spec=type_spec, read_only=read_only, definition_env=env))
+
+    cur = slot_specs
+    while _consp_internal(cur):
+        name_str, default_form, type_spec, read_only = _parse_slot_spec(car(cur))
+        direct_slots.append(classes.SlotDefinition(
+            name=lisptype.LispSymbol(name_str), initform=default_form,
+            type_spec=type_spec, read_only=read_only, definition_env=env))
+        cur = cdr(cur)
+
+    struct_class = classes.make_class(
+        name=struct_name,
+        direct_superclasses=[parent_class] if parent_class is not None else [],
+        direct_slots=direct_slots,
+        documentation=doc_string,
+        metaclass_name='STRUCTURE-CLASS')
+    classes.register_class(struct_class)
+
+    ordered_slots = list(struct_class.get_all_slots().items())
+
+    def _default_slot_values():
+        return {name_str: _eval_initform(slot_def) for name_str, slot_def in ordered_slots}
+
+    def make_keyword_constructor():
+        def constructor(*call_args):
+            slot_values = _default_slot_values()
             i = 0
-            while i < len(args):
-                if i + 1 < len(args):
-                    key = args[i]
-                    value = args[i + 1]
-                    if isinstance(key, lisptype.lispKeyword):
-                        result_kwargs[key.name.upper()] = value
-                        i += 2
-                    else:
-                        i += 1
+            while i < len(call_args):
+                key = call_args[i]
+                if isinstance(key, lisptype.lispKeyword) and i + 1 < len(call_args):
+                    key_name = key.name.upper()
+                    for name_str, _slot_def in ordered_slots:
+                        if name_str.upper() == key_name:
+                            slot_values[name_str] = call_args[i + 1]
+                            break
+                    i += 2
                 else:
                     i += 1
-            return StructureInstance(struct_class_name, slot_defs, **result_kwargs)
-        
-        constructor_sym = current_pkg.intern_symbol(constructor_name)
-        global_env.add_function(constructor_sym, constructor_wrapper)
-    
-    # Create copier function
-    if copier_name:
-        def copy_structure(struct):
-            if not isinstance(struct, StructureInstance):
-                raise TypeError(f"Not a {struct_class_name}: {struct}")
-            new_struct = StructureInstance(struct_class_name, slot_defs)
-            new_struct._slots = dict(struct._slots)
-            return new_struct
-        
-        copier_sym = current_pkg.intern_symbol(copier_name)
-        global_env.add_function(copier_sym, copy_structure)
-    
-    # Create predicate function
+            return classes.LispInstance(lisp_class=struct_class, slot_values=slot_values)
+        return constructor
+
+    for ctor_name, _boa_ll in constructors:
+        ctor_sym = current_pkg.intern_symbol(ctor_name)
+        global_env.add_function(ctor_sym, make_keyword_constructor())
+
     if predicate_name:
         def is_structure(obj):
-            if hasattr(obj, '_struct_type') and obj._struct_type == struct_class_name:
-                return lisptype.T
+            # True for this structure type or any subtype (CLHS TYPEP semantics).
+            if isinstance(obj, classes.LispInstance):
+                for cls in obj.lisp_class.get_linearized_superclasses():
+                    if cls is struct_class:
+                        return lisptype.T
             return lisptype.NIL
-        
+
         predicate_sym = current_pkg.intern_symbol(predicate_name)
         global_env.add_function(predicate_sym, is_structure)
-    
-    # Create accessor functions for each slot
-    for slot_name, _ in slot_defs:
-        accessor_name = conc_name + slot_name
-        
-        # Create getter
-        def make_getter(sn):
-            def getter(struct):
-                if hasattr(struct, 'get_slot'):
-                    return struct.get_slot(sn)
-                raise TypeError(f"Not a {struct_class_name}: {struct}")
+
+    if copier_name:
+        def copy_structure_fn(struct):
+            # Copies using the instance's *actual* runtime class, so a
+            # parent's copier called on a subtype instance still works.
+            if not isinstance(struct, classes.LispInstance):
+                raise lisptype.LispTypeError(f"Not a structure: {struct}")
+            return classes.LispInstance(lisp_class=struct.lisp_class,
+                                         slot_values=dict(struct.slot_values))
+
+        copier_sym = current_pkg.intern_symbol(copier_name)
+        global_env.add_function(copier_sym, copy_structure_fn)
+
+    # Accessors for *every* slot of this struct, inherited included: CLHS
+    # 7.2's :INCLUDE effectively appends the parent's slot descriptions to
+    # this DEFSTRUCT's own, so a child gets a full accessor set under its
+    # own conc-name even for a slot it never mentions (STRUCT-INCLUDE.7
+    # calls `struct-include-04b-b` on a slot only STRUCT-INCLUDE-04A
+    # declared). The parent's own accessor for that slot keeps working on
+    # a child instance too, since it looks the slot up generically by name
+    # rather than by exact class.
+    for slot_name_str, slot_def in ordered_slots:
+        accessor_name = conc_name + slot_name_str
+        read_only = slot_def.read_only
+
+        def make_getter(sn, an):
+            def getter(instance):
+                if not isinstance(instance, classes.LispInstance) or sn not in instance.lisp_class.get_all_slots():
+                    raise lisptype.LispTypeError(f"{an}: not a {struct_class_name}: {instance}")
+                return instance.slot_values.get(sn, lisptype.NIL)
             return getter
-        
+
         accessor_sym = current_pkg.intern_symbol(accessor_name)
-        global_env.add_function(accessor_sym, make_getter(slot_name))
-        
-        # Create setter (for SETF)
-        def make_setter(sn):
-            def setter(struct, value):
-                if hasattr(struct, 'set_slot'):
-                    struct.set_slot(sn, value)
+        global_env.add_function(accessor_sym, make_getter(slot_name_str, accessor_name))
+
+        if not read_only:
+            def make_setter(sn, an):
+                def setter(instance, value):
+                    if not isinstance(instance, classes.LispInstance) or sn not in instance.lisp_class.get_all_slots():
+                        raise lisptype.LispTypeError(f"{an}: not a {struct_class_name}: {instance}")
+                    instance.slot_values[sn] = value
                     return value
-                raise TypeError(f"Not a {struct_class_name}: {struct}")
-            return setter
-        
-        setter_name = 'SET-' + accessor_name
-        setter_sym = current_pkg.intern_symbol(setter_name)
-        global_env.add_function(setter_sym, make_setter(slot_name))
-    
+                return setter
+
+            setter_sym = current_pkg.intern_symbol('SET-' + accessor_name)
+            global_env.add_function(setter_sym, make_setter(slot_name_str, accessor_name))
+
     return struct_name
+
+
+@_registry.cl_function('COPY-STRUCTURE')
+def copy_structure(structure):
+    """COPY-STRUCTURE (CLHS 7.2): a shallow copy of any structure, not just
+    one whose own `copy-<name>` function was defined. Previously absent
+    entirely -- `(copy-structure x)` raised Undefined function -- since
+    DEFSTRUCT only ever bound the per-struct `COPY-<name>` name."""
+    import fclpy.classes as classes
+    if not isinstance(structure, classes.LispInstance) or structure.lisp_class.metaclass_name != 'STRUCTURE-CLASS':
+        raise lisptype.LispTypeError(f"COPY-STRUCTURE: not a structure: {structure}")
+    return classes.LispInstance(lisp_class=structure.lisp_class,
+                                 slot_values=dict(structure.slot_values))
 
 
 def _pop_expander(place, *_rest):
