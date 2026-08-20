@@ -205,6 +205,28 @@ def _define_slot_accessors(lisp_class, slot_defs, definition_env):
     while global_env.parent is not None:
         global_env = global_env.parent
 
+    def _binding_symbol(gf_name):
+        """The symbol a *function name* is bound under in the environment.
+
+        A slot option's function name may be a `(SETF reader)` **list** --
+        `:writer (setf s1)` in a DEFCLASS is written exactly that way -- and
+        `Environment.bind_function` takes a symbol. Both this and
+        `classes.generic_function_key` go through
+        `_function_spec_to_key`, the one function-name resolver, so the
+        environment binding and the generic-function registry agree on the
+        name; a `:writer (setf foo)` and an `:accessor foo` therefore land on
+        the *same* function, which is what CLHS means by "an accessor is a
+        reader plus a writer named (setf reader)".
+        """
+        from fclpy.lispfunc.utilities_functions import _function_spec_to_key
+        key = _function_spec_to_key(gf_name)
+        if key is None:
+            raise lisptype.LispTypeError(
+                f"DEFCLASS: {gf_name} is not a function name",
+                expected_type='(OR SYMBOL (CONS (EQL SETF) (CONS SYMBOL NULL)))',
+                actual_value=gf_name)
+        return key
+
     def _bind_reader(gf_name, slot_name):
         # Deferred import: `misc_clos` is the one home of SLOT-VALUE's real
         # CLHS 7.5.3/7.5.5 protocol (SLOT-MISSING/SLOT-UNBOUND dispatch), and
@@ -214,7 +236,7 @@ def _define_slot_accessors(lisp_class, slot_defs, definition_env):
         from fclpy.lispfunc.misc_clos import slot_value
         gf = classes.ensure_generic_function(gf_name)
         classes.add_method(gf, [lisp_class], lambda instance: slot_value(instance, slot_name))
-        global_env.add_function(gf_name, gf)
+        global_env.add_function(_binding_symbol(gf_name), gf)
 
     def _bind_writer(gf_name, slot_name):
         from fclpy.lispfunc.misc_clos import set_slot_value
@@ -222,7 +244,7 @@ def _define_slot_accessors(lisp_class, slot_defs, definition_env):
         classes.add_method(
             gf, [None, lisp_class],
             lambda new_value, instance: set_slot_value(new_value, instance, slot_name))
-        global_env.add_function(gf_name, gf)
+        global_env.add_function(_binding_symbol(gf_name), gf)
 
     for slot_def in slot_defs:
         slot_name = slot_def.name

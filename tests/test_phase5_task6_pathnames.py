@@ -252,10 +252,20 @@ class TestPathnameCanonical:
         finally:
             os.unlink(fname)
     
-    def test_truename_nonexistent(self):
-        """Test TRUENAME on nonexistent file raises error."""
-        with pytest.raises(FileNotFoundError):
-            truename(os.path.join("nonexistent", "very_unlikely_file.txt"))
+    def test_truename_nonexistent_signals_file_error(self):
+        """TRUENAME signals a FILE-ERROR naming the file (CLHS TRUENAME).
+
+        It used to raise Python's `FileNotFoundError`, which is not a
+        condition: no HANDLER-CASE clause matched it, so it surfaced as the
+        *value* of the form instead of being handled.
+        """
+        from fclpy.lispfunc.evaluation_core import ConditionException
+        missing = os.path.join("nonexistent", "very_unlikely_file.txt")
+        with pytest.raises(ConditionException) as excinfo:
+            truename(missing)
+        condition = excinfo.value.condition
+        assert isinstance(condition, lisptype.FileError)
+        assert condition.get_slot('pathname') == missing
 
 
 class TestPathnameIntegration:

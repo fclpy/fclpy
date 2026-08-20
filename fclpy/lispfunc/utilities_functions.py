@@ -62,32 +62,43 @@ def fboundp(symbol):
 
 
 @_registry.cl_function('FMAKUNBOUND')
-def fmakunbound(symbol):
-    """Remove function binding for symbol.
+def fmakunbound(name):
+    """Remove `name`'s global function definition and return `name`
+    (CLHS FMAKUNBOUND).
 
-    This walks the current global environment's function bindings and
-    removes any entry whose symbol name matches the provided symbol.
-    Returns T if a binding was removed, otherwise NIL.
+    Three things it did not do:
+
+    * it removed the binding from `Environment.function_bindings` only, leaving
+      the `_function_map` cache `find_func` reads first, so FBOUNDP went on
+      answering T -- see `Environment.unbind_function`, which is now the one
+      place a function binding is removed;
+    * it looked only in `state.current_environment`, while DEFUN defines in the
+      *global* environment at the root of the chain, so an fmakunbound
+      evaluated inside any binding form found nothing to remove;
+    * it returned T/NIL rather than its argument, which is what CLHS specifies
+      and what `fmakunbound.1`--`.4` check with `(eqt (fmakunbound g) g)`.
+
+    A name that is neither a symbol nor `(SETF symbol)` is a TYPE-ERROR, not a
+    quiet NIL: the whole of `fmakunbound.error.*` is about that distinction.
     """
-    if not isinstance(symbol, lisptype.LispSymbol):
-        symbol = lisptype.LispSymbol(str(symbol))
+    key = _function_spec_to_key(name)
+    if key is None:
+        raise lisptype.LispTypeError(
+            f"FMAKUNBOUND: {name!r} is not a function name",
+            expected_type='(OR SYMBOL (CONS (EQL SETF) (CONS SYMBOL NULL)))',
+            actual_value=name)
+
     env = state.current_environment
-    if env is None:
-        return lisptype.NIL
-    prev = None
-    node = env.function_bindings
-    removed = False
-    while node is not None:
-        if node.symbol.name == symbol.name:
-            if prev is None:
-                env.function_bindings = node.next
-            else:
-                prev.next = node.next
-            removed = True
-            break
-        prev = node
-        node = node.next
-    return lisptype.T if removed else lisptype.NIL
+    while env is not None:
+        env.unbind_function(key)
+        env = getattr(env, 'parent', None)
+
+    # The symbol's own function cell is a third place a definition can live
+    # (SYMBOL-FUNCTION / SET-SYMBOL-FUNCTION write it), so it has to be
+    # cleared too or `(setf (symbol-function g) #'car)` would survive --
+    # `fmakunbound.1` is exactly that case.
+    key.function = None
+    return name
 
 
 @_registry.cl_function('FDEFINITION')

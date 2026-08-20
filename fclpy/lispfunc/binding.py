@@ -154,6 +154,48 @@ def is_proclaimed_special(var, env):
     return bool(specials) and name in specials
 
 
+def dynamic_value(symbol, default=None):
+    """The current value of a dynamic variable, read from Python.
+
+    Resolution follows ``evaluation_core.eval``'s own order for a variable
+    reference -- a binding in the current environment chain first, then the
+    symbol's value cell -- so a binding a Lisp ``LET`` made is honoured by a
+    builtin that reads the variable from Python. `default` is returned when
+    the variable is unbound; Python ``None`` is the value cell's "unbound"
+    marker, so it can never be a value here.
+
+    This exists because every builtin that consults a control variable was
+    writing the same four lines itself, and they had already drifted: LOAD's
+    copy read ``*DEFAULT-PATHNAME-DEFAULTS*`` out of ``COMMON-LISP-USER``
+    while COMPILE-FILE's read it out of ``COMMON-LISP``, and since global
+    lookup is by symbol *identity* those are two different variables -- so
+    the two operators resolved the same relative pathname differently.
+    """
+    import fclpy.state as state
+    env = getattr(state, 'current_environment', None)
+    if env is not None and env.has_variable(symbol):
+        return env.find_variable(symbol)
+    value = getattr(symbol, 'value', None)
+    return default if value is None else value
+
+
+def set_dynamic_value(symbol, value):
+    """Assign to a dynamic variable's innermost existing binding.
+
+    This is *assignment* (SETQ), not establishment: `Environment.set_variable`
+    walks the chain and writes the first binding of the name it finds, ending
+    at the value cell. That is exactly right here and exactly wrong for
+    establishing a binding -- see `BindingFrame`, which is what a form that
+    *binds* a variable must use.
+    """
+    import fclpy.state as state
+    env = getattr(state, 'current_environment', None)
+    if env is None:
+        symbol.value = value
+        return value
+    return env.set_variable(symbol, value)
+
+
 def special_reference(var):
     """The form a *free* SPECIAL declaration makes `var` expand to.
 

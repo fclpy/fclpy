@@ -54,6 +54,31 @@ class Pathname:
         """
         return self.original
     
+    def __eq__(self, other):
+        """CLHS 20.1.1 / EQUAL: two pathnames are equal when all their
+        corresponding components are.
+
+        Without this, two Pathname objects naming the same file were never
+        EQUAL or EQUALP however identically they printed -- so `load.18`
+        compared `(pathname (merge-pathnames target))` against the
+        `*load-pathname*` the loaded file had recorded, got two objects that
+        both printed `#P"...load-test-file-2.fasl"`, and reported them
+        different. On Windows the comparison is case-insensitive, as the
+        file system is.
+        """
+        if not isinstance(other, Pathname):
+            return NotImplemented
+        return self._key() == other._key()
+
+    def __hash__(self):
+        # Defining __eq__ without __hash__ makes the class unhashable, which
+        # would break every hash table and `frozenset` a pathname reaches.
+        return hash(self._key())
+
+    def _key(self):
+        normalized = os.path.normpath(self.original)
+        return os.path.normcase(normalized) if os.name == 'nt' else normalized
+
     def to_list(self):
         """Convert to list representation for Lisp."""
         return [
@@ -62,6 +87,86 @@ class Pathname:
             ('extension', self.extension),
             ('name', self.name)
         ]
+
+
+def _filespec_namestring(filespec):
+    """The namestring a *pathname designator* carries (CLHS glossary).
+
+    A designator is "a pathname, a namestring, or a stream associated with a
+    file", and the third case is not an edge: `(compile-file s)` on an open
+    file stream and `:output-file s` on a closed one are both in the ANSI
+    suite. A stream reaches Python as a `streams.Stream`, whose `name` is the
+    path it was opened on; `str()` on one yields its `__repr__`, which is how
+    `<StringInputStream pos=0 len=59>` ended up being treated as a filename.
+    """
+    if isinstance(filespec, Pathname):
+        return filespec.original
+    from .streams import Stream
+    if isinstance(filespec, Stream):
+        name = getattr(filespec, 'name', None)
+        if isinstance(name, str) and name and not name.startswith('<'):
+            return name
+        raise lisptype.LispTypeError(
+            f"{filespec!r} is not associated with a file",
+            expected_type='FILE-STREAM', actual_value=filespec)
+    return str(filespec)
+
+
+def resolve_filespec(filespec):
+    """The OS path a *filespec designator* names -- the one resolver.
+
+    CLHS's rule is `(merge-pathnames filespec *default-pathname-defaults*)`,
+    and that is the last step here. The two steps before it are this
+    implementation's own, and they are why this function exists rather than a
+    call to MERGE-PATHNAMES: a relative name is also tried against
+    ``LISP_CWD`` (so a Lisp working directory can differ from Python's) and
+    against the directory of the file currently being loaded (so a file the
+    ANSI harness loads can name a sibling), each only when that candidate
+    actually exists.
+
+    It **always returns a path**, existing or not, so a caller that has to
+    report a missing file can name it. That is the difference that mattered:
+    LOAD, COMPILE-FILE, COMPILE-FILE-PATHNAME and DELETE-FILE each had their
+    own ~35-line copy of this search, and the copies had already drifted --
+    LOAD read ``*DEFAULT-PATHNAME-DEFAULTS*`` out of ``COMMON-LISP-USER``
+    while COMPILE-FILE read it out of ``COMMON-LISP``, and since a global
+    variable's home is the symbol's value cell and lookup is by symbol
+    *identity*, those are two different variables. The same relative pathname
+    therefore resolved differently depending on which operator asked, which
+    is exactly the bug COMPILE-FILE.6 (`:output-file "foo.fasl"`) reported as
+    "File not found: foo.fasl".
+    """
+    from .binding import dynamic_value
+
+    path_str = _filespec_namestring(filespec)
+
+    if os.path.isabs(path_str):
+        return os.path.normpath(path_str)
+
+    lisp_cwd = os.environ.get('LISP_CWD')
+    if lisp_cwd:
+        candidate = os.path.normpath(os.path.join(lisp_cwd, path_str))
+        if os.path.exists(candidate):
+            return candidate
+
+    load_truename = dynamic_value(
+        lisptype.COMMON_LISP_PACKAGE.intern_symbol('*LOAD-TRUENAME*'))
+    if isinstance(load_truename, Pathname):
+        current_dir = os.path.dirname(load_truename.original)
+        if current_dir:
+            candidate = os.path.normpath(os.path.join(current_dir, path_str))
+            if os.path.exists(candidate):
+                return candidate
+
+    defaults = dynamic_value(
+        lisptype.COMMON_LISP_PACKAGE.intern_symbol('*DEFAULT-PATHNAME-DEFAULTS*'))
+    if isinstance(defaults, Pathname):
+        default_path = defaults.original
+        base = default_path if os.path.isdir(default_path) else os.path.dirname(default_path)
+        if base:
+            return os.path.normpath(os.path.join(base, path_str))
+
+    return os.path.normpath(path_str)
 
 
 @_registry.cl_function('PATHNAME')
@@ -466,10 +571,20 @@ def merge_pathnames(pathname, defaults=None):
         pathname = Pathname(pathname)
     elif not isinstance(pathname, Pathname):
         raise TypeError(f"Expected Pathname, got {type(pathname)}")
-    
-    if defaults is None:
-        return pathname
-    
+
+    if defaults is None or defaults is lisptype.NIL:
+        # CLHS MERGE-PATHNAMES: "defaults ... The default is the value of
+        # *default-pathname-defaults*." Returning the pathname unchanged made
+        # MERGE-PATHNAMES the identity in its commonest call shape, so
+        # `(merge-pathnames "load-test-file.lsp")` answered a *relative*
+        # pathname and load.17's comparison against the `*load-pathname*` the
+        # file recorded could not match.
+        from .binding import dynamic_value
+        defaults = dynamic_value(
+            lisptype.COMMON_LISP_PACKAGE.intern_symbol('*DEFAULT-PATHNAME-DEFAULTS*'))
+        if not isinstance(defaults, Pathname):
+            return pathname
+
     if isinstance(defaults, (str, lisptype.LispString)):
         defaults = Pathname(defaults)
     elif not isinstance(defaults, Pathname):
@@ -542,13 +657,9 @@ def probe_file(pathname):
     Returns:
         Pathname if exists, NIL otherwise
     """
-    if isinstance(pathname, Pathname):
-        path_str = pathname.original
-    else:
-        path_str = str(pathname)
-    
+    path_str = resolve_filespec(pathname)
     if os.path.exists(path_str) and os.path.isfile(path_str):
-        return Pathname(path_str)
+        return Pathname(os.path.realpath(path_str))
     return lisptype.NIL
 
 
@@ -595,20 +706,22 @@ def truename(pathname):
     Returns:
         Pathname with absolute canonical path
     """
-    if isinstance(pathname, Pathname):
-        path_str = pathname.original
-    else:
-        path_str = str(pathname)
-    
-    # Check if file exists first
+    from .evaluation_conditions import signal_file_error
+
+    path_str = resolve_filespec(pathname)
+
+    # CLHS TRUENAME: "an error of type FILE-ERROR is signaled if an
+    # appropriate file cannot be located". A Python FileNotFoundError is not a
+    # condition -- it matched no handler clause and surfaced as the *value* of
+    # the form.
     if not os.path.exists(path_str):
-        raise FileNotFoundError(f"File not found: {path_str}")
-    
+        return signal_file_error(pathname, f"TRUENAME: file not found: {path_str}")
+
     try:
-        real_path = os.path.realpath(path_str)
-        return Pathname(real_path)
+        return Pathname(os.path.realpath(path_str))
     except (OSError, ValueError):
-        raise FileNotFoundError(f"Cannot resolve pathname: {path_str}")
+        return signal_file_error(
+            pathname, f"TRUENAME: cannot resolve pathname: {path_str}")
 
 
 @_registry.cl_function('ABSOLUTE-PATHNAME-P')

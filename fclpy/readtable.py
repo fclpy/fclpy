@@ -113,6 +113,50 @@ class Readtable:
                 actual_value=case)
         self._case = case
 
+    def _rebind(self, function, target: 'Readtable'):
+        r"""`function`, but reading through `target` if it is one of *this*
+        readtable's own built-in reader methods.
+
+        This is what makes a copied readtable a readtable in its own right.
+        The built-in macro functions (`_left_paren_reader`, `_sharp_reader`,
+        ...) are **bound methods**, and each reads its sub-expressions through
+        `self._read_item`, i.e. through the macro characters of the readtable
+        it is bound to. Copying the dictionary alone therefore handed the copy
+        a set of readers that still consulted the *original*::
+
+            (let ((*readtable* (copy-readtable nil)))
+              (set-macro-character #\! (get-macro-character #'))
+              (read-from-string "(list 1 !good)"))   ; => (LIST 1 !GOOD)
+
+        -- the `!` worked at top level, where `read_1` looks the character up
+        in the current readtable, and was invisible inside the list, whose
+        elements were read by the standard readtable's `_left_paren_reader`.
+        `(copy-readtable nil)` followed by `set-macro-character` is the
+        standard idiom for altering syntax, and every use of it inside an
+        aggregate was silently ignored.
+
+        A function that is *not* one of this readtable's methods -- a user
+        function, or a reader borrowed from another table with
+        `(get-macro-character #')` -- is carried across untouched, because
+        then the function really is the value and not a piece of this table.
+        """
+        owner = getattr(function, '__self__', None)
+        if owner is not self:
+            return function
+        return getattr(target, function.__name__)
+
+    def _copied_tables(self, target: 'Readtable'):
+        """This readtable's two syntax tables, rebound for `target`."""
+        macro_characters = {
+            char: (self._rebind(fn, target), non_terminating)
+            for char, (fn, non_terminating) in self._macro_characters.items()
+        }
+        dispatch = {
+            char: {sub: self._rebind(fn, target) for sub, fn in table.items()}
+            for char, table in self._dispatch_macro_characters.items()
+        }
+        return macro_characters, dispatch
+
     def copy(self) -> 'Readtable':
         """Create a copy of this readtable.
         
@@ -123,15 +167,11 @@ class Readtable:
             A new Readtable instance with copied settings.
         """
         new_rt = Readtable.__new__(Readtable)
-        # Create shallow copies of the dictionaries
-        new_rt._macro_characters = dict(self._macro_characters)
-        new_rt._dispatch_macro_characters = {
-            k: dict(v) for k, v in self._dispatch_macro_characters.items()
-        }
-        new_rt._case = self._case
         # A copy of the standard readtable is an ordinary, mutable readtable --
         # that is the whole point of `(copy-readtable nil)`.
         new_rt._standard = False
+        new_rt._macro_characters, new_rt._dispatch_macro_characters =             self._copied_tables(new_rt)
+        new_rt._case = self._case
         return new_rt
 
     def copy_into(self, target: 'Readtable') -> 'Readtable':
@@ -143,10 +183,7 @@ class Readtable:
         EQL to the table it passed in.
         """
         target._check_mutable('COPY-READTABLE')
-        target._macro_characters = dict(self._macro_characters)
-        target._dispatch_macro_characters = {
-            k: dict(v) for k, v in self._dispatch_macro_characters.items()
-        }
+        target._macro_characters, target._dispatch_macro_characters =             self._copied_tables(target)
         target._case = self._case
         return target
     
@@ -375,10 +412,9 @@ class Readtable:
         if ':' in token_check and not token.startswith(':'):
             return self._read_package_qualified_symbol(token)
         
-        # Get current package
-        current_pkg = getattr(state, 'current_package', None)
-        if current_pkg is None:
-            current_pkg = lisptype.COMMON_LISP_USER_PACKAGE
+        # The current package is the value of `*PACKAGE*`; `state`'s resolver
+        # is the one place that decides (see state.current_package_value).
+        current_pkg = state.current_package_value()
         
         # Restore escaped colons before interning
         token_restored = token.replace('\x00', ':')
@@ -1151,19 +1187,12 @@ def coerce_to_readtable(designator, what: str, default=None) -> Readtable:
         expected_type="READTABLE", actual_value=designator)
 
 
-class _Omitted:
-    """Marks an argument that was not supplied at all.
-
-    Needed because NIL is a *meaningful* readtable designator here, so the
-    usual `=None` default cannot tell "omitted" (the current readtable) from
-    "given NIL" (the standard readtable).
-    """
-
-    def __repr__(self):
-        return '<omitted>'
-
-
-_OMITTED = _Omitted()
+# The "argument not supplied" marker. NIL is a *meaningful* readtable
+# designator here, so a `=None` default cannot tell "omitted" (the current
+# readtable) from "given NIL" (the standard readtable). One sentinel object
+# for the whole implementation -- this module used to define its own, and
+# every other operator with the same problem had no sentinel at all.
+from fclpy.lisptype_basic import OMITTED as _OMITTED
 
 
 def case_keyword(case_name: str):

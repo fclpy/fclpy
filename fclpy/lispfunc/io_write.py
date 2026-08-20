@@ -2207,66 +2207,81 @@ def formatter(control_string):
 
 @_registry.cl_function('DELETE-FILE')
 def delete_file(filespec):
-    """Delete file."""
+    """DELETE-FILE: delete the file `filespec` names (CLHS 20.2).
+
+    `filespec` is a *pathname designator*, which includes a stream associated
+    with a file -- `compile-file.14` passes exactly that, an output stream it
+    opened and closed, and this used to `str()` it and hand
+    ``<fclpy.lispfunc.streams.Stream object at 0x...>`` to `os.remove`. Both
+    the designator rule and the relative-pathname search now live in
+    `pathnames.resolve_filespec`; this carried a fourth copy of that search
+    (LOAD, COMPILE-FILE and COMPILE-FILE-PATHNAME had the others), which is
+    how they came to disagree about which package `*DEFAULT-PATHNAME-DEFAULTS*`
+    lives in.
+
+    A file that is not there is a FILE-ERROR, per CLHS -- not NIL, which
+    conflated "deleted nothing" with "deleted it".
+    """
     import os
-    # Resolve similar to LOAD/COMPILE-FILE so relative pathnames are found
-    from fclpy.lispfunc.pathnames import Pathname
-    import fclpy.state as state
-    env = state.current_environment
+    from fclpy.lispfunc.pathnames import Pathname, resolve_filespec
+    from fclpy.lispfunc.evaluation_conditions import signal_file_error
 
-    if isinstance(filespec, Pathname):
-        path_str = filespec.original
-    else:
-        path_str = str(filespec)
-
-    if not os.path.isabs(path_str):
-        resolved = False
-        lisp_cwd = os.environ.get('LISP_CWD')
-        if lisp_cwd:
-            candidate = os.path.normpath(os.path.join(lisp_cwd, path_str))
-            if os.path.exists(candidate):
-                path_str = candidate
-                resolved = True
-
-        if not resolved and env is not None:
-            load_truename_sym = lisptype.COMMON_LISP_PACKAGE.intern_symbol('*LOAD-TRUENAME*')
-            load_truename = env.find_variable(load_truename_sym)
-            if load_truename and load_truename is not lisptype.NIL and isinstance(load_truename, Pathname):
-                current_file_path = load_truename.original
-                current_dir = os.path.dirname(current_file_path)
-                if current_dir:
-                    candidate = os.path.normpath(os.path.join(current_dir, path_str))
-                    if os.path.exists(candidate):
-                        path_str = candidate
-                        resolved = True
-
-        if not resolved and env is not None:
-            default_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*DEFAULT-PATHNAME-DEFAULTS*')
-            default_pathname = env.find_variable(default_sym)
-            if default_pathname and default_pathname is not lisptype.NIL and isinstance(default_pathname, Pathname):
-                default_path = default_pathname.original
-                if os.path.isdir(default_path):
-                    default_dir = default_path
-                else:
-                    default_dir = os.path.dirname(default_path)
-                if default_dir:
-                    candidate = os.path.normpath(os.path.join(default_dir, path_str))
-                    if os.path.exists(candidate):
-                        path_str = candidate
-
+    path_str = resolve_filespec(filespec)
     try:
         os.remove(path_str)
-        return lisptype.T
     except FileNotFoundError:
-        return lisptype.NIL
+        return signal_file_error(
+            Pathname(path_str), "DELETE-FILE: file not found: " + path_str)
+    except OSError as error:
+        return signal_file_error(
+            Pathname(path_str), "DELETE-FILE: " + str(error))
+    return lisptype.T
 
 
 @_registry.cl_function('RENAME-FILE')
 def rename_file(filespec, new_name):
-    """Rename file."""
+    """RENAME-FILE (CLHS 20.2): rename a file and answer three values.
+
+    The three values are the standard's: the *defaulted* new name, the old
+    truename, and the new truename. This returned one value -- a Python string
+    -- from `os.rename(str(filespec), str(new_name))`, which got three separate
+    things wrong at once: a `str()` on a designator (so a stream argument
+    became its Python repr), no defaulting of `new-name` against the file being
+    renamed, and no truenames, which is what the caller needs in order to find
+    the file afterwards.
+
+    `new-name` is merged with `filespec` rather than with
+    `*default-pathname-defaults*`: CLHS says the components new-name does not
+    supply come from the file being renamed, which is what makes
+    `(rename-file "a/b.txt" "c")` land in `a/` and keep the type. That merge is
+    MERGE-PATHNAMES' job and is delegated to it -- it is still namestring-based
+    rather than component-based here, so a new-name that omits the *type*
+    (rename-file.3) does not yet inherit it; that is the pathname component
+    model, tracked separately, not something to work around in this operator.
+    """
     import os
-    os.rename(str(filespec), str(new_name))
-    return str(new_name)
+    from fclpy.lispfunc.pathnames import (
+        Pathname, resolve_filespec, merge_pathnames)
+    from fclpy.lispfunc.evaluation_conditions import signal_file_error
+
+    old_path = resolve_filespec(filespec)
+    if not os.path.exists(old_path):
+        return signal_file_error(
+            Pathname(old_path), "RENAME-FILE: file not found: " + old_path)
+
+    old_truename = Pathname(os.path.realpath(old_path))
+    defaulted_new_name = merge_pathnames(
+        Pathname(resolve_filespec(new_name)), Pathname(old_path))
+    new_path = defaulted_new_name.original
+
+    try:
+        os.replace(old_path, new_path)
+    except OSError as error:
+        return signal_file_error(
+            Pathname(old_path), "RENAME-FILE: " + str(error))
+
+    return lisptype.MultipleValues(
+        defaulted_new_name, old_truename, Pathname(os.path.realpath(new_path)))
 
 
 @_registry.cl_function('FILE-AUTHOR')
@@ -2307,167 +2322,15 @@ def file_write_date(pathspec):
         return 0
 
 
-@_registry.cl_function('COMPILE-FILE')
-def compile_file(input_file, output_file=None, **kwargs):
-    """Compile file.
-    
-    In FCLpy, we don't actually compile to bytecode - we copy the source file
-    to a .fasl file which will be interpreted when loaded. This allows FCLpy
-    to work with Common Lisp build systems that expect compile-and-load workflows.
-    
-    Returns: MultipleValues(output-truename, warnings-p, failure-p)
-      - output-truename: The pathname of the output file
-      - warnings-p: NIL (no warnings)
-      - failure-p: NIL (no failure)
-    """
-    import os
-    import shutil
-    from fclpy.lispfunc.pathnames import Pathname
-    
-    # Get the input path (resolve relative names similarly to LOAD)
-    import fclpy.state as state
-    env = state.current_environment
-
-    if isinstance(input_file, Pathname):
-        input_path = input_file.original
-    else:
-        input_path = str(input_file)
-
-    # If input_path is not absolute, try to resolve it using LISP_CWD,
-    # *LOAD-TRUENAME* directory, or *DEFAULT-PATHNAME-DEFAULTS* (like LOAD)
-    import os
-    if not os.path.isabs(input_path):
-        resolved = False
-        lisp_cwd = os.environ.get('LISP_CWD')
-        if lisp_cwd:
-            candidate = os.path.normpath(os.path.join(lisp_cwd, input_path))
-            if os.path.exists(candidate):
-                input_path = candidate
-                resolved = True
-
-        if not resolved and env is not None:
-            # Try *LOAD-TRUENAME*
-            load_truename_sym = lisptype.COMMON_LISP_PACKAGE.intern_symbol('*LOAD-TRUENAME*')
-            load_truename = env.find_variable(load_truename_sym)
-            try:
-                from fclpy.lispfunc.pathnames import Pathname as PN
-            except Exception:
-                PN = None
-            if load_truename and load_truename is not lisptype.NIL and PN is not None and isinstance(load_truename, PN):
-                current_file_path = load_truename.original
-                current_dir = os.path.dirname(current_file_path)
-                if current_dir:
-                    candidate = os.path.normpath(os.path.join(current_dir, input_path))
-                    if os.path.exists(candidate):
-                        input_path = candidate
-                        resolved = True
-
-        if not resolved and env is not None:
-            default_sym = lisptype.COMMON_LISP_PACKAGE.intern_symbol('*DEFAULT-PATHNAME-DEFAULTS*')
-            default_pathname = env.find_variable(default_sym)
-            if default_pathname and default_pathname is not lisptype.NIL and PN is not None and isinstance(default_pathname, PN):
-                default_path = default_pathname.original
-                if os.path.isdir(default_path):
-                    default_dir = default_path
-                else:
-                    default_dir = os.path.dirname(default_path)
-                if default_dir:
-                    candidate = os.path.normpath(os.path.join(default_dir, input_path))
-                    if os.path.exists(candidate):
-                        input_path = candidate
-                        resolved = True
-    
-    # Determine output path
-    if output_file is not None:
-        if isinstance(output_file, Pathname):
-            out_path = output_file.original
-        else:
-            out_path = str(output_file)
-    else:
-        # Default: replace extension with .fasl
-        base = os.path.splitext(input_path)[0]
-        out_path = base + ".fasl"
-    
-    # "Compile" by copying the source file to the output path
-    # This allows LOAD to find and interpret the .fasl file
-    try:
-        if os.path.exists(input_path):
-            shutil.copy2(input_path, out_path)
-            output_pathname = Pathname(out_path)
-            return lisptype.MultipleValues(output_pathname, lisptype.NIL, lisptype.NIL)
-        else:
-            # File doesn't exist - return failure
-            return lisptype.MultipleValues(lisptype.NIL, lisptype.NIL, lisptype.T)
-    except Exception as e:
-        # Compilation failed
-        return lisptype.MultipleValues(lisptype.NIL, lisptype.NIL, lisptype.T)
-
-
-@_registry.cl_function('COMPILE-FILE-PATHNAME')
-def compile_file_pathname(input_file, output_file=None, **kwargs):
-    """Get compiled file pathname.
-    
-    Returns the pathname that COMPILE-FILE would produce for the given input file.
-    Returns a .fasl extension version of the input file. The load function
-    will handle loading the source if the .fasl doesn't exist.
-    """
-    from fclpy.lispfunc.pathnames import Pathname
-    import os
-    
-    # Resolve input path similar to compile_file so pathname reflects real location
-    import fclpy.state as state
-    env = state.current_environment
-
-    if isinstance(input_file, Pathname):
-        input_str = input_file.original
-    else:
-        input_str = str(input_file)
-
-    import os
-    if not os.path.isabs(input_str):
-        # Try LISP_CWD
-        lisp_cwd = os.environ.get('LISP_CWD')
-        if lisp_cwd:
-            candidate = os.path.normpath(os.path.join(lisp_cwd, input_str))
-            if os.path.exists(candidate):
-                input_str = candidate
-
-        if env is not None:
-            load_truename_sym = lisptype.COMMON_LISP_PACKAGE.intern_symbol('*LOAD-TRUENAME*')
-            load_truename = env.find_variable(load_truename_sym)
-            try:
-                from fclpy.lispfunc.pathnames import Pathname as PN
-            except Exception:
-                PN = None
-            if load_truename and load_truename is not lisptype.NIL and PN is not None and isinstance(load_truename, PN):
-                current_file_path = load_truename.original
-                current_dir = os.path.dirname(current_file_path)
-                if current_dir:
-                    candidate = os.path.normpath(os.path.join(current_dir, input_str))
-                    if os.path.exists(candidate):
-                        input_str = candidate
-
-        if env is not None:
-            try:
-                from fclpy.lispfunc.pathnames import Pathname as PN
-            except Exception:
-                PN = None
-            default_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*DEFAULT-PATHNAME-DEFAULTS*')
-            default_pathname = env.find_variable(default_sym)
-            if default_pathname and default_pathname is not lisptype.NIL and PN is not None and isinstance(default_pathname, PN):
-                default_path = default_pathname.original
-                if os.path.isdir(default_path):
-                    default_dir = default_path
-                else:
-                    default_dir = os.path.dirname(default_path)
-                if default_dir:
-                    candidate = os.path.normpath(os.path.join(default_dir, input_str))
-                    if os.path.exists(candidate):
-                        input_str = candidate
-
-    base = os.path.splitext(input_str)[0]
-    result = base + ".fasl"
-    return Pathname(result)
+# COMPILE-FILE and COMPILE-FILE-PATHNAME live next to LOAD in
+# misc_macros.py. They are the same operation read from the other end -- both
+# read a file form by form with `*PACKAGE*` and `*READTABLE*` bound, and
+# COMPILE-FILE's output is what LOAD then reads -- and while they were apart
+# they had drifted: each carried its own ~35-line copy of "resolve a relative
+# pathname", and the copies looked `*DEFAULT-PATHNAME-DEFAULTS*` up in two
+# *different packages*, so the same relative name resolved differently
+# depending on which operator asked. That search now has one home,
+# `pathnames.resolve_filespec`.
 
 
 # Condition operations
@@ -2598,7 +2461,7 @@ __all__ = [
     # File operations
     'probe_file', 'delete_file', 'rename_file', 'file_author',
     'file_length', 'file_position', 'file_string_length',
-    'file_write_date', 'compile_file', 'compile_file_pathname',
+    'file_write_date',
     # Condition operations
     'simple_condition_format_arguments', 'simple_condition_format_control',
     'end_of_file', 'file_error', 'file_error_pathname',

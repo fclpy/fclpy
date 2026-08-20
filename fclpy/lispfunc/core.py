@@ -191,25 +191,21 @@ def listp(obj):
 
 
 @_registry.cl_function('SYMBOLP')
-def symbolp(*args):
-    """Test if object is a symbol."""
-    if len(args) != 1:
-        raise lisptype.LispProgramError(
-            f"SYMBOLP: wrong number of arguments (got {len(args)}, expected 1)"
-        )
-    obj = args[0]
-    return lisptype.lisp_bool(type(obj) is lisptype.LispSymbol)
+def symbolp(object):
+    """Test if object is a symbol (CLHS SYMBOLP).
+
+    Delegates to `lisptype.is_symbol`, the one predicate for the question, so
+    this and TYPEP's SYMBOL branch cannot disagree. The arity check that used
+    to be hand-written here is what the Python signature already expresses:
+    `LambdaListShape` signals the PROGRAM-ERROR for a wrong argument count.
+    """
+    return lisptype.lisp_bool(lisptype.is_symbol(object))
 
 
 @_registry.cl_function('KEYWORDP')
-def keywordp(*args):
-    """Test if object is a keyword."""
-    if len(args) != 1:
-        raise lisptype.LispProgramError(
-            f"KEYWORDP: wrong number of arguments (got {len(args)}, expected 1)"
-        )
-    obj = args[0]
-    return lisptype.lisp_bool(type(obj) is lisptype.lispKeyword)
+def keywordp(object):
+    """Test if object is a keyword (CLHS KEYWORDP)."""
+    return lisptype.lisp_bool(lisptype.is_keyword(object))
 
 
 @_registry.cl_function('HASH-TABLE-P')

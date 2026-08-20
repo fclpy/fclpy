@@ -588,27 +588,12 @@ def _looks_like_a_number(name, base):
 def current_package():
     """The current package: the value of ``*PACKAGE*``.
 
-    ``*PACKAGE*`` is the authority and ``state.current_package`` only mirrors
-    it, so the variable is read first. Reading only the mirror is wrong in
-    exactly the case that matters here -- the mirror is unset until something
-    assigns it, and a symbol in the current package would then acquire a
-    spurious ``COMMON-LISP-USER::`` prefix.
+    Delegates to `state.current_package_value`, the one resolver -- the
+    printer's copy of this decision was the only correct one of the five that
+    existed, so it became that function.
     """
     import fclpy.state as state
-
-    symbol = _control_symbol('*PACKAGE*')
-    env = getattr(state, 'current_environment', None)
-    if env is not None and env.has_variable(symbol):
-        package = env.find_variable(symbol)
-        if isinstance(package, lisptype.Package):
-            return package
-    package = getattr(symbol, 'value', None)
-    if isinstance(package, lisptype.Package):
-        return package
-    package = getattr(state, 'current_package', None)
-    if isinstance(package, lisptype.Package):
-        return package
-    return lisptype.COMMON_LISP_USER_PACKAGE
+    return state.current_package_value()
 
 
 def _package_prefix(symbol, ctx):

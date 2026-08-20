@@ -472,6 +472,7 @@ def parse_lambda_list(lambda_list):
     keyword = []
     aux = []
     environment = None
+    allow_other_keys = False
     
     # Parse the lambda list
     current_section = 'required'
@@ -502,7 +503,11 @@ def parse_lambda_list(lambda_list):
                 current = cdr(current)
                 continue
             elif marker == '&ALLOW-OTHER-KEYS':
-                # Skip this marker - it's informational
+                # Not informational: it is what suppresses the CLHS 3.5.1.5
+                # error for a keyword argument the lambda list does not name.
+                # Discarding it here left the binder unable to tell a function
+                # that accepts any keyword from one that does not.
+                allow_other_keys = True
                 current = cdr(current)
                 continue
             elif marker == '&WHOLE':
@@ -577,7 +582,8 @@ def parse_lambda_list(lambda_list):
         'keyword': keyword,
         'aux': aux,
         'whole': whole,
-        'environment': environment
+        'environment': environment,
+        'allow_other_keys': allow_other_keys,
     }
 
 

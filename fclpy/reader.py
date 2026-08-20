@@ -55,7 +55,7 @@ class Reader:
             package: Optional package to intern symbols into (defaults to state.current_package)
         """
         self.readtable = readtable or lisptype.COMMON_LISP_USER_PACKAGE
-        self.package = package or (state.current_package or lisptype.COMMON_LISP_USER_PACKAGE)
+        self.package = package or state.current_package_value()
         
     def read(self, text):
         """Read a single Lisp object from text.

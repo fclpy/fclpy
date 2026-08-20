@@ -130,8 +130,7 @@ def coerce_to_package(designator, default=None):
     if designator is None or designator is lisptype.NIL:
         if default is not None:
             return coerce_to_package(default)
-        current = getattr(state, 'current_package', None)
-        return current if current is not None else lisptype.COMMON_LISP_USER_PACKAGE
+        return state.current_package_value()
     name = _designator_to_string(designator)
     pkg = lisptype.find_package(name)
     if pkg is None:

@@ -183,7 +183,7 @@ def gensym(*args):
 @_registry.cl_function('*PACKAGE*')
 def get_current_package():
     """Get the value of *PACKAGE* (current package)."""
-    return getattr(state, 'current_package', None) or lisptype.COMMON_LISP_USER_PACKAGE
+    return state.current_package_value()
 
 
 @_registry.cl_function('IN-PACKAGE')

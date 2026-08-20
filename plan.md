@@ -140,6 +140,13 @@ check and `MAKE-LIST.ERROR.1`.
 `structures` (11.3%) and `system-construction` (16.0%) are unchanged and remain
 the subsystems where one absent mechanism fails everything downstream of it.
 
+> **`system-construction` is done as of 2026-08-20 (targeted): 77 of 77.**
+> `files` 29 → 47 of 87 in the same work. Not yet reflected in the table above,
+> which only moves on a full run. It took **eleven** mechanisms and only three
+> of them were about building systems — see the
+> [Changelog](#changelog) entry, which is worth reading before ranking any
+> other low-percentage directory as a "subsystem gap".
+
 ---
 
 ## 2. How to work
@@ -888,7 +895,7 @@ These are large but conventional: the mechanism is absent rather than wrong.
 
 | # | cluster | evidence (complete run) | owner |
 |---|---|---|---|
-| C11 | **Streams, files, pathnames** — `OPEN` 193 (`OPEN` 83, `OPEN.PROBE` 36, `OPEN.OUTPUT` 35, `OPEN.IO` 35); `streams/` 382 failing of 543, `pathnames/` 136 of 215, `files/` 64 of 87, `system-construction/` 64 of 75 (**14.7%**). ~170 `FileNotFoundError`/`FileExistsError`/`OSError` leaks. Gates ASDF and all library loading. | M10 |
+| C11 | **Streams, files, pathnames** — `system-construction/` is **done** (77 of 77, 2026-08-20): LOAD/COMPILE-FILE are real, the five copies of the relative-pathname search are one (`pathnames.resolve_filespec`, which also owns the *pathname designator* rule), and a missing file is a FILE-ERROR carrying its pathname rather than a Python exception. `files/` 40 failing of 87 and `pathnames/` 133 of 215 are now gated on **one** thing: `Pathname` is a namestring wrapper, not a component record, so `MAKE-PATHNAME`/`MERGE-PATHNAMES`/`DIRECTORY` cannot compose components. `(directory (make-pathname :version :wild :defaults p))` answers no files, which is why the suite's own `delete-all-versions` deletes nothing and `rename-file.1`–`.7` fail on leftover state rather than on RENAME-FILE. **That component model is the next mechanism here.** `streams/` remains large. | M10 |
 | C12 | **Reader** — `reader/` 136 failing of 165 (**17.6%**). `#(1 2 3)` reads as the cons `(VECTOR 1 2 3)` (CLHS 2.4.8.3); the tokenizer interprets `\n` inside strings, where CLHS 2.4.5 requires backslash to be a single-escape included *without interpretation*. **Also: `fclpy/reader.py` is a dead ~480-line second reader** that nothing under `fclpy/` imports, yet **177 unit tests (14% of that suite)** certify it — while the live reader (`tokenizer.py` → `lispreader.py` → `readtable.py`) has essentially no unit coverage, and the two disagree on conformance. Retire it or repoint those tests. | M10 |
 | C13 | **Strings** — `strings/` 388 failing of 501 (**22.6%**); `MERGE-STRING` 38. Rooted in the `LispString`/Python-`str` split (Finding I), which also blocks `EQUAL`/`EQUALP`. A length-1 `str` currently satisfies both `CHARACTER` and `STRING`, which are disjoint types (CLHS 4.2.2). | M9 |
 | C14 | **Types / `SUBTYPEP`** — `SUBTYPEP` 156 (`SUBTYPEP.INTEGER` 46); `types-and-classes/` 262 failing of 545. `SUBTYPEP` is a string-pair lookup table with no type lattice (Finding F). | M9 |
@@ -1400,6 +1407,168 @@ rather than discovering these one crash at a time.
 
 Condensed from the previous chronological plan. Each entry is a *mechanism*
 landed, not a test count.
+
+- **2026-08-20** — **`system-construction` 12 → 77 of 77 (100%)**, and the
+  mechanisms it took to get there were mostly not in `system-construction`.
+  `files` 29 → 47 of 87, `streams` +10 on a targeted run, 1961 unit tests
+  passing. This was the C11 rung, and the shape of it is the point: a directory
+  at 16% was failing on **eleven** distinct mechanisms, of which only three
+  were about building systems at all.
+
+  **1. `LOAD` is one operation whether it reads a file or a stream (CLHS
+  24.2).** `load-file.lsp` 3 → 27 of 27. The old LOAD ran `str(filespec)` on
+  whatever it got, so a stream became the *pathname*
+  `"<StringInputStream pos=0 len=59>"`. Four more things were wrong and each
+  was a mechanism rather than a detail: forms are read **one at a time through
+  READ**, not through one reader built at the top, because READ consults
+  `*READTABLE*` and `*PACKAGE*` per call and a form in the file that assigns
+  either governs how the rest of the file is *read* (load.15a, load.16a);
+  `*PACKAGE*`/`*READTABLE*`/`*LOAD-PATHNAME*`/`*LOAD-TRUENAME*` are **bound**
+  through `BindingFrame` — the mechanism LET uses — rather than saved and
+  restored by hand, so a file's IN-PACKAGE is undone however the load exits;
+  `:if-does-not-exist` was **inverted** (`is NIL or is None` *raised*), so
+  `(load f :if-does-not-exist nil)` signalled; and all four keyword parameters
+  are now spelled keyword-only, which is what makes `(load f :bad-key-arg t)`
+  the PROGRAM-ERROR CLHS 3.5.1.5 requires.
+
+  **2. `COMPILE-FILE` did not read the file.** It was `shutil.copy2`. So it
+  evaluated nothing (no `(eval-when (:compile-toplevel) ...)`), bound none of
+  the compile-file variables, resolved no `#.`, and reported `warnings-p` and
+  `failure-p` as constant NIL. It now reads each top-level form, evaluates the
+  ones CLHS 3.2.3.1 says the compiler must (`COMPILE_TIME_OPERATORS`, and
+  EVAL-WHEN's `:compile-toplevel`, recursing through PROGN/LOCALLY), and
+  *prints* the forms to the output. Printing rather than copying is the
+  mechanism: `#.` is **read**-time evaluation, so a byte copy defers it to load
+  time when `*compile-file-truename*` is NIL, which is exactly what
+  `compile-file.16` measures. The printer controls are pinned while writing
+  (`OUTPUT_PRINTER_CONTROLS`) because a caller's `*print-length*` would
+  otherwise truncate the output to `...` — a corrupt file reported as a
+  successful compilation. `warnings-p`/`failure-p` come from a handler cluster
+  pushed on `state.handler_stack`, i.e. the same mechanism HANDLER-BIND uses,
+  declining every condition so the compiled program's own handlers still see
+  them.
+
+  **3. `WITH-OUTPUT-TO-STRING (var string)` never wrote to `string`.** It bound
+  `var` to a fresh `MAKE-STRING-OUTPUT-STREAM` and then transferred its
+  contents nowhere. This is a **measurement gate**, not a wrong value: the ANSI
+  suite captures an operator's output with exactly this form and then asserts
+  about it, so every test of what something *prints* compared its expectation
+  against the empty string, and no amount of correct printing could pass.
+  `streams.FillPointerOutputStream` is the object CLHS describes — output
+  appends to the supplied fill-pointered string as the body runs, so text
+  written before a non-local exit is already there.
+
+  **4. `&rest` did not get the rest of the arguments.** The user-lambda-list
+  binder located the keyword region by *scanning the arguments* for the first
+  keyword-shaped value, rather than reading it off the lambda list as CLHS
+  3.4.1 defines it (after the required and `&optional` parameters, full stop).
+  So `(defun g (a &rest args) ...)` called as `(g 1 :b 2)` bound ARGS to
+  **NIL**, and the `&rest args &key ...` forward-my-arguments idiom the ANSI
+  suite's own helpers are written in silently forwarded nothing — which is why
+  `load-file-test` could pass `:verbose t` to LOAD and LOAD never saw it. Fixed
+  with `_bind_keyword_parameters`, which applies 3.4.1.4/3.5.1.5 to a user
+  lambda list the way `evaluation_core._split_declared_keywords` already
+  applies it to a builtin's Python signature: leftmost pair wins, an odd count
+  is a PROGRAM-ERROR, an undeclared keyword is a PROGRAM-ERROR unless
+  `&allow-other-keys` or `:allow-other-keys` says otherwise. `&allow-other-keys`
+  had been discarded by the parser as "informational". The
+  `((keyword-name var) init)` spec shape was not handled at all, because the two
+  loops that decomposed a `&key` spec — once for defaults, once for matching —
+  each assumed the keyword and the variable were the same name.
+
+  **5. A copied readtable's built-in readers read through the readtable they
+  were copied from.** `Readtable.copy()` copied the macro-character dict, whose
+  entries are **bound methods**, each of which reads its sub-expressions
+  through `self._read_item`. So `(copy-readtable nil)` followed by
+  `set-macro-character` — the standard idiom — worked at top level, where
+  `read_1` looks the character up in the *current* readtable, and was invisible
+  inside any list: `(list 1 !good)` read as `(LIST 1 !GOOD)`. `_rebind` rebinds
+  a table's own methods onto the copy; a function that is not one of them (a
+  user function, or a reader borrowed with `(get-macro-character #\')`) is
+  carried across untouched, because there the function really is the value.
+
+  **6. `SYMBOLP` and `TYPEP` disagreed about what a symbol is.** `SYMBOLP` was
+  `type(obj) is LispSymbol` — an *exact* type test — so `(symbolp :foo)` and
+  `(symbolp nil)` were NIL while `(typep :foo 'symbol)` and `(typep nil
+  'symbol)` were T. `lisptype.is_symbol` is now the one predicate and both go
+  through it. Anything dispatching on SYMBOLP (`(every #'symbolp *features*)`,
+  place processing, LOOP var-specs) had been seeing keywords as non-symbols.
+
+  **7. A `LispString` reported two different contents.** `__len__` and
+  `__iter__` honoured the fill pointer; `__str__` and `__repr__` returned the
+  whole backing store. For a fill-pointered "FOO" over "FOOZZZZ", `len(s)` was
+  3 and `str(s)` was "FOOZZZZ" — so every Python-side reader that goes through
+  `str()` (the string-designator resolvers, FORMAT, the printer) saw the
+  inactive characters.
+
+  **8. There was one "resolve a relative pathname" search, written five times.**
+  LOAD, COMPILE-FILE, COMPILE-FILE-PATHNAME, DELETE-FILE and OPEN each had
+  their own ~35-line copy, and the copies had drifted: LOAD read
+  `*DEFAULT-PATHNAME-DEFAULTS*` out of `COMMON-LISP-USER` while COMPILE-FILE
+  read it out of `COMMON-LISP`, and since a global variable's home is the
+  symbol's value cell and lookup is by symbol *identity*, those are two
+  different variables. OPEN's copy took the `LISP_CWD` candidate
+  unconditionally where the others took it only if it existed, so OPEN and
+  PROBE-FILE could resolve the same relative name to two different files.
+  `pathnames.resolve_filespec` is the one search, and it also owns the CLHS
+  *pathname designator* rule, including "a stream associated with a file" —
+  which is why `:output-file <stream>` and `(compile-file <stream>)` work now.
+  It always returns a path, existing or not, so a caller can *name* a missing
+  file. `MERGE-PATHNAMES` also now defaults its `defaults` argument to
+  `*DEFAULT-PATHNAME-DEFAULTS*` instead of being the identity.
+
+  **9. A missing file was a Python exception.** ~1 in 5 of `files/`'s failures
+  were `FileNotFoundError`/`FileExistsError` surfacing as the *value* of the
+  form, because a Python exception is not a condition and matches no handler
+  clause. `evaluation_conditions.signal_file_error` is the one place a file
+  operation reports failure; `FileError` gained the PATHNAME slot CLHS gives it
+  and `FILE-ERROR-PATHNAME` reads it (returning the slot **unchanged** — the
+  suite passes namestrings, pathnames and streams as `:pathname` and requires
+  each back out). LOAD, COMPILE-FILE, OPEN, DELETE-FILE, RENAME-FILE and
+  TRUENAME go through it. Two pathnames naming the same file are also EQUAL
+  now, which they were not however identically they printed.
+
+  **10. An uncaught THROW aborted the process.** `eval_throw` raised its Python
+  `ThrowException` unconditionally, so a throw with no outstanding catcher left
+  the evaluator as a Python exception — matching no handler, escaping
+  `do-tests`, and killing the whole run rather than failing one test. CLHS 5.2
+  makes it a CONTROL-ERROR, which requires knowing what is outstanding:
+  `state.catch_tags`, pushed by `eval_catch` for its body's dynamic extent.
+  Found because fixing READ-FROM-STRING made `read-suppress.lsp`'s
+  `#.(throw 'foo 1)` actually *run*.
+
+  **11. `FMAKUNBOUND` removed nothing observable.** A function definition lives
+  in two structures on an `Environment` — the `function_bindings` list and the
+  `_function_map` name cache `find_func` reads first — and FMAKUNBOUND unlinked
+  the list node only, so `(fboundp g)` stayed T for ever after. It also looked
+  only in `state.current_environment` while DEFUN defines at the root, and
+  returned T/NIL rather than its argument. `Environment.unbind_function` is now
+  the one place a function binding is removed. **This one stale cache entry
+  failed sixteen `system-construction` tests**, because `compile-file-test` and
+  `load-file-test` both open with `(fmakunbound funname)` and then assert the
+  function is *not* defined.
+
+  Also: `*MODULES*`/PROVIDE/REQUIRE existed as three stubs returning their own
+  argument, with `*MODULES*` unbound (`modules.lsp` 0 → 13 of 13);
+  `WITH-COMPILATION-UNIT` was a `cl_function`, so its option list
+  `(:OVERRIDE NIL)` was *evaluated as a function call* and its body's multiple
+  values were lost (0 → 7 of 7 — the registry defect CLAUDE.md documents,
+  found for the fourth time); `READ-FROM-STRING` had its own copy of READ's
+  plumbing which raised `TypeError: initial_value must be str or None, not
+  LispString` for any Lisp string and returned one value where CLHS requires
+  two; and "the current package" was resolved four different ways, all reading
+  `state.current_package` — a mirror only written when a *binding form* binds
+  `*PACKAGE*`, so a plain `(setq *package* ...)` in a loaded file changed the
+  variable and left every reader interning into the old package.
+  `state.current_package_value()` is the one resolver.
+
+  **What this says about the ranking.** `system-construction` was ranked as a
+  subsystem gap (C11). Three of its eleven mechanisms were: LOAD, COMPILE-FILE,
+  modules. The other eight were core defects — a lambda-list rule, a type
+  predicate, a string's own length, a readtable's identity, a control-transfer
+  rule — that a 75-test directory happened to be the *only* place exercising
+  all of them at once. A directory at 16% is evidence about mechanisms, not
+  about the subsystem it is named after.
 
 - **2026-08-18 (b)** — **List traversal is one primitive; a builtin's `&key`
   set is declared rather than guessed; and the printer cannot be made to

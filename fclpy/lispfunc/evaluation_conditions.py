@@ -699,6 +699,27 @@ def eval_signal(form, env):
     return signal_condition_object(condition)
 
 
+def signal_file_error(pathname, message=None):
+    """Signal a FILE-ERROR naming `pathname` (CLHS 20.1 / FILE-ERROR).
+
+    This is the one place a file operation reports failure. Every such
+    operator -- LOAD, COMPILE-FILE, OPEN, DELETE-FILE, RENAME-FILE, TRUENAME,
+    PROBE-FILE, DIRECTORY -- previously let Python's own `FileNotFoundError`
+    escape, which is not a condition at all: it matched no handler clause, so
+    `(signals-error (load "nope") file-error)` saw the Python exception
+    surface as the *value* of the form (prompt.txt: "Python exceptions must
+    not appear as Lisp values"), and HANDLER-CASE could not distinguish "the
+    file was missing" from "the implementation broke".
+
+    Routes through `signal_error_object`, so handlers run at the signal point
+    with the caller's CATCH/RESTART-CASE/UNWIND-PROTECT frames still live,
+    exactly as for any other ERROR.
+    """
+    condition = lisptype.FileError(pathname=pathname,
+                                   message=message or '')
+    return signal_error_object(condition)
+
+
 def signal_error_object(condition, recoverable=False, continue_format=None):
     """ERROR's/CERROR's runtime behavior for an already-built condition: offer
     it to the handlers first, and only if none takes control unwind by raising.

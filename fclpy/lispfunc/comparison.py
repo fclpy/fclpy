@@ -93,6 +93,14 @@ def equal(obj1, obj2):
         return lisptype.lisp_bool(
             _arrays.array_elements(obj1) == _arrays.array_elements(obj2))
 
+    # Pathnames -- the fourth and last aggregate CLHS 5.3 says EQUAL descends
+    # into. `Pathname.__eq__` compares components (and is case-insensitive
+    # where the file system is), so this is the one place that decides.
+    from .pathnames import Pathname
+    p1, p2 = isinstance(obj1, Pathname), isinstance(obj2, Pathname)
+    if p1 or p2:
+        return lisptype.lisp_bool(p1 and p2 and obj1 == obj2)
+
     # Lists and tuples
     if isinstance(obj1, (list, tuple)) and isinstance(obj2, (list, tuple)):
         if len(obj1) != len(obj2):
@@ -523,11 +531,11 @@ def typep(object, type_specifier):
     elif type_name == 'CHARACTER':
         return lisptype.lisp_bool(isinstance(object, lisptype.Character) or (isinstance(object, str) and len(object) == 1))
     elif type_name == 'SYMBOL':
-        # In Common Lisp, NIL is both the empty list AND the symbol NIL
-        # So we need to accept both LispSymbol instances and NIL
-        return lisptype.lisp_bool(isinstance(object, lisptype.LispSymbol) or object is lisptype.NIL or isinstance(object, lisptype.lispNull))
+        # One predicate, shared with SYMBOLP (CLHS 4.2): a LispSymbol, a
+        # lispKeyword, or NIL in any of its three Python spellings.
+        return lisptype.lisp_bool(lisptype.is_symbol(object))
     elif type_name == 'KEYWORD':
-        return lisptype.lisp_bool(isinstance(object, lisptype.lispKeyword))
+        return lisptype.lisp_bool(lisptype.is_keyword(object))
     elif type_name == 'FUNCTION':
         return lisptype.lisp_bool(callable(object))
     elif type_name == 'GENERIC-FUNCTION':

@@ -280,46 +280,19 @@ def open_file(filename, direction='input', element_type='character',
             if_does_not_exist = if_does_not_exist.lower()
     except Exception:
         pass
-    # Resolve relative filenames against Lisp runtime defaults so that files
-    # created by OPEN (from macro expansion of WITH-OPEN-FILE) end up where
-    # subsequent LOAD calls will search for them.
-    if not os.path.isabs(filename):
-        # 1) LISP_CWD environment variable
-        lisp_cwd = os.environ.get('LISP_CWD')
-        if lisp_cwd:
-            candidate = os.path.normpath(os.path.join(lisp_cwd, filename))
-            filename = candidate
-        else:
-            try:
-                from fclpy.lispfunc.pathnames import Pathname
-                import fclpy.lisptype as lisptype
-                # 2) *LOAD-TRUENAME* directory
-                load_truename_sym = lisptype.COMMON_LISP_PACKAGE.intern_symbol('*LOAD-TRUENAME*')
-                # current environment may not be set; use state if available
-                import fclpy.state as state
-                env = getattr(state, 'current_environment', None)
-                load_truename = env.find_variable(load_truename_sym) if env is not None else None
-                if load_truename and load_truename is not lisptype.NIL and isinstance(load_truename, Pathname):
-                    current_file_path = load_truename.original
-                    current_dir = os.path.dirname(current_file_path)
-                    if current_dir:
-                        filename = os.path.normpath(os.path.join(current_dir, filename))
-                else:
-                    # 3) *DEFAULT-PATHNAME-DEFAULTS*
-                    default_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*DEFAULT-PATHNAME-DEFAULTS*')
-                    default_pathname = env.find_variable(default_sym) if env is not None else None
-                    if default_pathname and default_pathname is not lisptype.NIL and isinstance(default_pathname, Pathname):
-                        default_path = default_pathname.original
-                        if os.path.isdir(default_path):
-                            default_dir = default_path
-                        else:
-                            default_dir = os.path.dirname(default_path)
-                        if default_dir:
-                            filename = os.path.normpath(os.path.join(default_dir, filename))
-            except Exception:
-                # If resolving fails for any reason, fall back to Python CWD
-                filename = os.path.normpath(os.path.join(os.getcwd(), filename))
-    
+    # Resolve the filename through `pathnames.resolve_filespec`, the one place
+    # a pathname designator becomes an OS path. OPEN carried the fifth copy of
+    # that search, and its copy differed: it took the LISP_CWD candidate
+    # *unconditionally*, while every other copy took it only when the candidate
+    # existed. So OPEN and PROBE-FILE/DELETE-FILE could resolve the same
+    # relative name to two different files -- which is how
+    # `files/rename-file.lsp` saw `delete-all-versions` delete one file and
+    # then `(with-open-file (s pn1 :direction :output) ...)` refuse because
+    # *another* file of that name still existed.
+    from fclpy.lispfunc.pathnames import resolve_filespec
+    filename = resolve_filespec(filename)
+
+
     # Map Lisp direction to Python mode
     if direction == 'input':
         mode = 'r'
@@ -335,10 +308,17 @@ def open_file(filename, direction='input', element_type='character',
     else:
         raise ValueError(f"Invalid direction: {direction}")
     
-    # Handle file existence checks
+    # Handle file existence checks. Every refusal here is a FILE-ERROR naming
+    # the file (CLHS OPEN), not a Python `FileExistsError`/`FileNotFoundError`:
+    # those match no handler clause, so `(handler-case (open ...) (file-error
+    # ...))` could not see them and they surfaced as the *value* of the form.
+    from fclpy.lispfunc.pathnames import Pathname
+    from fclpy.lispfunc.evaluation_conditions import signal_file_error
+
     if os.path.exists(filename):
         if direction == 'output' and if_exists == 'error':
-            raise FileExistsError(f"File exists: {filename}")
+            return signal_file_error(
+                Pathname(filename), "OPEN: file exists: " + filename)
         elif direction == 'output' and if_exists == 'append':
             mode = 'a'
         elif direction == 'output' and if_exists == 'supersede':
@@ -349,18 +329,21 @@ def open_file(filename, direction='input', element_type='character',
             if_does_not_exist = 'create'
 
         if if_does_not_exist == 'error':
-            raise FileNotFoundError(f"File not found: {filename}")
+            return signal_file_error(
+                Pathname(filename), "OPEN: file not found: " + filename)
         elif if_does_not_exist == 'create' and direction in ('output', 'io'):
             # Create the file (opening in 'w' or 'r+' will handle creation)
             pass
-    
+
     try:
         file_obj = open(filename, mode, encoding='utf-8')
-        stream = Stream(filename, file_obj, direction, element_type)
-        _open_streams[id(stream)] = stream
-        return stream
-    except IOError as e:
-        raise IOError(f"Cannot open {filename}: {e}")
+    except OSError as error:
+        return signal_file_error(
+            Pathname(filename),
+            "OPEN: cannot open " + filename + ": " + str(error))
+    stream = Stream(filename, file_obj, direction, element_type)
+    _open_streams[id(stream)] = stream
+    return stream
 
 
 @_registry.cl_function('CLOSE')
@@ -660,6 +643,86 @@ class StringOutputStream(Stream):
     
     def __repr__(self):
         return f"<StringOutputStream len={self.position}>"
+
+
+class FillPointerOutputStream(Stream):
+    r"""An output stream that appends to a fill-pointered string (CLHS 21.2).
+
+    This is the object `(WITH-OUTPUT-TO-STRING (var string) ...)` needs: CLHS
+    says output is *appended to* the supplied string, which must have a fill
+    pointer, and the form returns the body's values rather than the text. The
+    macro used to bind `var` to a plain `MAKE-STRING-OUTPUT-STREAM` and then
+    never transfer its contents anywhere, so every byte written in the body
+    went into a stream nobody read.
+
+    That was a **measurement gate**, not just a wrong value: the ANSI suite
+    captures an operator's output with exactly this form and then asserts
+    about it, so any test of what something *prints* compared its expectation
+    against the empty string -- `load-file-test` and `compile-file-test` both
+    check `(> (length str) 0)` and `(position #\; str)` -- and no amount of
+    correct printing could pass.
+
+    Appending as the body runs (rather than copying at the end) is also the
+    semantics: the text written so far must already be in the string if the
+    body exits non-locally.
+    """
+
+    def __init__(self, target, element_type='character'):
+        if not isinstance(target, lisptype.LispString):
+            raise lisptype.LispTypeError(
+                f"WITH-OUTPUT-TO-STRING: {target!r} is not a string",
+                expected_type='STRING', actual_value=target)
+        if target.fill_pointer is None:
+            # CLHS: the string "must be a string with a fill pointer".
+            raise lisptype.LispTypeError(
+                "WITH-OUTPUT-TO-STRING: the string must have a fill pointer",
+                expected_type='STRING', actual_value=target)
+        self.target = target
+        super().__init__("<fill-pointer-output-stream>", None, 'output',
+                         element_type)
+
+    def write_char(self, char):
+        if isinstance(char, lisptype.Character):
+            char = chr(char.code)
+        self.write_sequence(str(char))
+        return char
+
+    def write_sequence(self, sequence):
+        if isinstance(sequence, lisptype.Character):
+            text = chr(sequence.code)
+        elif isinstance(sequence, (list, tuple)):
+            text = ''.join(
+                chr(c.code) if isinstance(c, lisptype.Character) else str(c)
+                for c in sequence)
+        else:
+            text = str(sequence)
+        for char in text:
+            # Append past the fill pointer, growing the backing store: the
+            # string is adjustable in every use the suite makes of it, and
+            # `_data`/`fill_pointer` is the same pair VECTOR-PUSH-EXTEND moves.
+            if self.target.fill_pointer < len(self.target._data):
+                self.target._data[self.target.fill_pointer] = char
+            else:
+                self.target._data.append(char)
+            self.target.fill_pointer += 1
+            self.position += 1
+        return sequence
+
+    def peek_string(self):
+        return str(self.target)
+
+    def __repr__(self):
+        return f"<FillPointerOutputStream len={self.position}>"
+
+
+@_registry.cl_function('%MAKE-FILL-POINTER-OUTPUT-STREAM')
+def make_fill_pointer_output_stream(target):
+    """The stream `(WITH-OUTPUT-TO-STRING (var string) ...)` expands to.
+
+    Named with a `%` prefix because it is not an ANSI operator -- it is the
+    macro's runtime, the same way `%SPECIAL-REF` is a declaration's runtime.
+    """
+    return FillPointerOutputStream(target)
 
 
 @_registry.cl_function('MAKE-STRING-INPUT-STREAM')

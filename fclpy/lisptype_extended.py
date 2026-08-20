@@ -179,6 +179,41 @@ class Environment(lispT):
     def add_function(self, symbol, value):
         """Legacy: add a function binding (use bind_function)."""
         self.bind_function(symbol, value)
+
+    def unbind_function(self, symbol):
+        """Remove `symbol`'s function binding *in this environment*.
+
+        The one place a function binding is removed, because a function
+        definition is recorded in two structures here -- the
+        `function_bindings` linked list and the `_function_map` name cache
+        `find_func` consults first -- and a removal that forgets the cache
+        does not remove anything observable. That was FMAKUNBOUND: it unlinked
+        the list node and left the cache, so `(fboundp g)` stayed T for ever
+        afterwards. The ANSI suite's `compile-file-test` and `load-file-test`
+        both open with `(fmakunbound funname)` and then assert the function is
+        *not* defined, so this one stale cache entry failed sixteen
+        system-construction tests that had nothing to do with function cells.
+
+        Returns True if a binding was removed.
+        """
+        if not isinstance(symbol, LispSymbol):
+            raise TypeError(f"unbind_function: {symbol} is not a symbol")
+
+        removed = self._function_map.pop(symbol.name, None) is not None
+
+        previous = None
+        node = self.function_bindings
+        while node is not None:
+            if node.symbol.name == symbol.name:
+                if previous is None:
+                    self.function_bindings = node.next
+                else:
+                    previous.next = node.next
+                removed = True
+                break
+            previous = node
+            node = node.next
+        return removed
     
     def find_func(self, sym):
         """Legacy: find a function by symbol name."""
@@ -965,8 +1000,23 @@ class ControlError(Error):
 
 
 class FileError(Error):
-    """Condition for file operation errors."""
-    pass
+    """CLHS FILE-ERROR: an error involving a file, carrying the PATHNAME slot
+    that FILE-ERROR-PATHNAME reads.
+
+    The slot is part of the type, not an optional extra: CLHS says the
+    pathname "is initialized by the :PATHNAME initialization argument", so
+    every operator that signals a FILE-ERROR must say *which* file it was
+    about. Storing it here (rather than letting each raise site invent an
+    attribute) is what makes `signal_file_error` in evaluation_conditions.py
+    the one place a file operation reports failure.
+    """
+
+    def __init__(self, pathname=None, message="", **kwargs):
+        if not message:
+            message = ("File error" if pathname is None
+                       else f"File error on {pathname}")
+        super().__init__(message, **kwargs)
+        self._slots['pathname'] = pathname
 
 
 class StreamError(Error):

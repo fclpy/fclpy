@@ -14,6 +14,14 @@ passing as many of its tests as possible.
 > `cons` is at 99.0% and `sequences` at 94.9%; `objects` (422 failures),
 > `streams` (319) and `printer` (302) are now the constraint.
 >
+> **`system-construction` is 77 of 77 as of 2026-08-20** (targeted run; the
+> full-run number above predates it), and `files` is 47 of 87. Read that
+> Changelog entry in plan.md before ranking any other low-percentage directory
+> as a "subsystem gap": eight of the eleven mechanisms it took were core
+> defects — a lambda-list rule, a type predicate, a string's own length, a
+> readtable's identity, a control-transfer rule — that a 75-test directory
+> happened to be the only place exercising all of them at once.
+>
 > **Hang detection now lives in `fclpy/watchdog.py`, not in the loop forms.**
 > `LoopWatchdog` evaluates its 120s warning and 600s cap inside `tick()`, once
 > per *iteration*, so it cannot see a loop wedged **inside** one iteration —
@@ -339,6 +347,60 @@ passing as many of its tests as possible.
   equally specific and only the (stable) definition order separates them.
   Note also that `classes.py` still defines `_init_builtin_classes` **twice**;
   the second definition wins and the first is dead (standing rule 3).
+- **Pathnames and file operations**: `lispfunc/pathnames.py` owns
+  **`resolve_filespec`, the one place a pathname designator becomes an OS
+  path** — including CLHS's third designator case, "a stream associated with a
+  file", so `(compile-file s)` and `:output-file s` work. It replaced five
+  copies of the same relative-name search (LOAD, COMPILE-FILE,
+  COMPILE-FILE-PATHNAME, DELETE-FILE, OPEN), which had already drifted: two of
+  them looked `*DEFAULT-PATHNAME-DEFAULTS*` up in *different packages* (and
+  lookup is by symbol identity, so those are two variables), and OPEN's took
+  the `LISP_CWD` candidate unconditionally where the others took it only if it
+  existed — so OPEN and PROBE-FILE could resolve one relative name to two
+  different files. It always returns a path, existing or not, so a caller can
+  *name* a missing file. **`Pathname` is still a namestring wrapper, not a
+  component record**, so `MAKE-PATHNAME`/`MERGE-PATHNAMES`/`DIRECTORY` cannot
+  compose components: `(directory (make-pathname :version :wild :defaults p))`
+  answers no files, which is what gates most of `files/` and `pathnames/`
+  (plan.md C11).
+- **`LOAD` and `COMPILE-FILE`** live together in `lispfunc/misc_macros.py`
+  because they are the same operation read from two ends — both read a file
+  form by form with `*PACKAGE*` and `*READTABLE*` bound through
+  `BindingFrame`, and COMPILE-FILE's output is what LOAD then reads. Three
+  things here are load-bearing. **A form is read one at a time through READ**,
+  not through one reader built at the top, because READ consults `*READTABLE*`
+  and `*PACKAGE*` per call and a form in the file that assigns either governs
+  how the *rest of the file is read*. **COMPILE-FILE must not run the
+  program**: it evaluates only what CLHS 3.2.3.1 requires
+  (`COMPILE_TIME_OPERATORS`, and `EVAL-WHEN`'s `:compile-toplevel`, recursing
+  through PROGN/LOCALLY), which is what `(not (fboundp funname))` after a
+  compile checks. And it **prints** the forms it read rather than copying
+  bytes, because `#.` is *read*-time evaluation and must be resolved while
+  `*COMPILE-FILE-TRUENAME*` is bound; the printer controls are pinned
+  (`OUTPUT_PRINTER_CONTROLS`) while writing, since a caller's `*print-length*`
+  would otherwise truncate the output to `...` — a corrupt file reported as a
+  successful compilation.
+- **A file operation reports failure through
+  `evaluation_conditions.signal_file_error`**, which is the one place a
+  FILE-ERROR is built and signalled. `lisptype.FileError` carries the PATHNAME
+  slot CLHS gives it, and `FILE-ERROR-PATHNAME` returns that slot
+  **unchanged** — not coerced to a pathname, because the suite passes
+  namestrings, pathnames and streams as `:pathname` and requires each back
+  out. Before this, LOAD/OPEN/DELETE-FILE/TRUENAME let Python's
+  `FileNotFoundError`/`FileExistsError` escape, and a Python exception is not
+  a condition: it matches no handler clause, so it surfaced as the *value* of
+  the form.
+- **Output to a fill-pointered string** is `streams.FillPointerOutputStream`,
+  which `(WITH-OUTPUT-TO-STRING (var string) ...)` expands to via
+  `%MAKE-FILL-POINTER-OUTPUT-STREAM`. The macro used to bind `var` to a fresh
+  `MAKE-STRING-OUTPUT-STREAM` and transfer its contents nowhere, which is a
+  **measurement gate**: the ANSI suite captures an operator's output with
+  exactly this form and then asserts about it, so every test of what something
+  *prints* compared against the empty string.
+- **`*MODULES*` / PROVIDE / REQUIRE** (CLHS 24.1.5) are in
+  `lispfunc/misc_macros.py`. A module name is a *string designator*, resolved
+  through `misc_packages._designator_to_string` — the existing single resolver,
+  not a fourth copy.
 - **State**: `state.py` holds the few intentional cross-module globals
   (`packages`, `current_package`, `current_environment`, `restart_stack`,
   `handler_stack`). Don't add new ad-hoc globals elsewhere — put them here.
@@ -403,6 +465,70 @@ pipenv run python -c "import sys; sys.path.insert(0,'.'); from fclpy import lisp
   `state.current_package`. Anything that binds it (`LET`, `LET*`, `IN-PACKAGE`)
   must update both or symbol interning silently goes to the wrong package. For
   binding forms this now lives in one place, `BindingFrame._mirror_package`.
+  **Read it only through `state.current_package_value()`**, the one resolver:
+  it consults the variable first (environment chain, then value cell) and the
+  mirror last. The mirror is written only when a *binding form* binds
+  `*PACKAGE*`, so a plain `(setq *package* ...)` — which is what a loaded file
+  does — changes the variable and leaves the mirror stale. Four readers used to
+  consult the mirror alone (`readtable._read_symbol`,
+  `lispreader._read_symbol`, `reader.LispReader.__init__`,
+  `utilities_symbols.get_current_package`) and therefore interned into the old
+  package after any such SETQ.
+- **`&rest` gets *all* the remaining arguments, `&key` parameters included**,
+  and the keyword region starts immediately after the required and `&optional`
+  parameters — a property of the lambda list, never inferred from what the
+  arguments look like. `evaluation_special_forms._bind_keyword_parameters`
+  applies CLHS 3.4.1.4/3.5.1.5 to a *user* lambda list the way
+  `evaluation_core._split_declared_keywords` applies it to a builtin's Python
+  signature; the two must agree. The binder used to locate the keyword region
+  by scanning for the first keyword-shaped value, so
+  `(defun g (a &rest args) ...)` called as `(g 1 :b 2)` bound ARGS to **NIL**
+  and the `&rest args &key ...` forward-my-arguments idiom silently forwarded
+  nothing. `_keyword_param_parts` is the one place a `&key` spec is
+  decomposed, because the keyword a parameter answers to and the variable it
+  binds are not always the same name (`((:x y) 9)`).
+- **`lisptype.is_symbol` / `is_keyword` are the symbol predicates**, shared by
+  `SYMBOLP`/`KEYWORDP` and TYPEP's SYMBOL/KEYWORD branches. A symbol is a
+  `LispSymbol`, a `lispKeyword` (KEYWORD is a *subtype* of SYMBOL), or NIL in
+  any of its three Python spellings. `SYMBOLP` used to be
+  `type(obj) is LispSymbol`, an exact test, so `(symbolp :foo)` and
+  `(symbolp nil)` were NIL while TYPEP said T for both.
+- **`lisptype.OMITTED` is the one "argument not supplied" sentinel.** A `=None`
+  default cannot express it wherever NIL is itself meaningful, which in Common
+  Lisp is usually: `(load f :if-does-not-exist nil)` must return NIL while
+  `(load f)` must signal, and `(load f :verbose nil)` must override
+  `*LOAD-VERBOSE*` where an omitted `:verbose` defers to it.
+- **A `LispString`'s content stops at its fill pointer.** `__len__`,
+  `__iter__`, `__str__` and `__repr__` all go through `_active()`. The first
+  two honoured the fill pointer and the last two did not, so one object
+  reported two different contents and every Python reader that goes through
+  `str()` saw the inactive characters.
+- **A copied readtable is a readtable in its own right.** `Readtable.copy()`
+  and `copy_into` rebind the table's own reader *methods* onto the target
+  (`_rebind`), because those methods read sub-expressions through
+  `self._read_item` — i.e. through the macro characters of the table they are
+  bound to. Copying the dict alone gave the copy readers that still consulted
+  the original, so `(copy-readtable nil)` plus `set-macro-character` — the
+  standard idiom — worked at top level and was invisible inside any list.
+- **An uncaught THROW is a CONTROL-ERROR, not a Python exception** (CLHS 5.2).
+  `eval_catch` pushes its tag on `state.catch_tags` for its body's dynamic
+  extent and `eval_throw` checks it; `_tags_match` is the one place the
+  comparison is written. Without this a throw with no catcher left the
+  evaluator as a bare `ThrowException`, matching no handler and aborting
+  whatever was running the code rather than failing it.
+- **`Environment.unbind_function` is the one place a function binding is
+  removed.** A definition lives in two structures — the `function_bindings`
+  list and the `_function_map` name cache `find_func` reads *first* — so a
+  removal that forgets the cache removes nothing observable. That was
+  FMAKUNBOUND, and it failed sixteen `system-construction` tests that had
+  nothing to do with function cells, because `compile-file-test` and
+  `load-file-test` both open with `(fmakunbound funname)` and then assert the
+  function is not defined.
+- **`binding.dynamic_value` / `set_dynamic_value`** are how Python-side code
+  reads and assigns a dynamic variable: environment chain first, then the
+  symbol's value cell, matching `eval`'s own order for a variable reference.
+  Every builtin that consulted a control variable used to write those four
+  lines itself.
 - **The global environment has no lexical variables** (CLHS 3.1.1.1), and that
   is now enforced: `Environment.is_global` is true for the parentless
   environment at the root of every chain, and its `add_variable`/

@@ -173,6 +173,15 @@ def setup_standard_environment():
         cwd_pathname = Pathname(os.getcwd())
         state.current_environment.add_variable(default_pathname_sym, cwd_pathname)
         
+    # *MODULES* - the names of the modules PROVIDE has recorded (CLHS 24.1.5).
+    # Initially the empty list: a fresh image has provided nothing, and
+    # `(every #'stringp *modules*)` must still answer T rather than signal
+    # UNBOUND-VARIABLE.
+    modules_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*MODULES*')
+    fclpy.lisptype.COMMON_LISP_PACKAGE.export_symbol(modules_sym)
+    if state.current_environment.find_variable(modules_sym) is None:
+        state.current_environment.add_variable(modules_sym, fclpy.lisptype.NIL)
+
     # *FEATURES* - list of feature keywords for #+/- conditional read
     # Standard features include: :FCLPY (our implementation), :COMMON-LISP
     features_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*FEATURES*')

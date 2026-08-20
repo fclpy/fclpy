@@ -14,13 +14,12 @@ def with_accessors(slot_entries, instance_form, *body):
     return result
 
 
-@_registry.cl_function('WITH-COMPILATION-UNIT')
-def with_compilation_unit(options, *body):
-    """WITH-COMPILATION-UNIT macro."""
-    result = None
-    for form in body:
-        result = form
-    return result
+# WITH-COMPILATION-UNIT is a real macro expander in
+# evaluation_special_forms.py. It was a `cl_function` stub here whose body was
+# "evaluate every argument eagerly, return the last"; because `cl_function`
+# evaluates arguments, its option list `(:OVERRIDE NIL)` was evaluated as a
+# call to a function named OVERRIDE. Keeping a second registration would
+# silently win or lose depending on module import order (standing rule 3).
 
 
 # WITH-INPUT-FROM-STRING, WITH-OUTPUT-TO-STRING and WITH-OPEN-STREAM are
@@ -79,142 +78,490 @@ def load_time_value(form, read_only_p=None):
 
 
 @_registry.cl_function('LOAD')
-def load(filespec, verbose=None, print_p=None, if_does_not_exist=None, 
-         external_format=None):
-    """Load a Lisp file.
-    
-    Args:
-        filespec: Path to file (string or pathname)
-        verbose: If true, print loading messages
-        print_p: If true, print values of evaluated forms
+def load(filespec, *, verbose=lisptype.OMITTED, print=lisptype.OMITTED,
+         if_does_not_exist=lisptype.OMITTED, external_format=None):
+    """LOAD (CLHS 24.2): read and evaluate every form in a file or stream.
 
-        if_does_not_exist: :ERROR (default), :LOAD (try anyway), or NIL (return NIL)
-        external_format: Character encoding (not fully supported)
-    
-    Returns:
-        T if successful, NIL otherwise
+    Four things here are the mechanism rather than a detail, and each was a
+    cluster of failures in `system-construction/load-file.lsp`:
+
+    **A filespec may be a stream.** CLHS: "filespec---a stream, or a pathname
+    designator". Loading from a stream and loading from a file are the same
+    operation; only where the characters come from, and what the load
+    variables hold, differ. The previous implementation ran `str(filespec)` on
+    whatever it got, so a string-input stream became the *pathname*
+    ``"<StringInputStream pos=0 len=59>"`` and seven tests failed on
+    "file not found".
+
+    **The forms are read one at a time through READ**, not through a reader
+    built once at the top. READ consults `*READTABLE*` and `*PACKAGE*` at each
+    call, and that is the semantics: a form in the file that assigns either of
+    them governs how the *rest of the file* is read (load.15a, load.16a).
+
+    **`*PACKAGE*`, `*READTABLE*`, `*LOAD-PATHNAME*` and `*LOAD-TRUENAME*` are
+    bound, not assigned** -- through `BindingFrame`, the mechanism LET uses,
+    over the global environment where all four are proclaimed special and
+    therefore live in their value cells. So a file's IN-PACKAGE or
+    SET-MACRO-CHARACTER is undone when the file finishes, however it finishes,
+    and the hand-rolled save/restore pairs that used to do this (and leaked on
+    a non-local exit) are gone.
+
+    **A missing file is a FILE-ERROR, and `:if-does-not-exist` decides whether
+    it is signalled at all.** The default is true (CLHS); NIL means return NIL.
+    The old code had this inverted -- ``if_does_not_exist is NIL or is None``
+    *raised* -- so `(load "nope" :if-does-not-exist nil)` signalled, and what
+    it signalled was a Python `FileNotFoundError`, which no handler matches.
+
+    `verbose`/`print` default to `*LOAD-VERBOSE*`/`*LOAD-PRINT*`, and an
+    explicitly supplied NIL overrides them -- which is why they take the
+    OMITTED sentinel rather than defaulting to None. Spelling all four
+    keyword-only is what makes `(load f :bad-key-arg t)` the PROGRAM-ERROR
+    CLHS 3.5.1.5 requires (CLAUDE.md, "a builtin's ANSI lambda list is its
+    Python signature").
     """
+    import builtins
     import os
     import fclpy.state as state
-    from fclpy.lispfunc.pathnames import Pathname, truename
-    
-    # Get the environment
+    from .pathnames import Pathname, resolve_filespec
+    from .streams import Stream
+    from .binding import BindingFrame, root_environment, dynamic_value
+    from .evaluation_conditions import signal_file_error
+    from .io_write import write_text
+    from .io_read import read as read_form
+    from .evaluation_core import eval as lisp_eval
+    from fclpy.printer import write_object
+    from fclpy.readtable import get_current_readtable
+
+    def _cl(name):
+        return lisptype.COMMON_LISP_PACKAGE.intern_symbol(name)
+
+    verbose_p = lisptype.is_truthy(
+        verbose if lisptype.supplied(verbose)
+        else dynamic_value(_cl('*LOAD-VERBOSE*'), lisptype.NIL))
+    print_p = lisptype.is_truthy(
+        print if lisptype.supplied(print)
+        else dynamic_value(_cl('*LOAD-PRINT*'), lisptype.NIL))
+
     env = state.current_environment
     if env is None:
-        raise lisptype.LispNotImplementedError("LOAD: No environment available")
-    
-    # Convert filespec to path string
-    if isinstance(filespec, Pathname):
-        path_str = filespec.original
+        raise lisptype.LispEnvironmentError("LOAD: no environment available")
+
+    # A stream argument is loaded as it stands; the load variables then
+    # describe the stream's file, which for a string stream is nothing at all.
+    if isinstance(filespec, Stream):
+        stream = filespec
+        opened_here = None
+        # The load variables hold "the pathname of the file being loaded"
+        # (CLHS 24.2), which for a stream is the file it is associated with --
+        # NIL for a string stream, which has none.
+        name = getattr(filespec, 'name', None)
+        if isinstance(name, str) and name and not name.startswith('<') \
+                and os.path.exists(name):
+            pathname_obj = Pathname(name)
+            truename_obj = Pathname(os.path.realpath(name))
+        else:
+            pathname_obj = lisptype.NIL
+            truename_obj = lisptype.NIL
+        label = name or 'stream'
     else:
-        path_str = str(filespec)
-    
-    # If path is relative, resolve it against various directories in priority order:
-    # 1. LISP_CWD env var (allows Python CWD and Lisp CWD to differ)
-    # 2. *LOAD-TRUENAME* directory (for nested loads relative to current file)
-    # 3. *DEFAULT-PATHNAME-DEFAULTS*
-    # 4. Python's CWD as last resort
-    if not os.path.isabs(path_str):
-        resolved = False
-        
-        # First, try LISP_CWD environment variable
-        lisp_cwd = os.environ.get('LISP_CWD')
-        if lisp_cwd:
-            candidate = os.path.join(lisp_cwd, path_str)
-            candidate = os.path.normpath(candidate)
-            if os.path.exists(candidate):
-                path_str = candidate
-                resolved = True
-        
-        # Second, try to resolve against *LOAD-TRUENAME* (directory of currently loading file)
-        if not resolved:
-            load_truename_sym = lisptype.COMMON_LISP_PACKAGE.intern_symbol('*LOAD-TRUENAME*')
-            load_truename = env.find_variable(load_truename_sym)
-            
-            if load_truename and load_truename is not lisptype.NIL:
-                if isinstance(load_truename, Pathname):
-                    # Get the directory containing the currently loading file
-                    current_file_path = load_truename.original
-                    current_dir = os.path.dirname(current_file_path)
-                    if current_dir:
-                        candidate = os.path.join(current_dir, path_str)
-                        candidate = os.path.normpath(candidate)
-                        if os.path.exists(candidate):
-                            path_str = candidate
-                            resolved = True
-        
-        # Third, try *DEFAULT-PATHNAME-DEFAULTS*
-        if not resolved:
-            default_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*DEFAULT-PATHNAME-DEFAULTS*')
-            default_pathname = env.find_variable(default_sym)
-            
-            if default_pathname and default_pathname is not lisptype.NIL:
-                # Merge with default pathname
-                if isinstance(default_pathname, Pathname):
-                    # Check if the default pathname is a directory
-                    default_path = default_pathname.original
-                    if os.path.isdir(default_path):
-                        # It's a directory - use it directly
-                        default_dir = default_path
-                    else:
-                        # It's a file - use its parent directory
-                        default_dir = os.path.dirname(default_path)
-                    if default_dir:
-                        path_str = os.path.join(default_dir, path_str)
-                        path_str = os.path.normpath(path_str)
-    
-    # Handle if-does-not-exist: try .lsp if .fasl not found (for FCLpy)
-    if not os.path.exists(path_str):
-        # If looking for a .fasl file, try .lsp instead (FCLpy doesn't compile)
-        if path_str.endswith('.fasl'):
-            source_path = path_str[:-5] + '.lsp'
-            if os.path.exists(source_path):
-                path_str = source_path
-        
-        # Still not found?
+        path_str = resolve_filespec(filespec)
         if not os.path.exists(path_str):
-            if if_does_not_exist is lisptype.NIL or if_does_not_exist is None:
-                # Default behavior - raise error
-                raise FileNotFoundError(f"LOAD: File not found: {path_str}")
-            elif if_does_not_exist == lisptype.NIL:
+            # A "fasl" this implementation produces is the source file copied
+            # (see COMPILE-FILE), so fall back to the source when only it is
+            # present -- otherwise `(load (compile-file-pathname f))` from an
+            # image that never ran COMPILE-FILE could not work.
+            source = path_str[:-5] + '.lsp' if path_str.endswith('.fasl') else None
+            if source and os.path.exists(source):
+                path_str = source
+            elif (lisptype.supplied(if_does_not_exist)
+                  and not lisptype.is_truthy(if_does_not_exist)):
                 return lisptype.NIL
-    
-    # Create pathname objects
-    pathname_obj = Pathname(path_str)
+            else:
+                return signal_file_error(
+                    Pathname(path_str), f"LOAD: file not found: {path_str}")
+
+        pathname_obj = Pathname(path_str)
+        truename_obj = Pathname(os.path.realpath(path_str))
+        label = path_str
+        opened_here = builtins.open(path_str, 'r', encoding='utf-8')
+        stream = Stream(path_str, opened_here, 'input')
+
+    if verbose_p:
+        # The leading `;` is not decoration: a verbose load's output is Lisp
+        # comment syntax, and `load-file-test` checks for that character.
+        write_text("; loading " + str(label) + "\n")
+
+    frame = BindingFrame(root_environment(env))
     try:
-        truename_obj = truename(pathname_obj)
-    except FileNotFoundError:
-        truename_obj = pathname_obj  # Fall back to pathname if truename fails
-    
-    # Save old values of load variables
-    load_truename_sym = lisptype.COMMON_LISP_PACKAGE.intern_symbol('*LOAD-TRUENAME*')
-    load_pathname_sym = lisptype.COMMON_LISP_PACKAGE.intern_symbol('*LOAD-PATHNAME*')
-    
-    old_truename = env.find_variable(load_truename_sym)
-    old_pathname = env.find_variable(load_pathname_sym)
-    
-    try:
-        # Set load variables for this file
-        env.set_variable(load_truename_sym, truename_obj)
-        env.set_variable(load_pathname_sym, pathname_obj)
-        
-        # Actually load the file using runtime
-        import fclpy.runtime as runtime
-        is_verbose = verbose is True or verbose is lisptype.T
-        result = runtime.load_and_evaluate_file(path_str, env, verbose=is_verbose)
-        
-        return result
+        frame.bind(_cl('*LOAD-PATHNAME*'), pathname_obj)
+        frame.bind(_cl('*LOAD-TRUENAME*'), truename_obj)
+        # `*PACKAGE*` and `*READTABLE*` are bound to their own current values:
+        # the point is not to change them but to make the loaded forms'
+        # assignments to them local to the load (CLHS 24.2).
+        current_package = dynamic_value(_cl('*PACKAGE*'))
+        if not isinstance(current_package, lisptype.Package):
+            current_package = (getattr(state, 'current_package', None)
+                               or lisptype.COMMON_LISP_USER_PACKAGE)
+        frame.bind(_cl('*PACKAGE*'), current_package)
+        frame.bind(_cl('*READTABLE*'), get_current_readtable())
+
+        eof = object()
+        while True:
+            form = read_form(stream, lisptype.NIL, eof)
+            if form is eof:
+                break
+            result = lisp_eval(form, state.current_environment)
+            if print_p:
+                for value in _values_of(result):
+                    write_text(write_object(value) + "\n")
+        return lisptype.T
     finally:
-        # Restore old values
-        if old_truename is not None:
-            env.set_variable(load_truename_sym, old_truename)
-        else:
-            env.set_variable(load_truename_sym, lisptype.NIL)
-        
-        if old_pathname is not None:
-            env.set_variable(load_pathname_sym, old_pathname)
-        else:
-            env.set_variable(load_pathname_sym, lisptype.NIL)
+        frame.unwind()
+        if opened_here is not None:
+            opened_here.close()
+
+
+def _values_of(result):
+    """The values a form produced, as a Python list -- `:print` prints "the
+    results of evaluating each form" (CLHS 24.2), which may be none or many."""
+    if isinstance(result, lisptype.MultipleValues):
+        return list(result.values)
+    return [result]
+
+
+
+#: The top-level operators the compiler must *evaluate* while compiling a file
+#: (CLHS 3.2.3.1). This is a whitelist rather than "evaluate everything",
+#: because the defining difference between COMPILE-FILE and LOAD is that
+#: COMPILE-FILE does **not** run the program: after `(compile-file f)` the
+#: functions f defines must still be undefined, which is what
+#: `compile-file-test` asserts with `(not (fboundp funname))`. The previous
+#: implementation was a `shutil.copy2` -- it read nothing, so it evaluated
+#: nothing, bound none of the compile-file variables, resolved no `#.`, and
+#: could not tell an `(eval-when (:compile-toplevel) ...)` form from any other.
+#:
+#: What *is* evaluated is what later forms in the same file need in order to be
+#: read and processed at all: the package the reader interns into, macro and
+#: type definitions, and anything the program itself asked for with
+#: `(eval-when (:compile-toplevel) ...)`.
+COMPILE_TIME_OPERATORS = frozenset((
+    'IN-PACKAGE', 'DEFPACKAGE',
+    'DEFMACRO', 'DEFINE-COMPILER-MACRO', 'DEFINE-SYMBOL-MACRO',
+    'DEFINE-MODIFY-MACRO', 'DEFSETF', 'DEFINE-SETF-EXPANDER',
+    'DEFTYPE', 'DEFSTRUCT', 'DEFCLASS', 'DEFINE-CONDITION',
+    'DECLAIM', 'PROCLAIM',
+))
+
+#: Operators whose body is itself a sequence of top-level forms (CLHS 3.2.3.1),
+#: so the compile-time processing rule applies through them.
+COMPILE_TIME_TRANSPARENT = frozenset(('PROGN', 'LOCALLY'))
+
+#: The type this implementation gives a compiled file. fclpy has no code
+#: generator; a "compiled" file is the forms the compiler read, printed back
+#: out (see `compile_file`), so it stays readable Lisp.
+COMPILED_FILE_TYPE = '.fasl'
+
+
+def _operator_name(form):
+    """The name of `form`'s operator, upper-cased, or None if it has none."""
+    if not isinstance(form, lisptype.lispCons):
+        return None
+    head = form.car
+    return head.name.upper() if isinstance(head, lisptype.LispSymbol) else None
+
+
+def _eval_when_situations(form):
+    """The situation keywords of an EVAL-WHEN form, upper-cased."""
+    rest = form.cdr
+    if not isinstance(rest, lisptype.lispCons):
+        return ()
+    situations = []
+    cur = rest.car
+    while isinstance(cur, lisptype.lispCons):
+        item = cur.car
+        if isinstance(item, lisptype.LispSymbol):
+            situations.append(item.name.upper())
+        cur = cur.cdr
+    return tuple(situations)
+
+
+def _compile_time_forms(form):
+    """The forms COMPILE-FILE must evaluate for this top-level `form`
+    (CLHS 3.2.3.1), as a Python list.
+
+    Recursive, because PROGN and LOCALLY splice their subforms into the
+    top-level sequence, and EVAL-WHEN's body is itself processed as top-level
+    forms when the `:compile-toplevel` situation applies.
+    """
+    name = _operator_name(form)
+    if name is None:
+        return []
+    if name in COMPILE_TIME_OPERATORS:
+        return [form]
+    if name in COMPILE_TIME_TRANSPARENT:
+        out = []
+        cur = form.cdr
+        while isinstance(cur, lisptype.lispCons):
+            out.extend(_compile_time_forms(cur.car))
+            cur = cur.cdr
+        return out
+    if name == 'EVAL-WHEN':
+        situations = set(_eval_when_situations(form))
+        if not situations & {'COMPILE-TOPLEVEL', 'COMPILE'}:
+            return []
+        out = []
+        cur = form.cdr
+        cur = cur.cdr if isinstance(cur, lisptype.lispCons) else lisptype.NIL
+        while isinstance(cur, lisptype.lispCons):
+            out.append(cur.car)
+            cur = cur.cdr
+        return out
+    return []
+
+
+def _lisp_list_of(items):
+    result = lisptype.NIL
+    for item in reversed(list(items)):
+        result = lisptype.lispCons(item, result)
+    return result
+
+
+class _CompilationDiagnostics:
+    """Records whether a compilation signalled warnings or errors, so
+    COMPILE-FILE can answer its second and third values.
+
+    CLHS COMPILE-FILE: `warnings-p` is true if the compilation signalled any
+    condition of type ERROR or WARNING, and `failure-p` is true if it signalled
+    an ERROR or a WARNING that is **not** a STYLE-WARNING. Both used to be
+    hard-wired NIL, so the two tests that ask specifically about them --
+    `compile-file.2` (a style warning must set warnings-p) and
+    `compile-file.2a` (a plain warning must set failure-p) -- could not pass
+    however the compilation behaved.
+
+    Observation pushes a handler cluster onto `state.handler_stack`, i.e. goes
+    through the same mechanism HANDLER-BIND uses, so conditions are seen *at
+    the signal point*; the handler declines by returning, because it must not
+    intercept them -- the program being compiled may have handlers of its own.
+    """
+
+    def __init__(self):
+        self.warnings = False
+        self.failure = False
+
+    def note(self, condition):
+        from .comparison import typep
+        self.warnings = True
+        if typep(condition, 'STYLE-WARNING') != lisptype.T:
+            self.failure = True
+        return lisptype.NIL
+
+    def cluster(self):
+        # One handler for (OR ERROR WARNING) -- the exact set CLHS names.
+        specifier = _lisp_list_of([
+            lisptype.LispSymbol('OR'),
+            lisptype.LispSymbol('ERROR'),
+            lisptype.LispSymbol('WARNING'),
+        ])
+        return [(specifier, self.note)]
+
+
+#: The printer controls COMPILE-FILE pins while writing its output, and the
+#: values it pins them to. Every one of these can make the printer *lose*
+#: information: `*PRINT-LENGTH*`/`*PRINT-LEVEL*`/`*PRINT-LINES*` truncate to
+#: `...`, `*PRINT-BASE*` would write integers in another radix with nothing to
+#: say so, `*PRINT-ESCAPE*` NIL drops the quotes off strings, and
+#: `*PRINT-PRETTY*` may insert line breaks mid-token. A compiled file is meant
+#: to be read back, so a caller's `(let ((*print-length* 3)) (compile-file f))`
+#: must not silently truncate it -- that is a corrupt output file reported as a
+#: successful compilation, which is worse than a failure.
+#:
+#: `*PACKAGE*` and `*READTABLE*` are deliberately *not* pinned: they are the
+#: file's own, and the output's IN-PACKAGE forms appear in the same order, so
+#: symbols print and read back relative to the same package.
+OUTPUT_PRINTER_CONTROLS = (
+    ('*PRINT-ARRAY*', True),
+    ('*PRINT-BASE*', 10),
+    ('*PRINT-CASE*', 'UPCASE'),
+    ('*PRINT-ESCAPE*', True),
+    ('*PRINT-GENSYM*', True),
+    ('*PRINT-LENGTH*', None),
+    ('*PRINT-LEVEL*', None),
+    ('*PRINT-LINES*', None),
+    ('*PRINT-PRETTY*', False),
+    ('*PRINT-RADIX*', False),
+    ('*PRINT-RIGHT-MARGIN*', None),
+)
+
+
+def _print_for_output(form):
+    """`form`'s printed representation, written so it can be read back.
+
+    The printer controls are pinned for the duration (see
+    `OUTPUT_PRINTER_CONTROLS`) through `BindingFrame`, the same mechanism LET
+    uses, and unwound immediately -- so the *compile-time* forms COMPILE-FILE
+    evaluates still see the caller's printer environment.
+    """
+    import fclpy.state as state
+    from .binding import BindingFrame, root_environment
+    from fclpy.printer import write_object
+
+    frame = BindingFrame(root_environment(state.current_environment))
+    try:
+        for name, value in OUTPUT_PRINTER_CONTROLS:
+            symbol = lisptype.COMMON_LISP_PACKAGE.intern_symbol(name)
+            if value is True:
+                bound = lisptype.T
+            elif value is False or value is None:
+                bound = lisptype.NIL
+            elif name == '*PRINT-CASE*':
+                bound = lisptype.intern_keyword(value)
+            else:
+                bound = value
+            frame.bind(symbol, bound)
+        return write_object(form)
+    finally:
+        frame.unwind()
+
+
+@_registry.cl_function('COMPILE-FILE-PATHNAME')
+def compile_file_pathname(input_file, *, output_file=None, **kwargs):
+    """The pathname COMPILE-FILE would write for `input_file` (CLHS 24.2).
+
+    `:output-file`, when supplied, *is* the answer; otherwise the input's type
+    is replaced by this implementation's compiled-file type. Both go through
+    `pathnames.resolve_filespec`, so this and COMPILE-FILE cannot disagree
+    about where a relative name points -- they used to, each carrying its own
+    copy of the search.
+    """
+    import os
+    from .pathnames import Pathname, resolve_filespec
+
+    if output_file is not None and output_file is not lisptype.NIL:
+        return Pathname(resolve_filespec(output_file))
+    base = os.path.splitext(resolve_filespec(input_file))[0]
+    return Pathname(base + COMPILED_FILE_TYPE)
+
+
+@_registry.cl_function('COMPILE-FILE')
+def compile_file(input_file, *, output_file=None, verbose=lisptype.OMITTED,
+                 print=lisptype.OMITTED, external_format=None):
+    """COMPILE-FILE (CLHS 24.2): read `input_file`, process its top-level
+    forms, and write the result where LOAD can read it back.
+
+    fclpy has no code generator, so "compiling" is: read each top-level form
+    with `*PACKAGE*`, `*READTABLE*`, `*COMPILE-FILE-PATHNAME*` and
+    `*COMPILE-FILE-TRUENAME*` bound as CLHS requires; evaluate the ones CLHS
+    3.2.3.1 says the compiler must evaluate (see `COMPILE_TIME_OPERATORS`);
+    and print every form to the output file.
+
+    Printing the forms rather than copying the source bytes is the point:
+
+    * `#.` is *read*-time evaluation, so it must be resolved now, while
+      `*COMPILE-FILE-TRUENAME*` is bound. `compile-file.16` compiles a file
+      whose body is ``'#.*compile-file-truename*`` and then checks that
+      loading the output yields that truename; a byte copy defers the `#.` to
+      load time, when the variable is NIL.
+    * a macro character the compiling environment established is likewise
+      resolved now, so the output loads correctly whatever the readtable is
+      then (`compile-file.15`).
+
+    Returns the three values CLHS specifies: the output truename, `warnings-p`
+    and `failure-p`.
+    """
+    import builtins
+    import os
+    import fclpy.state as state
+    from .pathnames import Pathname, resolve_filespec
+    from .streams import Stream
+    from .binding import BindingFrame, root_environment, dynamic_value
+    from .evaluation_conditions import signal_file_error
+    from .io_write import write_text
+    from .io_read import read as read_form
+    from .evaluation_core import eval as lisp_eval, ConditionException
+    from fclpy.printer import write_object
+    from fclpy.readtable import get_current_readtable
+
+    def _cl(name):
+        return lisptype.COMMON_LISP_PACKAGE.intern_symbol(name)
+
+    verbose_p = lisptype.is_truthy(
+        verbose if lisptype.supplied(verbose)
+        else dynamic_value(_cl('*COMPILE-VERBOSE*'), lisptype.NIL))
+    print_p = lisptype.is_truthy(
+        print if lisptype.supplied(print)
+        else dynamic_value(_cl('*COMPILE-PRINT*'), lisptype.NIL))
+
+    input_path = resolve_filespec(input_file)
+    if not os.path.exists(input_path):
+        return signal_file_error(
+            Pathname(input_path), "COMPILE-FILE: file not found: " + input_path)
+
+    if output_file is not None and output_file is not lisptype.NIL:
+        output_path = resolve_filespec(output_file)
+    else:
+        output_path = os.path.splitext(input_path)[0] + COMPILED_FILE_TYPE
+
+    if verbose_p:
+        write_text("; compiling " + input_path + "\n")
+
+    env = state.current_environment
+    if env is None:
+        raise lisptype.LispEnvironmentError(
+            "COMPILE-FILE: no environment available")
+
+    diagnostics = _CompilationDiagnostics()
+    frame = BindingFrame(root_environment(env))
+    source = builtins.open(input_path, 'r', encoding='utf-8')
+    stream = Stream(input_path, source, 'input')
+    printed_forms = []
+    try:
+        frame.bind(_cl('*COMPILE-FILE-PATHNAME*'), Pathname(input_path))
+        frame.bind(_cl('*COMPILE-FILE-TRUENAME*'),
+                   Pathname(os.path.realpath(input_path)))
+        current_package = dynamic_value(_cl('*PACKAGE*'))
+        if not isinstance(current_package, lisptype.Package):
+            current_package = (getattr(state, 'current_package', None)
+                               or lisptype.COMMON_LISP_USER_PACKAGE)
+        frame.bind(_cl('*PACKAGE*'), current_package)
+        frame.bind(_cl('*READTABLE*'), get_current_readtable())
+
+        state.handler_stack.append(diagnostics.cluster())
+        try:
+            eof = object()
+            while True:
+                form = read_form(stream, lisptype.NIL, eof)
+                if form is eof:
+                    break
+                # Printed *before* its compile-time effects run, so every
+                # symbol is printed relative to the package current when the
+                # form was read -- which is the package the reader will be in
+                # when the output is loaded back, because the output's own
+                # IN-PACKAGE forms appear there in the same order.
+                text = _print_for_output(form)
+                printed_forms.append(text)
+                if print_p:
+                    write_text(text + "\n")
+                for compile_time_form in _compile_time_forms(form):
+                    lisp_eval(compile_time_form, state.current_environment)
+        except ConditionException as exception:
+            # An error during compilation is a failure, not an abort: CLHS
+            # has COMPILE-FILE return with failure-p true.
+            diagnostics.note(exception.condition)
+        finally:
+            state.handler_stack.pop()
+    finally:
+        frame.unwind()
+        source.close()
+
+    with builtins.open(output_path, 'w', encoding='utf-8') as out:
+        for text in printed_forms:
+            out.write(text)
+            out.write("\n")
+
+    return lisptype.MultipleValues(
+        Pathname(os.path.realpath(output_path)),
+        lisptype.lisp_bool(diagnostics.warnings),
+        lisptype.lisp_bool(diagnostics.failure))
 
 
 @_registry.cl_function('LOAD-LOGICAL-PATHNAME-TRANSLATIONS')
@@ -660,8 +1007,21 @@ def arithmetic_error_operation(condition):
 
 @_registry.cl_function('FILE-ERROR-PATHNAME')
 def file_error_pathname(condition):
-    """Get pathname from file error condition."""
-    return None
+    """CLHS FILE-ERROR-PATHNAME: the PATHNAME slot of a FILE-ERROR.
+
+    The value is whatever was given as :PATHNAME -- a namestring, a pathname,
+    a logical pathname or a stream -- and is returned unchanged, because CLHS
+    specifies the reader of a slot, not a coercion: file-error-pathname.1/.3
+    require the *string* back out, and .5/.6 require the *stream* object back
+    out. Coercing here (the obvious "return a pathname" reading) makes all
+    four fail.
+    """
+    if isinstance(condition, lisptype.Condition):
+        value = condition.get_slot('pathname')
+        return lisptype.NIL if value is None else value
+    raise lisptype.LispTypeError(
+        f"FILE-ERROR-PATHNAME: {condition} is not a FILE-ERROR",
+        expected_type='FILE-ERROR', actual_value=condition)
 
 
 # --- Multiple values operations ---
@@ -885,16 +1245,93 @@ def untrace(*fns):
     return list(fns)
 
 
+# --- Modules (CLHS 24.1.5) ---
+#
+# `*MODULES*`, PROVIDE and REQUIRE were three stubs that returned their own
+# argument: `*MODULES*` had no value at all (so a bare reference signalled
+# UNBOUND-VARIABLE and every one of the thirteen modules.lsp tests failed on
+# the *reference*, before reaching what it was testing), and neither operator
+# touched it. The mechanism they were missing is small but it is a mechanism:
+# a module name is a **string designator**, `*MODULES*` is a list of the
+# *strings* those designators denote, and REQUIRE's job is "load it unless
+# PROVIDE has already recorded it".
+
+def _modules_symbol():
+    return lisptype.COMMON_LISP_PACKAGE.intern_symbol('*MODULES*')
+
+
+def _module_name(designator):
+    """The string a module-name designator denotes (CLHS PROVIDE/REQUIRE).
+
+    Goes through `misc_packages._designator_to_string`, the existing single
+    string-designator resolver, rather than adding a fourth copy: it already
+    handles a symbol (including a keyword, and a reader-escaped `|FOO|`
+    name), a character, and every specialized character-array shape the suite
+    exercises -- which is exactly what modules.5/.10/.12 test.
+    """
+    from .misc_packages import _designator_to_string
+    return _designator_to_string(designator)
+
+
+def _modules_list():
+    """`*MODULES*` as a Python list of strings, whatever shape it holds."""
+    from .binding import dynamic_value
+    from .sequence_protocol import list_elements
+    value = dynamic_value(_modules_symbol(), lisptype.NIL)
+    if value is lisptype.NIL or value is None:
+        return []
+    return list(list_elements(value))
+
+
 @_registry.cl_function('PROVIDE')
-def provide(module):
-    """Provide module."""
-    return module
+def provide(module_name):
+    """Record that `module_name` has been provided (CLHS PROVIDE).
+
+    Adds the module's *name string* to `*MODULES*` unless a STRING= entry is
+    already there -- modules.3 checks exactly that idempotence, by counting
+    the entries after two PROVIDEs of the same name.
+    """
+    from .binding import set_dynamic_value
+    from .misc_packages import _lisp_list
+    name = _module_name(module_name)
+    modules = _modules_list()
+    if not any(str(m) == name for m in modules):
+        set_dynamic_value(_modules_symbol(),
+                          _lisp_list([lisptype.LispString(name)] + modules))
+    return lisptype.NIL
 
 
 @_registry.cl_function('REQUIRE')
-def require(module):
-    """Require module."""
-    return module
+def require(module_name, pathname_list=None):
+    """Load `module_name` unless PROVIDE has already recorded it (CLHS REQUIRE).
+
+    `pathname_list` is a single pathname designator or a list of them, each
+    LOADed in order. With no pathname list and no already-provided module
+    there is nothing this implementation can consult, so it signals an
+    error -- which is what CLHS requires ("If the module-name is not
+    [provided] ... an error of type ERROR is signaled") and what modules.9
+    checks. Returning the name, as the stub did, reported success for a
+    module that was never loaded.
+    """
+    from .sequence_protocol import list_elements
+    name = _module_name(module_name)
+    if any(str(m) == name for m in _modules_list()):
+        return lisptype.NIL
+
+    if pathname_list is None or pathname_list is lisptype.NIL:
+        from .evaluation_conditions import signal_error_object
+        return signal_error_object(lisptype.SimpleError(
+            format_control=f"REQUIRE: module {name} has not been provided "
+                           f"and no pathname was supplied"))
+
+    if isinstance(pathname_list, lisptype.lispCons):
+        pathnames = list(list_elements(pathname_list))
+    else:
+        pathnames = [pathname_list]
+
+    for pathname in pathnames:
+        load(pathname)
+    return lisptype.T
 
 
 # --- Form utilities ---
@@ -1001,7 +1438,6 @@ def is_variable_special(symbol, env=None):
 
 __all__ = [
     'with_accessors',
-    'with_compilation_unit',
     'with_pprint_logical_block',
     'with_slots',
     'complex_fn',

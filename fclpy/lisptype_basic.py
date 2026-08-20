@@ -197,6 +197,62 @@ def is_truthy(value):
     return value is not NIL and value is not None
 
 
+class _Omitted:
+    """Marks an argument that was not supplied at all.
+
+    A `=None` default cannot express this wherever NIL is itself a meaningful
+    value -- and in Common Lisp it usually is. `(load f :if-does-not-exist
+    nil)` must return NIL while `(load f)` must signal, `(copy-readtable nil)`
+    asks for the *standard* readtable rather than the current one, and
+    `(load f :verbose nil)` overrides `*LOAD-VERBOSE*` where an omitted
+    `:verbose` defers to it. A builtin that defaults such a parameter to
+    `None` cannot tell those apart and has to pick one, silently.
+    """
+
+    def __bool__(self):
+        return False
+
+    def __repr__(self):
+        return '<omitted>'
+
+
+#: The one "argument not supplied" sentinel. `readtable.py` had its own.
+OMITTED = _Omitted()
+
+
+def supplied(value):
+    """True when `value` is a real argument rather than the OMITTED marker."""
+    return not isinstance(value, _Omitted)
+
+
+def is_symbol(value):
+    """Test whether `value` is a Lisp SYMBOL (CLHS 4.2, Figure 4-2).
+
+    The one predicate for "is this a symbol", because the answer is not a
+    single `isinstance`: a symbol here is a `LispSymbol`, a `lispKeyword`
+    (KEYWORD is a *subtype* of SYMBOL), or NIL -- which reaches Python as the
+    `lispNull` singleton, as Python `None`, or as a `LispSymbol` named "NIL"
+    interned in some other package.
+
+    `SYMBOLP` used to spell this `type(obj) is LispSymbol`, an *exact* type
+    test, so `(symbolp :foo)` and `(symbolp nil)` were both NIL while
+    `(typep :foo 'symbol)` and `(typep nil 'symbol)` were both T -- two
+    disagreeing interpretations of the same lattice question. Anything that
+    dispatched on SYMBOLP (`(every #'symbolp *features*)`, the SETF/place
+    machinery, LOOP's var-spec parsing) therefore saw keywords as non-symbols.
+    """
+    return (isinstance(value, LispSymbol)
+            or isinstance(value, lispNull)
+            or value is None)
+
+
+def is_keyword(value):
+    """Test whether `value` is a KEYWORD (CLHS 11.1.2.3.1): a symbol whose
+    home package is KEYWORD. NIL is *not* a keyword, so this is not simply
+    `is_symbol` narrowed."""
+    return isinstance(value, lispKeyword)
+
+
 def lisp_str(value):
     """Return a Lisp-style string representation for printing.
 
@@ -374,16 +430,32 @@ class LispString(lispSequence):
         self.fill_pointer = fill_pointer
         self.adjustable = adjustable
     
+    def _active(self):
+        """The characters this string actually *has* -- those below the fill
+        pointer, or all of them when it has none (CLHS 3.2.1, "active
+        elements").
+
+        `__len__` and `__iter__` already answered by this rule; `__str__` and
+        `__repr__` answered by the whole backing store, so one object reported
+        two different contents: for a fill-pointered "FOO" whose backing store
+        is "FOOZZZZ", `len(s)` was 3 while `str(s)` was "FOOZZZZ". Every Python
+        reader that goes through `str()` -- the string-designator resolvers,
+        the printer, FORMAT -- therefore saw the inactive characters, which is
+        what made `(provide s)` record the module under the wrong name.
+        """
+        if self.fill_pointer is not None:
+            return ''.join(self._data[:self.fill_pointer])
+        return ''.join(self._data)
+
     def __repr__(self):
         """Return string representation for reading."""
         # Escape special characters for Lisp reader
-        content = ''.join(self._data)
-        escaped = content.replace('\\', '\\\\').replace('"', '\\"')
+        escaped = self._active().replace('\\', '\\\\').replace('"', '\\"')
         return f'"{escaped}"'
-    
+
     def __str__(self):
         """Return Python string representation."""
-        return ''.join(self._data)
+        return self._active()
     
     def __len__(self):
         """Return string length (respecting fill-pointer if set)."""
@@ -770,7 +842,8 @@ __all__ = [
     'symbol_value', 'set_symbol_value', 'symbol_function',
     'set_symbol_function', 'symbol_plist', 'set_symbol_plist',
     # Utilities
-    'lisp_bool', 'is_truthy', 'lisp_str', 'lisp_repr',
+    'lisp_bool', 'is_truthy', 'is_symbol', 'is_keyword', 'lisp_str', 'lisp_repr',
+    'OMITTED', 'supplied',
     'MultipleValues', 'primary_value', 'py_str_map',
     # Binding helpers (internal but useful)
     'Binding', 'FunctionBinding', 'SpecialForm'

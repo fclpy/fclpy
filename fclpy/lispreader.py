@@ -156,11 +156,10 @@ class LispReader():
         if ':' in token_check and not token.startswith(':'):
             return self._read_package_qualified_symbol(token)
         
-        # Get current package from state
+        # The current package is the value of `*PACKAGE*`; `state`'s resolver
+        # is the one place that decides (see state.current_package_value).
         from . import state
-        current_pkg = getattr(state, 'current_package', None)
-        if current_pkg is None:
-            current_pkg = lisptype.COMMON_LISP_USER_PACKAGE
+        current_pkg = state.current_package_value()
         
         # Restore escaped colons in the token before interning
         token_restored = token.replace('\x00', ':')

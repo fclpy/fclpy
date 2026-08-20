@@ -22,7 +22,8 @@ __all__ = [
     'NIL', 'T',
     'symbol_value', 'set_symbol_value', 'symbol_function',
     'set_symbol_function', 'symbol_plist', 'set_symbol_plist',
-    'lisp_bool', 'is_truthy', 'lisp_str', 'lisp_repr',
+    'lisp_bool', 'is_truthy', 'is_symbol', 'is_keyword', 'lisp_str', 'lisp_repr',
+    'OMITTED', 'supplied',
     'MultipleValues', 'primary_value', 'py_str_map',
     'Binding', 'FunctionBinding', 'SpecialForm',
     # From lisptype_extended

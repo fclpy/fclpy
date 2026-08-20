@@ -425,13 +425,40 @@ class GenericFunction:
     method_combination: Optional['MethodCombination'] = None
 
     def __repr__(self):
-        return f"#<STANDARD-GENERIC-FUNCTION {self.name.name}>"
+        return f"#<STANDARD-GENERIC-FUNCTION {generic_function_key(self.name)}>"
 
     def __call__(self, *args):
         # Makes a GenericFunction usable anywhere an ordinary callable is
         # (FUNCALL/APPLY, mapped over by MAPCAR, ...) instead of needing a
         # separate "is this a generic function?" branch at every call site.
         return call_generic_function(self, list(args))
+
+
+def generic_function_key(name: Any) -> str:
+    """The registry key for a *function name* (CLHS glossary): a symbol, or a
+    `(SETF symbol)` list.
+
+    The one place that key is computed. `register_generic` used to spell it
+    `gf.name.name` while `ensure_generic_function` spelled it
+    `name.name if isinstance(name, LispSymbol) else str(name)` -- two
+    computations of the same key, and they disagreed for exactly the case that
+    matters: a `(SETF accessor)` name is a **cons**, so registering a writer
+    generic function raised ``AttributeError: 'lispCons' object has no
+    attribute 'name'``. DEFCLASS defines a writer for every `:accessor` slot,
+    so that killed `(defclass ... (:accessor ...))` outright -- and because it
+    was raised while a file was being LOADed, and LOAD used to swallow
+    per-form errors, it was invisible: ~700 tests in `objects/` simply never
+    registered.
+
+    Goes through `utilities_functions._function_spec_to_key`, the existing
+    function-name resolver, so a setf generic function is keyed the same way
+    the function registry keys a setf DEFUN.
+    """
+    from fclpy.lispfunc.utilities_functions import _function_spec_to_key
+    key = _function_spec_to_key(name)
+    if key is not None:
+        return key.name
+    return name.name if isinstance(name, LispSymbol) else str(name)
 
 
 class GenericFunctionRegistry:
@@ -442,7 +469,7 @@ class GenericFunctionRegistry:
 
     def register_generic(self, gf: GenericFunction) -> GenericFunction:
         """Register a generic function."""
-        self._generics[gf.name.name] = gf
+        self._generics[generic_function_key(gf.name)] = gf
         return gf
 
     def find_generic(self, name: str) -> Optional[GenericFunction]:
@@ -497,7 +524,7 @@ def ensure_generic_function(
     Returns:
         The generic function (newly created or existing)
     """
-    name_str = name.name if isinstance(name, LispSymbol) else str(name)
+    name_str = generic_function_key(name)
 
     gf = _generic_registry.find_generic(name_str)
     if gf is None:

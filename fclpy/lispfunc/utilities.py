@@ -180,7 +180,6 @@ __all__ = [
     'generic_function_methods',
     'generic_function_name',
     'with_accessors',
-    'with_compilation_unit',
     'with_pprint_logical_block',
     'with_slots',
     'complex_fn',

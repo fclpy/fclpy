@@ -495,9 +495,15 @@ def with_output_to_string_macro(spec, *body):
     positional = _strip_keywords(rest)
 
     if positional:
-        # Output accumulates into the supplied string; the value is the body's.
+        # Output accumulates into the supplied string and the value is the
+        # body's, so `var` is bound to a stream that *writes into that string*
+        # (streams.FillPointerOutputStream). This used to bind a fresh
+        # MAKE-STRING-OUTPUT-STREAM and never transfer its contents anywhere,
+        # so the supplied string stayed empty however much the body printed --
+        # the measurement gate described on that class.
         stream_form = _cons_from([
-            lisptype.LispSymbol('MAKE-STRING-OUTPUT-STREAM'),
+            lisptype.LispSymbol('%MAKE-FILL-POINTER-OUTPUT-STREAM'),
+            positional[0],
         ])
         binding = _cons_from([var, stream_form])
         return _cons_from([
@@ -676,6 +682,50 @@ def _standard_io_syntax_bindings():
     ]
 
 
+@_registry.cl_macro('WITH-COMPILATION-UNIT',
+                    documentation='WITH-COMPILATION-UNIT macro expander')
+def with_compilation_unit_macro(options, *body):
+    """Macro expander for WITH-COMPILATION-UNIT (CLHS 3.2.5).
+
+    Transforms
+
+        (WITH-COMPILATION-UNIT (option-name option-form ...) form*)
+
+    into
+
+        (PROGN option-form ... NIL form*)
+
+    which is the whole of the standardized semantics for an implementation
+    that does not defer compiler diagnostics: the option *forms* are evaluated
+    ("override -- a generalized boolean; evaluated"), their values are
+    discarded, and the form's value, values and non-local exits are the
+    body's. The trailing NIL is what makes an empty body answer NIL rather
+    than the last option's value.
+
+    It was a `cl_function` -- the registry defect CLAUDE.md describes -- and
+    all four of its consequences showed: the option list `(:OVERRIDE NIL)` was
+    *evaluated as a function call*, so every test that passed an option
+    signalled UNDEFINED-FUNCTION OVERRIDE; the body forms were evaluated
+    before the form ran; only the last one's *primary* value came back, so
+    `(with-compilation-unit () (values 1 2 3 4 5))` answered 1 and
+    `(values)` answered NIL instead of no values; and a `RETURN-FROM` out of
+    the body could not be a non-local exit from a form that had already
+    finished evaluating its arguments.
+    """
+    option_forms = []
+    cur = options
+    while isinstance(cur, lisptype.lispCons):
+        # (name form name form ...): the names are syntax, the forms are
+        # evaluated. A trailing name with no form contributes nothing.
+        cur = cur.cdr
+        if isinstance(cur, lisptype.lispCons):
+            option_forms.append(cur.car)
+            cur = cur.cdr
+
+    return _cons_from([lisptype.LispSymbol('PROGN')] + option_forms
+                      + [lisptype.NIL] + list(body))
+
+
 @_registry.cl_macro('WITH-STANDARD-IO-SYNTAX',
                     documentation='WITH-STANDARD-IO-SYNTAX macro expander')
 def with_standard_io_syntax_macro(*body):
@@ -829,6 +879,118 @@ def eval_pprint_logical_block(form, env):
         bf.unwind()
 
 
+def _keyword_param_parts(param_spec):
+    """Decompose one `&key` parameter spec into
+    ``(keyword-name, variable, default-form, supplied-p)``.
+
+    CLHS 3.4.1.4 gives four shapes -- ``var``, ``(var init)``,
+    ``(var init supplied-p)`` and ``((keyword-name var) init [supplied-p])``.
+    The fourth is why this is a function: the keyword a parameter answers to
+    and the variable it binds are not always the same name, and the two loops
+    that used to decompose these specs (once to install defaults, once to
+    match an actual argument) each assumed they were, so
+    ``&key ((:x y) 9)`` bound Y to 9 whatever ``:x`` was given. They also
+    disagreed -- only one of them read the default form -- which is the
+    ordinary consequence of writing the same decomposition twice.
+
+    The keyword name is returned as an upper-case string, since that is what
+    matching against a `lispKeyword`'s name needs.
+    """
+    if not _consp_internal(param_spec):
+        return param_spec.name.upper(), param_spec, None, None
+
+    head = car(param_spec)
+    tail = cdr(param_spec)
+    default_form = car(tail) if _consp_internal(tail) else None
+    tail2 = cdr(tail) if _consp_internal(tail) else None
+    supplied_p = car(tail2) if _consp_internal(tail2) else None
+
+    if _consp_internal(head):
+        # ((keyword-name var) init [supplied-p])
+        keyword_name = car(head)
+        variable = car(cdr(head)) if _consp_internal(cdr(head)) else None
+        name = (keyword_name.name.upper()
+                if isinstance(keyword_name, lisptype.LispSymbol) else str(keyword_name).upper())
+        return name, variable, default_form, supplied_p
+
+    return head.name.upper(), head, default_form, supplied_p
+
+
+def _bind_keyword_parameters(parsed, trailing, func_env, eval_fn):
+    """Bind a user lambda list's `&key` parameters from the keyword region
+    (CLHS 3.4.1.4, 3.5.1.5).
+
+    `trailing` is every argument after the required and &optional ones -- the
+    whole keyword region, decided by the lambda list rather than guessed from
+    the argument values. Within it the standard applies in full: an odd number
+    of arguments is a PROGRAM-ERROR, the *leftmost* pair wins for a repeated
+    keyword, and a keyword the lambda list does not name is a PROGRAM-ERROR
+    unless `&allow-other-keys` was declared or `:ALLOW-OTHER-KEYS` is true in
+    the call itself.
+
+    This mirrors `evaluation_core._split_declared_keywords`, which applies the
+    same section of the standard to a *builtin's* Python signature. The two
+    cannot be one function -- one reads a Lisp lambda list and binds into an
+    environment, the other reads a Python signature and builds a kwargs dict --
+    but they must agree, and this is the copy that did not.
+    """
+    keyword_params = parsed['keyword']
+    allow_other_keys = bool(parsed.get('allow_other_keys'))
+
+    specs = [_keyword_param_parts(spec) for spec in keyword_params]
+
+    # Every parameter starts at its default; a supplied argument overwrites it.
+    for name, variable, default_form, supplied_p in specs:
+        if variable is None:
+            continue
+        if default_form is not None:
+            func_env.add_variable(variable, eval_fn(default_form, func_env))
+        else:
+            func_env.add_variable(variable, lisptype.NIL)
+        if supplied_p is not None:
+            func_env.add_variable(supplied_p, lisptype.NIL)
+
+    if len(trailing) % 2:
+        raise lisptype.LispProgramError(
+            f"odd number of keyword arguments: {trailing[-1]!r} has no value")
+
+    pairs = []
+    for i in range(0, len(trailing), 2):
+        key = trailing[i]
+        if not lisptype.is_symbol(key) or key is lisptype.NIL:
+            raise lisptype.LispProgramError(
+                f"{key!r} is not a valid keyword argument name")
+        pairs.append((key.name.upper(), trailing[i + 1]))
+
+    # CLHS 3.4.1.4.1: the leftmost :ALLOW-OTHER-KEYS pair governs.
+    for name, value in pairs:
+        if name == 'ALLOW-OTHER-KEYS':
+            allow_other_keys = allow_other_keys or lisptype.is_truthy(value)
+            break
+
+    by_name = {}
+    for name, variable, _default, supplied_p in specs:
+        by_name.setdefault(name, (variable, supplied_p))
+
+    seen = set()
+    for name, value in pairs:
+        if name in seen:
+            # Leftmost pair wins for a repeated keyword.
+            continue
+        seen.add(name)
+        if name in by_name:
+            variable, supplied_p = by_name[name]
+            if variable is not None:
+                func_env.add_variable(variable, value)
+            if supplied_p is not None:
+                func_env.add_variable(supplied_p, lisptype.T)
+        elif name == 'ALLOW-OTHER-KEYS':
+            continue
+        elif not allow_other_keys:
+            raise lisptype.LispProgramError(
+                f"unrecognized keyword argument: {name}")
+
+
 def _bind_ordinary_lambda_list_tail(parsed, call_args, arg_index, func_env, eval_fn):
     """Bind &optional/&rest/&key/&aux parameters (CLHS 3.4.1) into `func_env`
     from `call_args`, starting at `arg_index` -- i.e. after any required
@@ -876,27 +1038,29 @@ def _bind_ordinary_lambda_list_tail(parsed, call_args, arg_index, func_env, eval
             if supplied_p is not None:
                 func_env.add_variable(supplied_p, lisptype.NIL)
 
-    # Collect remaining positional arguments for &rest
-    remaining_positional = []
+    # From here on, `arg_index` is the start of the *keyword region*: CLHS
+    # 3.4.1 puts it immediately after the required and &optional parameters,
+    # and that is a property of the lambda list, not of what the arguments
+    # happen to look like. This code used to scan the arguments for the first
+    # keyword-shaped value instead, which got both halves wrong:
+    #
+    #   * `&rest` received only the values *before* that scan stopped, so
+    #     `(defun g (a &rest args) ...)` called as `(g 1 :b 2)` bound ARGS to
+    #     NIL. CLHS is explicit that &rest gets *all* the remaining arguments,
+    #     the ones the &key parameters also consume included -- which is the
+    #     whole point of the `&rest args &key ...` idiom the ANSI suite's own
+    #     helpers are written in (`load-file-test` forwards its ARGS to LOAD,
+    #     so LOAD never saw a single `:verbose`/`:print` argument).
+    #   * a non-keyword value in the keyword region silently became a
+    #     positional argument instead of the PROGRAM-ERROR CLHS 3.5.1.5 asks
+    #     for -- the same defect `LambdaListShape` was introduced to remove on
+    #     the builtin side, here in the user-lambda-list copy.
+    trailing = list(call_args[arg_index:])
 
-    # Find where keyword arguments start
-    keyword_start = arg_index
-    for i in range(arg_index, len(call_args)):
-        if isinstance(call_args[i], lisptype.lispKeyword):
-            keyword_start = i
-            break
-        remaining_positional.append(call_args[i])
-        keyword_start = i + 1
-
-    # Bind &rest parameter if present
     if rest_param:
-        # Rest gets all remaining positional args as a list
-        if remaining_positional:
-            rest_list = lisptype.NIL
-            for item in reversed(remaining_positional):
-                rest_list = lisptype.lispCons(item, rest_list)
-        else:
-            rest_list = lisptype.NIL
+        rest_list = lisptype.NIL
+        for item in reversed(trailing):
+            rest_list = lisptype.lispCons(item, rest_list)
 
         # Support destructuring rest spec: either a symbol or a cons
         if isinstance(rest_param, lisptype.LispSymbol):
@@ -921,60 +1085,8 @@ def _bind_ordinary_lambda_list_tail(parsed, call_args, arg_index, func_env, eval
                 # If tail isn't a symbol, bind the whole rest_list
                 func_env.add_variable(rest_param, rest_list)
 
-    # Bind keyword parameters
-    # First, initialize all keyword params to their defaults and supplied-p to NIL
-    for param_spec in keyword_params:
-        if _consp_internal(param_spec):
-            param = car(param_spec)
-            rest = cdr(param_spec)
-            default_form = car(rest) if _consp_internal(rest) else None
-            # Check for supplied-p parameter (third element)
-            rest2 = cdr(rest) if _consp_internal(rest) else None
-            supplied_p = car(rest2) if _consp_internal(rest2) else None
-        else:
-            param = param_spec
-            default_form = None
-            supplied_p = None
-
-        # Default value
-        if default_form is not None:
-            default_value = eval_fn(default_form, func_env)
-            func_env.add_variable(param, default_value)
-        else:
-            func_env.add_variable(param, lisptype.NIL)
-
-        # Initialize supplied-p to NIL (not supplied yet)
-        if supplied_p is not None:
-            func_env.add_variable(supplied_p, lisptype.NIL)
-
-    # Now process actual keyword arguments from the call
-    i = keyword_start
-    while i < len(call_args) - 1:
-        key = call_args[i]
-        value = call_args[i + 1]
-
-        if isinstance(key, lisptype.lispKeyword):
-            key_name = key.name.upper()
-            # Find matching parameter
-            for param_spec in keyword_params:
-                if _consp_internal(param_spec):
-                    param = car(param_spec)
-                    rest = cdr(param_spec)
-                    rest2 = cdr(rest) if _consp_internal(rest) else None
-                    supplied_p = car(rest2) if _consp_internal(rest2) else None
-                else:
-                    param = param_spec
-                    supplied_p = None
-
-                if isinstance(param, lisptype.LispSymbol) and param.name.upper() == key_name:
-                    func_env.add_variable(param, value)
-                    # Set supplied-p to T when keyword is provided
-                    if supplied_p is not None:
-                        func_env.add_variable(supplied_p, lisptype.T)
-                    break
-            i += 2
-        else:
-            i += 1
+    if keyword_params or parsed.get('allow_other_keys'):
+        _bind_keyword_parameters(parsed, trailing, func_env, eval_fn)
 
     # Bind &aux parameters
     for param_spec in aux_params:

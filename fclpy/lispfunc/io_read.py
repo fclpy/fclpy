@@ -337,52 +337,34 @@ def read_delimited_list(char, stream=None, recursive_p=None):
 
 
 @_registry.cl_function('READ-FROM-STRING')
-def read_from_string(string, eof_error_p=True, eof_value=None, start=0, end=None, preserve_whitespace=None):
-    """READ-FROM-STRING: Parse first form from substring.
-    
-    Returns the first Lisp object parsed from STRING[START:END].
-    Returns two values: the object read and the position where reading stopped.
+def read_from_string(string, eof_error_p=True, eof_value=None, *,
+                     start=0, end=None, preserve_whitespace=None):
+    """READ-FROM-STRING: read one form from `string` (CLHS 23.2).
+
+    CLHS defines this as reading "as if" from a string input stream, so that
+    is literally how it is implemented: a `StringInputStream` over the
+    bounding indices, read through `_read_via_reader` -- the same body READ
+    uses. It had its own copy of that plumbing (build an `io.StringIO`, build
+    a reader, call `read_1`), and the copy differed in two ways that mattered:
+
+    * `io.StringIO(substring)` raised ``TypeError: initial_value must be str
+      or None, not LispString`` for a Lisp string, because slicing a
+      `LispString` yields another `LispString`. Every `(read-from-string s)`
+      on a string that had come from the reader was therefore a Python
+      exception surfacing as the form's value.
+    * it returned one value where CLHS requires two -- the object and the
+      index reading stopped at.
     """
-    import io as _io
-    from fclpy import lispreader
-    from fclpy.readtable import get_current_readtable
-    
-    if end is None:
-        end = len(string)
-    
-    substring = string[start:end]
-    
-    if not substring.strip():
-        if eof_error_p:
-            raise lisptype.LispEndOfFileError(None, "READ-FROM-STRING: empty string")
-        return eof_value
-    
-    try:
-        # Create a stream from the substring
-        string_io = _io.StringIO(substring)
-        stream = lispreader.LispStream(string_io)
-        
-        # Create reader using centralized readtable
-        readtable = get_current_readtable()
-        reader = lispreader.LispReader(readtable.get_macro_character, stream)
-        
-        # Read one expression
-        result = reader.read_1()
-        
-        if result is None:
-            if eof_error_p:
-                raise lisptype.LispEndOfFileError(None, "READ-FROM-STRING: unexpected EOF")
-            return eof_value
-        
-        # Return the parsed object
-        # Note: In full CL, this returns multiple values (object, position)
-        # For now we just return the object
-        return result
-        
-    except EOFError:
-        if eof_error_p:
-            raise lisptype.LispEndOfFileError(None, "READ-FROM-STRING: unexpected EOF")
-        return eof_value
+    from .streams import StringInputStream
+
+    text = string if isinstance(string, str) else str(string)
+    stop = len(text) if end is None or end is lisptype.NIL else int(end)
+    begin = 0 if start is None or start is lisptype.NIL else int(start)
+
+    stream = StringInputStream(text, begin, stop)
+    result = _read_via_reader(stream, eof_error_p, eof_value,
+                              "READ-FROM-STRING")
+    return lisptype.MultipleValues(result, begin + stream.position)
 
 
 @_registry.cl_function('READ-PRESERVING-WHITESPACE')

@@ -128,7 +128,12 @@ def eval_catch(form, env):
     
     # Evaluate the tag form
     tag = eval(tag_form, env)
-    
+
+    # Record the catcher as outstanding for the extent of the body, so THROW
+    # can tell "no catcher for this tag" (a CONTROL-ERROR) from "a catcher
+    # further out" (an ordinary transfer). See state.catch_tags.
+    import fclpy.state as state
+    state.catch_tags.append(tag)
     try:
         # Evaluate body forms in sequence
         result = lisptype.NIL
@@ -138,15 +143,20 @@ def eval_catch(form, env):
             current = cdr(current)
         return result
     except ThrowException as e:
-        # Check if tag matches
-        if e.tag == tag or (isinstance(e.tag, lisptype.LispSymbol) and 
-                           isinstance(tag, lisptype.LispSymbol) and
-                           e.tag.name == tag.name):
+        if _tags_match(e.tag, tag):
             # Caught! Return the thrown value
             return e.value
-        else:
-            # Not for us, re-raise for outer catch
-            raise
+        # Not for us, re-raise for outer catch
+        raise
+    finally:
+        # Remove *this* catcher, by identity, rather than popping blindly: a
+        # non-local exit out of the body may have left inner catchers on the
+        # stack (their own `finally` clauses run, but an exception raised
+        # inside a `finally` elsewhere could still skip one).
+        for index in range(len(state.catch_tags) - 1, -1, -1):
+            if state.catch_tags[index] is tag:
+                del state.catch_tags[index:]
+                break
 
 
 def eval_throw(form, env):
@@ -171,9 +181,37 @@ def eval_throw(form, env):
     # Evaluate both tag and value
     tag = eval(tag_form, env)
     value = eval(value_form, env)
-    
-    # Raise exception
+
+    # CLHS THROW: "If there is no outstanding catcher whose tag is EQ to tag,
+    # no unwinding is done and an error of type CONTROL-ERROR is signaled."
+    # Signalling it here, before raising, is what keeps an uncaught throw
+    # inside the language: it used to leave the evaluator as a bare Python
+    # `ThrowException`, which matches no handler clause and therefore aborted
+    # whatever was running the code instead of failing it.
+    import fclpy.state as state
+    if not any(_tags_match(tag, outstanding) for outstanding in state.catch_tags):
+        from .evaluation_conditions import signal_error_object
+        return signal_error_object(lisptype.ControlError(
+            message=f"attempt to THROW to a tag that does not exist: {tag}"))
+
     raise ThrowException(tag, value)
+
+
+def _tags_match(thrown, established):
+    """Whether a THROW of `thrown` is caught by a CATCH of `established`.
+
+    CLHS 5.2 says the comparison is EQ. The name fallback is this
+    implementation's, and it is needed while a symbol can still reach here as
+    a freshly built `LispSymbol` rather than an interned one; it is the one
+    place the comparison is written, so CATCH and THROW cannot disagree about
+    which tags match -- and disagreeing is what makes a throw either
+    uncatchable or caught by the wrong frame.
+    """
+    if thrown is established or thrown == established:
+        return True
+    return (isinstance(thrown, lisptype.LispSymbol)
+            and isinstance(established, lisptype.LispSymbol)
+            and thrown.name == established.name)
 
 
 def eval_unwind_protect(form, env):

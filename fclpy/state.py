@@ -8,7 +8,11 @@ not import other fclpy modules that depend on it.
 # Package registry: mapping name -> Package (populated by lisptype.make_package)
 packages = {}
 
-# Current package (set by in-package or initialization code)
+# Current package -- a *mirror* of `*PACKAGE*`, not a second home for it.
+# `binding.BindingFrame._mirror_package` keeps it in step when a binding form
+# binds `*PACKAGE*`; read it through `current_package_value()` below, never
+# directly, because a plain SETQ of `*PACKAGE*` writes the variable's value
+# cell and does not touch this.
 current_package = None
 
 # Environment object (set by lispenv during setup)
@@ -35,9 +39,57 @@ restart_stack = []
 # forms in lispfunc/evaluation_conditions.py; walked by signal_condition().
 handler_stack = []
 
+# The tags of the CATCH forms currently outstanding, innermost last (CLHS 5.2).
+#
+# THROW needs this to answer the one question the standard asks of it before it
+# transfers control: "if there is no outstanding catcher whose tag is EQ to the
+# tag argument, an error of type CONTROL-ERROR is signaled". Without it THROW
+# raised its `ThrowException` unconditionally and an uncaught throw propagated
+# all the way out of the evaluator as a **Python** exception -- which no
+# handler can match, so it escaped `do-tests` and aborted the whole ANSI run
+# rather than failing one test. `#.(throw 'foo 1)` inside a READ is exactly
+# that shape.
+#
+# Pushed and popped by eval_catch for the dynamic extent of its body, so the
+# stack is a record of what is *outstanding*, not of what is lexically
+# enclosing -- a THROW from inside a function called by the CATCH body counts,
+# and one from a closure invoked after the CATCH returned does not.
+catch_tags = []
+
 # PPRINT-LOGICAL-BLOCK frame stack (CLHS 22.2.2), innermost last. Each entry
 # is an io_write.PPrintFrame; PPRINT-POP and PPRINT-EXIT-IF-LIST-EXHAUSTED
 # consult the top one, and *PRINT-LEVEL* nesting depth is this stack's length
 # at entry, so both live here rather than as a scalar counter one call could
 # forget to restore on a non-local exit.
 pprint_stack = []
+
+def current_package_value():
+    """The current package: the value of `*PACKAGE*` (CLHS 11.1.2.1).
+
+    The one resolver. `*PACKAGE*` is the authority and `current_package` above
+    only mirrors it, so the variable is read first -- through the environment
+    chain, then the symbol's value cell, which is where a proclaimed special's
+    binding and any SETQ of it both land.
+
+    This existed four times over, each copy reading `state.current_package`
+    *only*: in `readtable._read_symbol`, in `lispreader._read_symbol`, in
+    `reader.LispReader.__init__` and in `utilities_symbols.get_current_package`.
+    Because the mirror is only written when a binding form binds `*PACKAGE*`,
+    a plain ``(setq *package* (find-package "FOO"))`` -- which is exactly what
+    a loaded file does, and what `load.15a` tests -- changed the variable and
+    left every one of those readers interning into the old package.
+    """
+    import fclpy.lisptype as lisptype
+
+    symbol = lisptype.COMMON_LISP_PACKAGE.intern_symbol('*PACKAGE*')
+    env = current_environment
+    if env is not None and env.has_variable(symbol):
+        package = env.find_variable(symbol)
+        if isinstance(package, lisptype.Package):
+            return package
+    package = getattr(symbol, 'value', None)
+    if isinstance(package, lisptype.Package):
+        return package
+    if isinstance(current_package, lisptype.Package):
+        return current_package
+    return lisptype.COMMON_LISP_USER_PACKAGE

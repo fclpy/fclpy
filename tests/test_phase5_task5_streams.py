@@ -207,9 +207,16 @@ class TestOpenFile:
             os.unlink(fname)
     
     def test_open_nonexistent_file_error(self):
-        """Test error on opening nonexistent file."""
-        with pytest.raises(FileNotFoundError):
+        """OPEN signals a FILE-ERROR for a missing file (CLHS OPEN).
+
+        It used to raise Python's `FileNotFoundError`, which is not a
+        condition: no HANDLER-CASE clause matched it, so it surfaced as the
+        *value* of the form instead of being handled.
+        """
+        from fclpy.lispfunc.evaluation_core import ConditionException
+        with pytest.raises(ConditionException) as excinfo:
             open_file('/nonexistent/path/file.txt', direction='input')
+        assert isinstance(excinfo.value.condition, lisptype.FileError)
     
     def test_open_existing_file_error(self):
         """Test error on opening existing file for output."""
@@ -217,8 +224,10 @@ class TestOpenFile:
             fname = f.name
         
         try:
-            with pytest.raises(FileExistsError):
+            from fclpy.lispfunc.evaluation_core import ConditionException
+            with pytest.raises(ConditionException) as excinfo:
                 open_file(fname, direction='output', if_exists='error')
+            assert isinstance(excinfo.value.condition, lisptype.FileError)
         finally:
             os.unlink(fname)
     

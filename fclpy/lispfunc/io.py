@@ -48,7 +48,7 @@ __all__ = [
     'truename',
     'open_fn', 'close_fn', 'probe_file', 'delete_file', 'rename_file',
     'file_author', 'file_length', 'file_position', 'file_string_length',
-    'file_write_date', 'compile_file', 'compile_file_pathname',
+    'file_write_date',
     'stream_element_type', 'stream_external_format',
     'simple_condition_format_arguments', 'simple_condition_format_control',
     'end_of_file', 'file_error', 'file_error_pathname',
