@@ -24,13 +24,12 @@ class TestClassDefinition:
         slots = [lisptype.LispSymbol('NAME')]
         
         result = lispfunc.defclass(name, [], slots)
-        
-        # DEFCLASS returns the class name
-        assert result is name
-        
-        # Class should be registered
+
+        # DEFCLASS returns the new class object (CLHS 7.7 defclass, Values),
+        # not its name -- unlike DEFUN/DEFVAR, which return the name.
         cls = classes.find_class('PERSON')
         assert cls is not None
+        assert result is cls
         assert cls.name is name
     
     def test_defclass_with_slots(self):

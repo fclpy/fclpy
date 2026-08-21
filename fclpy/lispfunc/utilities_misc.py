@@ -33,7 +33,6 @@ from .misc_clos import (
     update_instance_for_different_class,
     update_instance_for_redefined_class,
     class_of,
-    class_name,
     change_class,
     built_in_class,
     standard_class,
@@ -88,7 +87,7 @@ from .misc_packages import (
     macroexpand_1,
 )
 
-from .classes import defclass
+from .classes import defclass, class_name
 
 from .arrays import (
     fill_pointer,

@@ -179,8 +179,13 @@ def defclass(name, direct_superclasses=None, slots=None, **options):
 
     _define_slot_accessors(lisp_class, slot_defs, definition_env)
 
-    # Per expected runtime behavior, DEFCLASS returns the class name symbol
-    return name
+    # CLHS 7.7 defclass, Values: "new-class -- the new class object", not
+    # its name (unlike DEFUN/DEFVAR, which return the name being defined).
+    # `find-class.lsp`'s FIND-CLASS.15/.16/.17/.18/.19/.20/.21 all pin this:
+    # each does `(eqt (eval '(defclass ...)) (find-class 'name))`, which a
+    # returned symbol can never satisfy since FIND-CLASS itself always
+    # answers the class object.
+    return lisp_class
 
 
 def _define_slot_accessors(lisp_class, slot_defs, definition_env):
@@ -316,7 +321,9 @@ def class_name(lisp_class):
     if isinstance(lisp_class, lisptype.LispSymbol) and lisp_class.name.upper() == 'T':
         return lisptype.T
     if not isinstance(lisp_class, classes.LispClass):
-        raise TypeError(f"Expected a class, got {lisp_class}")
+        raise lisptype.LispTypeError(
+            f"Expected a class, got {lisp_class!r}",
+            expected_type='CLASS', actual_value=lisp_class)
     return lisp_class.name
 
 
@@ -327,7 +334,9 @@ def class_direct_slots(lisp_class):
     if isinstance(lisp_class, lisptype.LispSymbol) and lisp_class.name.upper() == 'T':
         return []
     if not isinstance(lisp_class, classes.LispClass):
-        raise TypeError(f"Expected a class, got {lisp_class}")
+        raise lisptype.LispTypeError(
+            f"Expected a class, got {lisp_class!r}",
+            expected_type='CLASS', actual_value=lisp_class)
     
     # Return as a list of slot names
     return [slot.name for slot in lisp_class.direct_slots]
@@ -340,7 +349,9 @@ def class_slots(lisp_class):
     if isinstance(lisp_class, lisptype.LispSymbol) and lisp_class.name.upper() == 'T':
         return []
     if not isinstance(lisp_class, classes.LispClass):
-        raise TypeError(f"Expected a class, got {lisp_class}")
+        raise lisptype.LispTypeError(
+            f"Expected a class, got {lisp_class!r}",
+            expected_type='CLASS', actual_value=lisp_class)
     
     # Return as a list of slot names
     all_slots = lisp_class.get_all_slots()
@@ -354,7 +365,9 @@ def class_superclasses(lisp_class):
     if isinstance(lisp_class, lisptype.LispSymbol) and lisp_class.name.upper() == 'T':
         return lisptype.NIL
     if not isinstance(lisp_class, classes.LispClass):
-        raise TypeError(f"Expected a class, got {lisp_class}")
+        raise lisptype.LispTypeError(
+            f"Expected a class, got {lisp_class!r}",
+            expected_type='CLASS', actual_value=lisp_class)
     
     # Build a Lisp list from the superclasses
     result = lisptype.NIL

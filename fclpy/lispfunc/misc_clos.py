@@ -400,12 +400,10 @@ def class_of(object):
     return type(object)
 
 
-@_registry.cl_function('CLASS-NAME')
-def class_name(class_obj):
-    """Return the class name symbol where possible."""
-    if isinstance(class_obj, classes.LispClass):
-        return class_obj.name
-    return getattr(class_obj, '__name__', str(class_obj))
+# CLASS-NAME lives in `classes.py` (lispfunc) -- the one place, since it
+# raises a proper TYPE-ERROR for a non-class argument rather than silently
+# falling back to `str()` (standing rule 2/3: two registrations of the same
+# Lisp name, import order silently picking the winner).
 
 
 @_registry.cl_function('CHANGE-CLASS')

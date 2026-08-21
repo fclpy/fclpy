@@ -221,7 +221,15 @@ class ClassRegistry:
     def find_class(self, name: str) -> Optional[LispClass]:
         """Find a class by name."""
         return self._classes.get(name)
-    
+
+    def unregister_class_as(self, name: str) -> None:
+        """Make `name` no longer denote a class (CLHS `(setf find-class)`,
+        new-value NIL). A no-op if `name` was not registered -- the
+        operation's own postcondition, `(find-class name nil)` is NIL, is
+        already true either way.
+        """
+        self._classes.pop(name, None)
+
     def get_class_or_error(self, name: str) -> LispClass:
         """Find a class by name or raise error."""
         cls = self.find_class(name)
@@ -251,6 +259,15 @@ def register_class_as(name, cls: LispClass) -> LispClass:
     if isinstance(name, LispSymbol):
         name = name.name
     return _class_registry.register_class_as(name, cls)
+
+
+def unregister_class_as(name) -> None:
+    """Make `name` no longer denote a class -- see `ClassRegistry.unregister_class_as`.
+    `name` may be a symbol or a plain string.
+    """
+    if isinstance(name, LispSymbol):
+        name = name.name
+    _class_registry.unregister_class_as(name)
 
 
 def find_class(name: str) -> Optional[LispClass]:

@@ -9,7 +9,7 @@ import logging
 import fclpy.state as state
 import fclpy.lisptype as lisptype
 import fclpy.lispreader as lispreader
-from .core import car, cdr, cons, _consp_internal, _atom_internal
+from .core import car, cdr, cons, _consp_internal, _atom_internal, _null_internal
 import fclpy.lispenv as lispenv  # environment setup utilities
 from fclpy.lisptype import resolve_environment, LispEnvironmentError
 import inspect
@@ -1090,8 +1090,12 @@ def eval(form, env=None):
                                 if isinstance(place_name, lisptype.LispSymbol):
                                     if isinstance(result, classes.LispClass):
                                         classes.register_class_as(place_name, result)
+                                    elif _null_internal(result):
+                                        # CLHS 7.7: new-value NIL means `place_name`
+                                        # no longer denotes a class at all.
+                                        classes.unregister_class_as(place_name)
                                     else:
-                                        raise lisptype.LispError("SETF FIND-CLASS: value must be a class")
+                                        raise lisptype.LispError("SETF FIND-CLASS: value must be a class or NIL")
                                 else:
                                     raise lisptype.LispError("SETF FIND-CLASS: place name must be a symbol")
                             elif op_name == 'MACRO-FUNCTION':

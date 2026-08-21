@@ -1422,14 +1422,14 @@ def _create_macro_function(macro_name, lambda_list, body, env,
 
             if supplied_p is not None:
                 macro_env.add_variable(supplied_p, lisptype.NIL)
-        
+
         # Process actual keyword arguments
         keyword_start = arg_idx
         i = keyword_start
         while i < len(call_args) - 1:
             key = call_args[i]
             value = call_args[i + 1]
-            
+
             if isinstance(key, lisptype.lispKeyword):
                 key_name = key.name.upper()
                 for param_spec in keyword_params:
@@ -3358,10 +3358,16 @@ def _place_accessor(place_form, env):
             def _find_class_setter(v):
                 # (SETF/ROTATEF/... (FIND-CLASS name) class) registers `v`
                 # under `name` as an alias -- CLHS: it does not rename the
-                # class, it adds another name for it.
-                if not isinstance(v, _classes.LispClass):
-                    raise lisptype.LispError("FIND-CLASS place: value must be a class")
-                _classes.register_class_as(place_name, v)
+                # class, it adds another name for it. `v` of NIL instead
+                # means `place_name` no longer denotes a class at all
+                # (CLHS 7.7) -- the other half of this place, alongside
+                # `evaluation_core.py`'s copy of the same two branches.
+                if isinstance(v, _classes.LispClass):
+                    _classes.register_class_as(place_name, v)
+                elif _null_internal(v):
+                    _classes.unregister_class_as(place_name)
+                else:
+                    raise lisptype.LispError("FIND-CLASS place: value must be a class or NIL")
                 return v
 
             return (_find_class_getter, _find_class_setter)
@@ -3849,8 +3855,11 @@ def eval_defclass(form, env):
         definition_env=env,
         default_initargs=default_initargs,
     )
-    
-    return class_name
+
+    # CLHS 7.7: DEFCLASS returns the class object `defclass()` just built
+    # and registered, not the name -- see the fuller note at its own
+    # `return` statement.
+    return result
 
 
 def _resolve_specializer(param_type, env):
