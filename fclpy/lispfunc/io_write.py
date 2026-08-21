@@ -1,5 +1,7 @@
 """I/O write operations - stream output, printing, pathnames, and file operations."""
 
+import re
+
 import fclpy.lisptype as lisptype
 from . import registry as _registry
 from .streams import open_file as open_fn, close_stream as close_fn, open_stream_p
@@ -1295,6 +1297,278 @@ def _roman_numeral(n, table):
     return ''.join(parts)
 
 
+# === FORMAT's pretty-printing directives: ~<...~:>, ~_, ~I (CLHS 22.3.5) ===
+#
+# `~_`/`~I` and a `~<...~:>` logical block need to be resolved together,
+# against a margin, only once the *whole* body between an opening and closing
+# delimiter is known -- exactly the problem `_format_process_cursor` cannot
+# see, since it emits text left-to-right as it goes. Rather than a second,
+# parallel control-string walker (a duplicate of `_format_process_cursor`,
+# standing rule 3), a conditional newline or indent directive is left behind
+# as a sentinel *tag string* in the ordinary returned string, and a run of
+# literal control-string spaces is bracketed the same way. Both kinds of
+# marker ride unchanged through every existing consumer (`~(...~)`,
+# `~[...~]`, `~{...~}`, `~<...~>` justification, `~?`) exactly like any
+# other text, and are resolved -- or, if no `~<...~:>` ever claims them,
+# stripped -- in exactly one place: `_resolve_pretty_body`, called from the
+# `<` directive itself and once more at the true top level
+# (`_format_process_with_tail`) for a bare `~_`/`~I` with no enclosing block.
+#
+# **These must not be single reserved codepoints.** A first version used one
+# private-use-area character per marker, on the assumption that a PUA
+# codepoint could never be *data*. `CHAR-CODE-LIMIT` here is 1114112 -- the
+# full Unicode range, surrogates included (`(code-char 55296)` answers a
+# character, not an error) -- so `FORMAT.C.1A`, which calls `~C` on every one
+# of the first 65536 codepoints, walks straight through the reserved block
+# and corrupted it: the character *was* the marker, so the top-level cleanup
+# silently deleted it from the output. `PRINT.STRING.RANDOM.1` hit the same
+# defect from a random codepoint. A long, specific multi-character tag has
+# the same practical safety a canary string does elsewhere: unlike a single
+# codepoint, no ansi-test literal or per-character/per-codepoint random test
+# can produce it by coincidence, only a real `~_`/`~I`/logical-block-body
+# path can ever write one.
+_PP_BREAK = {
+    'linear': '\x01\x02FCLPY:PPBREAK:LINEAR\x03',
+    'fill': '\x01\x02FCLPY:PPBREAK:FILL\x03',
+    'miser': '\x01\x02FCLPY:PPBREAK:MISER\x03',
+    'mandatory': '\x01\x02FCLPY:PPBREAK:MANDATORY\x03',
+}
+_PP_BREAK_KIND = {v: k for k, v in _PP_BREAK.items()}
+_PP_INDENT_OPEN = '\x01\x02FCLPY:PPINDENT:'
+_PP_INDENT_CLOSE = '\x03'
+_PP_INDENT_RE = re.compile(re.escape(_PP_INDENT_OPEN) + r'([BC])(-?\d+)' + re.escape(_PP_INDENT_CLOSE))
+_PP_LIT_SPACE_OPEN = '\x01\x02FCLPY:PPSPACEOPEN\x03'
+_PP_LIT_SPACE_CLOSE = '\x01\x02FCLPY:PPSPACECLOSE\x03'
+_PP_LIT_SPACE_RUN_RE = re.compile(re.escape(_PP_LIT_SPACE_OPEN) + ' +' + re.escape(_PP_LIT_SPACE_CLOSE))
+# Any not-yet-resolved break or indent-open tag (not the literal-space
+# brackets, which need no margin/indent resolution -- just stripping).
+_PP_ANY_BREAK_OR_INDENT_RE = re.compile(
+    '|'.join(re.escape(tag) for tag in list(_PP_BREAK.values()) + [_PP_INDENT_OPEN]))
+_PP_ANY_SENTINEL_RE = re.compile(
+    '|'.join(re.escape(tag) for tag in list(_PP_BREAK.values())
+             + [_PP_INDENT_OPEN, _PP_LIT_SPACE_OPEN, _PP_LIT_SPACE_CLOSE]))
+# One combined pattern for `_pp_tokenize`: each break tag verbatim, or the
+# indent tag with its payload captured.
+_PP_TOKEN_RE = re.compile(
+    '(?:' + '|'.join(re.escape(tag) for tag in _PP_BREAK.values()) + ')'
+    + '|' + re.escape(_PP_INDENT_OPEN) + r'[BC]-?\d+' + re.escape(_PP_INDENT_CLOSE))
+
+
+def _pp_indent_sentinel(relative_to, n):
+    return _PP_INDENT_OPEN + relative_to + str(n) + _PP_INDENT_CLOSE
+
+
+def _pp_strip_lit_space(text):
+    """Remove the literal-space bracketing, leaving the spaces themselves."""
+    return text.replace(_PP_LIT_SPACE_OPEN, '').replace(_PP_LIT_SPACE_CLOSE, '')
+
+
+def _pp_visible_width(text):
+    """Length of `text` as printed, ignoring any not-yet-resolved sentinels.
+
+    Used only to estimate the column a `~<...~:>` starts at from `emitted`,
+    the same best-effort, control-string-local column `~&` already uses
+    (plan.md's recorded `~&`/FRESH-LINE gap) -- not a claim of a real,
+    stream-wide column.
+    """
+    text = _PP_INDENT_RE.sub('', text)
+    text = _PP_ANY_SENTINEL_RE.sub('', text)
+    return len(text)
+
+
+def _pp_tokenize(text):
+    """Split resolved-argument text into literal runs, breaks and indents.
+
+    Matches whole sentinel *tags*, not single characters -- see the module
+    note above on why a single reserved codepoint was not safe.
+    """
+    tokens = []
+    pos = 0
+    for m in _PP_TOKEN_RE.finditer(text):
+        if m.start() > pos:
+            tokens.append(('text', text[pos:m.start()]))
+        matched = m.group(0)
+        if matched in _PP_BREAK_KIND:
+            tokens.append(('break', _PP_BREAK_KIND[matched]))
+        else:
+            im = _PP_INDENT_RE.match(matched)
+            tokens.append(('indent', 'block' if im.group(1) == 'B' else 'current',
+                           int(im.group(2))))
+        pos = m.end()
+    if pos < len(text):
+        tokens.append(('text', text[pos:]))
+    return tokens
+
+
+def _pp_flat_width(tokens):
+    """Width of `tokens` if every break stayed a space (or nothing).
+
+    `None` means "cannot be one line regardless of margin": a `:mandatory`
+    break, or a nested block that already decided (during its own, earlier
+    resolution) to break, leaving a real newline in one of its text tokens.
+    """
+    width = 0
+    for kind, *rest in tokens:
+        if kind == 'text':
+            text = rest[0]
+            if '\n' in text:
+                return None
+            width += len(text)
+        elif kind == 'break' and rest[0] == 'mandatory':
+            return None
+    return width
+
+
+def _pp_render(tokens, start_col, indent_baseline, right_margin, block_fits, miser_active):
+    """Resolve `tokens`' breaks/indents into plain text (CLHS 22.2.1).
+
+    `:linear`/`:miser` break all-or-none, decided once for the whole block
+    from `block_fits`; `:fill` decides per break, from whether the material
+    up to the *next* break fits; `:mandatory` always breaks. A firing break
+    strips whitespace already queued since the last one -- the reason a
+    literal space kept in the control string before `~_` does not survive
+    into a broken line (`format.logical-block.18`'s "1\\n2\\n3", not "1 \\n2 ").
+    """
+    col = start_col
+    indent = indent_baseline
+    out = []
+
+    def lookahead(idx):
+        width = 0
+        for kind, *rest in tokens[idx + 1:]:
+            if kind == 'break':
+                break
+            if kind == 'text':
+                text = rest[0]
+                if '\n' in text:
+                    width += len(text.split('\n', 1)[0])
+                    break
+                width += len(text)
+        return width
+
+    def rstrip_pending():
+        while out:
+            if out[-1] == '':
+                out.pop()
+                continue
+            stripped = out[-1].rstrip(' ')
+            if stripped == out[-1]:
+                return
+            out[-1] = stripped
+            if not stripped:
+                out.pop()
+            return
+
+    for idx, (kind, *rest) in enumerate(tokens):
+        if kind == 'text':
+            text = rest[0]
+            if '\n' not in text:
+                out.append(text)
+                col += len(text)
+                continue
+            parts = text.split('\n')
+            for j, part in enumerate(parts):
+                out.append(part)
+                col = len(part) if j == len(parts) - 1 else 0
+        elif kind == 'indent':
+            relative_to, n = rest
+            indent = (indent_baseline + n) if relative_to == 'block' else (col + n)
+        else:  # break
+            bkind = rest[0]
+            if bkind == 'mandatory':
+                fire = True
+            elif right_margin is None:
+                fire = False
+            elif bkind == 'linear':
+                fire = not block_fits
+            elif bkind == 'miser':
+                fire = miser_active and not block_fits
+            else:  # fill
+                fire = False if block_fits else (col + lookahead(idx)) > right_margin
+            if fire:
+                rstrip_pending()
+                col = max(indent, 0)
+                out.append('\n' + ' ' * col)
+    return ''.join(out)
+
+
+def _resolve_pretty_body(body_text, start_column, prefix_text, suffix_text,
+                          per_line, auto_fill):
+    """Render one logical block's body (CLHS 22.2/22.3.5.2) and wrap it.
+
+    `auto_fill` is `~:@>`'s own effect: every run of literal control-string
+    blanks directly in the body becomes a `:fill` conditional newline too,
+    not just the explicit `~_`-family directives -- CLHS 22.3.5.2, "a
+    fill-style conditional newline is automatically inserted after each
+    group of blanks immediately contained in the body". Only *literal*
+    blanks: the space characters bracketed by `_format_process_cursor`'s
+    literal-run branch, never ones inside an argument's own printed text
+    (`format.logical-block.26`'s `~A` of the string `"1 2 3"` must not wrap).
+    """
+    if auto_fill:
+        body_text = _PP_LIT_SPACE_RUN_RE.sub(
+            lambda m: m.group(0) + _PP_BREAK['fill'], body_text)
+    body_text = _pp_strip_lit_space(body_text)
+
+    right_margin = _printer._as_count(_printer.resolve_control('*PRINT-RIGHT-MARGIN*'))
+    miser_width = _printer._as_count(_printer.resolve_control('*PRINT-MISER-WIDTH*'))
+    pretty = _printer._true(_printer.resolve_control('*PRINT-PRETTY*'))
+
+    tokens = _pp_tokenize(body_text)
+    body_col = start_column + len(prefix_text)
+
+    if pretty and right_margin is not None:
+        flat = _pp_flat_width(tokens)
+        block_fits = flat is not None and body_col + flat + len(suffix_text) <= right_margin
+        miser_active = miser_width is not None and (right_margin - body_col) < miser_width
+    else:
+        # No margin (or *print-pretty* nil) to break against: only a
+        # `:mandatory` break -- or a nested block that already broke -- is
+        # honoured, which `_pp_render` does on its own once `block_fits` is
+        # true and `right_margin` carries no fill/linear/miser decision.
+        block_fits = True
+        miser_active = False
+
+    indent_baseline = 0 if per_line else body_col
+    rendered = _pp_render(tokens, body_col, indent_baseline,
+                           right_margin if pretty else None, block_fits, miser_active)
+
+    if per_line:
+        rendered = rendered.replace('\n', '\n' + prefix_text)
+    return prefix_text + rendered + suffix_text
+
+
+#: A backstop, not a spec-accurate answer -- see `_pp_bounded_list_elements`.
+#: Deliberately much smaller than `printer.PRINT_BUDGET`: that one bounds
+#: total aggregates across a whole recursive print, this one bounds a single
+#: flat list that the `~{...~}`/`~@{...~}` consuming it re-slices per pass
+#: (quadratic in the list length), so a six-figure cap would itself take
+#: minutes on a genuinely circular argument even though it terminates.
+_PP_LIST_BUDGET = 1_000
+
+
+def _pp_bounded_list_elements(obj):
+    """The elements of a proper-or-dotted Lisp list `obj`, for a `~<...~:>`
+    logical block's local argument stream -- capped against a circular one.
+
+    Unlike `PPRINT-POP`, which checks `*PRINT-LENGTH*` once per element as
+    the body actually consumes them, `~<...~:>` decomposes its whole list
+    argument up front (CLHS 22.3.5.2's "the argument ... becomes a list of
+    arguments to be used"), before the body -- and *PRINT-LENGTH* -- ever
+    run. `*PRINT-CIRCLE*` has no shared-structure detector yet (plan.md), so
+    a genuinely circular argument here would otherwise walk forever:
+    `format.logical-block.circle.2`/`.3` hang the whole suite the same way
+    plan.md's printer/DIRECTORY incidents did, not merely fail. Capped via
+    `itertools.islice` over `list_cells` directly rather than `_pp_list`'s
+    `seq_elements`/`_format_args_list`, which fully materialize before
+    returning and so cannot be capped from the outside.
+    """
+    import itertools
+    from .sequence_protocol import list_cells
+    return [cell.car for cell in
+            itertools.islice(list_cells(obj, 'FORMAT ~<...~:>', dotted='allow'), _PP_LIST_BUDGET)]
+
+
 def _format_directive(control_string, cursor, pos, emitted=None):
     """Process a single format directive starting at pos (after ~).
 
@@ -1560,92 +1834,186 @@ def _format_directive(control_string, cursor, pos, emitted=None):
             sub_cursor = _FormatCursor(_format_args_list(fmt_args))
             result = _format_process_cursor(str(fmt_str) if fmt_str else '', sub_cursor)
         return (result, pos)
-    
+
+    elif directive == '_':
+        # ~_ - Conditional newline (CLHS 22.3.5.1), same four kinds as
+        # PPRINT-NEWLINE: no flags linear, `:` fill, `@` miser, `:@` mandatory.
+        # Resolved later, against a margin, by whichever `~<...~:>` encloses
+        # this one -- or by `_format_process_with_tail` if none does -- since
+        # only that point knows whether the surrounding material fits.
+        if colon_flag and at_flag:
+            kind = 'mandatory'
+        elif colon_flag:
+            kind = 'fill'
+        elif at_flag:
+            kind = 'miser'
+        else:
+            kind = 'linear'
+        return (_PP_BREAK[kind], pos)
+
+    elif directive == 'I':
+        # ~I - Indent (CLHS 22.3.5.3): (pprint-indent :block n), or
+        # (pprint-indent :current n) with the colon flag. Resolved alongside
+        # `~_` by the enclosing block.
+        n = params[0] if params and params[0] is not None else 0
+        return (_pp_indent_sentinel('C' if colon_flag else 'B', _lisp_number(n)), pos)
+
     elif directive == '<':
-        # ~< ... ~> - Justification/Logical block
-        # This is a complex directive for text justification and pretty printing
-        # For now, implement a simplified version that processes content between separators
-        # Find matching ~>
+        # ~<...~> is Justification (CLHS 22.3.6.2) if it ends in a plain
+        # ~>, or a Logical Block (CLHS 22.3.5.2) if it ends in ~:>/~:@> --
+        # the colon flag on the *closing* delimiter, not the opening one,
+        # decides which of the two unrelated directives this is. One scan
+        # serves both: it records each top-level ~;'s own colon/at flags
+        # (a separator can be `~;`, `~:;` or `~@;`) and, separately, the
+        # flags on whichever `~>` finally closes nesting back to 0, plus
+        # whether any *nested* pair (closing before that) was itself a
+        # colon-closed logical block -- CLHS forbids nesting one of those
+        # inside a plain justification (`format.logical-block.error.25`).
         nesting = 1
         end_pos = pos
         segments = []
-        # Whether the `~;` that *ended* each segment carried a colon. Only
-        # the first one is meaningful (see the ~:; handling below), but it
-        # is only knowable while scanning, so it is recorded per segment.
-        separator_colons = []
+        sep_flags = []
+        nested_logical_closers = []
         segment_start = pos
+        closer_colon = False
+        closer_at = False
 
         while end_pos < len(control_string) and nesting > 0:
-            if control_string[end_pos] == '~':
-                if end_pos + 1 < len(control_string):
-                    # Skip any modifiers to find directive char
-                    j = end_pos + 1
-                    while j < len(control_string) and control_string[j] in '0123456789,:#@':
-                        j += 1
-                    if j < len(control_string):
-                        next_char = control_string[j].upper()
-                        has_colon = ':' in control_string[end_pos+1:j]
-                        
-                        if next_char == '<':
-                            nesting += 1
-                            end_pos = j + 1
-                        elif next_char == '>':
-                            nesting -= 1
-                            if nesting == 0:
-                                # Found the closing ~>
-                                segments.append(control_string[segment_start:end_pos])
-                                separator_colons.append(False)
-                                end_pos = j + 1  # Position after the closing >
-                                break
-                            end_pos = j + 1
-                        elif next_char == ';' and nesting == 1:
-                            # Separator within the justification block
+            if control_string[end_pos] == '~' and end_pos + 1 < len(control_string):
+                j = end_pos + 1
+                while j < len(control_string) and control_string[j] in '0123456789,:#@':
+                    j += 1
+                if j < len(control_string):
+                    next_char = control_string[j].upper()
+                    seg_colon = ':' in control_string[end_pos + 1:j]
+                    seg_at = '@' in control_string[end_pos + 1:j]
+
+                    if next_char == '<':
+                        nesting += 1
+                        end_pos = j + 1
+                    elif next_char == '>':
+                        nesting -= 1
+                        if nesting == 0:
                             segments.append(control_string[segment_start:end_pos])
-                            separator_colons.append(has_colon)
-                            segment_start = j + 1
+                            closer_colon, closer_at = seg_colon, seg_at
                             end_pos = j + 1
-                        else:
-                            end_pos = j + 1
+                            break
+                        nested_logical_closers.append(seg_colon)
+                        end_pos = j + 1
+                    elif next_char == ';' and nesting == 1:
+                        segments.append(control_string[segment_start:end_pos])
+                        sep_flags.append((seg_colon, seg_at))
+                        segment_start = j + 1
+                        end_pos = j + 1
                     else:
-                        end_pos += 1
+                        end_pos = j + 1
                 else:
                     end_pos += 1
             else:
                 end_pos += 1
         else:
-            # If we exited the loop without finding closing ~>
             segments.append(control_string[segment_start:])
-            separator_colons.append(False)
             end_pos = len(control_string)
 
-        # CLHS 22.3.6.2: a first segment terminated by `~:;` is not content
-        # -- it is the prefix emitted only when the block has to be broken
-        # across lines. There is no line-width model here, so the block is
-        # always one line and the prefix is omitted. `has_colon` was already
-        # being computed by the scanner above and then discarded, which is
-        # why `~<pfx~:;body~>` had no defined behaviour either way.
-        if len(segments) > 1 and separator_colons[0]:
-            segments = segments[1:]
+        if not closer_colon:
+            # Justification (CLHS 22.3.6.2). A logical block cannot appear
+            # nested inside it.
+            if any(nested_logical_closers):
+                raise lisptype.LispProgramError(
+                    "FORMAT: ~<...~:> (logical block) cannot be nested "
+                    "inside ~<...~> (justification)")
 
-        # CLHS 22.3.6.2: *every* segment is output, and padding is
-        # distributed among the gaps between them so the whole reaches
-        # mincol. The previous code processed only `segments[-1]` and
-        # dropped the rest, so `~<~A~;~A~>` printed just its second
-        # argument and no justification ever happened.
-        #
-        # All segments share the outer cursor: arguments consumed inside the
-        # block must not be re-offered to directives that follow the ~>.
-        texts = []
-        for seg in segments:
-            try:
-                texts.append(_format_process_cursor(seg, cursor))
-            except _FormatEscape as esc:
-                # ~^ inside a justification abandons the remaining segments
-                # but keeps what this one produced.
-                texts.append(esc.partial)
-                break
+            # A first segment terminated by `~:;` is not content -- it is
+            # the prefix emitted only when the block has to be broken across
+            # lines. There is no line-width model for plain justification,
+            # so the block is always one line and the prefix is omitted.
+            if len(segments) > 1 and sep_flags and sep_flags[0][0]:
+                segments = segments[1:]
 
-        return (_justify(texts, params, colon_flag, at_flag), end_pos)
+            # Every segment is output, with padding distributed among the
+            # gaps so the whole reaches mincol. All segments share the outer
+            # cursor: arguments consumed inside the block must not be
+            # re-offered to directives that follow the ~>. Literal-space
+            # brackets are stripped here (not left for the top level): this
+            # branch never resolves against a margin, so `_justify`'s own
+            # width/padding math must see the real character count.
+            texts = []
+            for seg in segments:
+                try:
+                    texts.append(_pp_strip_lit_space(_format_process_cursor(seg, cursor)))
+                except _FormatEscape as esc:
+                    texts.append(_pp_strip_lit_space(esc.partial))
+                    break
+
+            return (_justify(texts, params, colon_flag, at_flag), end_pos)
+
+        # Logical block (CLHS 22.3.5.2). The body is split by top-level ~;
+        # into at most three sections: prefix ; body ; suffix. Two sections
+        # is prefix + body (suffix defaults); one section is just body
+        # (prefix and suffix both default). A first section is a per-line
+        # prefix, re-output after every line break the body causes, rather
+        # than a one-shot prefix, when its own separator carried `@`
+        # (`~@;`) -- `format.logical-block.27`'s "**" before every line.
+        n_sections = len(segments)
+        if n_sections == 1:
+            prefix_src, body_src, suffix_src, per_line = None, segments[0], None, False
+        elif n_sections == 2:
+            prefix_src, body_src, suffix_src = segments[0], segments[1], None
+            per_line = sep_flags[0][1]
+        else:
+            prefix_src, suffix_src = segments[0], segments[-1]
+            body_src = '~;'.join(segments[1:-1])
+            per_line = sep_flags[0][1]
+
+        def _check_constant_section(section, label):
+            if section is not None and '~' in section:
+                raise lisptype.LispProgramError(
+                    f"FORMAT: the {label} of ~<...~:> must be a constant "
+                    f"string, not {section!r}")
+
+        _check_constant_section(prefix_src, 'prefix')
+        _check_constant_section(suffix_src, 'suffix')
+
+        # The colon flag on the *opening* ~< supplies "(" / ")" as the
+        # prefix/suffix defaults (only when no explicit section overrode
+        # them); the at flag decides whether the object is the next single
+        # argument or the rest of them (CLHS 22.3.5.2).
+        prefix_text = prefix_src if prefix_src is not None else ('(' if colon_flag else '')
+        suffix_text = suffix_src if suffix_src is not None else (')' if colon_flag else '')
+
+        if at_flag:
+            items = cursor.remaining()
+            cursor.idx = len(cursor.args)
+        else:
+            obj = get_arg()
+            if not _listp_internal(obj):
+                # A non-list object is printed as if by WRITE, with the
+                # prefix, suffix and body all skipped entirely (CLHS
+                # 22.3.5.2 / pprint-logical-block's "atom" case --
+                # `format.logical-block.8`).
+                escape = _printer._true(_printer.resolve_control('*PRINT-ESCAPE*'))
+                return (_write_object(obj, escape=escape), end_pos)
+            items = _pp_bounded_list_elements(obj)
+
+        sub_cursor = _FormatCursor(items)
+        try:
+            body_text = _format_process_cursor(body_src, sub_cursor)
+        except _FormatEscape as esc:
+            # Within the body, ~^ acts like PPRINT-EXIT-IF-LIST-EXHAUSTED:
+            # it ends the body, not the whole enclosing control string
+            # (`format.logical-block.escape.1`/`.2`).
+            body_text = esc.partial
+
+        # ~:@> -- CLHS 22.3.5.2: "a fill-style conditional newline is
+        # automatically inserted after each group of blanks immediately
+        # contained in the body", on top of whatever `~_`-family directives
+        # the body already spelled out explicitly.
+        auto_fill = closer_colon and closer_at
+        preceding = ''.join(emitted) if emitted else ''
+        start_column = _pp_visible_width(preceding.rsplit('\n', 1)[-1])
+        return (_resolve_pretty_body(body_text, start_column, prefix_text,
+                                      suffix_text, per_line, auto_fill),
+                end_pos)
 
     elif directive == '>':
         # End of justification - should not be reached directly
@@ -2028,7 +2396,8 @@ def _format_process_cursor(control_string, cursor):
     """
     result = []
     pos = 0
-    while pos < len(control_string):
+    n = len(control_string)
+    while pos < n:
         c = control_string[pos]
         if c == '~':
             pos += 1
@@ -2043,6 +2412,19 @@ def _format_process_cursor(control_string, cursor):
                 esc.partial = ''.join(result) + esc.partial
                 raise
             result.append(output)
+        elif c == ' ':
+            # Bracket a run of *literal* control-string spaces so a
+            # `~<...~:@>` enclosing this text can later tell them apart from
+            # spaces inside an argument's own printed value (CLHS 22.3.5.2's
+            # auto-fill only wraps "blanks immediately contained in the
+            # body" -- see `_resolve_pretty_body`). Invisible outside a
+            # logical block: `_format_process_with_tail` strips the brackets
+            # from any result that never reaches one.
+            run_start = pos
+            while pos < n and control_string[pos] == ' ':
+                pos += 1
+            result.append(_PP_LIT_SPACE_OPEN + control_string[run_start:pos]
+                           + _PP_LIT_SPACE_CLOSE)
         else:
             result.append(c)
             pos += 1
@@ -2065,6 +2447,18 @@ def _format_process_with_tail(control_string, args):
         # this is the outermost frame, so the escape stops here rather than
         # escaping FORMAT as a Python exception (standing rule 2).
         result = esc.partial
+
+    # `~_`/`~I` bare at the top of a control string, with no enclosing
+    # `~<...~:>`, still resolve (CLHS restricts them only from appearing
+    # inside a plain `~<...~>` justification, not from needing one at all) --
+    # against an implicit block spanning the whole string. Every other
+    # result -- the overwhelming majority of FORMAT calls -- just needs its
+    # literal-space brackets (`_format_process_cursor`'s own bookkeeping)
+    # stripped back out.
+    if _PP_ANY_BREAK_OR_INDENT_RE.search(result):
+        result = _resolve_pretty_body(result, 0, '', '', False, False)
+    else:
+        result = _pp_strip_lit_space(result)
     return result, cursor.idx
 
 
