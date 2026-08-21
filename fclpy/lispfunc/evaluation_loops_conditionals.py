@@ -735,35 +735,56 @@ def eval_ctypecase(form, env):
 
 
 def eval_and(form, env):
-    """Evaluate AND special form."""
+    """Evaluate AND special form (CLHS 5.1).
+
+    CLHS: "If [a form] is the last form, AND returns the values returned by
+    that form, whatever they are" -- the last form's result is returned
+    exactly, not reduced to NIL/T first. Only the non-last forms use the
+    single-value truthiness test to decide whether to short-circuit.
+    `(and (values))` must answer zero values and `(and 1 (values nil 2))`
+    must answer NIL *and* 2 (AND.5/AND.8) -- checking every form's
+    truthiness, including the last, discarded the last form's real
+    value(s) whenever its primary value happened to be NIL.
+    """
     from .evaluation_core import eval
-    
+
     args = cdr(form)
-    result = lisptype.T  # AND with no arguments is T
-    
-    while _consp_internal(args):
-        result = eval(car(args), env)
+    if not _consp_internal(args):
+        return lisptype.T  # AND with no arguments is T
+
+    while True:
+        current = car(args)
+        rest = cdr(args)
+        result = eval(current, env)
+        if not _consp_internal(rest):
+            return result
         if not lisptype.is_truthy(result):
             return lisptype.NIL
-        args = cdr(args)
-    
-    return lisptype.NIL if result is None else result
+        args = rest
 
 
 def eval_or(form, env):
-    """Evaluate OR special form."""
+    """Evaluate OR special form (CLHS 5.1).
+
+    Same last-form exception as AND: the last form's value(s) are returned
+    exactly, whatever they are, rather than being reduced to NIL when its
+    primary value is falsy.
+    """
     from .evaluation_core import eval
-    
+
     args = cdr(form)
-    
-    while _consp_internal(args):
-        result = eval(car(args), env)
+    if not _consp_internal(args):
+        return lisptype.NIL  # OR with no arguments is NIL
+
+    while True:
+        current = car(args)
+        rest = cdr(args)
+        result = eval(current, env)
+        if not _consp_internal(rest):
+            return result
         if lisptype.is_truthy(result):
             return result
-        args = cdr(args)
-
-    # OR with no truthy values returns NIL, not Python None
-    return lisptype.NIL
+        args = rest
 
 
 def eval_progn(form, env):

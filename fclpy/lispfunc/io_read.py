@@ -187,19 +187,20 @@ def read_char(stream=None, eof_error_p=True, eof_value=None, recursive_p=None):
 
 @_registry.cl_function('READ-BYTE')
 def read_byte(stream, eof_error_p=True, eof_value=None):
-    """READ-BYTE (CLHS 21.2).
+    """READ-BYTE (CLHS 21.2): read one integer element from a binary stream.
 
-    fclpy's `OPEN` does not yet honour `:element-type` for a binary stream
-    (every file is opened in text mode -- plan.md C11), so there is no real
-    byte source to read from here yet; this at least resolves the stream
-    designator and honours end-of-file handling instead of unconditionally
-    returning 0.
+    `OPEN` now honours a binary `:element-type` (streams.py's
+    `_classify_element_type` records the per-element byte width and
+    signedness on the stream), so this reads exactly that many raw bytes
+    per element instead of unconditionally one -- the previous version
+    always read a single byte, which was wrong for any element type wider
+    than 8 bits (`(unsigned-byte 12)`, `(unsigned-byte 100)`, ...).
     """
     target = resolve_input_stream(stream)
-    if isinstance(target, Stream) and target.element_type not in ('character', 'base-char'):
-        raw = target.file_obj.read(1)
-        if raw:
-            return raw[0] if isinstance(raw, bytes) else ord(raw)
+    if isinstance(target, Stream) and target.binary:
+        raw = target.file_obj.read(target.byte_width)
+        if raw and len(raw) == target.byte_width:
+            return int.from_bytes(raw, 'big', signed=target.byte_signed)
     if _supplied_true(eof_error_p):
         raise lisptype.LispEndOfFileError(target, "READ-BYTE")
     return eof_value

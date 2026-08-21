@@ -1399,7 +1399,38 @@ def _create_macro_function(macro_name, lambda_list, body, env,
                 if tail_sym is not None:
                     macro_env.add_variable(tail_sym, rest_tail)
         
-        # Bind keyword parameters with defaults and supplied-p
+        # Bind &key parameters (CLHS 3.4.1.1): an init-form is evaluated, in
+        # left-to-right lambda-list order, in an environment where every
+        # *earlier* parameter -- whether defaulted or supplied -- is already
+        # bound. This used to bind every parameter to its own default value
+        # FIRST and only afterward overwrite the ones the caller actually
+        # supplied, in a separate second pass -- so a later parameter's
+        # default form referencing an earlier one always saw that earlier
+        # parameter at its own default, never at the caller's value.
+        # `_bind_keyword_parameters` (this file, used by DEFUN/LET/DO) was
+        # already fixed for exactly this shape; this is DEFMACRO/MACROLET/
+        # DEFTYPE's own separate lambda-list binder and had not been.
+        # `streams/open.lsp`'s own `def-open-output-test`/`def-open-io-test`
+        # test-generating macros are this shape --
+        # `(&rest keyargs &key (element-type 'character) (build-form (cond
+        # ((subtypep element-type 'integer) ...) ...)) ...)` -- so
+        # `(def-open-output-test ... :element-type '(unsigned-byte 12))`
+        # built its write loop against ELEMENT-TYPE's *default* (CHARACTER),
+        # not the type the caller actually passed, regardless of what
+        # ELEMENT-TYPE itself later read as.
+        keyword_start = arg_idx
+        supplied = {}
+        i = keyword_start
+        while i < len(call_args) - 1:
+            key = call_args[i]
+            if isinstance(key, lisptype.lispKeyword):
+                key_name = key.name.upper()
+                if key_name not in supplied:
+                    supplied[key_name] = call_args[i + 1]
+                i += 2
+            else:
+                i += 1
+
         for param_spec in keyword_params:
             if _consp_internal(param_spec):
                 param = car(param_spec)
@@ -1412,45 +1443,20 @@ def _create_macro_function(macro_name, lambda_list, body, env,
                 default_form = None
                 supplied_p = None
 
-            _, var_pattern = _kw_parts(param)
+            kw_name, var_pattern = _kw_parts(param)
 
-            if default_form is not None:
-                default_value = eval(default_form, macro_env)
+            if kw_name in supplied:
+                _bind_pattern(var_pattern, supplied[kw_name])
+                if supplied_p is not None:
+                    macro_env.add_variable(supplied_p, lisptype.T)
             else:
-                default_value = unsupplied_default
-            _bind_pattern(var_pattern, default_value)
-
-            if supplied_p is not None:
-                macro_env.add_variable(supplied_p, lisptype.NIL)
-
-        # Process actual keyword arguments
-        keyword_start = arg_idx
-        i = keyword_start
-        while i < len(call_args) - 1:
-            key = call_args[i]
-            value = call_args[i + 1]
-
-            if isinstance(key, lisptype.lispKeyword):
-                key_name = key.name.upper()
-                for param_spec in keyword_params:
-                    if _consp_internal(param_spec):
-                        param = car(param_spec)
-                        rest = cdr(param_spec)
-                        rest2 = cdr(rest) if _consp_internal(rest) else None
-                        supplied_p = car(rest2) if _consp_internal(rest2) else None
-                    else:
-                        param = param_spec
-                        supplied_p = None
-
-                    kw_name, var_pattern = _kw_parts(param)
-                    if kw_name == key_name:
-                        _bind_pattern(var_pattern, value)
-                        if supplied_p is not None:
-                            macro_env.add_variable(supplied_p, lisptype.T)
-                        break
-                i += 2
-            else:
-                i += 1
+                if default_form is not None:
+                    default_value = eval(default_form, macro_env)
+                else:
+                    default_value = unsupplied_default
+                _bind_pattern(var_pattern, default_value)
+                if supplied_p is not None:
+                    macro_env.add_variable(supplied_p, lisptype.NIL)
 
         # If no body, return NIL
         if not _consp_internal(actual_body):

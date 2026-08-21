@@ -34,10 +34,14 @@ def stream_element_type(stream):
 
     This returned a raw Python string -- a Python object standing in for a
     Lisp value (standing rule 2), so `(eq (stream-element-type s) 'character)`
-    was false regardless of the stream. Byte streams are not modelled yet
-    (`OPEN` always opens in text mode -- plan.md C11), so every stream
-    answers `CHARACTER`; that is honest for what actually exists rather
-    than claiming a byte type this implementation cannot back up.
+    was false regardless of the stream -- and it was hardcoded to CHARACTER
+    unconditionally, which was honest while `OPEN` had no binary streams at
+    all (plan.md C11). Now that `OPEN` records the declared `:element-type`
+    on the stream (`streams.py`'s `_classify_element_type`), this returns it
+    back verbatim -- a symbol/cons the caller supplied, or the interned
+    CHARACTER symbol for the default/text case -- which is what lets
+    `(subtypep '(unsigned-byte 12) (stream-element-type s))` consult the
+    real SUBTYPEP lattice instead of a constant.
 
     Explicitly decorated rather than left to `register_module`'s auto
     registration: that heuristic strips a trailing "-TYPE" as an assumed
@@ -52,6 +56,11 @@ def stream_element_type(stream):
         raise lisptype.LispTypeError(
             f"STREAM-ELEMENT-TYPE: not a stream: {stream!r}",
             expected_type="STREAM", actual_value=stream)
+    element_type = stream.element_type
+    if isinstance(element_type, (lisptype.LispSymbol, lisptype.lispKeyword, lisptype.lispCons)):
+        return element_type
+    if isinstance(element_type, str):
+        return lisptype.COMMON_LISP_PACKAGE.intern_symbol(element_type.upper())
     return lisptype.COMMON_LISP_PACKAGE.intern_symbol('CHARACTER')
 
 
@@ -224,8 +233,25 @@ def write_line(string, stream=None, start=0, end=None):
 
 @_registry.cl_function('WRITE-BYTE')
 def write_byte(byte, stream):
-    """Write byte to stream."""
-    # Simplified implementation
+    """WRITE-BYTE (CLHS 21.2): write one integer element to a binary stream.
+
+    Was a complete no-op -- `return byte` never touched the stream at all,
+    so every OPEN test built on a binary `:element-type` (streams/open.lsp's
+    `(unsigned-byte n)`/`bit`/`signed-byte` family) read back whatever the
+    file already held from an earlier test. `stream.byte_width`/
+    `byte_signed`, set by OPEN from the declared element-type
+    (`streams._classify_element_type`), decide the physical encoding; it
+    only has to round-trip through this implementation's own WRITE-BYTE/
+    READ-BYTE, not match any other implementation's on-disk layout.
+    """
+    from .streams import Stream
+    if not isinstance(stream, Stream) or not stream.binary:
+        raise lisptype.LispTypeError(
+            f"WRITE-BYTE: {stream!r} is not a binary output stream",
+            expected_type='STREAM', actual_value=stream)
+    value = int(byte)
+    data = value.to_bytes(stream.byte_width, 'big', signed=stream.byte_signed)
+    stream.file_obj.write(data)
     return byte
 
 
@@ -370,14 +396,34 @@ def _at_line_start(target):
 
 @_registry.cl_function('FINISH-OUTPUT')
 def finish_output(stream=None):
-    """Finish output to stream."""
-    return None
+    """FINISH-OUTPUT (CLHS 21.2): ensure `stream`'s output has actually
+    reached its destination before returning.
+
+    Was a complete no-op (`return None`) -- text written to a stream stayed
+    in Python's file-object buffer, invisible to anything reading the same
+    underlying file through a second stream, which is exactly what
+    `streams/open.lsp`'s OPEN.66/OPEN.67/OPEN.OUTPUT.30/OPEN.IO.30 do:
+    write to `s`, `(finish-output s)`, then `(open s :direction :input)` and
+    expect to read what was just written.
+    """
+    from .streams import Stream
+    target = resolve_output_stream(stream)
+    if isinstance(target, Stream):
+        target.flush()
+    return lisptype.NIL
 
 
 @_registry.cl_function('FORCE-OUTPUT')
 def force_output(stream=None):
-    """Force output to stream."""
-    return None
+    """FORCE-OUTPUT (CLHS 21.2): initiate output without necessarily
+    waiting for it to complete. This implementation has no asynchronous
+    I/O, so there is nothing weaker than FINISH-OUTPUT to do here.
+    """
+    from .streams import Stream
+    target = resolve_output_stream(stream)
+    if isinstance(target, Stream):
+        target.flush()
+    return lisptype.NIL
 
 
 @_registry.cl_function('MAKE-STRING-OUTPUT-STREAM')
@@ -2670,8 +2716,39 @@ def file_author(pathspec):
 
 @_registry.cl_function('FILE-LENGTH')
 def file_length(stream):
-    """Get file length."""
-    return 0  # Simplified
+    """FILE-LENGTH (CLHS 21.1.2): length of the file `stream` is open to,
+    in units of its element type.
+
+    Was a stub returning 0 unconditionally, regardless of the stream or
+    what had been written to it. CLHS defines this only for a FILE-STREAM
+    (or a BROADCAST-STREAM, which delegates to one of its own targets) --
+    every other stream kind (string streams, echo/two-way/concatenated
+    streams) is a TYPE-ERROR, which `streams/file-length.lsp`'s
+    FILE-LENGTH.ERROR.3 checks across every stream kind at once. For a
+    binary stream, the byte count is divided by `byte_width` (set by OPEN
+    from the declared `:element-type`, `streams._classify_element_type`)
+    to answer in elements, not bytes -- FILE-LENGTH.2/.3/.4 write 17
+    elements of various bit widths and require exactly 17 back.
+    """
+    from .streams import Stream, BroadcastStream, SynonymStream, stream_type_matches
+    if isinstance(stream, BroadcastStream):
+        if not stream.streams:
+            return 1
+        return file_length(stream.streams[0])
+    if isinstance(stream, SynonymStream):
+        return file_length(stream._target())
+    if not (isinstance(stream, Stream) and stream_type_matches(stream, 'FILE-STREAM')):
+        raise lisptype.LispTypeError(
+            f"FILE-LENGTH: {stream!r} is not a file-stream",
+            expected_type='(OR FILE-STREAM BROADCAST-STREAM)', actual_value=stream)
+    import os
+    try:
+        size = os.fstat(stream.file_obj.fileno()).st_size
+    except (OSError, AttributeError, ValueError):
+        return lisptype.NIL
+    if stream.binary and stream.byte_width:
+        return size // stream.byte_width
+    return size
 
 
 @_registry.cl_function('FILE-POSITION')
