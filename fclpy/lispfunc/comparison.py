@@ -21,11 +21,34 @@ def _string_characters(obj):
     test's result against its expected value with `EQUAL`, so *every* test
     whose expected value is a string failed regardless of whether the code
     under test was correct.
+
+    A third representation is a rank-1 array whose element type is a
+    subtype of CHARACTER (CLAUDE.md's array model, `characters.is_string`'s
+    definition of STRINGP) -- `arrays._new_array` uses this for a
+    *displaced* character array, where `LispString`'s own fill-pointer
+    support does not reach. Without this branch here, `(equalp
+    displaced-string "foo")` was NIL for every one of `make-pathname.2a`'s
+    16 special-string variants that happened to be displaced, because one
+    side resolved to a string and the other did not, and this function's
+    "exactly one side is a string" check treated that as categorically
+    unequal rather than comparing the array's own active characters.
     """
     if isinstance(obj, lisptype.LispString):
         return str(obj)
     if isinstance(obj, str):
         return obj
+    if _arrays.is_array(obj) and _arrays.array_rank_of(obj) == 1:
+        element_type = _arrays.element_type_of(obj)
+        if element_type is _arrays.CHARACTER_TYPE or element_type is _arrays.NIL_TYPE:
+            chars = []
+            for e in _arrays.array_elements(obj):
+                if isinstance(e, lisptype.Character):
+                    chars.append(e.char)
+                elif isinstance(e, str) and len(e) == 1:
+                    chars.append(e)
+                else:
+                    return None
+            return ''.join(chars)
     return None
 
 
@@ -591,6 +614,18 @@ def typep(object, type_specifier):
         # predicate and the type specifier cannot disagree.
         from fclpy.readtable import Readtable
         return lisptype.lisp_bool(isinstance(object, Readtable))
+    elif type_name == 'PATHNAME':
+        # TYPEP had no branch for PATHNAME at all, so it fell through to the
+        # CLOS `find_class` branch below (which requires a
+        # `classes.LispInstance`), and `(typep p 'pathname)` was NIL for
+        # every real pathname -- failing every `make-pathname-test` in
+        # pathnames/make-pathname.lsp regardless of the pathname's actual
+        # components.
+        from .pathnames import Pathname
+        return lisptype.lisp_bool(isinstance(object, Pathname))
+    elif type_name == 'LOGICAL-PATHNAME':
+        from .pathnames import Pathname
+        return lisptype.lisp_bool(isinstance(object, Pathname) and object.logical)
     elif type_name in ('STREAM', 'TWO-WAY-STREAM', 'ECHO-STREAM',
                        'CONCATENATED-STREAM', 'BROADCAST-STREAM',
                        'SYNONYM-STREAM', 'STRING-STREAM', 'FILE-STREAM'):

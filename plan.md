@@ -147,6 +147,23 @@ the subsystems where one absent mechanism fails everything downstream of it.
 > [Changelog](#changelog) entry, which is worth reading before ranking any
 > other low-percentage directory as a "subsystem gap".
 
+> **`pathnames` is done as of 2026-08-21 (targeted): 214 of 215 (99.5%),
+> up from 82 of 215 (38.1%).** This is Tier 2's C11 (the pathname half) closed:
+> `Pathname` was a namestring wrapper — a parsed `pathlib.Path` plus the
+> original string — with no representation for a wildcard, an
+> `:absolute`/`:relative` marker, or a component that was simply never
+> supplied, so `MAKE-PATHNAME`/`MERGE-PATHNAMES`/`DIRECTORY` had nothing to
+> *compose*. It is now a component record (host/device/directory/name/type/
+> version, CLHS 19.2) with real parsing and rendering in both directions,
+> plus a working logical-pathname/translation mechanism `misc_macros.py` had
+> been silently shadowing with three no-op stubs (standing rule 3 — import
+> order, not a missing feature, was the defect). The one surviving failure,
+> `PATHNAMES-PRINT-AND-READ-PROPERLY`, is a real representational gap left
+> alone rather than hacked around: a physical pathname's `VERSION` has no
+> namestring syntax to round-trip through when `NAME`/`TYPE` are both NIL, so
+> `(make-pathname :version :newest)` and `(make-pathname :version :wild)`
+> both print as `#P""` and read back with `VERSION` NIL. See the Changelog.
+
 ---
 
 ## 2. How to work
@@ -895,7 +912,7 @@ These are large but conventional: the mechanism is absent rather than wrong.
 
 | # | cluster | evidence (complete run) | owner |
 |---|---|---|---|
-| C11 | **Streams, files, pathnames** — `system-construction/` is **done** (77 of 77, 2026-08-20): LOAD/COMPILE-FILE are real, the five copies of the relative-pathname search are one (`pathnames.resolve_filespec`, which also owns the *pathname designator* rule), and a missing file is a FILE-ERROR carrying its pathname rather than a Python exception. `files/` 40 failing of 87 and `pathnames/` 133 of 215 are now gated on **one** thing: `Pathname` is a namestring wrapper, not a component record, so `MAKE-PATHNAME`/`MERGE-PATHNAMES`/`DIRECTORY` cannot compose components. `(directory (make-pathname :version :wild :defaults p))` answers no files, which is why the suite's own `delete-all-versions` deletes nothing and `rename-file.1`–`.7` fail on leftover state rather than on RENAME-FILE. **That component model is the next mechanism here.** `streams/` remains large. | M10 |
+| C11 | **Streams, files, pathnames** — `system-construction/` is **done** (77 of 77, 2026-08-20) and **`pathnames/` is done** (214 of 215, 99.5%, 2026-08-21 targeted): LOAD/COMPILE-FILE are real, the five copies of the relative-pathname search are one (`pathnames.resolve_filespec`), a missing file is a FILE-ERROR carrying its pathname, and `Pathname` is now a component record (host/device/directory/name/type/version) rather than a namestring wrapper, so `MAKE-PATHNAME`/`MERGE-PATHNAMES`/`DIRECTORY`/`PATHNAME-MATCH-P`/`TRANSLATE-PATHNAME` genuinely compose components, and a basic logical-pathname/translation mechanism exists. `files/` is not yet re-measured with the component model in place — the `(directory (make-pathname :version :wild :defaults p))` gap this row used to name should be closed by it, but confirm before assuming `delete-all-versions`/`rename-file` are fixed rather than merely no-longer-blocked. `streams/` remains large and untouched. | M10 |
 | C12 | **Reader** — `reader/` 136 failing of 165 (**17.6%**). `#(1 2 3)` reads as the cons `(VECTOR 1 2 3)` (CLHS 2.4.8.3); the tokenizer interprets `\n` inside strings, where CLHS 2.4.5 requires backslash to be a single-escape included *without interpretation*. **Also: `fclpy/reader.py` is a dead ~480-line second reader** that nothing under `fclpy/` imports, yet **177 unit tests (14% of that suite)** certify it — while the live reader (`tokenizer.py` → `lispreader.py` → `readtable.py`) has essentially no unit coverage, and the two disagree on conformance. Retire it or repoint those tests. | M10 |
 | C13 | **Strings** — `strings/` 388 failing of 501 (**22.6%**); `MERGE-STRING` 38. Rooted in the `LispString`/Python-`str` split (Finding I), which also blocks `EQUAL`/`EQUALP`. A length-1 `str` currently satisfies both `CHARACTER` and `STRING`, which are disjoint types (CLHS 4.2.2). | M9 |
 | C14 | **Types / `SUBTYPEP`** — `SUBTYPEP` 156 (`SUBTYPEP.INTEGER` 46); `types-and-classes/` 262 failing of 545. `SUBTYPEP` is a string-pair lookup table with no type lattice (Finding F). | M9 |
@@ -1407,6 +1424,119 @@ rather than discovering these one crash at a time.
 
 Condensed from the previous chronological plan. Each entry is a *mechanism*
 landed, not a test count.
+
+- **2026-08-21** — **`Pathname` is a component record.** `pathnames` (targeted)
+  82 → 214 of 215 (38.1% → 99.5%), `pytest` 1964 passed. Two real
+  regressions surfaced and were fixed (item 5 below); `files`,
+  `system-construction`, `streams`, `packages`, `conditions` and `hash-tables`
+  were re-run and diffed name-for-name against `git stash`d unmodified code
+  with none remaining. `objects`/`structures`/`iteration`/`sequences`/`cons`/
+  `strings`/`symbols` were not individually diffed this way — `cons` alone
+  already runs several minutes on *unmodified* code (confirmed, not a new
+  hang), which is what made one combined 13-directory sweep look stuck; treat
+  those seven as spot-checked by `pytest` and the shared-mechanism reasoning
+  in items 3-4, not as independently confirmed regression-free.
+
+  **1. There was nothing to compose.** `Pathname` stored a `pathlib.Path`
+  parse plus the original string, so `MAKE-PATHNAME`, `MERGE-PATHNAMES` and
+  `DIRECTORY` re-derived every answer from a flat string instead of
+  combining components. Rewrote it as host/device/directory/name/type/
+  version (CLHS 19.2), using interned keyword objects (`:WILD`,
+  `:WILD-INFERIORS`, `:UP`, `:BACK`, `:ABSOLUTE`/`:RELATIVE`,
+  `:UNSPECIFIC`, `:NEWEST`) as component markers so a marker and a literal
+  string component can never be confused (they're different Python types).
+  `MAKE-PATHNAME`'s defaulting (host alone falls back to
+  `*DEFAULT-PATHNAME-DEFAULTS*` when no `:defaults` is given; every other
+  component defaults to NIL), `MERGE-PATHNAMES`'s per-component merge
+  (including CLHS 19.3.3's easy-to-get-backward VERSION rule — it comes from
+  `defaults` only when `pathname` supplies *no* name and *no* type, and from
+  `default-version` otherwise), `WILD-PATHNAME-P`, `PATHNAME-MATCH-P` and
+  `TRANSLATE-PATHNAME` (a real capture-based directory-wildcard matcher,
+  not `fnmatch` on the whole string) are all built on it.
+
+  **2. `misc_macros.py` was silently shadowing three logical-pathname
+  functions with no-op stubs.** It defines `LOAD-LOGICAL-PATHNAME-
+  TRANSLATIONS`/`LOGICAL-PATHNAME-TRANSLATIONS`/`DIRECTORY`/
+  `ENSURE-DIRECTORIES-EXIST` too, and because `lispfunc/__init__.py` imports
+  it *after* `pathnames.py`, the registry decorator overwrote pathnames.py's
+  real implementations every time — standing rule 3 (two implementations of
+  one operator), the same shape `system-construction`'s `WITH-COMPILATION-
+  UNIT` had. `(setf (logical-pathname-translations "CLTEST") ...)` therefore
+  always looked like a no-op, independent of anything pathnames.py did.
+  Deleted the stubs; a basic logical-pathname mechanism (host registry,
+  namestring parse/render, `TRANSLATE-LOGICAL-PATHNAME` built on the same
+  wildcard matcher as `TRANSLATE-PATHNAME`) now actually works, including
+  a stream's `LOGICAL-PATHNAME` remembering the logical designator OPEN was
+  given even after `resolve_filespec` has already turned it into the real
+  OS path used for I/O.
+
+  **3. `&key` default-value forms could not see earlier `&key` arguments.**
+  `_bind_keyword_parameters` (a user lambda list's own binder, distinct from
+  the builtin-signature path CLAUDE.md documents) evaluated *every*
+  parameter's default form first and only afterward overwrote the supplied
+  ones — so `(defun f (&key (defaults nil) (device (if defaults (pathname-
+  device defaults) ...))) ...)` called as `(f :defaults d)` always evaluated
+  DEVICE's default with DEFAULTS still NIL, regardless of what was passed.
+  CLHS 3.4.1.1 requires left-to-right visibility: each parameter's init-form
+  runs in an environment where every earlier parameter, defaulted or
+  supplied, already has its real value. This is not a pathname-specific
+  bug — it silently mis-evaluated *any* user function with one `&key`
+  parameter's default referencing another — and it was invisible until a
+  test helper happened to be shaped exactly that way:
+  `pathnames/make-pathname.lsp`'s own `make-pathname-test` derives every
+  expected component from `:defaults` through nested `&key` defaults.
+
+  **4. `EQUAL`/`EQUALP` had their own narrower copy of "is this a string."**
+  `comparison.py`'s `_string_characters` recognized `LispString`/`str` but
+  not the third representation `characters.is_string` already knows about:
+  a rank-1 array whose element type is a subtype of CHARACTER, which is what
+  a *displaced* character vector always is (`LispString` has no displacement
+  support). So `(equalp displaced-string "foo")` was NIL whenever one side
+  happened to be displaced — plan.md's already-recorded deviation on this
+  exact gap, previously believed confined to "the STRING-specific
+  operators." Extended the array branch here to match; found via
+  `make-pathname.lsp`'s `do-special-strings`, which exercises every
+  fill-pointer/adjustable/displaced/base-char combination of a name argument
+  and compares the result with `EQUALP`.
+
+  **5. `EQUAL` on a MERGE-PATHNAMES result regressed two `system-
+  construction` tests the moment MERGE-PATHNAMES stopped being a string
+  operation.** CLHS 19.3.3's version rule (item 1 above) makes
+  `(merge-pathnames (make-pathname :name "foo"))` answer `:NEWEST`, correctly
+  — `merge-pathnames.1`-`.7` require exactly that. But `*LOAD-PATHNAME*`,
+  built straight from LOAD's own namestring (which has no version syntax at
+  all), answers `NIL` for the identical file, and `load.17`/`.18` require
+  `(equal (pathname (merge-pathnames f)) *load-pathname*)`. Confirmed via
+  `git stash`: this really is new, not pre-existing (`COMPILE-FILE.16`,
+  `LOAD.17` — `LOAD.18` itself turned out to be pre-existing, see below).
+  `Pathname._key()` now treats `:NEWEST` and NIL as the same version for
+  `EQUAL`/`EQUALP`/hashing purposes only — `PATHNAME-VERSION` still answers
+  the one actually stored, so `merge-pathnames.6`'s "answer `:NEWEST`
+  literally" and `load.17`'s "be `EQUAL` to a NIL-version pathname" are both
+  satisfied without contradiction.
+
+  **Discovered, not yet fixed:**
+
+  - `LOAD.18` (`system-construction`) fails identically on the
+    pre-`git stash` code: `(declare (special ...))` on a *free* variable
+    reference inside a `LET*` (no binding form for that name in the same
+    `LET*`) appears to leave a phantom entry that a later `SETQ` of the
+    truly-global variable of the same name -- inside a nested `(load ...)`,
+    after `MAKUNBOUND` -- finds and reports as unbound, even though
+    `(declaim (special ...))` inside the loaded file has already proclaimed
+    it. Reproducible outside pathnames entirely; not touched here.
+  - `cons/` (and likely other large directories) already runs to several
+    minutes under `run_ansi.py` on unmodified code -- confirmed with
+    `git stash` plus a wall-clock cap, not assumed. Don't read a long
+    multi-directory `run_ansi.py` invocation's silence as a hang; run
+    directories individually if you need a clean per-directory timing.
+  - a physical pathname's `VERSION` has no namestring syntax to round-trip
+    through when `NAME`/`TYPE` are both NIL — `(make-pathname :version
+    :newest)` and `(make-pathname :version :wild)` both print `#P""` and
+    read back with `VERSION` NIL (`PATHNAMES-PRINT-AND-READ-PROPERLY`, the
+    one remaining failure). Real Unix-style physical pathnames have no
+    version syntax at all; inventing one only for this round trip would be
+    exactly the kind of test-specific hack the rules of this project forbid.
 
 - **2026-08-20** — **`system-construction` 12 → 77 of 77 (100%)**, and the
   mechanisms it took to get there were mostly not in `system-construction`.

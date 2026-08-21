@@ -37,6 +37,10 @@ class Stream:
         self.direction = direction
         self.element_type = element_type
         self.open_p = True
+        # Set by OPEN when this stream was opened via a logical pathname
+        # designator (CLHS LOGICAL-PATHNAME's stream case) -- `self.name` by
+        # then already holds the *physical* OS path used for I/O.
+        self.logical_pathname = None
         self.position = 0  # Track current position
         # LIFO pushback buffer for PEEK-CHAR/UNREAD-CHAR/LISTEN. CLHS only
         # requires depth 1, but a stack costs nothing extra and lets a
@@ -264,6 +268,13 @@ def open_file(filename, direction='input', element_type='character',
     """
     filename = str(filename)
     import fclpy.lisptype as lisptype
+    # CLHS LOGICAL-PATHNAME: "if pathspec is a stream ... it must be ... an
+    # open stream to a file which was originally specified using a logical
+    # pathname" -- the stream has to remember the designator it was opened
+    # with, because `resolve_filespec` below immediately translates it to a
+    # real OS path and nothing else keeps the logical form around.
+    from fclpy.lispfunc.pathnames import pathname_from_namestring as _pn_from_ns
+    _original_pn = _pn_from_ns(filename)
     # Normalize Lisp keyword or symbol arguments to Python strings
 
     if isinstance(direction, (lisptype.lispKeyword, lisptype.LispSymbol)):
@@ -312,13 +323,13 @@ def open_file(filename, direction='input', element_type='character',
     # the file (CLHS OPEN), not a Python `FileExistsError`/`FileNotFoundError`:
     # those match no handler clause, so `(handler-case (open ...) (file-error
     # ...))` could not see them and they surfaced as the *value* of the form.
-    from fclpy.lispfunc.pathnames import Pathname
+    from fclpy.lispfunc.pathnames import pathname_from_namestring
     from fclpy.lispfunc.evaluation_conditions import signal_file_error
 
     if os.path.exists(filename):
         if direction == 'output' and if_exists == 'error':
             return signal_file_error(
-                Pathname(filename), "OPEN: file exists: " + filename)
+                pathname_from_namestring(filename), "OPEN: file exists: " + filename)
         elif direction == 'output' and if_exists == 'append':
             mode = 'a'
         elif direction == 'output' and if_exists == 'supersede':
@@ -330,7 +341,7 @@ def open_file(filename, direction='input', element_type='character',
 
         if if_does_not_exist == 'error':
             return signal_file_error(
-                Pathname(filename), "OPEN: file not found: " + filename)
+                pathname_from_namestring(filename), "OPEN: file not found: " + filename)
         elif if_does_not_exist == 'create' and direction in ('output', 'io'):
             # Create the file (opening in 'w' or 'r+' will handle creation)
             pass
@@ -339,9 +350,11 @@ def open_file(filename, direction='input', element_type='character',
         file_obj = open(filename, mode, encoding='utf-8')
     except OSError as error:
         return signal_file_error(
-            Pathname(filename),
+            pathname_from_namestring(filename),
             "OPEN: cannot open " + filename + ": " + str(error))
     stream = Stream(filename, file_obj, direction, element_type)
+    if _original_pn.logical:
+        stream.logical_pathname = _original_pn
     _open_streams[id(stream)] = stream
     return stream
 

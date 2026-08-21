@@ -914,17 +914,6 @@ def _bind_keyword_parameters(parsed, trailing, func_env, eval_fn):
 
     specs = [_keyword_param_parts(spec) for spec in keyword_params]
 
-    # Every parameter starts at its default; a supplied argument overwrites it.
-    for name, variable, default_form, supplied_p in specs:
-        if variable is None:
-            continue
-        if default_form is not None:
-            func_env.add_variable(variable, eval_fn(default_form, func_env))
-        else:
-            func_env.add_variable(variable, lisptype.NIL)
-        if supplied_p is not None:
-            func_env.add_variable(supplied_p, lisptype.NIL)
-
     if len(trailing) % 2:
         raise lisptype.LispProgramError(
             f"odd number of keyword arguments: {trailing[-1]!r} has no value")
@@ -943,27 +932,48 @@ def _bind_keyword_parameters(parsed, trailing, func_env, eval_fn):
             allow_other_keys = allow_other_keys or lisptype.is_truthy(value)
             break
 
-    by_name = {}
-    for name, variable, _default, supplied_p in specs:
-        by_name.setdefault(name, (variable, supplied_p))
+    declared_names = {name for name, _variable, _default, _supplied in specs}
 
-    seen = set()
+    # Leftmost pair wins for a repeated keyword; an unrecognized name is a
+    # PROGRAM-ERROR resolved before any default-value form runs, matching
+    # CLHS 3.4.1.4's argument-processing pass.
+    supplied_values = {}
     for name, value in pairs:
-        if name in seen:
-            # Leftmost pair wins for a repeated keyword.
+        if name in supplied_values or name == 'ALLOW-OTHER-KEYS':
             continue
-        seen.add(name)
-        if name in by_name:
-            variable, supplied_p = by_name[name]
-            if variable is not None:
-                func_env.add_variable(variable, value)
-            if supplied_p is not None:
-                func_env.add_variable(supplied_p, lisptype.T)
-        elif name == 'ALLOW-OTHER-KEYS':
-            continue
-        elif not allow_other_keys:
+        if name not in declared_names and not allow_other_keys:
             raise lisptype.LispProgramError(
                 f"unrecognized keyword argument: {name}")
+        supplied_values[name] = value
+
+    # CLHS 3.4.1.1: a parameter's init-form is evaluated, in left-to-right
+    # lambda-list order, in an environment where every *earlier* parameter
+    # -- whether defaulted or supplied -- is already bound. Evaluating
+    # every default form first and only afterward overwriting the supplied
+    # ones (the previous structure here) broke that: a later parameter's
+    # default form referencing an earlier `&key` parameter always saw that
+    # earlier parameter at its OWN default, never at the value the caller
+    # actually supplied. `pathnames/make-pathname.lsp`'s own test helper is
+    # exactly this shape --
+    # `(defun make-pathname-test (&rest args &key (defaults nil) (device
+    # (if defaults (pathname-device defaults) ...)) ...))` -- so
+    # `(make-pathname-test :defaults *default-pathname-defaults*)` derived
+    # every expected component from `defaults`, which read back NIL for
+    # every parameter after the first regardless of what was passed.
+    for name, variable, default_form, supplied_p in specs:
+        if variable is None:
+            continue
+        if name in supplied_values:
+            func_env.add_variable(variable, supplied_values[name])
+            if supplied_p is not None:
+                func_env.add_variable(supplied_p, lisptype.T)
+        else:
+            if default_form is not None:
+                func_env.add_variable(variable, eval_fn(default_form, func_env))
+            else:
+                func_env.add_variable(variable, lisptype.NIL)
+            if supplied_p is not None:
+                func_env.add_variable(supplied_p, lisptype.NIL)
 
 
 def _bind_ordinary_lambda_list_tail(parsed, call_args, arg_index, func_env, eval_fn):

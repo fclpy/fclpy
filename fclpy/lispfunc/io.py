@@ -45,7 +45,7 @@ __all__ = [
     'format_fn', 'formatter',
     'pathname', 'pathnamep', 'pathname_host', 'pathname_device',
     'pathname_directory', 'pathname_name', 'pathname_type', 'pathname_version',
-    'make_pathname', 'namestring', 'directory_namestring', 'host_namestring',
+    'make_pathname_function', 'namestring', 'directory_namestring', 'host_namestring',
     'file_namestring', 'enough_namestring', 'parse_namestring',
     'merge_pathnames', 'wild_pathname_p', 'pathname_match_p',
     'translate_pathname', 'logical_pathname', 'translate_logical_pathname',

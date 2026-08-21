@@ -38,18 +38,18 @@ def load_and_evaluate_file(filename, environment=None, verbose=False, timing=Fal
     """
     import os
     import time
-    from fclpy.lispfunc.pathnames import Pathname
-    
+    from fclpy.lispfunc.pathnames import pathname_from_os_path
+
     start_time = time.time()
-    
+
     if environment is None:
         # Ensure standard environment is set up
         lispenv.setup_standard_environment()
         environment = lispenv.current_environment
-    
+
     # Set *LOAD-TRUENAME* and *LOAD-PATHNAME* for this file
     abs_path = os.path.abspath(filename)
-    pathname_obj = Pathname(abs_path)
+    pathname_obj = pathname_from_os_path(abs_path)
     
     load_truename_sym = lisptype.COMMON_LISP_PACKAGE.intern_symbol('*LOAD-TRUENAME*')
     load_pathname_sym = lisptype.COMMON_LISP_PACKAGE.intern_symbol('*LOAD-PATHNAME*')

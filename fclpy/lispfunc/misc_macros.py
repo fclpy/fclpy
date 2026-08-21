@@ -122,7 +122,7 @@ def load(filespec, *, verbose=lisptype.OMITTED, print=lisptype.OMITTED,
     import builtins
     import os
     import fclpy.state as state
-    from .pathnames import Pathname, resolve_filespec
+    from .pathnames import pathname_from_namestring, pathname_from_os_path, resolve_filespec
     from .streams import Stream
     from .binding import BindingFrame, root_environment, dynamic_value
     from .evaluation_conditions import signal_file_error
@@ -157,8 +157,8 @@ def load(filespec, *, verbose=lisptype.OMITTED, print=lisptype.OMITTED,
         name = getattr(filespec, 'name', None)
         if isinstance(name, str) and name and not name.startswith('<') \
                 and os.path.exists(name):
-            pathname_obj = Pathname(name)
-            truename_obj = Pathname(os.path.realpath(name))
+            pathname_obj = pathname_from_os_path(name)
+            truename_obj = pathname_from_os_path(os.path.realpath(name))
         else:
             pathname_obj = lisptype.NIL
             truename_obj = lisptype.NIL
@@ -178,10 +178,10 @@ def load(filespec, *, verbose=lisptype.OMITTED, print=lisptype.OMITTED,
                 return lisptype.NIL
             else:
                 return signal_file_error(
-                    Pathname(path_str), f"LOAD: file not found: {path_str}")
+                    pathname_from_namestring(path_str), f"LOAD: file not found: {path_str}")
 
-        pathname_obj = Pathname(path_str)
-        truename_obj = Pathname(os.path.realpath(path_str))
+        pathname_obj = pathname_from_os_path(path_str)
+        truename_obj = pathname_from_os_path(os.path.realpath(path_str))
         label = path_str
         opened_here = builtins.open(path_str, 'r', encoding='utf-8')
         stream = Stream(path_str, opened_here, 'input')
@@ -434,12 +434,12 @@ def compile_file_pathname(input_file, *, output_file=None, **kwargs):
     copy of the search.
     """
     import os
-    from .pathnames import Pathname, resolve_filespec
+    from .pathnames import pathname_from_namestring, resolve_filespec
 
     if output_file is not None and output_file is not lisptype.NIL:
-        return Pathname(resolve_filespec(output_file))
+        return pathname_from_namestring(resolve_filespec(output_file))
     base = os.path.splitext(resolve_filespec(input_file))[0]
-    return Pathname(base + COMPILED_FILE_TYPE)
+    return pathname_from_namestring(base + COMPILED_FILE_TYPE)
 
 
 @_registry.cl_function('COMPILE-FILE')
@@ -471,7 +471,7 @@ def compile_file(input_file, *, output_file=None, verbose=lisptype.OMITTED,
     import builtins
     import os
     import fclpy.state as state
-    from .pathnames import Pathname, resolve_filespec
+    from .pathnames import pathname_from_namestring, pathname_from_os_path, resolve_filespec
     from .streams import Stream
     from .binding import BindingFrame, root_environment, dynamic_value
     from .evaluation_conditions import signal_file_error
@@ -494,7 +494,7 @@ def compile_file(input_file, *, output_file=None, verbose=lisptype.OMITTED,
     input_path = resolve_filespec(input_file)
     if not os.path.exists(input_path):
         return signal_file_error(
-            Pathname(input_path), "COMPILE-FILE: file not found: " + input_path)
+            pathname_from_namestring(input_path), "COMPILE-FILE: file not found: " + input_path)
 
     if output_file is not None and output_file is not lisptype.NIL:
         output_path = resolve_filespec(output_file)
@@ -515,9 +515,9 @@ def compile_file(input_file, *, output_file=None, verbose=lisptype.OMITTED,
     stream = Stream(input_path, source, 'input')
     printed_forms = []
     try:
-        frame.bind(_cl('*COMPILE-FILE-PATHNAME*'), Pathname(input_path))
+        frame.bind(_cl('*COMPILE-FILE-PATHNAME*'), pathname_from_os_path(input_path))
         frame.bind(_cl('*COMPILE-FILE-TRUENAME*'),
-                   Pathname(os.path.realpath(input_path)))
+                   pathname_from_os_path(os.path.realpath(input_path)))
         current_package = dynamic_value(_cl('*PACKAGE*'))
         if not isinstance(current_package, lisptype.Package):
             current_package = (getattr(state, 'current_package', None)
@@ -559,32 +559,20 @@ def compile_file(input_file, *, output_file=None, verbose=lisptype.OMITTED,
             out.write("\n")
 
     return lisptype.MultipleValues(
-        Pathname(os.path.realpath(output_path)),
+        pathname_from_os_path(os.path.realpath(output_path)),
         lisptype.lisp_bool(diagnostics.warnings),
         lisptype.lisp_bool(diagnostics.failure))
 
 
-@_registry.cl_function('LOAD-LOGICAL-PATHNAME-TRANSLATIONS')
-def load_logical_pathname_translations(host):
-    """Load logical pathname translations."""
-    return lisptype.T
-
-
-@_registry.cl_function('LOGICAL-PATHNAME-TRANSLATIONS')
-def logical_pathname_translations(host):
-    """Get logical pathname translations."""
-    return []
-
-
-def directory(pathspec, **kwargs):
-    """List directory."""
-    return []
-
-
-@_registry.cl_function('ENSURE-DIRECTORIES-EXIST')
-def ensure_directories_exist(pathspec, **kwargs):
-    """Ensure directories exist."""
-    return pathspec, lisptype.T
+## LOAD-LOGICAL-PATHNAME-TRANSLATIONS, LOGICAL-PATHNAME-TRANSLATIONS, DIRECTORY
+## and ENSURE-DIRECTORIES-EXIST are real implementations in `pathnames.py`,
+## the one home for the pathname object model (CLAUDE.md). Stub duplicates
+## used to live here too, and because this module is imported *after*
+## `pathnames.py` (`lispfunc/__init__.py`), the registry decorator silently
+## overwrote the real implementations with these no-op stubs (plan.md
+## standing rule 3) -- so `(setf (logical-pathname-translations ...) ...)`
+## and `LOAD-LOGICAL-PATHNAME-TRANSLATIONS` always answered as if nothing had
+## ever been registered, regardless of what pathnames.py did.
 
 
 ## DEFINE-SETF-EXPANDER, DEFSETF and GET-SETF-EXPANSION are special forms
@@ -1446,10 +1434,6 @@ __all__ = [
     'complex_fn',
     'load_time_value',
     'load',
-    'load_logical_pathname_translations',
-    'logical_pathname_translations',
-    'directory',
-    'ensure_directories_exist',
     'proclaim',
     'describe',
     'inspect_object',

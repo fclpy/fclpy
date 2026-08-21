@@ -166,11 +166,13 @@ def setup_standard_environment():
         state.current_environment.add_variable(compile_file_pathname_sym, fclpy.lisptype.NIL)
         
     # *DEFAULT-PATHNAME-DEFAULTS* - default pathname for pathname functions
-    # Initialize to current directory as a Pathname object
-    from fclpy.lispfunc.pathnames import Pathname
+    # Initialize to current directory as a Pathname object, a *directory*
+    # (no :name component) -- `pathname_from_os_path` is what tells the two
+    # apart, since `os.getcwd()` carries no trailing separator to parse.
+    from fclpy.lispfunc.pathnames import pathname_from_os_path
     default_pathname_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*DEFAULT-PATHNAME-DEFAULTS*')
     if state.current_environment.find_variable(default_pathname_sym) is None:
-        cwd_pathname = Pathname(os.getcwd())
+        cwd_pathname = pathname_from_os_path(os.getcwd())
         state.current_environment.add_variable(default_pathname_sym, cwd_pathname)
         
     # *MODULES* - the names of the modules PROVIDE has recorded (CLHS 24.1.5).

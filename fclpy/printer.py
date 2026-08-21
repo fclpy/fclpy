@@ -971,7 +971,7 @@ def _write(value, ctx, depth):
 
     from fclpy.lispfunc.pathnames import Pathname
     if isinstance(value, Pathname):
-        return '#P' + _write_string(str(value.original), ctx.with_escape(True))
+        return '#P' + _write_string(value.namestring(), ctx.with_escape(True))
 
     if isinstance(value, lisptype.Condition):
         # A condition's printed representation is its report (CLHS 9.1.3), and

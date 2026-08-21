@@ -98,6 +98,13 @@ from .arrays import (
     row_major_aref,
 )
 
+from .pathnames import (
+    load_logical_pathname_translations,
+    logical_pathname_translations,
+    directory,
+    ensure_directories_exist,
+)
+
 from .misc_macros import (
     with_accessors,
     with_pprint_logical_block,
@@ -105,10 +112,6 @@ from .misc_macros import (
     complex_fn,
     load_time_value,
     load,
-    load_logical_pathname_translations,
-    logical_pathname_translations,
-    directory,
-    ensure_directories_exist,
     proclaim,
     describe,
     inspect_object,

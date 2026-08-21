@@ -906,19 +906,19 @@ class Readtable:
     
     def _read_pathname_literal(self, stream):
         """Read a pathname literal like #P\"path/to/file\"."""
-        from fclpy.lispfunc.pathnames import Pathname
-        
+        from fclpy.lispfunc.pathnames import pathname_from_namestring
+
         # Expect a string next
         c = stream.read_char()
         while c and c.isspace():
             c = stream.read_char()
-        
+
         if c != '"':
             raise ValueError(f"Expected string after #P, got: {c}")
-        
+
         # Read the string
         path_str = self._read_string_literal(stream)
-        return Pathname(path_str)
+        return pathname_from_namestring(path_str)
     
     _RADIX_DIGIT_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 

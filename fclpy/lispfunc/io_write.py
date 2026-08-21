@@ -140,10 +140,11 @@ def write_text(text, stream=None):
 
 
 # Re-export pathname functions from pathnames module for backward compatibility
-# Note: make_pathname (registered as 'PATHNAME') and make_pathname_function
-# (registered as 'MAKE-PATHNAME') are different functions!
+# Note: `pathname` (registered as 'PATHNAME', coerces a designator) and
+# `make_pathname_function` (registered as 'MAKE-PATHNAME', builds one from
+# components) are different functions!
 from .pathnames import (
-    make_pathname,  # PATHNAME function - converts string to Pathname
+    pathname,  # PATHNAME function - coerces a pathname designator
     make_pathname_function,  # MAKE-PATHNAME function - constructs pathname from components
     pathnamep,
     pathname_host,
@@ -167,9 +168,6 @@ from .pathnames import (
     truename,
     probe_file,
 )
-
-# Alias for backward compatibility - some code may use 'pathname' instead of 'make_pathname'
-pathname = make_pathname
 
 
 @_registry.cl_function('CLEAR-OUTPUT')
@@ -2208,7 +2206,7 @@ def delete_file(filespec):
     conflated "deleted nothing" with "deleted it".
     """
     import os
-    from fclpy.lispfunc.pathnames import Pathname, resolve_filespec
+    from fclpy.lispfunc.pathnames import pathname_from_namestring, resolve_filespec
     from fclpy.lispfunc.evaluation_conditions import signal_file_error
 
     path_str = resolve_filespec(filespec)
@@ -2216,10 +2214,10 @@ def delete_file(filespec):
         os.remove(path_str)
     except FileNotFoundError:
         return signal_file_error(
-            Pathname(path_str), "DELETE-FILE: file not found: " + path_str)
+            pathname_from_namestring(path_str), "DELETE-FILE: file not found: " + path_str)
     except OSError as error:
         return signal_file_error(
-            Pathname(path_str), "DELETE-FILE: " + str(error))
+            pathname_from_namestring(path_str), "DELETE-FILE: " + str(error))
     return lisptype.T
 
 
@@ -2246,27 +2244,28 @@ def rename_file(filespec, new_name):
     """
     import os
     from fclpy.lispfunc.pathnames import (
-        Pathname, resolve_filespec, merge_pathnames)
+        pathname_from_namestring, pathname_from_os_path, resolve_filespec, merge_pathnames)
     from fclpy.lispfunc.evaluation_conditions import signal_file_error
 
     old_path = resolve_filespec(filespec)
     if not os.path.exists(old_path):
         return signal_file_error(
-            Pathname(old_path), "RENAME-FILE: file not found: " + old_path)
+            pathname_from_namestring(old_path), "RENAME-FILE: file not found: " + old_path)
 
-    old_truename = Pathname(os.path.realpath(old_path))
+    old_truename = pathname_from_os_path(os.path.realpath(old_path))
     defaulted_new_name = merge_pathnames(
-        Pathname(resolve_filespec(new_name)), Pathname(old_path))
-    new_path = defaulted_new_name.original
+        pathname_from_namestring(resolve_filespec(new_name)),
+        pathname_from_namestring(old_path))
+    new_path = defaulted_new_name.namestring()
 
     try:
         os.replace(old_path, new_path)
     except OSError as error:
         return signal_file_error(
-            Pathname(old_path), "RENAME-FILE: " + str(error))
+            pathname_from_namestring(old_path), "RENAME-FILE: " + str(error))
 
     return lisptype.MultipleValues(
-        defaulted_new_name, old_truename, Pathname(os.path.realpath(new_path)))
+        defaulted_new_name, old_truename, pathname_from_os_path(os.path.realpath(new_path)))
 
 
 @_registry.cl_function('FILE-AUTHOR')
@@ -2443,7 +2442,7 @@ __all__ = [
     # Pathname operations
     'pathname', 'pathnamep', 'pathname_host', 'pathname_device',
     'pathname_directory', 'pathname_name', 'pathname_type',
-    'pathname_version', 'make_pathname', 'namestring',
+    'pathname_version', 'make_pathname_function', 'namestring',
     'directory_namestring', 'host_namestring', 'file_namestring',
     'enough_namestring', 'parse_namestring', 'merge_pathnames',
     'wild_pathname_p', 'pathname_match_p', 'translate_pathname',
