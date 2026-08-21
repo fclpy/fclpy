@@ -251,20 +251,50 @@ def resolve_input_stream(designator):
 _open_streams = {}
 
 
+def _normalize_open_keyword(value):
+    """Normalize a keyword/symbol/string OPEN argument to a lowercase,
+    underscore-spelled Python string, with NIL (in any of its three
+    representations -- CLAUDE.md) becoming the string ``'nil'`` and the
+    `OMITTED` sentinel passed through unchanged.
+
+    ``:if-exists nil`` and an *omitted* `:if-exists` are different CLHS
+    outcomes (the former makes OPEN return NIL when the file exists; the
+    latter falls back to a version-dependent default), so collapsing both
+    to a bare `None` -- the previous Python default -- could not tell them
+    apart. Normalizing NIL to the string `'nil'` here means it survives the
+    same lowering every other keyword value goes through, rather than
+    needing a separate NIL-designator check at every comparison site.
+    """
+    if value is lisptype.OMITTED:
+        return value
+    if value is None or value is lisptype.NIL:
+        return 'nil'
+    if isinstance(value, (lisptype.lispKeyword, lisptype.LispSymbol)):
+        name = value.name
+        return 'nil' if name.upper() == 'NIL' else name.lower().replace('-', '_')
+    if isinstance(value, str):
+        return 'nil' if value.upper() == 'NIL' else value.lower().replace('-', '_')
+    return value
+
+
 @_registry.cl_function('OPEN')
-def open_file(filename, direction='input', element_type='character', 
-              if_exists='error', if_does_not_exist='error'):
-    """Open a file and return a stream.
-    
+def open_file(filename, *, direction='input', element_type='character',
+              if_exists=lisptype.OMITTED, if_does_not_exist=lisptype.OMITTED,
+              external_format=None):
+    """Open a file and return a stream (CLHS 21.1, `open`).
+
     Args:
         filename: Path to file (string)
         direction: 'input', 'output', 'io', 'probe' (default: 'input')
         element_type: 'character' or 'byte' (default: 'character')
-        if_exists: 'error', 'new-version', 'rename', 'supersede', 'append', 'overwrite'
-        if_does_not_exist: 'error', 'create'
-    
+        if_exists: 'error', 'new-version', 'rename', 'rename-and-delete',
+            'supersede', 'append', 'overwrite', NIL, or omitted
+        if_does_not_exist: 'error', 'create', NIL, or omitted
+
     Returns:
-        Stream object or NIL for probe mode
+        Stream object, or NIL for :direction :probe naming a missing file,
+        or NIL for an :if-exists/:if-does-not-exist of NIL that declines
+        rather than signals.
     """
     filename = str(filename)
     import fclpy.lisptype as lisptype
@@ -275,22 +305,13 @@ def open_file(filename, direction='input', element_type='character',
     # real OS path and nothing else keeps the logical form around.
     from fclpy.lispfunc.pathnames import pathname_from_namestring as _pn_from_ns
     _original_pn = _pn_from_ns(filename)
-    # Normalize Lisp keyword or symbol arguments to Python strings
 
-    if isinstance(direction, (lisptype.lispKeyword, lisptype.LispSymbol)):
-        direction = direction.name.lower().replace('-', '_')
-    elif isinstance(direction, str):
-        direction = direction.lower()
+    direction = _normalize_open_keyword(direction)
+    if direction is lisptype.OMITTED or direction == 'nil':
+        direction = 'input'
+    if_exists = _normalize_open_keyword(if_exists)
+    if_does_not_exist = _normalize_open_keyword(if_does_not_exist)
 
-
-
-    try:
-        if isinstance(if_does_not_exist, (lisptype.lispKeyword, lisptype.LispSymbol)):
-            if_does_not_exist = if_does_not_exist.name.lower().replace('-', '_')
-        elif isinstance(if_does_not_exist, str):
-            if_does_not_exist = if_does_not_exist.lower()
-    except Exception:
-        pass
     # Resolve the filename through `pathnames.resolve_filespec`, the one place
     # a pathname designator becomes an OS path. OPEN carried the fifth copy of
     # that search, and its copy differed: it took the LISP_CWD candidate
@@ -303,48 +324,105 @@ def open_file(filename, direction='input', element_type='character',
     from fclpy.lispfunc.pathnames import resolve_filespec
     filename = resolve_filespec(filename)
 
+    from fclpy.lispfunc.pathnames import pathname_from_namestring
+    from fclpy.lispfunc.evaluation_conditions import signal_file_error
 
-    # Map Lisp direction to Python mode
-    if direction == 'input':
-        mode = 'r'
-    elif direction == 'output':
-        mode = 'w'
-    elif direction == 'io':
-        mode = 'r+'
-    elif direction == 'probe':
-        # Probe mode: check if file exists without opening
-        if os.path.exists(filename):
-            return lisptype.T
-        return lisptype.NIL
-    else:
-        raise ValueError(f"Invalid direction: {direction}")
-    
+    exists = os.path.exists(filename)
+
+    if direction == 'probe':
+        # CLHS 21.1: :probe returns a (non-open) stream when the file is
+        # there, or NIL. It used to return the Python booleans T/NIL, which
+        # fails `(typep s 'file-stream)` -- OPEN.PROBE.* assert exactly that
+        # plus `(not (open-stream-p s))`, which a Lisp boolean can never
+        # satisfy because it is not a stream at all.
+        if not exists and if_does_not_exist == 'create':
+            open(filename, 'w', encoding='utf-8').close()
+            exists = True
+        if not exists:
+            if if_does_not_exist == 'error':
+                return signal_file_error(
+                    pathname_from_namestring(filename), "OPEN: file not found: " + filename)
+            return lisptype.NIL
+        stream = Stream(filename, None, 'probe', element_type)
+        stream.open_p = False
+        return stream
+
+    if direction not in ('input', 'output', 'io'):
+        raise lisptype.LispProgramError("OPEN: invalid :direction %r" % (direction,))
+
+    writable = direction in ('output', 'io')
+
     # Handle file existence checks. Every refusal here is a FILE-ERROR naming
     # the file (CLHS OPEN), not a Python `FileExistsError`/`FileNotFoundError`:
     # those match no handler clause, so `(handler-case (open ...) (file-error
     # ...))` could not see them and they surfaced as the *value* of the form.
-    from fclpy.lispfunc.pathnames import pathname_from_namestring
-    from fclpy.lispfunc.evaluation_conditions import signal_file_error
-
-    if os.path.exists(filename):
-        if direction == 'output' and if_exists == 'error':
+    if exists and writable:
+        # CLHS 21.1.1's default depends on the pathname's version; fclpy's
+        # physical pathnames carry no real version (plan.md), which is the
+        # "file system does not support multiple versions" branch, so the
+        # default -- and an explicit :new-version, which means the same
+        # thing here since there is no second version to keep -- behaves
+        # like :supersede.
+        action = if_exists
+        if action is lisptype.OMITTED:
+            action = 'supersede'
+        if action == 'error':
             return signal_file_error(
                 pathname_from_namestring(filename), "OPEN: file exists: " + filename)
-        elif direction == 'output' and if_exists == 'append':
-            mode = 'a'
-        elif direction == 'output' and if_exists == 'supersede':
-            mode = 'w'
+        if action == 'nil':
+            return lisptype.NIL
+        if action == 'append':
+            mode = 'a+' if direction == 'io' else 'a'
+        elif action == 'overwrite':
+            # Preserves any bytes beyond what gets written (OPEN.OUTPUT.24
+            # requires "wxyzefghij" after writing 4 characters over a
+            # 10-character file) -- the one action that must not truncate.
+            mode = 'r+'
+        elif action in ('supersede', 'new_version'):
+            mode = 'w+' if direction == 'io' else 'w'
+        elif action in ('rename', 'rename_and_delete'):
+            backup = filename + '.bak'
+            try:
+                if os.path.exists(backup):
+                    os.remove(backup)
+                os.rename(filename, backup)
+                if action == 'rename_and_delete':
+                    os.remove(backup)
+            except OSError as error:
+                return signal_file_error(
+                    pathname_from_namestring(filename),
+                    "OPEN: cannot rename " + filename + ": " + str(error))
+            mode = 'w+' if direction == 'io' else 'w'
+        else:
+            raise lisptype.LispProgramError(
+                "OPEN: invalid :if-exists %r" % (if_exists,))
+    elif exists:
+        mode = 'r'
     else:
-        # If opening for output/io, default to creating the file when it does not exist
-        if if_does_not_exist == 'error' and direction in ('output', 'io'):
-            if_does_not_exist = 'create'
-
-        if if_does_not_exist == 'error':
+        # If opening for output/io, an omitted :if-does-not-exist defaults
+        # to :create (CLHS 21.1.1); :probe is handled above and :input's
+        # omitted default stays :error. But :overwrite/:append only make
+        # sense against an *existing* file, so an explicit :if-exists of
+        # either one flips that default back to :error -- OPEN.ERROR.11-14
+        # require `(open pn :direction :output :if-exists :overwrite)` on a
+        # missing file to signal FILE-ERROR, not silently create one.
+        action = if_does_not_exist
+        if action is lisptype.OMITTED:
+            if writable and if_exists in ('overwrite', 'append'):
+                action = 'error'
+            else:
+                action = 'create' if writable else 'error'
+        if action == 'error':
             return signal_file_error(
                 pathname_from_namestring(filename), "OPEN: file not found: " + filename)
-        elif if_does_not_exist == 'create' and direction in ('output', 'io'):
-            # Create the file (opening in 'w' or 'r+' will handle creation)
-            pass
+        if action == 'nil':
+            return lisptype.NIL
+        if action != 'create':
+            raise lisptype.LispProgramError(
+                "OPEN: invalid :if-does-not-exist %r" % (if_does_not_exist,))
+        # 'w'/'w+' create the file; a pure :input open can never reach here
+        # since its default action above is 'error'.
+        mode = 'w+' if direction == 'io' else 'w'
 
     try:
         file_obj = open(filename, mode, encoding='utf-8')
@@ -397,18 +475,18 @@ def write_sequence_stream(sequence, stream=None, start=0, end=None):
 
     Routed through `write_text` so a NIL/T/omitted `stream` resolves to
     `*STANDARD-OUTPUT*`/`*TERMINAL-IO*` like every other output operator,
-    instead of writing to Python's `sys.stdout` unconditionally.
+    instead of writing to Python's `sys.stdout` unconditionally. Elements
+    come from `seq_elements`, the one CLHS 17 sequence-element accessor --
+    the previous `isinstance(sequence, str)` check missed `LispString`
+    entirely (`(write-sequence "wxyz" s)` raised a bare Python `TypeError`,
+    standing rule 2), and hand-rolling a second string/vector split here
+    would drift from what every other sequence operator already does.
     """
-    if isinstance(sequence, str):
-        if end is None:
-            end = len(sequence)
-        text = sequence[start:end]
-    elif isinstance(sequence, (list, tuple)):
-        if end is None:
-            end = len(sequence)
-        text = ''.join(str(c) for c in sequence[start:end])
-    else:
-        raise TypeError(f"Expected string or list, got {type(sequence)}")
+    from .sequence_protocol import seq_elements, bounding_indices, _char_text
+
+    elements = seq_elements(sequence, 'WRITE-SEQUENCE')
+    start, end = bounding_indices(len(elements), start, end, 'WRITE-SEQUENCE')
+    text = ''.join(_char_text(item) for item in elements[start:end])
 
     from .io_write import write_text
     write_text(text, stream)

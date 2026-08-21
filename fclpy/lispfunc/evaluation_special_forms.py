@@ -117,7 +117,7 @@ def eval_if(form, env):
     else_form = car(cdr(cdr(args))) if _consp_internal(cdr(cdr(args))) else None
     
     test_result = eval(test_form, env)
-    if test_result is not None and test_result != lisptype.NIL:
+    if lisptype.is_truthy(test_result):
         return eval(then_form, env)
     elif else_form is not None:
         return eval(else_form, env)

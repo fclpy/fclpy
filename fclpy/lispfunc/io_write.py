@@ -2282,11 +2282,46 @@ def file_length(stream):
 
 @_registry.cl_function('FILE-POSITION')
 def file_position(stream, position=None):
-    """Get or set file position."""
+    """FILE-POSITION (CLHS 21.2): get or set a stream's file position.
+
+    Was a complete stub that returned its own argument without touching the
+    file at all -- `(progn (file-position s :start) (read-line s))` after a
+    write read from wherever the write had left the cursor (typically EOF),
+    not the start, because no `seek` ever happened. A pending PEEK-CHAR/
+    UNREAD-CHAR pushback is stale the instant the underlying position moves,
+    so a successful seek drops it.
+    """
+    import os
+    from .streams import Stream
+
+    if not isinstance(stream, Stream) or not hasattr(stream.file_obj, 'seek'):
+        return lisptype.NIL
+
+    file_obj = stream.file_obj
     if position is None:
-        return 0  # Get position
+        try:
+            return file_obj.tell()
+        except (OSError, ValueError):
+            return lisptype.NIL
+
+    if isinstance(position, (lisptype.lispKeyword, lisptype.LispSymbol)):
+        name = position.name.upper()
+        if name == 'START':
+            whence, offset = os.SEEK_SET, 0
+        elif name == 'END':
+            whence, offset = os.SEEK_END, 0
+        else:
+            return lisptype.NIL
     else:
-        return position  # Set position
+        whence, offset = os.SEEK_SET, int(position)
+
+    try:
+        file_obj.seek(offset, whence)
+    except (OSError, ValueError):
+        return lisptype.NIL
+    stream._pending.clear()
+    stream.position = file_obj.tell()
+    return lisptype.T
 
 
 @_registry.cl_function('FILE-STRING-LENGTH')

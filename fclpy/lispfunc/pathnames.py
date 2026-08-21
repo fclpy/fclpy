@@ -1167,13 +1167,37 @@ def directory(pathname, **kwargs):
         pn = translate_logical_pathname(pn)
     _directory_error_check(pn, signal_file_error)
 
-    path_str = pn.namestring()
+    # `resolve_filespec`, not a bare `pn.namestring()`: a relative pathname
+    # here has no directory of its own, so without going through the same
+    # `*DEFAULT-PATHNAME-DEFAULTS*`/`LISP_CWD` resolution OPEN and DELETE-FILE
+    # use, `(directory "tmp.dat")` matched (or missed) whatever file of that
+    # name happened to sit under the Python process's actual working
+    # directory -- not the one every other file operator was reading and
+    # writing. The mismatch is exactly what broke `delete-all-versions`
+    # (ansi-aux.lsp): its `(directory (make-pathname :version :wild
+    # :defaults p))` would resolve one relative candidate, and the
+    # `delete-file` on the truename it returned would resolve a *different*
+    # one, so cleanup between OPEN.* tests either found nothing or deleted
+    # the wrong file.
+    path_str = resolve_filespec(pn)
     import glob
 
     if '*' in path_str or '?' in path_str:
         matches = glob.glob(path_str)
     elif os.path.isdir(path_str):
         matches = [os.path.join(path_str, name) for name in os.listdir(path_str)]
+    elif os.path.isfile(path_str):
+        # A literal, non-wildcard pathname matches its own file if that file
+        # exists (CLHS 20.2) -- including one whose only wild component is
+        # :VERSION, which never appears in `path_str` at all because a
+        # physical pathname here has no version namestring syntax (plan.md).
+        # `delete-all-versions`'s `(directory (make-pathname :version :wild
+        # :defaults p))` depends on exactly this: without it, DIRECTORY
+        # answered NIL for a real file every time, so the ansi-test harness's
+        # own cleanup helper never deleted anything and every OPEN.ERROR.*
+        # test expecting a missing-file FILE-ERROR instead found the file
+        # left over from a previous test.
+        matches = [path_str]
     else:
         matches = []
 

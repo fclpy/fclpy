@@ -238,7 +238,13 @@ class TestOpenFile:
         
         try:
             result = open_file(fname, direction='probe')
-            assert result == lisptype.T
+            # CLHS 21.1: :probe returns a (non-open) stream when the file
+            # exists, not the boolean T -- `(typep result 'file-stream)`
+            # and `(not (open-stream-p result))` is what ansi-test's
+            # OPEN.PROBE.* actually assert.
+            from fclpy.lispfunc.streams import Stream, open_stream_p
+            assert isinstance(result, Stream)
+            assert open_stream_p(result) is lisptype.NIL
         finally:
             os.unlink(fname)
     

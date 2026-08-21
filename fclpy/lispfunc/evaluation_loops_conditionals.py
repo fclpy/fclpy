@@ -758,10 +758,10 @@ def eval_or(form, env):
     
     while _consp_internal(args):
         result = eval(car(args), env)
-        if result is not None and result != lisptype.NIL:
+        if lisptype.is_truthy(result):
             return result
         args = cdr(args)
-    
+
     # OR with no truthy values returns NIL, not Python None
     return lisptype.NIL
 

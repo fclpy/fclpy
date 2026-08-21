@@ -193,7 +193,22 @@ def lisp_bool(value):
         return T
 
 def is_truthy(value):
-    """Test if a value is truthy in Lisp (anything except NIL and None)."""
+    """Test if a value is truthy in Lisp (anything except NIL and None).
+
+    CLHS 5.1: a boolean-test position (IF/COND/AND/OR/WHEN/UNLESS/a loop
+    end-test, ...) is a single-value context, so a `MultipleValues` result
+    must be reduced to its primary value before this check. Without it,
+    `(if (subtypep 'integer 'character) ...)` was unconditionally true,
+    because the not-yet-unwrapped `MultipleValues` *wrapper object* is
+    itself neither `NIL` nor `None` regardless of what SUBTYPEP decided --
+    every two-values-returning predicate (SUBTYPEP, GETHASH, FIND-SYMBOL,
+    ...) has the same defect in a test position. An ordinary function call
+    does not hit this: evaluating an argument already reduces it to its
+    primary value on the way into the call, which is why `(not (subtypep
+    ...))` was fine but `(if (subtypep ...) ...)` was not.
+    """
+    if isinstance(value, MultipleValues):
+        value = value.get_primary()
     return value is not NIL and value is not None
 
 
