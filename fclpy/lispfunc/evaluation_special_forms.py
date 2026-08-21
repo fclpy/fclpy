@@ -4060,6 +4060,65 @@ def _check_argument_precedence_order(func_name, lambda_list, order_tail):
             f"is not a permutation of the required parameters {required_names}")
 
 
+def _congruence_shape(required_count, tail):
+    """The four congruence-relevant facts of one lambda list (CLHS 7.6.4),
+    from a required-parameter count and the parsed `&optional`/`&rest`/
+    `&key`/`&allow-other-keys` tail `parse_lambda_list` already produces.
+
+    `keywords` is `None` when `&key` was not mentioned at all -- distinct
+    from mentioning it with no names -- which is exactly what rule 3 below
+    needs and a bare `len(tail['keyword'])` cannot tell apart.
+    """
+    mentions_rest_or_key = tail['mentions_rest'] or tail['mentions_key']
+    keywords = None
+    if tail['mentions_key']:
+        keywords = {_keyword_param_parts(k)[0] for k in tail['keyword']}
+    return required_count, len(tail['optional']), mentions_rest_or_key, keywords, tail['allow_other_keys']
+
+
+def _check_method_congruent(gf_name, gf_lambda_list, required_params, optional_lambda_list):
+    """CLHS 7.6.4, "Congruent Lambda-lists for all Methods of a Generic
+    Function": every method added to a generic function -- whether via
+    DEFGENERIC's inline `:method` options or a standalone DEFMETHOD --
+    must agree with the generic function's own lambda list on the number
+    of required parameters, the number of optional parameters, and whether
+    `&rest`/`&key` is accepted at all; if the generic function's lambda
+    list names `&key` arguments, every method must accept all of them
+    (by naming them itself, or via `&allow-other-keys`).
+
+    This was entirely unchecked: `(defgeneric g (x) (:method ((x t) (y t))
+    ...))` silently added a two-argument method to a one-argument generic
+    function instead of signalling the PROGRAM-ERROR CLHS requires
+    (`defgeneric.error.9` through `.19`, and `.7`'s inline-:method case).
+    """
+    from .evaluation_core import parse_lambda_list
+
+    gf_tail = parse_lambda_list(gf_lambda_list)
+    gf_req, gf_opt, gf_rk, gf_keys, _ = _congruence_shape(len(gf_tail['required']), gf_tail)
+    m_req, m_opt, m_rk, m_keys, m_aok = _congruence_shape(len(required_params), optional_lambda_list)
+
+    name = gf_name.name if isinstance(gf_name, lisptype.LispSymbol) else str(gf_name)
+
+    if m_req != gf_req:
+        raise lisptype.LispProgramError(
+            f"{name}: method has {m_req} required parameter(s); "
+            f"the generic function has {gf_req}")
+    if m_opt != gf_opt:
+        raise lisptype.LispProgramError(
+            f"{name}: method has {m_opt} optional parameter(s); "
+            f"the generic function has {gf_opt}")
+    if m_rk != gf_rk:
+        raise lisptype.LispProgramError(
+            f"{name}: method and generic function lambda lists must agree "
+            f"on whether &rest or &key is accepted")
+    if gf_keys is not None and m_keys is not None and not m_aok:
+        missing = gf_keys - m_keys
+        if missing:
+            raise lisptype.LispProgramError(
+                f"{name}: method does not accept keyword argument(s) "
+                f"{sorted(missing)} named by the generic function's lambda list")
+
+
 def eval_defgeneric(form, env):
     """Evaluate DEFGENERIC special form (CLHS 7.7).
 
@@ -4162,6 +4221,7 @@ def eval_defgeneric(form, env):
     gf.method_combination = method_combination
 
     for qualifiers, specializers, required_params, optional_lambda_list, method_body in method_specs:
+        _check_method_congruent(func_name, lambda_list, required_params, optional_lambda_list)
         method_fn = _make_method_function(required_params, optional_lambda_list, method_body, env, func_name)
         classes.add_method(gf, specializers, method_fn, qualifiers=qualifiers)
 
@@ -4228,6 +4288,13 @@ def eval_defmethod(form, env):
     method_fn = _make_method_function(required_params, optional_lambda_list, method_body, env, block_name)
 
     gf = classes.ensure_generic_function(func_name)
+    # Congruence (CLHS 7.6.4) is only checked against a lambda list the
+    # generic function actually declared -- `ensure_generic_function`'s own
+    # contract is that DEFMETHOD alone never supplies one, so a GF an
+    # earlier DEFMETHOD created implicitly has none to be congruent with
+    # yet (CLHS lets the *first* method establish it instead).
+    if gf.lambda_list is not None:
+        _check_method_congruent(func_name, gf.lambda_list, required_params, optional_lambda_list)
     classes.add_method(gf, specializers, method_fn, qualifiers=qualifiers)
     new_method = next(m for m in gf.methods if m.function is method_fn)
 

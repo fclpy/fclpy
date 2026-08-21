@@ -473,7 +473,15 @@ def parse_lambda_list(lambda_list):
     aux = []
     environment = None
     allow_other_keys = False
-    
+    # Whether &rest/&body or &key was *mentioned at all* -- distinct from
+    # `rest is not None`/`keyword` being non-empty, both of which a bare
+    # `&key` (naming no keywords) or a destructuring-less `&rest` leave
+    # looking identical to "not mentioned". CLHS 7.6.4's method/generic-
+    # function lambda-list congruence rule 3 turns on exactly that
+    # presence, not on whether anything follows it.
+    mentions_rest = False
+    mentions_key = False
+
     # Parse the lambda list
     current_section = 'required'
     current = lambda_list
@@ -492,10 +500,12 @@ def parse_lambda_list(lambda_list):
             elif marker == '&REST' or marker == '&BODY':
                 # &BODY is a Common Lisp synonym for &REST
                 current_section = 'rest'
+                mentions_rest = True
                 current = cdr(current)
                 continue
             elif marker == '&KEY':
                 current_section = 'keyword'
+                mentions_key = True
                 current = cdr(current)
                 continue
             elif marker == '&AUX':
@@ -584,6 +594,8 @@ def parse_lambda_list(lambda_list):
         'whole': whole,
         'environment': environment,
         'allow_other_keys': allow_other_keys,
+        'mentions_rest': mentions_rest,
+        'mentions_key': mentions_key,
     }
 
 
