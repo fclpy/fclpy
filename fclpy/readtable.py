@@ -369,70 +369,118 @@ class Readtable:
         quote_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol("QUOTE")
         return lisptype.lispCons(quote_sym, lisptype.lispCons(expr, lisptype.NIL))
     
-    def _read_symbol(self, first_char, stream):
-        """Read a symbol token with package awareness.
-        
-        When reading an unqualified symbol:
-        1. Check current *PACKAGE* (from state.current_package)
-        2. Look for existing symbol in current package
-        3. Look for exported symbol in USE'd packages
-        4. If not found, intern in current package
+    def _read_token(self, stream, first_char=None):
+        """Read a symbol-like token, honoring CLHS 2.4.5's escape characters.
+
+        A character is either a plain constituent -- case-converted per
+        `readtable-case` as it is read -- or escaped via `\\` (single escape)
+        or `|...|` (multiple escape), which CLHS 23.1.2 says is used *as is*:
+        "an escaped character ... is not affected by the readtable case".
+        Every caller here used to skip that distinction and force-upcase the
+        whole token regardless of escaping, which is why `(string= '|abc|
+        (copy-seq "abc"))` was NIL -- `|abc|`'s name became "ABC", identical
+        to plain `ABC`, instead of the case-preserved "abc" CLHS requires.
+
+        Returns `(name, raw, consumed)`: `raw` is the token with every escape
+        stripped and an escaped colon replaced by the `\x00` placeholder
+        already used below for package-qualifier detection (an escaped
+        colon is never a separator); `name` is `raw` with `.upper()` applied
+        to only the characters that were *not* escaped -- the one thing a
+        caller must use for lookup/interning instead of `raw.upper()`.
+        `consumed` is False only when nothing at all followed -- `raw` empty
+        is not the same thing, because `||` (CLHS 2.4.5) is a *valid*,
+        explicitly-escaped empty name (`universe.lsp`'s `'#:||`), not the
+        absence of one.
         """
-        token = first_char
+        raw_chars = []
+        exact = []
+
+        def consume(c):
+            if c == '\\':
+                escaped = stream.read_char()
+                if escaped is None:
+                    raise Exception("reader-error: EOF after escape")
+                raw_chars.append('\x00' if escaped == ':' else escaped)
+                exact.append(True)
+            elif c == '|':
+                while True:
+                    p = stream.read_char()
+                    if p is None:
+                        raise Exception("reader-error: EOF in |...|")
+                    if p == '|':
+                        return
+                    if p == '\\':
+                        p = stream.read_char()
+                        if p is None:
+                            raise Exception(
+                                "reader-error: EOF after escape in |...|")
+                    raw_chars.append('\x00' if p == ':' else p)
+                    exact.append(True)
+            else:
+                raw_chars.append(c)
+                exact.append(False)
+
+        consumed = first_char is not None
+        if consumed:
+            consume(first_char)
         while True:
             c = stream.read_char()
             if not c or c.isspace() or c in '()':
                 if c:
                     stream.unread_char(c)
                 break
-            # Handle backslash escape
-            if c == '\\':
-                escaped = stream.read_char()
-                if not escaped:
-                    raise Exception("reader-error: EOF after escape")
-                # Use placeholder for escaped colons
-                if escaped == ':':
-                    token += '\x00'
-                else:
-                    token += escaped
-            else:
-                token += c
+            consumed = True
+            consume(c)
+
+        raw = ''.join(raw_chars)
+        name = ''.join(c if e else c.upper() for c, e in zip(raw_chars, exact))
+        return name, raw, consumed
+
+    def _read_symbol(self, first_char, stream):
+        """Read a symbol token with package awareness.
+
+        When reading an unqualified symbol:
+        1. Check current *PACKAGE* (from state.current_package)
+        2. Look for existing symbol in current package
+        3. Look for exported symbol in USE'd packages
+        4. If not found, intern in current package
+        """
+        name, raw, _consumed = self._read_token(stream, first_char)
         from . import lisptype
         from . import state
-        
-        # If symbol starts with a leading colon, treat it as a keyword
-        if token.startswith(':'):
-            # Intern keyword with the name after the colon
-            name = token[1:]
-            return lisptype.intern_keyword(name.upper())
-        
+
+        # If symbol starts with a leading (unescaped) colon, it's a keyword.
+        if raw.startswith(':'):
+            return lisptype.intern_keyword(name[1:], exact_case=True)
+
         # Handle package-qualified symbols (PKG:SYM or PKG::SYM)
         # Only treat as package-qualified if contains a real colon (not escaped placeholder \x00)
-        token_check = token.replace('\x00', '')
-        if ':' in token_check and not token.startswith(':'):
-            return self._read_package_qualified_symbol(token)
-        
+        raw_check = raw.replace('\x00', '')
+        if ':' in raw_check and not raw.startswith(':'):
+            return self._read_package_qualified_symbol(raw)
+
         # The current package is the value of `*PACKAGE*`; `state`'s resolver
         # is the one place that decides (see state.current_package_value).
         current_pkg = state.current_package_value()
-        
-        # Restore escaped colons before interning
-        token_restored = token.replace('\x00', ':')
-        name_upper = token_restored.upper()
-        
+
+        # Restore escaped colons; `name` already has the correct per-character
+        # case (readtable-case for plain characters, verbatim for escaped
+        # ones), so this is the string every lookup/intern below must use.
+        name_restored = name.replace('\x00', ':')
+
         # CRITICAL: In Common Lisp, NIL is both the symbol and the empty list; the
         # reader should return the canonical NIL object rather than a
         # fresh symbol. Similarly, T should return the global T symbol.
-        if name_upper == 'NIL':
+        if name_restored == 'NIL':
             return lisptype.NIL
-        if name_upper == 'T':
+        if name_restored == 'T':
             return lisptype.T
-        
+
         # First check if symbol exists in current package
-        sym, status = current_pkg.find_symbol(name_upper)
+        sym, status = current_pkg.find_symbol(name_restored)
         if sym is not None:
             return sym
-        
+
         # Check USE'd packages for exported symbols
         for used_pkg in getattr(current_pkg, 'use_packages', []):
             # Handle both Package objects and package names
@@ -440,13 +488,14 @@ class Readtable:
                 used_pkg = lisptype.find_package(used_pkg)
             if used_pkg is not None:
                 # Only look for external symbols in USE'd packages
-                if name_upper in getattr(used_pkg, 'external_symbols', set()):
-                    sym = used_pkg.symbols.get(name_upper)
+                if name_restored in getattr(used_pkg, 'external_symbols', set()):
+                    sym = used_pkg.symbols.get(name_restored)
                     if sym is not None:
                         return sym
-        
-        # Not found - intern in current package
-        return current_pkg.intern_symbol(token_restored)
+
+        # Not found - intern in current package. `name_restored` is already
+        # correctly cased per character, so this must not be re-upcased.
+        return current_pkg.intern_symbol(name_restored, exact_case=True)
     
     def _read_package_qualified_symbol(self, token):
         """Read a package-qualified symbol like PKG:SYM or PKG::SYM.
@@ -939,23 +988,17 @@ class Readtable:
             A new uninterned LispSymbol
         """
         from . import lisptype
-        
-        # Read the symbol name
-        token = ''
-        while True:
-            c = stream.read_char()
-            if not c or c.isspace() or c in '()':
-                if c:
-                    stream.unread_char(c)
-                break
-            token += c
-        
-        if not token:
+
+        # Read the symbol name, honoring `\`/`|...|` escapes (CLHS 2.4.5)
+        # exactly as `_read_symbol` does -- this used to read raw characters
+        # with no escape handling at all, so `#:|abc|` kept its literal pipe
+        # characters as part of the name and then upcased them too.
+        name, raw, consumed = self._read_token(stream)
+
+        if not consumed:
             raise ValueError("Empty symbol name after #:")
-        
-        # Create an uninterned symbol (not in any package)
-        # Use uppercase for consistency with CL standard
-        name = token.upper()
+
+        name = name.replace('\x00', ':')
         # Special case: T and NIL should return the canonical symbols
         if name == 'T':
             return lisptype.T

@@ -78,6 +78,15 @@ T_TYPE = lisptype.T
 BIT_TYPE = _cl_symbol('BIT')
 CHARACTER_TYPE = _cl_symbol('CHARACTER')
 
+# The upgraded element type of a `NIL`-element-type array is NIL itself, not
+# T -- CLHS 15.1.2.1's monotonicity requirement forces this: NIL is a
+# subtype of both BIT and CHARACTER, so UAET(NIL) must be a subtype of both
+# UAET(BIT)=BIT and UAET(CHARACTER)=CHARACTER, and the only type that is a
+# subtype of two disjoint types is NIL (`upgraded-array-element-type.nil.1`,
+# CLHS's own worked example). NIL is also the one Lisp object that denotes
+# the empty type as a type specifier, so it doubles as that marker here.
+NIL_TYPE = lisptype.NIL
+
 _CHARACTER_TYPE_NAMES = frozenset((
     'CHARACTER', 'BASE-CHAR', 'STANDARD-CHAR', 'EXTENDED-CHAR'))
 
@@ -117,17 +126,30 @@ def _type_args(designator):
 def upgraded_element_type(spec):
     """The element type an array of `spec` actually holds (CLHS 15.1.2.1).
 
-    fclpy specializes on exactly the two element types the standard *requires*
-    a distinct representation for -- `BIT` and `CHARACTER` -- and upgrades
-    everything else to `T`, which CLHS 15.1.2.1 explicitly permits ("the
-    upgraded array element type ... is a supertype of the expressed type").
-    The distinction has to be recorded rather than inferred, because a bit
-    vector and a general vector holding zeroes and ones are different types
-    that print differently and answer `BIT-VECTOR-P` differently.
+    fclpy specializes on exactly the three element types the standard forces
+    a distinct representation for -- `NIL`, `BIT` and `CHARACTER` -- and
+    upgrades everything else to `T`, which CLHS 15.1.2.1 explicitly permits
+    ("the upgraded array element type ... is a supertype of the expressed
+    type"). `BIT`/`CHARACTER` have to be recorded rather than inferred
+    because a bit vector and a general vector holding zeroes and ones are
+    different types that print differently and answer `BIT-VECTOR-P`
+    differently; `NIL` has to be recorded because upgrading it to `T` fails
+    the monotonicity check `upgraded-array-element-type.nil.1` runs (see
+    `NIL_TYPE`).
+
+    `spec` denoting NIL is checked before `_type_name(spec)`, because NIL
+    (however it arrives -- the singleton, Python `None`, or a `LispSymbol`
+    named "NIL") has no `.name` attribute for `_type_name` to read and would
+    otherwise fall through to the `name is None` "not a type name at all"
+    branch, silently becoming `T` like an unrecognized specifier would.
     """
+    if spec is None or spec is lisptype.NIL:
+        return NIL_TYPE
     name = _type_name(spec)
     if name is None:
         return T_TYPE
+    if name == 'NIL':
+        return NIL_TYPE
     if name == 'BIT':
         return BIT_TYPE
     if name in _CHARACTER_TYPE_NAMES:
@@ -1235,7 +1257,20 @@ def array_type_matches(object, type_name, args=()):
         return False
     if base == 'BIT-VECTOR' and element_type is not BIT_TYPE:
         return False
-    if base in ('STRING', 'BASE-STRING') and element_type is not CHARACTER_TYPE:
+    if base == 'STRING' and element_type not in (CHARACTER_TYPE, NIL_TYPE):
+        # NIL is a subtype of every type, CHARACTER included, so an
+        # `(array nil (*))` is a STRING too (CLHS 15.1, `*.NIL-ARRAY.1`'s
+        # `:nil-vectors-are-strings` tests) -- matching `characters.is_string`,
+        # which STRINGP/SIMPLE-STRING-P go through, and `typespec.py`'s
+        # `_array_type` STRING branch, which SUBTYPEP goes through. Without
+        # this a mismatch here was directly observable as TYPEP and STRINGP
+        # disagreeing on the same object (`check-type-predicate`).
+        # BASE-STRING gets no such allowance below: unlike the bare name
+        # STRING, it is exactly `(vector base-char)` with nothing extra
+        # (`base-string-is-vector-of-base-char.1`/`.2` require the plain
+        # equivalence, no NIL-shaped exception).
+        return False
+    if base == 'BASE-STRING' and element_type is not CHARACTER_TYPE:
         return False
 
     args = list(args)

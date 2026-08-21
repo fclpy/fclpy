@@ -752,13 +752,23 @@ class ConsBulk:
 #
 # An array type is a question about three things (CLHS 15.1): simplicity, the
 # *upgraded* element type, and the dimensions. fclpy upgrades every element
-# type to one of exactly three (T, BIT, CHARACTER -- see
+# type to one of exactly four (T, BIT, CHARACTER, NIL -- see
 # `arrays.upgraded_element_type`), and simplicity is a boolean, so those two
-# axes are a six-element key rather than something needing its own algebra.
+# axes are an eight-element key rather than something needing its own algebra.
 # Only the dimensions do, and they get `DimSet`.
+#
+# NIL is its own key, disjoint from the other three, rather than folded into
+# T: UPGRADED-ARRAY-ELEMENT-TYPE(NIL) is NIL, not T (CLHS 15.1.2.1's
+# monotonicity requirement -- NIL is a subtype of both BIT and CHARACTER, so
+# its UAET must be a subtype of both UAET(BIT)=BIT and UAET(CHARACTER)=
+# CHARACTER, and only NIL itself is a subtype of two disjoint types). Folding
+# it into T made `(array t)` and `(array nil)` the same lattice region
+# instead of disjoint ones, which is what `subtypep.array.7`'s
+# `check-disjointness` over `*array-element-types*` (which includes `nil`)
+# caught the moment `upgraded_element_type` stopped answering `T` for it.
 # ---------------------------------------------------------------------------
 
-_ARRAY_ETYPES = ('T', 'BIT', 'CHARACTER')
+_ARRAY_ETYPES = ('T', 'BIT', 'CHARACTER', 'NIL')
 _ARRAY_KEYS = tuple((simple, etype)
                     for simple in (True, False)
                     for etype in _ARRAY_ETYPES)
@@ -949,6 +959,8 @@ def _etype_key(element_type):
         return 'BIT'
     if element_type is _arrays.CHARACTER_TYPE:
         return 'CHARACTER'
+    if element_type is _arrays.NIL_TYPE:
+        return 'NIL'
     return 'T'
 
 
@@ -2086,7 +2098,17 @@ def _array_type(name, args, environment, depth):
     # element type
     if base == 'BIT-VECTOR':
         etypes = ('BIT',)
-    elif base in ('STRING', 'BASE-STRING'):
+    elif base == 'STRING':
+        # CLHS 15.1: a string is a specialized array whose element type is a
+        # subtype of CHARACTER, and NIL is a subtype of every type -- so
+        # STRING is CHARACTER's region *and* NIL's, not CHARACTER's alone
+        # (`*-is-not-vector-of-character.*`'s `:nil-vectors-are-strings`
+        # tests). `(vector base-char)`/`base-string` carry no such clause
+        # below because a *specific* element-type argument, unlike the bare
+        # name STRING, resolves through the generic `etype_spec` branch and
+        # never includes NIL on its own.
+        etypes = ('CHARACTER', 'NIL')
+    elif base == 'BASE-STRING':
         etypes = ('CHARACTER',)
     elif name == 'SIMPLE-VECTOR':
         etypes = ('T',)

@@ -451,16 +451,48 @@ def string_fn(designator):
         return lisptype.LispString(str(designator))
 
 
+def is_string(value):
+    """CLHS 15.1: a string is a specialized array whose element type is a
+    subtype of CHARACTER -- not just the two representations that happen to
+    print like one.
+
+    `STRINGP`/`SIMPLE-STRING-P` used to test only `isinstance(x, (str,
+    LispString))`, which is right for a `LispString` and a plain Python
+    `str` but blind to the third representation the array model (CLAUDE.md)
+    already tracks: `(make-array n :element-type 'character)` is a
+    `LispArray` with `element_type_of(...) is CHARACTER_TYPE`, correctly
+    reported by `TYPE-OF`/`ARRAY-ELEMENT-TYPE` -- but invisible to an
+    `isinstance` check, exactly the pattern plan.md Finding M names. This is
+    not a corner case: ansi-test's own random-string generator (`auxiliary/
+    string-aux.lsp`'s `make-random-string`) builds strings this way as often
+    as it builds `LispString`s, and the harness's own `(assert (stringp
+    ...))` was failing on its own fixture, independent of anything under
+    test.
+
+    An `(array nil (*))` counts too (`*.NIL-ARRAY.1`'s ``:nil-vectors-
+    are-strings`` tests): NIL is a subtype of every type, CHARACTER
+    included, so it satisfies "element type is a subtype of CHARACTER" even
+    though it is not CHARACTER itself.
+    """
+    if isinstance(value, (str, lisptype.LispString)):
+        return True
+    if not (_arrays.is_array(value) and _arrays.array_rank_of(value) == 1):
+        return False
+    element_type = _arrays.element_type_of(value)
+    return element_type is _arrays.CHARACTER_TYPE or element_type is _arrays.NIL_TYPE
+
+
 @_registry.cl_function('STRINGP')
 def stringp(object):
     """Test if object is a string."""
-    return lisptype.lisp_bool(isinstance(object, (str, lisptype.LispString)))
+    return lisptype.lisp_bool(is_string(object))
 
 
 @_registry.cl_function('SIMPLE-STRING-P')
 def simple_string_p(object):
-    """Test if object is a simple string."""
-    return lisptype.lisp_bool(isinstance(object, (str, lisptype.LispString)))
+    """Test if object is a simple (non-adjustable, non-displaced, no
+    fill-pointer) string."""
+    return lisptype.lisp_bool(is_string(object) and _arrays.is_simple_array(object))
 
 
 @_registry.cl_function('MAKE-STRING')
@@ -569,152 +601,175 @@ def nstring_upcase(string, start=0, end=None):
     return string_upcase(string, start, end)
 
 
-@_registry.cl_function('STRING-EQUAL')
-def string_equal(string1, string2, start1=0, end1=None, start2=0, end2=None):
-    """Test string equality (case insensitive)."""
-    string1 = _string_designator(string1)
-    string2 = _string_designator(string2)
-    if end1 is None:
-        end1 = len(string1)
-    if end2 is None:
-        end2 = len(string2)
-
-    substr1 = string1[start1:end1].upper()
-    substr2 = string2[start2:end2].upper()
-
-    return substr1 == substr2
-
-
-@_registry.cl_function('STRING-NOT-EQUAL')
-def string_not_equal(string1, string2, start1=0, end1=None, start2=0, end2=None):
-    """Test string inequality (case insensitive)."""
-    return not string_equal(string1, string2, start1, end1, start2, end2)
-
-
-@_registry.cl_function('STRING-LESSP')
-def string_lessp(string1, string2, start1=0, end1=None, start2=0, end2=None):
-    """Test string less than (case insensitive)."""
-    if end1 is None:
-        end1 = len(string1)
-    if end2 is None:
-        end2 = len(string2)
-    
-    substr1 = string1[start1:end1].upper()
-    substr2 = string2[start2:end2].upper()
-    
-    return substr1 < substr2
-
-
-@_registry.cl_function('STRING-GREATERP')
-def string_greaterp(string1, string2, start1=0, end1=None, start2=0, end2=None):
-    """Test string greater than (case insensitive)."""
-    if end1 is None:
-        end1 = len(string1)
-    if end2 is None:
-        end2 = len(string2)
-    
-    substr1 = string1[start1:end1].upper()
-    substr2 = string2[start2:end2].upper()
-    
-    return substr1 > substr2
-
-
-@_registry.cl_function('STRING-NOT-GREATERP')
-def string_not_greaterp(string1, string2, start1=0, end1=None, start2=0, end2=None):
-    """Test string not greater than (case insensitive)."""
-    return not string_greaterp(string1, string2, start1, end1, start2, end2)
-
-
-@_registry.cl_function('STRING-NOT-LESSP')
-def string_not_lessp(string1, string2, start1=0, end1=None, start2=0, end2=None):
-    """Test string not less than (case insensitive)."""
-    return not string_lessp(string1, string2, start1, end1, start2, end2)
-
-
 def _string_designator(x):
-    """Coerce a string designator (string, symbol, or character) to a Python str.
+    """Resolve `x` as a CLHS "string designator" to plain Python text.
 
-    ANSI STRING=/STRING</STRING> etc. accept any string designator, not just
-    literal strings -- e.g. (STRING= "FOO" 'FOO) must be true.
+    Delegates to `misc_packages._designator_to_string`, the one designator
+    resolver (plan.md standing rule 3). This module used to carry its own
+    copy that only handled the symbol and character cases, so a
+    pipe-escaped symbol name (`'|abc|`, `STRING=.4`/`.5`) kept its literal
+    pipes instead of being unescaped, and a zero-length
+    `(make-array '(0) :element-type nil)` string stand-in
+    (`*.NIL-ARRAY.1`) fell through to `str(x)` instead of resolving to "".
     """
-    if isinstance(x, str):
-        return x
-    if isinstance(x, lisptype.LispSymbol):
-        return x.name
-    if isinstance(x, lisptype.Character):
-        return x.char
-    return str(x)
+    from .misc_packages import _designator_to_string
+    return _designator_to_string(x)
 
 
-@_registry.cl_function('STRING<')
-def string_lt(string1, string2, start1=0, end1=None, start2=0, end2=None):
-    """Test string less than (case sensitive)."""
-    string1 = _string_designator(string1)
-    string2 = _string_designator(string2)
-    if end1 is None:
-        end1 = len(string1)
-    if end2 is None:
-        end2 = len(string2)
+def _string_relation(s1, s2, start1, end1, start2, end2, fold):
+    """Classify the CLHS 16.4 ordering relation between two substrings.
 
-    return string1[start1:end1] < string2[start2:end2]
+    Returns ``(relation, index)``: `relation` is one of ``'lt'``, ``'eq'``,
+    ``'gt'``, and `index` is CLHS's "mismatch index" -- a bounding index of
+    `s1` -- which every comparator except STRING=/STRING-EQUAL must return
+    on success instead of a bare boolean. `../ansi-test/auxiliary/
+    string-aux.lsp`'s `my-string-compare` is the ANSI suite's own reference
+    model for this (and what its randomized `random-string-comparison-tests`
+    checks every comparator against): a shorter string that matches the
+    longer one's prefix is "less", the mismatch index is always relative to
+    `s1`, and two substrings that both run out at once are "equal" with the
+    index reported as `end1`. `fold` case-folds each character pair, which
+    is the entire difference between e.g. STRING-LESSP and STRING<.
+    """
+    i1, i2 = start1, start2
+    while i1 < end1 and i2 < end2:
+        c1, c2 = s1[i1], s2[i2]
+        if fold:
+            c1, c2 = c1.upper(), c2.upper()
+        if c1 != c2:
+            return ('lt', i1) if c1 < c2 else ('gt', i1)
+        i1 += 1
+        i2 += 1
+    if i1 == end1 and i2 == end2:
+        return ('eq', end1)
+    if i1 == end1:
+        return ('lt', end1)
+    return ('gt', i1)
 
 
-@_registry.cl_function('STRING<=')
-def string_le(string1, string2, start1=0, end1=None, start2=0, end2=None):
-    """Test string less than or equal (case sensitive)."""
-    string1 = _string_designator(string1)
-    string2 = _string_designator(string2)
-    if end1 is None:
-        end1 = len(string1)
-    if end2 is None:
-        end2 = len(string2)
+def _string_bounds(string1, string2, start1, end1, start2, end2):
+    """Resolve both string designators and their CLHS bounding indices.
 
-    return string1[start1:end1] <= string2[start2:end2]
+    `sequence_protocol.bounding_indices` is the one place `:end` NIL vs. an
+    explicit integer is told apart (CLHS 17.1); the comparators used to test
+    `end1 is None`, which is false for an explicitly-passed Lisp NIL and
+    made `(string= s1 s2 :end1 nil)` slice with NIL as an index instead of
+    treating it as "through the end" (`*.ORDER.2`/`.3`, `STRING=.13`/`.14`).
+    """
+    from . import sequence_protocol as _seq
+    s1 = _string_designator(string1)
+    s2 = _string_designator(string2)
+    start1, end1 = _seq.bounding_indices(len(s1), start1, end1, 'STRING comparison')
+    start2, end2 = _seq.bounding_indices(len(s2), start2, end2, 'STRING comparison')
+    return s1, s2, start1, end1, start2, end2
 
 
 @_registry.cl_function('STRING=')
-def string_eq(string1, string2, start1=0, end1=None, start2=0, end2=None):
-    """Test string equality (case sensitive)."""
-    string1 = _string_designator(string1)
-    string2 = _string_designator(string2)
-    if end1 is None:
-        end1 = len(string1)
-    if end2 is None:
-        end2 = len(string2)
-
-    return string1[start1:end1] == string2[start2:end2]
+def string_eq(string1, string2, *, start1=0, end1=None, start2=0, end2=None):
+    """CLHS 16.4: true if the substrings' characters match (case sensitive)."""
+    s1, s2, start1, end1, start2, end2 = _string_bounds(
+        string1, string2, start1, end1, start2, end2)
+    relation, _index = _string_relation(s1, s2, start1, end1, start2, end2, fold=False)
+    return lisptype.lisp_bool(relation == 'eq')
 
 
-@_registry.cl_function('STRING/=')
-def string_ne(string1, string2, start1=0, end1=None, start2=0, end2=None):
-    """Test string inequality (case sensitive)."""
-    return not string_eq(string1, string2, start1, end1, start2, end2)
+@_registry.cl_function('STRING-EQUAL')
+def string_equal(string1, string2, *, start1=0, end1=None, start2=0, end2=None):
+    """CLHS 16.4: true if the substrings' characters match (case insensitive)."""
+    s1, s2, start1, end1, start2, end2 = _string_bounds(
+        string1, string2, start1, end1, start2, end2)
+    relation, _index = _string_relation(s1, s2, start1, end1, start2, end2, fold=True)
+    return lisptype.lisp_bool(relation == 'eq')
+
+
+@_registry.cl_function('STRING<')
+def string_lt(string1, string2, *, start1=0, end1=None, start2=0, end2=None):
+    """CLHS 16.4: the mismatch index if string1 < string2 (case sensitive), else NIL."""
+    s1, s2, start1, end1, start2, end2 = _string_bounds(
+        string1, string2, start1, end1, start2, end2)
+    relation, index = _string_relation(s1, s2, start1, end1, start2, end2, fold=False)
+    return index if relation == 'lt' else lisptype.NIL
 
 
 @_registry.cl_function('STRING>')
-def string_gt(string1, string2, start1=0, end1=None, start2=0, end2=None):
-    """Test string greater than (case sensitive)."""
-    string1 = _string_designator(string1)
-    string2 = _string_designator(string2)
-    if end1 is None:
-        end1 = len(string1)
-    if end2 is None:
-        end2 = len(string2)
+def string_gt(string1, string2, *, start1=0, end1=None, start2=0, end2=None):
+    """CLHS 16.4: the mismatch index if string1 > string2 (case sensitive), else NIL."""
+    s1, s2, start1, end1, start2, end2 = _string_bounds(
+        string1, string2, start1, end1, start2, end2)
+    relation, index = _string_relation(s1, s2, start1, end1, start2, end2, fold=False)
+    return index if relation == 'gt' else lisptype.NIL
 
-    return string1[start1:end1] > string2[start2:end2]
+
+@_registry.cl_function('STRING<=')
+def string_le(string1, string2, *, start1=0, end1=None, start2=0, end2=None):
+    """CLHS 16.4: the mismatch index if string1 <= string2 (case sensitive), else NIL."""
+    s1, s2, start1, end1, start2, end2 = _string_bounds(
+        string1, string2, start1, end1, start2, end2)
+    relation, index = _string_relation(s1, s2, start1, end1, start2, end2, fold=False)
+    return index if relation in ('lt', 'eq') else lisptype.NIL
 
 
 @_registry.cl_function('STRING>=')
-def string_ge(string1, string2, start1=0, end1=None, start2=0, end2=None):
-    """Test string greater than or equal (case sensitive)."""
-    string1 = _string_designator(string1)
-    string2 = _string_designator(string2)
-    if end1 is None:
-        end1 = len(string1)
-    if end2 is None:
-        end2 = len(string2)
+def string_ge(string1, string2, *, start1=0, end1=None, start2=0, end2=None):
+    """CLHS 16.4: the mismatch index if string1 >= string2 (case sensitive), else NIL."""
+    s1, s2, start1, end1, start2, end2 = _string_bounds(
+        string1, string2, start1, end1, start2, end2)
+    relation, index = _string_relation(s1, s2, start1, end1, start2, end2, fold=False)
+    return index if relation in ('gt', 'eq') else lisptype.NIL
 
-    return string1[start1:end1] >= string2[start2:end2]
+
+@_registry.cl_function('STRING/=')
+def string_ne(string1, string2, *, start1=0, end1=None, start2=0, end2=None):
+    """CLHS 16.4: the mismatch index if the substrings differ (case sensitive), else NIL."""
+    s1, s2, start1, end1, start2, end2 = _string_bounds(
+        string1, string2, start1, end1, start2, end2)
+    relation, index = _string_relation(s1, s2, start1, end1, start2, end2, fold=False)
+    return index if relation != 'eq' else lisptype.NIL
+
+
+@_registry.cl_function('STRING-LESSP')
+def string_lessp(string1, string2, *, start1=0, end1=None, start2=0, end2=None):
+    """CLHS 16.4: the mismatch index if string1 < string2 (case insensitive), else NIL."""
+    s1, s2, start1, end1, start2, end2 = _string_bounds(
+        string1, string2, start1, end1, start2, end2)
+    relation, index = _string_relation(s1, s2, start1, end1, start2, end2, fold=True)
+    return index if relation == 'lt' else lisptype.NIL
+
+
+@_registry.cl_function('STRING-GREATERP')
+def string_greaterp(string1, string2, *, start1=0, end1=None, start2=0, end2=None):
+    """CLHS 16.4: the mismatch index if string1 > string2 (case insensitive), else NIL."""
+    s1, s2, start1, end1, start2, end2 = _string_bounds(
+        string1, string2, start1, end1, start2, end2)
+    relation, index = _string_relation(s1, s2, start1, end1, start2, end2, fold=True)
+    return index if relation == 'gt' else lisptype.NIL
+
+
+@_registry.cl_function('STRING-NOT-GREATERP')
+def string_not_greaterp(string1, string2, *, start1=0, end1=None, start2=0, end2=None):
+    """CLHS 16.4: the mismatch index if string1 <= string2 (case insensitive), else NIL."""
+    s1, s2, start1, end1, start2, end2 = _string_bounds(
+        string1, string2, start1, end1, start2, end2)
+    relation, index = _string_relation(s1, s2, start1, end1, start2, end2, fold=True)
+    return index if relation in ('lt', 'eq') else lisptype.NIL
+
+
+@_registry.cl_function('STRING-NOT-LESSP')
+def string_not_lessp(string1, string2, *, start1=0, end1=None, start2=0, end2=None):
+    """CLHS 16.4: the mismatch index if string1 >= string2 (case insensitive), else NIL."""
+    s1, s2, start1, end1, start2, end2 = _string_bounds(
+        string1, string2, start1, end1, start2, end2)
+    relation, index = _string_relation(s1, s2, start1, end1, start2, end2, fold=True)
+    return index if relation in ('gt', 'eq') else lisptype.NIL
+
+
+@_registry.cl_function('STRING-NOT-EQUAL')
+def string_not_equal(string1, string2, *, start1=0, end1=None, start2=0, end2=None):
+    """CLHS 16.4: the mismatch index if the substrings differ (case insensitive), else NIL."""
+    s1, s2, start1, end1, start2, end2 = _string_bounds(
+        string1, string2, start1, end1, start2, end2)
+    relation, index = _string_relation(s1, s2, start1, end1, start2, end2, fold=True)
+    return index if relation != 'eq' else lisptype.NIL
 
 
 @_registry.cl_function('STRING-LEFT-TRIM')

@@ -440,24 +440,33 @@ class Package(lispT):
         """Alias for use_packages for compatibility with package functions."""
         return self.use_packages
     
-    def intern(self, name, external=False):
+    def intern(self, name, external=False, exact_case=False):
         """Intern a symbol in this package.
 
         Returns an existing symbol with the given name, or creates a new one.
-        Symbol names are uppercased per Common Lisp standard.
-        
+        Symbol names are uppercased per Common Lisp standard -- that
+        normalization is really the *reader*'s job (CLHS 23.1.2's
+        readtable-case, applied only to characters that were not escaped
+        with `\\`/`|...|`), not this function's, but every existing caller
+        already hands in a name it wants upcased wholesale. `exact_case=True`
+        opts out for a caller (the reader) that has already resolved the
+        correct per-character case itself and must not have it clobbered --
+        without this, a pipe-escaped `|abc|` and plain `ABC` always interned
+        as the same symbol, because this method force-upcased both.
+
         If the symbol is inherited from a used package, returns the inherited
         symbol (Common Lisp semantics).
-        
+
         Args:
             name: Symbol name (string)
             external: Whether to export the symbol
-            
+            exact_case: use `name` exactly as given, skipping the upcase
+
         Returns:
             LispSymbol object
         """
-        # Uppercase the name per Common Lisp standard
-        name = name.upper()
+        if not exact_case:
+            name = name.upper()
         
         # DEBUG: Trace T intern attempts
         # First check if symbol already exists in this package
@@ -512,20 +521,22 @@ class Package(lispT):
         
         return symbol
     
-    def intern_symbol(self, name, external=False):
+    def intern_symbol(self, name, external=False, exact_case=False):
         """Alias for intern() - interned a symbol in this package.
 
         Returns an existing symbol with the given name, or creates a new one.
-        Symbol names are uppercased per Common Lisp standard.
-        
+        Symbol names are uppercased per Common Lisp standard, unless
+        `exact_case` says the caller already resolved the case itself.
+
         Args:
             name: Symbol name (string)
             external: Whether to export the symbol
-            
+            exact_case: use `name` exactly as given, skipping the upcase
+
         Returns:
             LispSymbol object
         """
-        return self.intern(name, external)
+        return self.intern(name, external, exact_case=exact_case)
     
     def find_symbol(self, name):
         """Find a symbol in this package.
@@ -738,26 +749,31 @@ def intern_symbol(name, package=None):
     return package.intern_symbol(name, external=False)
 
 
-def intern_keyword(name):
+def intern_keyword(name, exact_case=False):
     """Intern a keyword (interned in KEYWORD package and auto-exported).
-    
+
     Args:
         name: Keyword name (without leading colon) or lispKeyword object
-        
+        exact_case: use `name` exactly as given (a reader that already
+            resolved per-character case for a `\\`/`|...|`-escaped keyword
+            name, e.g. `:|foo|`, must not have it re-upcased here)
+
     Returns:
         lispKeyword in keyword package
     """
     # If it's already a lispKeyword, return it
     if isinstance(name, lispKeyword):
         return name
-    
+
     # Convert to string and strip leading colon if present
     name = str(name)
     if name.startswith(':'):
         name = name[1:]
-    
-    # Normalize to uppercase (Common Lisp keyword convention)
-    name = name.upper()
+
+    # Normalize to uppercase (Common Lisp keyword convention), unless the
+    # caller already resolved the correct case itself.
+    if not exact_case:
+        name = name.upper()
     
     # Check if already interned
     if name in KEYWORD_PACKAGE.symbols:
