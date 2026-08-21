@@ -349,6 +349,27 @@ def special_defsetf(*args):
     raise lisptype.LispNotImplementedError('DEFSETF (evaluated in evaluator)')
 
 
+@_registry.cl_special('DEFINE-SETF-EXPANDER')
+def special_define_setf_expander(*args):
+    """DEFINE-SETF-EXPANDER special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('DEFINE-SETF-EXPANDER (evaluated in evaluator)')
+
+
+@_registry.cl_special('GET-SETF-EXPANSION')
+def special_get_setf_expansion(*args):
+    """GET-SETF-EXPANSION is an ordinary function per CLHS, but its first
+    argument's *value* denotes a place, which is exactly the shape the
+    evaluator's special-form dispatch (not eager cl_function argument
+    evaluation) already needs for SETF/DEFSETF/DEFINE-SETF-EXPANDER --
+    handled directly in `evaluation_core.py`'s dispatch, calling
+    `evaluation_special_forms.get_setf_expansion`. Registered here only so
+    `(fboundp 'get-setf-expansion)` is true (`data-and-control-flow.lsp`'s
+    `dcf-funs` checks exactly that), matching DEFSETF's own registration
+    above.
+    """
+    raise lisptype.LispNotImplementedError('GET-SETF-EXPANSION (evaluated in evaluator)')
+
+
 @_registry.cl_special('DEFINE-COMPILER-MACRO')
 def special_define_compiler_macro(*args):
     """DEFINE-COMPILER-MACRO special form (handled by evaluator)."""

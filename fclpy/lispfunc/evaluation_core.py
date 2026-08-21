@@ -917,10 +917,21 @@ def eval(form, env=None):
                 while _consp_internal(args) and _consp_internal(cdr(args)):
                     place = car(args)
                     value_form = car(cdr(args))
-                    
+
+                    # CLHS 5.1.2.8: a symbol place may name a symbol-macro
+                    # (SYMBOL-MACROLET), in which case SETF operates on the
+                    # macro's expansion instead -- `setf-symbol-macro.*`.
+                    while isinstance(place, lisptype.LispSymbol):
+                        expansion = env.get_symbol_macro(place)
+                        if expansion is None:
+                            break
+                        place = expansion
+
                     if isinstance(place, lisptype.LispSymbol):
-                        # Simple variable assignment - like SETQ
-                        result = eval(value_form, env)
+                        # Simple variable assignment - like SETQ. Only the
+                        # primary value is stored (and returned) -- CLHS
+                        # 5.1.1; `setf.4` observes this directly.
+                        result = lisptype.primary_value(eval(value_form, env))
                         env.set_variable(place, result)
                     elif _consp_internal(place):
                         # Complex place like (CAR x), (CDR x), (AREF arr i), (SLOT-VALUE obj slot), etc.
@@ -928,8 +939,33 @@ def eval(form, env=None):
                         if isinstance(place_op, lisptype.LispSymbol):
                             op_name = place_op.name
                             place_args = cdr(place)
+
+                            # VALUES/THE/APPLY-as-place, a DEFSETF long-form
+                            # / DEFINE-SETF-EXPANDER registration, or a
+                            # macro place all need their subforms resolved
+                            # *before* the value-form (CLHS 5.1.1) -- unlike
+                            # the legacy branches below, which evaluate the
+                            # value-form first (a known, separate gap; see
+                            # plan.md). `_place_accessor`'s GET-SETF-
+                            # EXPANSION bridge is the one place all of this
+                            # is implemented, so route to it before falling
+                            # into the legacy ladder rather than duplicating
+                            # any of it here.
+                            if _es_forms._setf_needs_expansion_bridge(op_name, place_op, env):
+                                # CLHS 5.1.1: "the value returned by SETF is
+                                # the primary value yielded by evaluating
+                                # the storing form" -- not necessarily the
+                                # value-form's own value (a long-form
+                                # DEFSETF's body may compute something
+                                # else entirely, as `defsetf.7a` pins).
+                                getter, setter = _es_forms._place_accessor(place, env)
+                                new_value = eval(value_form, env)
+                                result = setter(new_value)
+                                args = cdr(cdr(args))
+                                continue
+
                             result = eval(value_form, env)
-                            
+
                             if op_name == 'CAR':
                                 target = eval(car(place_args), env)
                                 if _consp_internal(target):
@@ -1040,22 +1076,20 @@ def eval(form, env=None):
                                 else:
                                     raise lisptype.LispError("SETF FDEFINITION: requires a symbol")
                             elif op_name == 'FIND-CLASS':
-                                # (SETF (FIND-CLASS name) class) registers a class with a new name
+                                # (SETF (FIND-CLASS name) class) registers
+                                # `class` under `name` as an alias -- it
+                                # does not rename the class (CLHS), so this
+                                # must not go through `register_class`,
+                                # which keys off the object's own mutable
+                                # `.name` and would have to rename-then-
+                                # restore around it -- a dance that
+                                # corrupts the registry once two such
+                                # aliasing operations touch the same
+                                # objects in sequence, e.g. `rotatef.35`.
                                 place_name = eval(car(place_args), env)  # e.g., n3
                                 if isinstance(place_name, lisptype.LispSymbol):
-                                    # result is the class object to assign
-                                    # We need to register it under the new name
                                     if isinstance(result, classes.LispClass):
-                                        # Update the class's name to the target name
-                                        original_name = result.name
-                                        result.name = place_name
-                                        # Register under the new name
-                                        classes.register_class(result)
-                                        # Also register under original name if different (aliases)
-                                        if original_name != place_name:
-                                            result.name = original_name
-                                            classes.register_class(result)
-                                            result.name = place_name  # Restore target name
+                                        classes.register_class_as(place_name, result)
                                     else:
                                         raise lisptype.LispError("SETF FIND-CLASS: value must be a class")
                                 else:
@@ -1092,7 +1126,13 @@ def eval(form, env=None):
                                 if _consp_internal(default_args):
                                     eval(car(default_args), env)
                                 if isinstance(sym, lisptype.LispSymbol):
-                                    if not hasattr(sym, 'plist') or sym.plist is None:
+                                    # `LispSymbol.__init__` defaults `plist`
+                                    # to a bare Python `{}`, not NIL --
+                                    # `sym.plist is None` never catches that,
+                                    # so a fresh symbol's first SETF GET
+                                    # appended onto the dict as a dotted
+                                    # tail instead of replacing it.
+                                    if not _consp_internal(sym.plist):
                                         sym.plist = lisptype.NIL
                                     plist = sym.plist
                                     found = False
@@ -1258,120 +1298,39 @@ def eval(form, env=None):
                 
                 return result
             elif operator.name == 'PSETF':
-                # PSETF is like SETF but evaluates ALL values FIRST before any assignment
-                # (PSETF place1 value1 place2 value2 ...) - all values are computed first
+                # PSETF is SETF's "read/write" split into two passes (CLHS
+                # 5.1.3): every place's subforms *and* value-form are
+                # evaluated, left to right, before any assignment happens.
+                # `_place_accessor` is the one place-resolution mechanism
+                # (shared with SETF/ROTATEF/SHIFTF/PUSH/POP/...) rather
+                # than a second, narrower ladder duplicating it -- the old
+                # one covered only CAR/CDR/arrays/SYMBOL-FUNCTION/
+                # FDEFINITION/FIND-CLASS/NTH/FILL-POINTER/MACRO-FUNCTION
+                # and silently did nothing for every other place kind.
+                from . import evaluation_special_forms as _es_forms
                 args = cdr(form)
-                assignments = []  # List of (place, evaluated_value) pairs
-                
-                # First pass: collect all places and evaluate values
+                pending = []  # (setter, new_value) pairs, in left-to-right order
+
                 while _consp_internal(args) and _consp_internal(cdr(args)):
                     place = car(args)
                     value_form = car(cdr(args))
-                    value_result = eval(value_form, env)  # Evaluate all values first
-                    assignments.append((place, value_result))
+
+                    while isinstance(place, lisptype.LispSymbol):
+                        expansion = env.get_symbol_macro(place)
+                        if expansion is None:
+                            break
+                        place = expansion
+
+                    _, setter = _es_forms._place_accessor(place, env)
+                    new_value = eval(value_form, env)
+                    pending.append((setter, new_value))
+
                     args = cdr(cdr(args))
-                
-                # Second pass: perform all assignments with pre-evaluated values
-                result = lisptype.NIL
-                for place, value_result in assignments:
-                    result = value_result  # Track last assigned value
-                    if isinstance(place, lisptype.LispSymbol):
-                        # Simple variable assignment
-                        env.set_variable(place, value_result)
-                    elif _consp_internal(place):
-                        # Complex place like (CAR x), (FDEFINITION sym), etc.
-                        place_op = car(place)
-                        if isinstance(place_op, lisptype.LispSymbol):
-                            op_name = place_op.name
-                            place_args = cdr(place)
-                            
-                            if op_name == 'CAR':
-                                target = eval(car(place_args), env)
-                                if _consp_internal(target):
-                                    target.car = value_result
-                                else:
-                                    raise lisptype.LispError("PSETF CAR: target is not a cons")
-                            elif op_name == 'CDR':
-                                target = eval(car(place_args), env)
-                                if _consp_internal(target):
-                                    target.cdr = value_result
-                                else:
-                                    raise lisptype.LispError("PSETF CDR: target is not a cons")
-                            elif _arrays.is_array_place(op_name):
-                                _arrays.array_place_write(
-                                    op_name, _eval_args(place_args, env), value_result)
-                            elif op_name == 'SYMBOL-FUNCTION':
-                                sym = eval(car(place_args), env)
-                                if isinstance(sym, lisptype.LispSymbol):
-                                    env.add_function(sym, value_result)
-                                else:
-                                    raise lisptype.LispError("PSETF SYMBOL-FUNCTION: requires a symbol")
-                            elif op_name == 'FDEFINITION':
-                                from .utilities_functions import _function_spec_to_key
-                                sym = _function_spec_to_key(eval(car(place_args), env))
-                                if sym is not None:
-                                    env.add_function(sym, value_result)
-                                else:
-                                    raise lisptype.LispError("PSETF FDEFINITION: requires a symbol")
-                            elif op_name == 'FIND-CLASS':
-                                # (PSETF (FIND-CLASS name) class) registers a class with a new name
-                                place_name = eval(car(place_args), env)  # e.g., n3
-                                if isinstance(place_name, lisptype.LispSymbol):
-                                    # value_result is the class object to assign
-                                    # We need to register it under the new name
-                                    if isinstance(value_result, classes.LispClass):
-                                        # Update the class's name to the target name
-                                        original_name = value_result.name
-                                        value_result.name = place_name
-                                        # Register under the new name
-                                        classes.register_class(value_result)
-                                        # Also register under original name if different (aliases)
-                                        if original_name != place_name:
-                                            value_result.name = original_name
-                                            classes.register_class(value_result)
-                                            value_result.name = place_name  # Restore target name
-                                    else:
-                                        raise lisptype.LispError("PSETF FIND-CLASS: value must be a class")
-                                else:
-                                    raise lisptype.LispError("PSETF FIND-CLASS: place name must be a symbol")
-                            elif op_name == 'NTH':
-                                n = eval(car(place_args), env)
-                                lst = eval(car(cdr(place_args)), env)
-                                current = lst
-                                for _ in range(n):
-                                    if not _consp_internal(current):
-                                        raise lisptype.LispError("PSETF NTH: index out of bounds")
-                                    current = cdr(current)
-                                if _consp_internal(current):
-                                    current.car = value_result
-                                else:
-                                    raise lisptype.LispError("PSETF NTH: index out of bounds")
-                            elif op_name == 'FILL-POINTER':
-                                vec = eval(car(place_args), env)
-                                if hasattr(vec, 'fill_pointer'):
-                                    vec.fill_pointer = value_result
-                            elif op_name == 'MACRO-FUNCTION':
-                                # (PSETF (MACRO-FUNCTION sym) val) should install a macro
-                                sym = eval(car(place_args), env)
-                                if isinstance(sym, lisptype.LispSymbol):
-                                    global_env = env
-                                    while global_env.parent is not None:
-                                        global_env = global_env.parent
-                                    global_env.add_function(sym, value_result)
-                                    # Also add to current env for immediate visibility
-                                    if env is not global_env:
-                                        env.add_function(sym, value_result)
-                                else:
-                                    raise lisptype.LispError("PSETF MACRO-FUNCTION: requires a symbol")
-                            else:
-                                # For other complex places, try generic handling
-                                pass
-                        else:
-                            raise lisptype.LispNotImplementedError(f"PSETF: place operator must be a symbol")
-                    else:
-                        raise lisptype.LispNotImplementedError(f"PSETF: place must be a symbol or form")
-                
-                return result
+
+                for setter, new_value in pending:
+                    setter(new_value)
+
+                return lisptype.NIL
             elif operator.name == 'PROGN':
                 return eval_progn(form, env)
             elif operator.name == 'LOCALLY':
@@ -1426,6 +1385,34 @@ def eval(form, env=None):
                 return eval_psetq(form, env)
             elif operator.name == 'ROTATEF':
                 return eval_rotatef(form, env)
+            elif operator.name == 'SHIFTF':
+                from . import evaluation_special_forms as _es_forms
+                return _es_forms.eval_shiftf(form, env)
+            elif operator.name == 'DEFINE-MODIFY-MACRO':
+                from . import evaluation_special_forms as _es_forms
+                return _es_forms.eval_define_modify_macro(form, env)
+            elif operator.name == 'GET-SETF-EXPANSION':
+                from . import evaluation_special_forms as _es_forms
+                arg_forms = []
+                cur = cdr(form)
+                while _consp_internal(cur):
+                    arg_forms.append(car(cur))
+                    cur = cdr(cur)
+                if len(arg_forms) < 1 or len(arg_forms) > 2:
+                    raise lisptype.LispProgramError(
+                        f"GET-SETF-EXPANSION: wrong number of arguments (got {len(arg_forms)}, expected 1-2)")
+                place_value = eval(arg_forms[0], env)
+                env_value = eval(arg_forms[1], env) if len(arg_forms) == 2 else lisptype.NIL
+                if env_value is lisptype.NIL or env_value is None:
+                    env_value = env
+                temps, vals, stores, store_form, access_form = _es_forms.get_setf_expansion(place_value, env_value)
+                return lisptype.MultipleValues(
+                    _es_forms._setf_pylist_to_form(temps),
+                    _es_forms._setf_pylist_to_form(vals),
+                    _es_forms._setf_pylist_to_form(stores),
+                    store_form,
+                    access_form,
+                )
             elif operator.name == 'MULTIPLE-VALUE-LIST':
                 # Must see the raw (possibly multiple-valued) result of its
                 # argument -- unlike ordinary function-call arguments, this

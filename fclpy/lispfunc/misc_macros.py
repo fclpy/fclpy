@@ -587,23 +587,12 @@ def ensure_directories_exist(pathspec, **kwargs):
     return pathspec, lisptype.T
 
 
-@_registry.cl_function('DEFINE-SETF-EXPANDER')
-def define_setf_expander(access_fn, lambda_list, *body):
-    """Define setf expander."""
-    return access_fn
-
-
-## `DEFSETF` is a special form handled by the evaluator; do not
-## register it as a regular function here. Arguments should not be evaluated.
-def defsetf(access_fn, update_fn, documentation=None):
-    """Define setf function (stub kept for reference)."""
-    return access_fn
-
-
-@_registry.cl_function('GET-SETF-EXPANSION')
-def get_setf_expansion(place, environment=None):
-    """Get setf expansion."""
-    return [], [], [], place, place
+## DEFINE-SETF-EXPANDER, DEFSETF and GET-SETF-EXPANSION are special forms
+## handled directly by the evaluator (`evaluation_core.py`'s dispatch, and
+## the real GET-SETF-EXPANSION protocol in
+## `evaluation_special_forms.get_setf_expansion`) -- their arguments must
+## not be evaluated eagerly the way a `cl_function` registration would,
+## so they are not registered as regular functions here.
 
 
 @_registry.cl_special('PROCLAIM')
@@ -1447,9 +1436,6 @@ __all__ = [
     'logical_pathname_translations',
     'directory',
     'ensure_directories_exist',
-    'define_setf_expander',
-    'defsetf',
-    'get_setf_expansion',
     'proclaim',
     'describe',
     'inspect_object',

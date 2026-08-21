@@ -203,7 +203,21 @@ class ClassRegistry:
         """Register a class in the registry."""
         self._classes[cls.name.name] = cls
         return cls
-    
+
+    def register_class_as(self, name: str, cls: LispClass) -> LispClass:
+        """Register `cls` under `name` as an alias, without touching
+        `cls.name`. `(setf (find-class alias) cls)` (CLHS) adds another
+        name for an *existing* class; it does not rename it, so this must
+        not go through `register_class`, which keys off the object's own
+        mutable `.name` and would have to mutate it there and back to
+        register under a different key -- a dance that corrupts the
+        registry when two such aliasing operations touch the same
+        objects in sequence (ROTATEF's own two SETFs-in-effect being
+        exactly that case).
+        """
+        self._classes[name] = cls
+        return cls
+
     def find_class(self, name: str) -> Optional[LispClass]:
         """Find a class by name."""
         return self._classes.get(name)
@@ -227,6 +241,16 @@ _class_registry = ClassRegistry()
 def register_class(cls: LispClass) -> LispClass:
     """Register a class in the global registry."""
     return _class_registry.register_class(cls)
+
+
+def register_class_as(name, cls: LispClass) -> LispClass:
+    """Register `cls` under `name` as an alias, without renaming it --
+    see `ClassRegistry.register_class_as`. `name` may be a symbol or a
+    plain string.
+    """
+    if isinstance(name, LispSymbol):
+        name = name.name
+    return _class_registry.register_class_as(name, cls)
 
 
 def find_class(name: str) -> Optional[LispClass]:

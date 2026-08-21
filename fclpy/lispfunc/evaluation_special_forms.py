@@ -126,7 +126,15 @@ def eval_if(form, env):
 
 
 def eval_setq(form, env):
-    """Evaluate SETQ special form."""
+    """Evaluate SETQ special form.
+
+    CLHS: if `var` names a symbol-macro, SETQ behaves as if the form were
+    SETF (`setf-symbol-macro.2`/`.3`) -- including a symbol-macro whose
+    expansion is itself a non-symbol place like `(values y z)`. Either way,
+    only the *primary* value of the last value-form is returned (`setq.4`);
+    a place that itself takes several values (a VALUES place) still gets
+    all of them via `_place_accessor`'s setter.
+    """
     from .evaluation_core import eval
 
     args = cdr(form)
@@ -136,11 +144,22 @@ def eval_setq(form, env):
         var = car(args)
         value_form = car(cdr(args))
 
-        if not isinstance(var, lisptype.LispSymbol):
-            raise lisptype.LispNotImplementedError("SETQ: variable must be a symbol")
+        while isinstance(var, lisptype.LispSymbol):
+            expansion = env.get_symbol_macro(var)
+            if expansion is None:
+                break
+            var = expansion
 
-        result = eval(value_form, env)
-        env.set_variable(var, result)
+        if isinstance(var, lisptype.LispSymbol):
+            result = lisptype.primary_value(eval(value_form, env))
+            env.set_variable(var, result)
+        elif _consp_internal(var):
+            getter, setter = _place_accessor(var, env)
+            full_result = eval(value_form, env)
+            setter(full_result)
+            result = lisptype.primary_value(full_result)
+        else:
+            raise lisptype.LispNotImplementedError("SETQ: variable must be a symbol")
 
         args = cdr(cdr(args))
 
@@ -212,54 +231,33 @@ def eval_incf(form, env):
     args = cdr(form)
     if not _consp_internal(args):
         raise lisptype.LispNotImplementedError("INCF requires at least 1 argument")
-    
+
     place = car(args)
-    
-    # Get delta (default 1)
-    delta_form = car(cdr(args)) if _consp_internal(cdr(args)) else 1
-    if delta_form != 1:
-        delta = eval(delta_form, env)
-    else:
-        delta = 1
-    
-    # Handle simple variable case
+    delta_args = cdr(args)
+
+    # Handle simple variable case. CLHS 5.1.3: place's subforms (none, for
+    # a bare variable) are evaluated before delta.
     if isinstance(place, lisptype.LispSymbol):
-        # Use find_variable (not lookup) to get the current binding
         if env.has_variable(place):
             current_value = env.find_variable(place)
         else:
             current_value = 0
+        delta = eval(car(delta_args), env) if _consp_internal(delta_args) else 1
         new_value = current_value + delta
         env.set_variable(place, new_value)
         return new_value
 
-    # An array place: one shared reader/writer pair (arrays.py), so INCF
-    # reaches every subscript of a multi-dimensional array rather than the
-    # first one, and an out-of-range index is an error rather than a silent
-    # extension of the underlying Python list.
-    if _consp_internal(place):
-        place_op = car(place)
-        place_args = cdr(place)
-        if isinstance(place_op, lisptype.LispSymbol) and _arrays.is_array_place(place_op.name):
-            from .evaluation_core import _eval_args
-            op_name = place_op.name
-            values = _eval_args(place_args, env)
-            current_value = _arrays.array_place_read(op_name, values)
-            try:
-                new_value = current_value + delta
-            except Exception:
-                raise lisptype.LispTypeError(
-                    actual_value=current_value, expected_type='number',
-                    message="INCF: cannot add delta to place value")
-            _arrays.array_place_write(op_name, values, new_value)
-            return new_value
-
-    # Any other place `_place_accessor` knows (CAR/CDR/CADR/GETF/...) --
-    # shared with PUSH/PUSHNEW/ROTATEF, so a place newly supported there
-    # (e.g. GETF, plan.md C16) works for INCF too instead of needing its
-    # own copy of the same place logic.
+    # Any other place `_place_accessor` knows (CAR/CDR/CADR/AREF/GETF/...)
+    # -- shared with PUSH/PUSHNEW/ROTATEF/SHIFTF, so a place newly
+    # supported there works for INCF too instead of needing its own copy
+    # of the same place logic. `_place_accessor` evaluates the place's own
+    # subforms (e.g. an AREF index) as soon as it is called, which is why
+    # delta is evaluated only *after* this -- `incf.order.1` pins that
+    # order directly: `(incf (aref x (incf i)) (incf i))` requires the
+    # place's own `(incf i)` to run before delta's.
     getter, setter = _place_accessor(place, env)
     current_value = getter()
+    delta = eval(car(delta_args), env) if _consp_internal(delta_args) else 1
     try:
         new_value = current_value + delta
     except TypeError:
@@ -283,53 +281,30 @@ def eval_decf(form, env):
     args = cdr(form)
     if not _consp_internal(args):
         raise lisptype.LispNotImplementedError("DECF requires at least 1 argument")
-    
+
     place = car(args)
-    
-    # Get delta (default 1)
-    delta_form = car(cdr(args)) if _consp_internal(cdr(args)) else 1
-    if delta_form != 1:
-        delta = eval(delta_form, env)
-    else:
-        delta = 1
-    
-    # Handle simple variable case
+    delta_args = cdr(args)
+
+    # Handle simple variable case. CLHS 5.1.3: place's subforms (none, for
+    # a bare variable) are evaluated before delta.
     if isinstance(place, lisptype.LispSymbol):
-        # Use find_variable (not lookup) to get the current binding
         if env.has_variable(place):
             current_value = env.find_variable(place)
         else:
             current_value = 0
+        delta = eval(car(delta_args), env) if _consp_internal(delta_args) else 1
         new_value = current_value - delta
         env.set_variable(place, new_value)
         return new_value
 
-    # An array place: one shared reader/writer pair (arrays.py), so DECF
-    # reaches every subscript of a multi-dimensional array rather than the
-    # first one, and an out-of-range index is an error rather than a silent
-    # extension of the underlying Python list.
-    if _consp_internal(place):
-        place_op = car(place)
-        place_args = cdr(place)
-        if isinstance(place_op, lisptype.LispSymbol) and _arrays.is_array_place(place_op.name):
-            from .evaluation_core import _eval_args
-            op_name = place_op.name
-            values = _eval_args(place_args, env)
-            current_value = _arrays.array_place_read(op_name, values)
-            try:
-                new_value = current_value - delta
-            except Exception:
-                raise lisptype.LispTypeError(
-                    actual_value=current_value, expected_type='number',
-                    message="DECF: cannot subtract delta from place value")
-            _arrays.array_place_write(op_name, values, new_value)
-            return new_value
-
-    # Any other place `_place_accessor` knows (CAR/CDR/CADR/GETF/...) --
-    # shared with PUSH/PUSHNEW/ROTATEF/INCF, so a place newly supported
-    # there works for DECF too instead of needing its own copy.
+    # Any other place `_place_accessor` knows (CAR/CDR/CADR/AREF/GETF/...)
+    # -- shared with PUSH/PUSHNEW/ROTATEF/SHIFTF/INCF, so a place newly
+    # supported there works for DECF too instead of needing its own copy.
+    # `_place_accessor` evaluates the place's own subforms as soon as it
+    # is called, before delta below -- `decf.order.1`'s ordering pin.
     getter, setter = _place_accessor(place, env)
     current_value = getter()
+    delta = eval(car(delta_args), env) if _consp_internal(delta_args) else 1
     try:
         new_value = current_value - delta
     except TypeError:
@@ -2806,6 +2781,389 @@ def eval_pushnew(form, env):
     return new_value
 
 
+def _setf_form(head, *args):
+    """Build the Lisp form (head arg1 arg2 ...), unevaluated.
+
+    A string `head` is interned in COMMON-LISP rather than built as a
+    bare, uninterned `LispSymbol` -- special-form dispatch only compares
+    `.name` so an uninterned symbol would still evaluate correctly, but
+    `get-setf-expansion.1` inspects the returned form structurally with
+    EQUAL against a backquoted `(function (setf ,fn))`, whose FUNCTION/
+    SETF symbols *are* the interned ones.
+    """
+    if isinstance(head, str):
+        head = lisptype.COMMON_LISP_PACKAGE.intern_symbol(head)
+    op = head
+    result = lisptype.NIL
+    for a in reversed(args):
+        result = lisptype.lispCons(a, result)
+    return lisptype.lispCons(op, result)
+
+
+def _setf_pylist_to_form(items):
+    """Build a proper Lisp list from a Python list, unevaluated."""
+    result = lisptype.NIL
+    for a in reversed(items):
+        result = lisptype.lispCons(a, result)
+    return result
+
+
+def _setf_form_args(lst):
+    """Walk a Lisp list into a Python list of its (unevaluated) elements."""
+    out = []
+    cur = lst
+    while _consp_internal(cur):
+        out.append(car(cur))
+        cur = cdr(cur)
+    return out
+
+
+def _setf_literal_list_forms(form):
+    """If `form` is literally (QUOTE (...)) or NIL, return its elements as a
+    Python list of forms; otherwise None. Used by the APPLY place (CLHS
+    5.1.2.5), which cannot resolve a non-literal spread list without
+    evaluating the place -- something GET-SETF-EXPANSION must not do.
+    """
+    if form is lisptype.NIL or (isinstance(form, lisptype.LispSymbol) and form.name == 'NIL'):
+        return []
+    if _consp_internal(form) and isinstance(car(form), lisptype.LispSymbol) and car(form).name == 'QUOTE':
+        quoted = car(cdr(form)) if _consp_internal(cdr(form)) else lisptype.NIL
+        if quoted is lisptype.NIL or (isinstance(quoted, lisptype.LispSymbol) and quoted.name == 'NIL'):
+            return []
+        if _consp_internal(quoted):
+            return _setf_form_args(quoted)
+        return None
+    return None
+
+
+def _rewrite_setf_apply(place_args):
+    """(APPLY #'fn a1..an spread) -> (fn a1..an . elements-of-spread), CLHS
+    5.1.2.5, for the literal-final-argument shape ansi-test's setf-apply.*
+    tests use. Returns the rewritten place, or None if it cannot be
+    rewritten this way.
+    """
+    if not place_args:
+        return None
+    fn_designator = place_args[0]
+    if not (_consp_internal(fn_designator) and isinstance(car(fn_designator), lisptype.LispSymbol)
+            and car(fn_designator).name == 'FUNCTION'):
+        return None
+    fn_name = car(cdr(fn_designator)) if _consp_internal(cdr(fn_designator)) else None
+    if not isinstance(fn_name, lisptype.LispSymbol):
+        return None
+    rest = place_args[1:]
+    if not rest:
+        return None
+    spread = _setf_literal_list_forms(rest[-1])
+    if spread is None:
+        return None
+    return lisptype.lispCons(fn_name, _setf_pylist_to_form(list(rest[:-1]) + spread))
+
+
+def _fclpy_array_place_set(op_sym, value, *indices):
+    """Internal helper: the write half of an array place (AREF/SVREF/BIT/
+    SBIT/ROW-MAJOR-AREF/FILL-POINTER/...), reached only through a
+    GET-SETF-EXPANSION storing-form -- there is no real `(SETF AREF)`
+    Lisp function to call, since the write happens in
+    `arrays.array_place_write`, so this is the one bridge from a form
+    back into it. Registered as a plain internal function (the same
+    pattern PUSH/POP use) rather than special-cased in the evaluator.
+    """
+    _arrays.array_place_write(op_sym.name, list(indices), value)
+    return value
+
+
+_registry.function_registry['%FCLPY-ARRAY-PLACE-SET'] = _registry.RegistryEntry(
+    name='%FCLPY-ARRAY-PLACE-SET', py_name='_fclpy_array_place_set',
+    kind='function', func=_fclpy_array_place_set)
+
+
+def _fclpy_setf_symbol_value(sym, value):
+    sym.value = value
+    return value
+
+
+def _fclpy_setf_symbol_function(sym, value):
+    state.current_environment.add_function(sym, value)
+    return value
+
+
+def _fclpy_setf_symbol_plist(sym, value):
+    sym.plist = value
+    return value
+
+
+def _fclpy_setf_gethash(key, table, value):
+    table[key] = value
+    return value
+
+
+for _helper_name, _helper_fn in (
+    ('%FCLPY-SETF-SYMBOL-VALUE', _fclpy_setf_symbol_value),
+    ('%FCLPY-SETF-SYMBOL-FUNCTION', _fclpy_setf_symbol_function),
+    ('%FCLPY-SETF-SYMBOL-PLIST', _fclpy_setf_symbol_plist),
+    ('%FCLPY-SETF-GETHASH', _fclpy_setf_gethash),
+):
+    _registry.function_registry[_helper_name] = _registry.RegistryEntry(
+        name=_helper_name, py_name=_helper_fn.__name__, kind='function', func=_helper_fn)
+
+
+def get_setf_expansion(place, env):
+    """CLHS 5.1.2.1 GET-SETF-EXPANSION -- the one form-based place protocol.
+
+    Returns (temps, vals, stores, store_form, access_form), all plain
+    Python lists / unevaluated Lisp forms. This exists for the cases that
+    are genuinely code generation -- a place whose expansion is DEFSETF
+    long-form / DEFINE-SETF-EXPANDER-supplied Lisp code, or CLHS 5.1.2.9's
+    generic function-call fallback -- because those are extended by a
+    *user* writing Lisp code that must see real forms. `_place_accessor`
+    handles every other place kind directly as a (getter, setter) closure
+    pair without ever building a form, and bridges into this protocol
+    (`_accessor_from_expansion`) only for what is left, so there is one
+    home for "which mechanism does this place use" rather than a second
+    ladder here duplicating SETF's.
+    """
+    from .misc_packages import _direct_macroexpand_1
+    from .utilities_symbols import gensym as _gensym_fn
+
+    if isinstance(place, lisptype.LispSymbol):
+        expansion = env.get_symbol_macro(place)
+        if expansion is not None:
+            return get_setf_expansion(expansion, env)
+        store = _gensym_fn()
+        return ([], [], [store],
+                _setf_form('SETQ', place, store),
+                place)
+
+    if not _consp_internal(place):
+        raise lisptype.LispError("GET-SETF-EXPANSION: not a valid place")
+
+    op = car(place)
+    if not isinstance(op, lisptype.LispSymbol):
+        raise lisptype.LispError("GET-SETF-EXPANSION: place operator must be a symbol")
+    op_name = op.name
+    place_args = _setf_form_args(cdr(place))
+
+    # CLHS 5.1.2.3 -- a place naming several subplaces at once.
+    if op_name == 'VALUES':
+        temps, vals, stores, store_forms, access_forms = [], [], [], [], []
+        for p in place_args:
+            t, v, s, sf, af = get_setf_expansion(p, env)
+            temps += t; vals += v; stores += s
+            store_forms.append(sf); access_forms.append(af)
+        store_form = _setf_form('PROGN', *(store_forms + [_setf_form('VALUES', *stores)]))
+        access_form = _setf_form('VALUES', *access_forms)
+        return temps, vals, stores, store_form, access_form
+
+    # CLHS 5.1.2.4 -- (THE type place) reads through the assertion; writes
+    # go straight to the underlying place.
+    if op_name == 'THE' and len(place_args) == 2:
+        type_spec, subplace = place_args
+        temps, vals, stores, store_form, access_form = get_setf_expansion(subplace, env)
+        return temps, vals, stores, store_form, _setf_form('THE', type_spec, access_form)
+
+    # CLHS 5.1.2.5 -- only the literal-final-argument shape is resolvable
+    # without evaluating the place.
+    if op_name == 'APPLY':
+        rewritten = _rewrite_setf_apply(place_args)
+        if rewritten is not None:
+            return get_setf_expansion(rewritten, env)
+        raise lisptype.LispNotImplementedError(
+            "SETF of APPLY requires a literal quoted (or NIL) final argument list")
+
+    # CLHS 5.1.2.1's compound CAR/CDR accessors -- mirrors `_place_accessor`'s
+    # closure-based fast path (via the same real RPLACA/RPLACD functions),
+    # so a *macro* place that expands to one of these (setf-macro.1/.3/.4)
+    # resolves the same way here as it would going straight through
+    # `_place_accessor`, instead of falling all the way to the generic
+    # (SETF fn) fallback below, which has no `(SETF CAR)` function to call.
+    if op_name in ('CAR', 'FIRST') and len(place_args) == 1:
+        temp, store = _gensym_fn(), _gensym_fn()
+        store_form = _setf_form('PROGN', _setf_form('RPLACA', temp, store), store)
+        return [temp], list(place_args), [store], store_form, _setf_form('CAR', temp)
+    if op_name in ('CDR', 'REST') and len(place_args) == 1:
+        temp, store = _gensym_fn(), _gensym_fn()
+        store_form = _setf_form('PROGN', _setf_form('RPLACD', temp, store), store)
+        return [temp], list(place_args), [store], store_form, _setf_form('CDR', temp)
+    cxr_match = _CXR_RE.match(op_name)
+    if cxr_match and len(place_args) == 1:
+        letters = cxr_match.group(1)
+        temp, store = _gensym_fn(), _gensym_fn()
+        parent_form = temp
+        for ch in reversed(letters[1:]):
+            parent_form = _setf_form('CDR' if ch == 'D' else 'CAR', parent_form)
+        final_op = 'RPLACA' if letters[0] == 'A' else 'RPLACD'
+        store_form = _setf_form('PROGN', _setf_form(final_op, parent_form, store), store)
+        return [temp], list(place_args), [store], store_form, _setf_form(op, temp)
+
+    # Every other place kind `_place_accessor` knows as a closure needs a
+    # real form here too -- GET-SETF-EXPANSION, DEFINE-SETF-EXPANDER and
+    # DEFINE-MODIFY-MACRO bodies call this directly on an arbitrary place
+    # (e.g. `(aref a (incf i))`), bypassing `_place_accessor`'s fast
+    # closures entirely, so the generic (SETF fn) fallback further down
+    # would wrongly be tried for all of these otherwise.
+    if _arrays.is_array_place(op_name):
+        temps = [_gensym_fn() for _ in place_args]
+        store = _gensym_fn()
+        store_form = _setf_form('%FCLPY-ARRAY-PLACE-SET', _setf_form('QUOTE', op), store, *temps)
+        access_form = _setf_form(op, *temps)
+        return temps, list(place_args), [store], store_form, access_form
+
+    if op_name == 'GETHASH' and len(place_args) >= 2:
+        temps = [_gensym_fn(), _gensym_fn()]
+        store = _gensym_fn()
+        store_form = _setf_form('PROGN', _setf_form('%FCLPY-SETF-GETHASH', temps[0], temps[1], store), store)
+        access_form = _setf_form('GETHASH', temps[0], temps[1])
+        return temps, list(place_args[:2]), [store], store_form, access_form
+
+    if op_name in ('SYMBOL-VALUE', 'SYMBOL-FUNCTION', 'SYMBOL-PLIST') and len(place_args) == 1:
+        setter_name = {'SYMBOL-VALUE': '%FCLPY-SETF-SYMBOL-VALUE',
+                        'SYMBOL-FUNCTION': '%FCLPY-SETF-SYMBOL-FUNCTION',
+                        'SYMBOL-PLIST': '%FCLPY-SETF-SYMBOL-PLIST'}[op_name]
+        temp, store = _gensym_fn(), _gensym_fn()
+        store_form = _setf_form('PROGN', _setf_form(setter_name, temp, store), store)
+        return [temp], list(place_args), [store], store_form, _setf_form(op, temp)
+
+    # User-registered DEFSETF / DEFINE-SETF-EXPANDER take priority over the
+    # operator's own macro definition (setf-macro.2: a DEFSETF overrides a
+    # macro of the same name).
+    global_env = env
+    while global_env.parent is not None:
+        global_env = global_env.parent
+    expanders = getattr(global_env, 'setf_expanders', None)
+    if expanders and op_name in expanders:
+        return _expand_registered_setf(expanders[op_name], op, place_args, env)
+
+    # CLHS 5.1.2.7 -- a macro place, including one local to a MACROLET.
+    expanded, did_expand = _direct_macroexpand_1(place, env)
+    if did_expand:
+        return get_setf_expansion(expanded, env)
+
+    # CLHS 5.1.2.9's fallback: (setf (fn a1..an) v) => (funcall #'(setf fn) v a1..an)
+    temps = [_gensym_fn() for _ in place_args]
+    store = _gensym_fn()
+    store_form = _setf_form('FUNCALL', _setf_form('FUNCTION', _setf_form('SETF', op)), store, *temps)
+    access_form = _setf_form(op, *temps)
+    return temps, list(place_args), [store], store_form, access_form
+
+
+def _expand_registered_setf(entry, op, place_args, env):
+    """Build a GET-SETF-EXPANSION 5-tuple from a DEFSETF / DEFINE-SETF-
+    EXPANDER registration (`evaluation_core.py`'s DEFSETF/DEFINE-SETF-
+    EXPANDER handlers populate `global_env.setf_expanders` with exactly
+    the three shapes this switches on).
+    """
+    from .utilities_symbols import gensym as _gensym_fn
+
+    etype = entry.get('type')
+
+    if etype == 'short':
+        temps = [_gensym_fn() for _ in place_args]
+        store = _gensym_fn()
+        store_form = _setf_form(entry['update_fn'], *(temps + [store]))
+        access_form = _setf_form(op, *temps)
+        return temps, list(place_args), [store], store_form, access_form
+
+    if etype == 'long':
+        # CLHS 5.1.2.2 long form: the body is executed *once per expansion*
+        # with each lambda-list parameter bound to a temp *symbol* standing
+        # for that argument (not its value) and each store-var bound the
+        # same way -- the body's job is to produce the storing *form*,
+        # which is why this, unlike the short form above, needs real code
+        # execution rather than a fixed template. Reusing
+        # `_create_macro_function` gets the destructuring binder, the
+        # implicit BLOCK (defsetf.5's RETURN-FROM), and the &ENVIRONMENT/
+        # lexical-closure behaviour (defsetf.6) for free instead of a
+        # second copy of all three.
+        lambda_list = entry['lambda_list']
+        store_var_syms = _setf_form_args(entry['store_vars'])
+        temps = [_gensym_fn() for _ in place_args]
+        stores = [_gensym_fn() for _ in store_var_syms] or [_gensym_fn()]
+        store_bindings = lisptype.NIL
+        for sv, gs in zip(reversed(store_var_syms), reversed(stores)):
+            store_bindings = lisptype.lispCons(_setf_form(sv, _setf_form('QUOTE', gs)), store_bindings)
+        let_form = lisptype.lispCons(lisptype.LispSymbol('LET'),
+                       lisptype.lispCons(store_bindings, entry['body']))
+        wrapped_body = lisptype.lispCons(let_form, lisptype.NIL)
+        expander_fn = _create_macro_function(op, lambda_list, wrapped_body, entry['env'])
+        store_form = expander_fn(*(temps + [env]))
+        access_form = _setf_form(op, *temps)
+        return temps, list(place_args), stores, store_form, access_form
+
+    if etype == 'expander':
+        # DEFINE-SETF-EXPANDER: the lambda-list binds directly to the raw
+        # (unevaluated) place-argument forms, like an ordinary macro's
+        # does, and the body computes and returns the five values itself
+        # (my-car/my-assoc in define-setf-expander.lsp build their own
+        # temps via GENSYM) rather than having them assembled here.
+        lambda_list = entry['lambda_list']
+        expander_fn = _create_macro_function(op, lambda_list, entry['body'], entry['env'])
+        result = expander_fn(*(list(place_args) + [env]))
+        values = list(result.values) if isinstance(result, lisptype.MultipleValues) else [result]
+        values += [lisptype.NIL] * (5 - len(values))
+        temps = _setf_form_args(values[0]) if _consp_internal(values[0]) else []
+        vals = _setf_form_args(values[1]) if _consp_internal(values[1]) else []
+        stores = _setf_form_args(values[2]) if _consp_internal(values[2]) else []
+        return temps, vals, stores, values[3], values[4]
+
+    raise lisptype.LispNotImplementedError(f"SETF: unsupported expander type {etype!r}")
+
+
+def _setf_needs_expansion_bridge(op_name, place_op, env):
+    """True if SETF's legacy per-operator ladder does not (yet) cover this
+    place correctly and should instead route through `_place_accessor` /
+    GET-SETF-EXPANSION: VALUES/THE/APPLY-as-place, any DEFSETF/DEFINE-
+    SETF-EXPANDER registration (the ladder's own trailing short-form
+    branch calls a registered update-fn directly as a Python callable,
+    which silently discards the expansion instead of evaluating it when
+    the update-fn is itself a macro -- `defsetf.2b`), or a macro place.
+    Every op the ladder already special-cases directly (CAR, CDR, AREF,
+    GETF, ...) returns False so that existing, unchanged code path keeps
+    running.
+    """
+    if op_name in ('VALUES', 'THE', 'APPLY'):
+        return True
+    global_env = env
+    while global_env.parent is not None:
+        global_env = global_env.parent
+    expanders = getattr(global_env, 'setf_expanders', None)
+    if expanders and op_name in expanders:
+        return True
+    try:
+        fn = env.find_func(place_op)
+    except Exception:
+        fn = None
+    return bool(fn is not None and getattr(fn, '__is_macro__', False))
+
+
+def _accessor_from_expansion(place, env):
+    """Bridge GET-SETF-EXPANSION's form-based protocol into the (getter,
+    setter) closure pair `_place_accessor`'s callers expect.
+    """
+    from .evaluation_core import eval as leval
+
+    temps, vals, stores, store_form, access_form = get_setf_expansion(place, env)
+    child = lisptype.Environment(parent=env)
+    for t, v in zip(temps, vals):
+        child.add_variable(t, leval(v, child))
+
+    def getter():
+        return leval(access_form, child)
+
+    def setter(v):
+        if len(stores) <= 1:
+            if stores:
+                child.add_variable(stores[0], v)
+        else:
+            vs = list(v.values) if isinstance(v, lisptype.MultipleValues) else [v]
+            vs = vs + [lisptype.NIL] * (len(stores) - len(vs))
+            for s, vv in zip(stores, vs):
+                child.add_variable(s, vv)
+        return leval(store_form, child)
+
+    return getter, setter
+
+
 def _place_accessor(place_form, env):
     """Evaluate a place form's shared subforms exactly once and return a
     (get, set) pair of closures for reading/writing it.
@@ -2817,9 +3175,26 @@ def _place_accessor(place_form, env):
     """
     from .evaluation_core import eval
 
+    def _setattr_return(obj, attr, v):
+        """setattr returns None; every place setter here must return the
+        stored value instead, since SETF's own return value (CLHS 5.1.1)
+        is whatever the setter/storing-form yields, and THE/APPLY-as-
+        place delegate straight to these closures."""
+        setattr(obj, attr, v)
+        return v
+
+    def _setitem_return(obj, key, v):
+        obj[key] = v
+        return v
+
     if isinstance(place_form, lisptype.LispSymbol):
         sym = place_form
-        return (lambda: eval(sym, env), lambda v: env.set_variable(sym, v))
+
+        def _var_setter(v):
+            env.set_variable(sym, v)
+            return v
+
+        return (lambda: eval(sym, env), _var_setter)
 
     if _consp_internal(place_form) and isinstance(car(place_form), lisptype.LispSymbol):
         op_name = car(place_form).name
@@ -2829,20 +3204,245 @@ def _place_accessor(place_form, env):
             target = eval(car(place_args), env)
             if not _consp_internal(target):
                 raise lisptype.LispError(f"{op_name} place: target is not a cons")
-            return (lambda: target.car, lambda v: setattr(target, 'car', v))
+            return (lambda: target.car, lambda v: _setattr_return(target, 'car', v))
 
         if op_name in ('CDR', 'REST') and _consp_internal(place_args):
             target = eval(car(place_args), env)
             if not _consp_internal(target):
                 raise lisptype.LispError(f"{op_name} place: target is not a cons")
-            return (lambda: target.cdr, lambda v: setattr(target, 'cdr', v))
+            return (lambda: target.cdr, lambda v: _setattr_return(target, 'cdr', v))
 
         if _CXR_RE.match(op_name) and _consp_internal(place_args):
             obj = eval(car(place_args), env)
             parent, is_car = _cxr_target(op_name, obj)
             if is_car:
-                return (lambda: parent.car, lambda v: setattr(parent, 'car', v))
-            return (lambda: parent.cdr, lambda v: setattr(parent, 'cdr', v))
+                return (lambda: parent.car, lambda v: _setattr_return(parent, 'car', v))
+            return (lambda: parent.cdr, lambda v: _setattr_return(parent, 'cdr', v))
+
+        _NTH_ACCESSOR_INDEX = {
+            'FIRST': 0, 'SECOND': 1, 'THIRD': 2, 'FOURTH': 3, 'FIFTH': 4,
+            'SIXTH': 5, 'SEVENTH': 6, 'EIGHTH': 7, 'NINTH': 8, 'TENTH': 9,
+        }
+        if op_name in _NTH_ACCESSOR_INDEX and op_name != 'FIRST' and _consp_internal(place_args):
+            lst = eval(car(place_args), env)
+            n = _NTH_ACCESSOR_INDEX[op_name]
+            cell = lst
+            for _ in range(n):
+                if not _consp_internal(cell):
+                    raise lisptype.LispError(f"{op_name} place: list too short")
+                cell = cdr(cell)
+            if not _consp_internal(cell):
+                raise lisptype.LispError(f"{op_name} place: list too short")
+            return (lambda: cell.car, lambda v: _setattr_return(cell, 'car', v))
+
+        if op_name == 'NTH' and _consp_internal(place_args) and _consp_internal(cdr(place_args)):
+            n = eval(car(place_args), env)
+            lst = eval(car(cdr(place_args)), env)
+            cell = lst
+            for _ in range(n):
+                if not _consp_internal(cell):
+                    raise lisptype.LispError("NTH place: index out of bounds")
+                cell = cdr(cell)
+            if not _consp_internal(cell):
+                raise lisptype.LispError("NTH place: index out of bounds")
+            return (lambda: cell.car, lambda v: _setattr_return(cell, 'car', v))
+
+        if op_name in ('CHAR', 'SCHAR', 'ELT') and _consp_internal(place_args) and _consp_internal(cdr(place_args)):
+            seq = eval(car(place_args), env)
+            idx = eval(car(cdr(place_args)), env)
+            if _consp_internal(seq):
+                cell = seq
+                for _ in range(idx):
+                    if not _consp_internal(cell):
+                        raise lisptype.LispError(f"{op_name} place: index out of bounds")
+                    cell = cdr(cell)
+                if not _consp_internal(cell):
+                    raise lisptype.LispError(f"{op_name} place: index out of bounds")
+                return (lambda: cell.car, lambda v: _setattr_return(cell, 'car', v))
+            return (lambda: seq[idx], lambda v: _setitem_return(seq, idx, v))
+
+        if op_name == 'SYMBOL-VALUE' and _consp_internal(place_args):
+            sym = eval(car(place_args), env)
+            if not isinstance(sym, lisptype.LispSymbol):
+                raise lisptype.LispError("SYMBOL-VALUE place: requires a symbol")
+            return (lambda: sym.value, lambda v: _setattr_return(sym, 'value', v))
+
+        if op_name == 'SYMBOL-FUNCTION' and _consp_internal(place_args):
+            sym = eval(car(place_args), env)
+            if not isinstance(sym, lisptype.LispSymbol):
+                raise lisptype.LispError("SYMBOL-FUNCTION place: requires a symbol")
+
+            def _symbol_function_setter(v):
+                env.add_function(sym, v)
+                return v
+
+            return (lambda: env.find_func(sym), _symbol_function_setter)
+
+        if op_name == 'FDEFINITION' and _consp_internal(place_args):
+            from .utilities_functions import _function_spec_to_key
+            sym = _function_spec_to_key(eval(car(place_args), env))
+            if sym is None:
+                raise lisptype.LispError("FDEFINITION place: requires a function name")
+
+            def _fdefinition_setter(v):
+                env.add_function(sym, v)
+                return v
+
+            return (lambda: env.find_func(sym), _fdefinition_setter)
+
+        if op_name == 'SYMBOL-PLIST' and _consp_internal(place_args):
+            sym = eval(car(place_args), env)
+            if not isinstance(sym, lisptype.LispSymbol):
+                raise lisptype.LispError("SYMBOL-PLIST place: requires a symbol")
+            # `LispSymbol.__init__` defaults `plist` to a bare Python `{}`,
+            # not NIL -- normalize on read so a fresh symbol's plist is
+            # NIL, matching what `(symbol-plist sym)` itself already
+            # returns (a separate reader normalizes it there).
+            return (lambda: sym.plist if _consp_internal(sym.plist) else lisptype.NIL,
+                    lambda v: _setattr_return(sym, 'plist', v))
+
+        if op_name == 'GET' and _consp_internal(place_args):
+            sym = eval(car(place_args), env)
+            indicator = eval(car(cdr(place_args)), env) if _consp_internal(cdr(place_args)) else lisptype.NIL
+            if not isinstance(sym, lisptype.LispSymbol):
+                raise lisptype.LispError("GET place: requires a symbol")
+
+            def _get_getter():
+                plist = sym.plist if _consp_internal(sym.plist) else lisptype.NIL
+                cur = plist
+                while _consp_internal(cur) and _consp_internal(cdr(cur)):
+                    if car(cur) == indicator:
+                        return cdr(cur).car
+                    cur = cdr(cdr(cur))
+                return lisptype.NIL
+
+            def _get_setter(v):
+                if not _consp_internal(sym.plist):
+                    sym.plist = lisptype.NIL
+                cur = sym.plist
+                while _consp_internal(cur) and _consp_internal(cdr(cur)):
+                    if car(cur) == indicator:
+                        cdr(cur).car = v
+                        return v
+                    cur = cdr(cdr(cur))
+                sym.plist = lisptype.lispCons(indicator, lisptype.lispCons(v, sym.plist))
+                return v
+
+            return (_get_getter, _get_setter)
+
+        if op_name == 'GETHASH' and _consp_internal(place_args) and _consp_internal(cdr(place_args)):
+            key = eval(car(place_args), env)
+            table = eval(car(cdr(place_args)), env)
+            return (lambda: table.get(key, lisptype.NIL), lambda v: _setitem_return(table, key, v))
+
+        if op_name == 'FIND-CLASS' and _consp_internal(place_args):
+            import fclpy.classes as _classes
+            place_name = eval(car(place_args), env)
+            if not isinstance(place_name, lisptype.LispSymbol):
+                raise lisptype.LispError("FIND-CLASS place: name must be a symbol")
+
+            def _find_class_getter():
+                found = _classes.find_class(place_name)
+                return found if found is not None else lisptype.NIL
+
+            def _find_class_setter(v):
+                # (SETF/ROTATEF/... (FIND-CLASS name) class) registers `v`
+                # under `name` as an alias -- CLHS: it does not rename the
+                # class, it adds another name for it.
+                if not isinstance(v, _classes.LispClass):
+                    raise lisptype.LispError("FIND-CLASS place: value must be a class")
+                _classes.register_class_as(place_name, v)
+                return v
+
+            return (_find_class_getter, _find_class_setter)
+
+        if op_name == 'MACRO-FUNCTION' and _consp_internal(place_args):
+            sym = eval(car(place_args), env)
+            if not isinstance(sym, lisptype.LispSymbol):
+                raise lisptype.LispError("MACRO-FUNCTION place: requires a symbol")
+
+            def _macro_function_setter(v):
+                global_env = env
+                while global_env.parent is not None:
+                    global_env = global_env.parent
+                global_env.add_function(sym, v)
+                if env is not global_env:
+                    env.add_function(sym, v)
+                return v
+
+            return (lambda: env.find_func(sym), _macro_function_setter)
+
+        if op_name == 'LDB' and _consp_internal(place_args) and _consp_internal(cdr(place_args)):
+            # (LDB bytespec place) -- CLHS 22.1.3; `(byte size position)`
+            # is a plain (size, position) Python tuple here (`math_arithmetic.byte_fn`).
+            size, pos = eval(car(place_args), env)
+            inner_getter, inner_setter = _place_accessor(car(cdr(place_args)), env)
+            mask = (1 << size) - 1
+
+            def _ldb_getter():
+                return (inner_getter() >> pos) & mask
+
+            def _ldb_setter(v):
+                current = inner_getter()
+                inner_setter((current & ~(mask << pos)) | ((v & mask) << pos))
+                return v
+
+            return (_ldb_getter, _ldb_setter)
+
+        if op_name == 'MASK-FIELD' and _consp_internal(place_args) and _consp_internal(cdr(place_args)):
+            # (MASK-FIELD bytespec place) -- like LDB but the field keeps
+            # its original bit position instead of being shifted down.
+            size, pos = eval(car(place_args), env)
+            inner_getter, inner_setter = _place_accessor(car(cdr(place_args)), env)
+            mask = ((1 << size) - 1) << pos
+
+            def _mask_field_getter():
+                return inner_getter() & mask
+
+            def _mask_field_setter(v):
+                current = inner_getter()
+                inner_setter((current & ~mask) | (v & mask))
+                return v
+
+            return (_mask_field_getter, _mask_field_setter)
+
+        if op_name == 'SUBSEQ' and _consp_internal(place_args):
+            # (SETF (SUBSEQ seq start [end]) new-seq) -- CLHS 17.1: copies
+            # elements from new-seq into seq in place, only as many as fit
+            # between start and end (or seq's own length); it does not
+            # resize seq. The *read* side (needed for ROTATEF/PSETF/SHIFTF,
+            # which all treat a place as get-then-set) is the ordinary
+            # SUBSEQ function -- the window itself, not all of `seq`.
+            seq = eval(car(place_args), env)
+            rest = cdr(place_args)
+            start = eval(car(rest), env) if _consp_internal(rest) else 0
+            end_args = cdr(rest) if _consp_internal(rest) else lisptype.NIL
+            end = eval(car(end_args), env) if _consp_internal(end_args) else None
+
+            def _subseq_getter():
+                from .sequences_compose import subseq as _subseq_fn
+                return _subseq_fn(seq, start, end)
+
+            def _subseq_setter(new_seq):
+                from .sequence_protocol import seq_elements
+                src = seq_elements(new_seq)
+                if _consp_internal(seq):
+                    cell = seq
+                    for _ in range(start):
+                        cell = cdr(cell)
+                    i = 0
+                    limit = (end - start) if end is not None else len(src)
+                    while _consp_internal(cell) and i < len(src) and i < limit:
+                        cell.car = src[i]
+                        cell = cdr(cell)
+                        i += 1
+                else:
+                    limit = end if end is not None else len(seq)
+                    for i in range(start, min(limit, start + len(src))):
+                        seq[i] = src[i - start]
+                return new_seq
+
+            return (_subseq_getter, _subseq_setter)
 
         if op_name == 'GETF' and _consp_internal(place_args):
             # (GETF plist indicator [default]) as a place, CLHS 5.1.2.6:
@@ -2877,28 +3477,61 @@ def _place_accessor(place_form, env):
                 while _consp_internal(current) and _consp_internal(cdr(current)):
                     if car(current) == indicator:
                         cdr(current).car = v
-                        return
+                        return v
                     current = cdr(cdr(current))
                 plist_setter(lisptype.lispCons(indicator, lisptype.lispCons(v, plist)))
+                return v
 
             return (_getf_get, _getf_set)
 
         if _arrays.is_array_place(op_name) and _consp_internal(place_args):
             from .evaluation_core import _eval_args
             values = _eval_args(place_args, env)
-            return (lambda: _arrays.array_place_read(op_name, values),
-                    lambda v: _arrays.array_place_write(op_name, values, v))
 
-        # Not a place op this function knows directly -- it may still be a
-        # macro call (e.g. ansi-aux's `expand-in-current-env`, which exists
-        # specifically so a MACROLET-local macro expands in the *caller's*
-        # lexical environment). CLHS 5.1.3 requires place resolution to see
-        # through macroexpansion; `pushnew.21`/`push.5` are exactly a place
-        # that is a macro form.
-        from .misc_packages import _direct_macroexpand_1
-        expanded, did_expand = _direct_macroexpand_1(place_form, env)
-        if did_expand:
-            return _place_accessor(expanded, env)
+            def _array_place_setter(v):
+                _arrays.array_place_write(op_name, values, v)
+                return v
+
+            return (lambda: _arrays.array_place_read(op_name, values), _array_place_setter)
+
+        if op_name == 'VALUES':
+            # CLHS 5.1.2.3: a place naming several subplaces at once --
+            # each subplace's own subforms are resolved left to right here
+            # (this list comprehension), before the caller ever evaluates
+            # the value-form, which is what `setf-values.5` observes.
+            sub_accessors = [_place_accessor(p, env) for p in _setf_form_args(place_args)]
+
+            def _values_getter():
+                return lisptype.MultipleValues(*[g() for g, _ in sub_accessors])
+
+            def _values_setter(v):
+                vs = list(v.values) if isinstance(v, lisptype.MultipleValues) else [v]
+                vs = vs + [lisptype.NIL] * (len(sub_accessors) - len(vs))
+                for (_, s), vv in zip(sub_accessors, vs):
+                    s(vv)
+                return v
+
+            return (_values_getter, _values_setter)
+
+        if op_name == 'THE' and _consp_internal(place_args) and _consp_internal(cdr(place_args)):
+            # CLHS 5.1.2.4: the type assertion has no bearing on where the
+            # value is stored or read from.
+            return _place_accessor(car(cdr(place_args)), env)
+
+        if op_name == 'APPLY':
+            rewritten = _rewrite_setf_apply(_setf_form_args(place_args))
+            if rewritten is not None:
+                return _place_accessor(rewritten, env)
+            # Falls through to the generic expansion below, which raises
+            # LispNotImplementedError for the non-literal-spread shape.
+
+        # Not a place op this function knows directly as a closure -- a
+        # user DEFSETF/DEFINE-SETF-EXPANDER expander, a macro place
+        # (including one local to a MACROLET, e.g. ansi-aux's
+        # `expand-in-current-env`), or CLHS 5.1.2.9's generic function-call
+        # fallback all share the one form-based protocol, GET-SETF-
+        # EXPANSION, rather than a second ladder duplicating it here.
+        return _accessor_from_expansion(place_form, env)
 
     raise lisptype.LispNotImplementedError(f"place not supported: {place_form}")
 
@@ -2930,6 +3563,146 @@ def eval_rotatef(form, env):
         accessors[i][1](old_values[(i + 1) % n])
 
     return lisptype.NIL
+
+
+def eval_shiftf(form, env):
+    """Evaluate SHIFTF special form.
+
+    (SHIFTF place+ newvalue) -- CLHS 5.1.3: every place's subforms are
+    resolved left to right (via `_place_accessor`, shared with ROTATEF),
+    then their old values are read; `newvalue` is evaluated *after* all of
+    that (`shiftf-order.*` pins this). place[i] is set to the old value of
+    place[i+1], the last place is set to `newvalue`, and the first place's
+    old value is returned.
+    """
+    from .evaluation_core import eval
+
+    forms = []
+    current = cdr(form)
+    while _consp_internal(current):
+        forms.append(car(current))
+        current = cdr(current)
+
+    if len(forms) < 2:
+        raise lisptype.LispNotImplementedError("SHIFTF requires at least one place and a new-value form")
+
+    *place_forms, value_form = forms
+    accessors = [_place_accessor(p, env) for p in place_forms]
+    old_values = [get() for get, _ in accessors]
+    new_value = eval(value_form, env)
+
+    n = len(accessors)
+    for i in range(n):
+        target_value = old_values[i + 1] if i + 1 < n else new_value
+        accessors[i][1](target_value)
+
+    return old_values[0]
+
+
+def eval_define_modify_macro(form, env):
+    """Evaluate DEFINE-MODIFY-MACRO special form.
+
+    (DEFINE-MODIFY-MACRO name lambda-list function [documentation])
+    defines `name` as a macro such that `(name place arg*)` reads place's
+    old value, applies `function` to it and the (evaluated-later) `arg*`
+    forms, and stores the result back -- CLHS 5.1.3. Built directly on
+    `get_setf_expansion` rather than a bespoke place ladder, since a
+    modify-macro is nothing but SETF's own "read, combine, store" pattern
+    with `function` supplying the combine step.
+    """
+    args = cdr(form)
+    if not _consp_internal(args) or not _consp_internal(cdr(args)) or not _consp_internal(cdr(cdr(args))):
+        raise lisptype.LispNotImplementedError(
+            "DEFINE-MODIFY-MACRO requires a name, a lambda-list and a function")
+
+    name = car(args)
+    lambda_list = car(cdr(args))
+    function_name = car(cdr(cdr(args)))
+    doc_rest = cdr(cdr(cdr(args)))
+    doc_string = None
+    if _consp_internal(doc_rest):
+        d = car(doc_rest)
+        if isinstance(d, (str, lisptype.LispString)):
+            doc_string = str(d)
+
+    if not isinstance(name, lisptype.LispSymbol):
+        raise lisptype.LispNotImplementedError("DEFINE-MODIFY-MACRO: name must be a symbol")
+
+    from .evaluation_core import parse_lambda_list, bind_destructuring_pattern, eval as leval
+    from .utilities_symbols import gensym as _gensym_fn
+
+    parsed = parse_lambda_list(lambda_list)
+    required_params = parsed.get('required', [])
+    optional_params = parsed.get('optional', [])
+    rest_param = parsed.get('rest', None)
+    def_env = env
+
+    def macro_callable(*call_args):
+        expansion_env = def_env
+        if call_args and isinstance(call_args[-1], lisptype.Environment):
+            expansion_env = call_args[-1]
+            call_args = call_args[:-1]
+        if not call_args:
+            raise lisptype.LispNotImplementedError(f"{name.name}: requires a place argument")
+
+        place = call_args[0]
+        rest_args = call_args[1:]
+        macro_env = lisptype.Environment(parent=def_env)
+
+        extra_forms = []
+        idx = 0
+        for p in required_params:
+            val = rest_args[idx] if idx < len(rest_args) else lisptype.NIL
+            bind_destructuring_pattern(p, val, macro_env)
+            extra_forms.append(val)
+            idx += 1
+        for p in optional_params:
+            if _consp_internal(p):
+                pname = car(p)
+                prest = cdr(p)
+                pdefault = car(prest) if _consp_internal(prest) else None
+            else:
+                pname, pdefault = p, None
+            if idx < len(rest_args):
+                val = rest_args[idx]
+                idx += 1
+            else:
+                val = leval(pdefault, macro_env) if pdefault is not None else lisptype.NIL
+            bind_destructuring_pattern(pname, val, macro_env)
+            extra_forms.append(val)
+        if rest_param is not None:
+            remaining = list(rest_args[idx:])
+            bind_destructuring_pattern(rest_param, _setf_pylist_to_form(remaining), macro_env)
+            extra_forms.extend(remaining)
+
+        temps, vals, stores, store_form, access_form = get_setf_expansion(place, expansion_env)
+        store = stores[0] if stores else _gensym_fn()
+        call_form = _setf_form(function_name, access_form, *extra_forms)
+        bindings = list(zip(temps, vals)) + [(store, call_form)]
+        return _make_let_star(bindings, store_form)
+
+    macro_callable.__is_macro__ = True
+    macro_callable.__expects_environment__ = True
+
+    if doc_string:
+        if not hasattr(name, 'plist'):
+            name.plist = {}
+        name.plist['DOCUMENTATION'] = doc_string
+
+    global_env = env
+    while global_env.parent is not None:
+        global_env = global_env.parent
+    global_env.add_function(name, macro_callable)
+    if env is not global_env:
+        env.add_function(name, macro_callable)
+
+    return name
+
+
+def _make_let_star(bindings, body_form):
+    """Build (LET* ((v1 f1) (v2 f2) ...) body-form), unevaluated."""
+    binding_forms = _setf_pylist_to_form([_setf_form(v, f) for v, f in bindings])
+    return _setf_form('LET*', binding_forms, body_form)
 
 
 def eval_defclass(form, env):
