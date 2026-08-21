@@ -21,13 +21,6 @@ from .misc_hashtables import (
     hash_table_rehash_size,
     hash_table_rehash_threshold,
     upgraded_complex_part_type,
-    echo_stream_input_stream,
-    echo_stream_output_stream,
-    broadcast_stream_streams,
-    concatenated_stream_streams,
-    synonym_stream_symbol,
-    two_way_stream_input_stream,
-    two_way_stream_output_stream,
 )
 
 from .misc_clos import (
@@ -214,13 +207,6 @@ __all__ = [
     'upgraded_complex_part_type',
     'adjustable_array_p',
     'row_major_aref',
-    'echo_stream_input_stream',
-    'echo_stream_output_stream',
-    'broadcast_stream_streams',
-    'concatenated_stream_streams',
-    'synonym_stream_symbol',
-    'two_way_stream_input_stream',
-    'two_way_stream_output_stream',
     'find_class',
     'make_instance',
     'allocate_instance',

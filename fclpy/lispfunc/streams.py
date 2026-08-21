@@ -469,46 +469,41 @@ def set_stream_position(stream, position):
 
 @_registry.cl_function('READ-SEQUENCE')
 def read_sequence(sequence, stream, start=0, end=None):
-    """Read elements from stream into sequence.
-    
-    Args:
-        sequence: Mutable sequence (string or list) to fill
-        stream: Stream to read from
-        start: Starting index in sequence (default 0)
-        end: Ending index (exclusive, default length of sequence)
-    
-    Returns:
-        Index of position where reading stopped
+    """READ-SEQUENCE: fill `sequence` elementwise from `stream` (CLHS 21.2).
+
+    Routed through `seq_length`/`bounding_indices`/`seq_set` -- the one
+    place CLHS 17.1's `:start`/`:end` and mutable-sequence-write rules live
+    -- rather than this function's own `isinstance(sequence, list)` check,
+    which silently discarded every character read into a `LispString` or
+    `lispCons` target (`end` fell back to `start`, so the loop never ran at
+    all) and, for the `list`/`LispArray` targets it did handle, stored the
+    raw Python character instead of a `Character` object, so
+    `(equalp x #(#\\f #\\o #\\o))` was false regardless of what was read.
     """
-    if end is None:
-        if isinstance(sequence, str):
-            end = len(sequence)
-        elif isinstance(sequence, list):
-            end = len(sequence)
-        else:
-            end = start
-    
+    from .sequence_protocol import seq_length, bounding_indices, seq_set
+
+    length = seq_length(sequence, "READ-SEQUENCE")
+    start, end = bounding_indices(length, start, end, "READ-SEQUENCE")
+
     if not isinstance(stream, Stream):
-        # Try reading from file-like object
         if hasattr(stream, 'read'):
-            chars = stream.read(end - start)
-            for i, c in enumerate(chars):
-                if start + i >= end:
-                    break
-                if isinstance(sequence, list):
-                    sequence[start + i] = c
-            return start + len(chars)
-        raise TypeError(f"Expected Stream, got {type(stream)}")
-    
+            position = start
+            for c in stream.read(end - start):
+                seq_set(sequence, position, lisptype.Character(c), "READ-SEQUENCE")
+                position += 1
+            return position
+        raise lisptype.LispTypeError(
+            f"READ-SEQUENCE: not a stream: {stream!r}",
+            expected_type='STREAM', actual_value=stream)
+
     position = start
     while position < end:
         char = stream.read_char()
         if char is None:
             break
-        if isinstance(sequence, list):
-            sequence[position] = char
+        seq_set(sequence, position, lisptype.Character(char), "READ-SEQUENCE")
         position += 1
-    
+
     return position
 
 
@@ -820,3 +815,522 @@ def string_input_stream_p(obj):
 def string_output_stream_p(obj):
     """Test if object is a string output stream."""
     return lisptype.lisp_bool(isinstance(obj, StringOutputStream))
+
+
+# === Composite streams (CLHS 21.1.2) ===
+#
+# MAKE-TWO-WAY-STREAM/MAKE-ECHO-STREAM/MAKE-CONCATENATED-STREAM/
+# MAKE-BROADCAST-STREAM/MAKE-SYNONYM-STREAM used to each return one of their
+# own arguments (or, for MAKE-SYNONYM-STREAM, `str(symbol)`) rather than a new
+# stream object standing for the composition CLHS defines -- so every one of
+# `streams/make-two-way-stream.lsp` etc.'s behavioural tests failed, since
+# there was no such stream, only a constituent wearing its name. Each class
+# below delegates to its constituent(s) rather than reimplementing character
+# I/O, so it inherits READ-CHAR/WRITE-CHAR/TERPRI/FRESH-LINE/etc. for free --
+# those all go through the single `Stream` method each one overrides
+# (`write_text`, the generic READ-SEQUENCE, ... all call `.read_char()`/
+# `.write_sequence()`/... rather than touching `.file_obj` directly).
+
+
+def _require_input_stream(stream, who):
+    if not (isinstance(stream, Stream) and stream.direction in ('input', 'io')):
+        # `expected_type` must be a specifier the datum genuinely fails --
+        # a stream open only for output *is* a STREAM, so naming that would
+        # make `(typep datum expected-type)` true and trip
+        # ansi-aux's `signals-type-error` (which demands it be false).
+        raise lisptype.LispTypeError(
+            f"{who}: not an input stream: {stream!r}",
+            expected_type='(SATISFIES INPUT-STREAM-P)', actual_value=stream)
+
+
+def _require_output_stream(stream, who):
+    if not (isinstance(stream, Stream) and stream.direction in ('output', 'io')):
+        raise lisptype.LispTypeError(
+            f"{who}: not an output stream: {stream!r}",
+            expected_type='(SATISFIES OUTPUT-STREAM-P)', actual_value=stream)
+
+
+class TwoWayStream(Stream):
+    """CLHS 21.1.2: reads through `input_stream`, writes through `output_stream`."""
+
+    def __init__(self, input_stream, output_stream):
+        _require_input_stream(input_stream, "MAKE-TWO-WAY-STREAM")
+        _require_output_stream(output_stream, "MAKE-TWO-WAY-STREAM")
+        self.input_stream = input_stream
+        self.output_stream = output_stream
+        self.name = "<two-way-stream>"
+        self.file_obj = None
+        self.direction = 'io'
+        self.element_type = input_stream.element_type
+        self.open_p = True
+        self.position = 0
+        self._pending = []
+
+    def _ensure_open(self):
+        if not self.open_p:
+            raise lisptype.LispStreamError(stream=self, message=f"Stream {self.name} is closed")
+
+    def read_char(self):
+        self._ensure_open()
+        return self.input_stream.read_char()
+
+    def peek_char(self):
+        self._ensure_open()
+        return self.input_stream.peek_char()
+
+    def unread_char(self, char):
+        self.input_stream.unread_char(char)
+
+    def listen(self):
+        return self.open_p and self.input_stream.listen()
+
+    def read_line(self):
+        self._ensure_open()
+        return self.input_stream.read_line()
+
+    def write_char(self, char):
+        self._ensure_open()
+        return self.output_stream.write_char(char)
+
+    def write_sequence(self, sequence):
+        self._ensure_open()
+        return self.output_stream.write_sequence(sequence)
+
+    def write_line(self, line):
+        self._ensure_open()
+        return self.output_stream.write_line(line)
+
+    def flush(self):
+        return self.output_stream.flush()
+
+    def close(self):
+        self.open_p = False
+        return lisptype.T
+
+    def __repr__(self):
+        return "#<TWO-WAY-STREAM>"
+
+
+class EchoStream(Stream):
+    """CLHS 21.1.2: like a two-way-stream, but every character actually read
+    from `input_stream` is also written to `output_stream`.
+
+    Writing directly to the echo-stream (it is itself an output stream) goes
+    straight to `output_stream`, unechoed -- only characters *read* are
+    echoed. UNREAD-CHAR suppresses the echo the corresponding re-read would
+    otherwise repeat (CLHS 21.1.2's "will not be echoed a second time").
+    """
+
+    def __init__(self, input_stream, output_stream):
+        _require_input_stream(input_stream, "MAKE-ECHO-STREAM")
+        _require_output_stream(output_stream, "MAKE-ECHO-STREAM")
+        self.input_stream = input_stream
+        self.output_stream = output_stream
+        self.name = "<echo-stream>"
+        self.file_obj = None
+        self.direction = 'io'
+        self.element_type = input_stream.element_type
+        self.open_p = True
+        self.position = 0
+        self._pending = []
+        self._unechoed = 0
+
+    def _ensure_open(self):
+        if not self.open_p:
+            raise lisptype.LispStreamError(stream=self, message=f"Stream {self.name} is closed")
+
+    def read_char(self):
+        self._ensure_open()
+        char = self.input_stream.read_char()
+        if char is not None:
+            if self._unechoed > 0:
+                self._unechoed -= 1
+            else:
+                self.output_stream.write_char(char)
+        return char
+
+    def peek_char(self):
+        self._ensure_open()
+        return self.input_stream.peek_char()
+
+    def unread_char(self, char):
+        self.input_stream.unread_char(char)
+        self._unechoed += 1
+
+    def listen(self):
+        return self.open_p and self.input_stream.listen()
+
+    def read_line(self):
+        self._ensure_open()
+        chars = []
+        while True:
+            char = self.read_char()
+            if char is None:
+                if not chars:
+                    return None
+                return (''.join(chars), True)
+            if char == '\n':
+                return (''.join(chars), False)
+            chars.append(char)
+
+    def write_char(self, char):
+        self._ensure_open()
+        return self.output_stream.write_char(char)
+
+    def write_sequence(self, sequence):
+        self._ensure_open()
+        return self.output_stream.write_sequence(sequence)
+
+    def write_line(self, line):
+        self._ensure_open()
+        return self.output_stream.write_line(line)
+
+    def flush(self):
+        return self.output_stream.flush()
+
+    def close(self):
+        self.open_p = False
+        return lisptype.T
+
+    def __repr__(self):
+        return "#<ECHO-STREAM>"
+
+
+class ConcatenatedStream(Stream):
+    """CLHS 21.1.2: reads through a sequence of input streams, advancing to
+    the next one once the current one is exhausted (permanently -- once
+    skipped, a constituent is never revisited).
+    """
+
+    def __init__(self, constituents):
+        for s in constituents:
+            _require_input_stream(s, "MAKE-CONCATENATED-STREAM")
+        self.streams = list(constituents)
+        self._index = 0
+        self.name = "<concatenated-stream>"
+        self.file_obj = None
+        self.direction = 'input'
+        self.element_type = self.streams[0].element_type if self.streams else 'character'
+        self.open_p = True
+        self.position = 0
+        self._pending = []
+
+    def _ensure_open(self):
+        if not self.open_p:
+            raise lisptype.LispStreamError(stream=self, message=f"Stream {self.name} is closed")
+
+    def _current(self):
+        """The constituent to read from next, skipping exhausted ones, or
+        `None` once every constituent is exhausted."""
+        while self._index < len(self.streams):
+            if self.streams[self._index].listen():
+                return self.streams[self._index]
+            self._index += 1
+        return None
+
+    def read_char(self):
+        self._ensure_open()
+        current = self._current()
+        return None if current is None else current.read_char()
+
+    def peek_char(self):
+        self._ensure_open()
+        current = self._current()
+        return None if current is None else current.peek_char()
+
+    def unread_char(self, char):
+        if self._index < len(self.streams):
+            self.streams[self._index].unread_char(char)
+
+    def listen(self):
+        return self.open_p and self._current() is not None
+
+    def read_line(self):
+        self._ensure_open()
+        chars = []
+        while True:
+            char = self.read_char()
+            if char is None:
+                if not chars:
+                    return None
+                return (''.join(chars), True)
+            if char == '\n':
+                return (''.join(chars), False)
+            chars.append(char)
+
+    def close(self):
+        self.open_p = False
+        return lisptype.T
+
+    def __repr__(self):
+        return "#<CONCATENATED-STREAM>"
+
+
+class BroadcastStream(Stream):
+    """CLHS 21.1.2: writes every operation to each constituent output stream."""
+
+    def __init__(self, constituents):
+        for s in constituents:
+            _require_output_stream(s, "MAKE-BROADCAST-STREAM")
+        self.streams = list(constituents)
+        self.name = "<broadcast-stream>"
+        self.file_obj = None
+        self.direction = 'output'
+        self.element_type = self.streams[-1].element_type if self.streams else 'character'
+        self.open_p = True
+        self.position = 0
+        self._pending = []
+
+    def _ensure_open(self):
+        if not self.open_p:
+            raise lisptype.LispStreamError(stream=self, message=f"Stream {self.name} is closed")
+
+    def write_char(self, char):
+        self._ensure_open()
+        for s in self.streams:
+            s.write_char(char)
+        return char
+
+    def write_sequence(self, sequence):
+        self._ensure_open()
+        for s in self.streams:
+            s.write_sequence(sequence)
+        return sequence
+
+    def write_line(self, line):
+        self._ensure_open()
+        for s in self.streams:
+            s.write_line(line)
+        return lisptype.NIL
+
+    def flush(self):
+        for s in self.streams:
+            s.flush()
+        return lisptype.T
+
+    def close(self):
+        self.open_p = False
+        return lisptype.T
+
+    def __repr__(self):
+        return "#<BROADCAST-STREAM>"
+
+
+class SynonymStream(Stream):
+    """CLHS 21.1.2: every operation is forwarded to whatever stream is the
+    *current* value of `symbol`, re-resolved on every operation -- not
+    captured once at creation time -- so a later `(setf (symbol-value sym)
+    other-stream)` redirects it immediately.
+    """
+
+    def __init__(self, symbol):
+        if not lisptype.is_symbol(symbol):
+            raise lisptype.LispTypeError(
+                f"MAKE-SYNONYM-STREAM: not a symbol: {symbol!r}",
+                expected_type='SYMBOL', actual_value=symbol)
+        self.symbol = symbol
+        self.name = "<synonym-stream>"
+        self.file_obj = None
+        self.open_p = True
+        self.position = 0
+        self._pending = []
+
+    def _target(self):
+        from .binding import dynamic_value
+        target = dynamic_value(self.symbol)
+        if not isinstance(target, Stream):
+            raise lisptype.LispTypeError(
+                f"SYNONYM-STREAM: {self.symbol!r} does not designate a stream",
+                expected_type='STREAM', actual_value=target)
+        return target
+
+    @property
+    def direction(self):
+        return self._target().direction
+
+    @property
+    def element_type(self):
+        return self._target().element_type
+
+    def _ensure_open(self):
+        if not self.open_p:
+            raise lisptype.LispStreamError(stream=self, message=f"Stream {self.name} is closed")
+
+    def read_char(self):
+        self._ensure_open()
+        return self._target().read_char()
+
+    def peek_char(self):
+        self._ensure_open()
+        return self._target().peek_char()
+
+    def unread_char(self, char):
+        self._target().unread_char(char)
+
+    def listen(self):
+        return self.open_p and self._target().listen()
+
+    def read_line(self):
+        self._ensure_open()
+        return self._target().read_line()
+
+    def write_char(self, char):
+        self._ensure_open()
+        return self._target().write_char(char)
+
+    def write_sequence(self, sequence):
+        self._ensure_open()
+        return self._target().write_sequence(sequence)
+
+    def write_line(self, line):
+        self._ensure_open()
+        return self._target().write_line(line)
+
+    def flush(self):
+        return self._target().flush()
+
+    def close(self):
+        self.open_p = False
+        return lisptype.T
+
+    def __repr__(self):
+        return "#<SYNONYM-STREAM>"
+
+
+def stream_type_matches(obj, type_name):
+    """Does `obj` satisfy the STREAM type specifier named `type_name` (CLHS 21.1)?
+
+    One place, so TYPEP and any future caller cannot disagree with what each
+    composite class actually is -- the same shape as `_arrays.array_type_matches`.
+    """
+    if type_name == 'STREAM':
+        return isinstance(obj, Stream)
+    if type_name == 'TWO-WAY-STREAM':
+        return isinstance(obj, TwoWayStream)
+    if type_name == 'ECHO-STREAM':
+        return isinstance(obj, EchoStream)
+    if type_name == 'CONCATENATED-STREAM':
+        return isinstance(obj, ConcatenatedStream)
+    if type_name == 'BROADCAST-STREAM':
+        return isinstance(obj, BroadcastStream)
+    if type_name == 'SYNONYM-STREAM':
+        return isinstance(obj, SynonymStream)
+    if type_name == 'STRING-STREAM':
+        return isinstance(obj, (StringInputStream, StringOutputStream, FillPointerOutputStream))
+    if type_name == 'FILE-STREAM':
+        return isinstance(obj, Stream) and not isinstance(obj, (
+            StringInputStream, StringOutputStream, FillPointerOutputStream,
+            TwoWayStream, EchoStream, ConcatenatedStream, BroadcastStream,
+            SynonymStream))
+    return False
+
+
+@_registry.cl_function('MAKE-TWO-WAY-STREAM')
+def make_two_way_stream(input_stream, output_stream):
+    """MAKE-TWO-WAY-STREAM (CLHS 21.1.2)."""
+    return TwoWayStream(input_stream, output_stream)
+
+
+@_registry.cl_function('MAKE-ECHO-STREAM')
+def make_echo_stream(input_stream, output_stream):
+    """MAKE-ECHO-STREAM (CLHS 21.1.2)."""
+    return EchoStream(input_stream, output_stream)
+
+
+@_registry.cl_function('MAKE-CONCATENATED-STREAM')
+def make_concatenated_stream(*streams):
+    """MAKE-CONCATENATED-STREAM (CLHS 21.1.2)."""
+    return ConcatenatedStream(streams)
+
+
+@_registry.cl_function('MAKE-BROADCAST-STREAM')
+def make_broadcast_stream(*streams):
+    """MAKE-BROADCAST-STREAM (CLHS 21.1.2)."""
+    return BroadcastStream(streams)
+
+
+@_registry.cl_function('MAKE-SYNONYM-STREAM')
+def make_synonym_stream(symbol):
+    """MAKE-SYNONYM-STREAM (CLHS 21.1.2)."""
+    return SynonymStream(symbol)
+
+
+@_registry.cl_function('TWO-WAY-STREAM-INPUT-STREAM')
+def two_way_stream_input_stream(stream):
+    """TWO-WAY-STREAM-INPUT-STREAM (CLHS 21.1.2)."""
+    if not isinstance(stream, TwoWayStream):
+        raise lisptype.LispTypeError(
+            f"TWO-WAY-STREAM-INPUT-STREAM: not a two-way-stream: {stream!r}",
+            expected_type='TWO-WAY-STREAM', actual_value=stream)
+    return stream.input_stream
+
+
+@_registry.cl_function('TWO-WAY-STREAM-OUTPUT-STREAM')
+def two_way_stream_output_stream(stream):
+    """TWO-WAY-STREAM-OUTPUT-STREAM (CLHS 21.1.2)."""
+    if not isinstance(stream, TwoWayStream):
+        raise lisptype.LispTypeError(
+            f"TWO-WAY-STREAM-OUTPUT-STREAM: not a two-way-stream: {stream!r}",
+            expected_type='TWO-WAY-STREAM', actual_value=stream)
+    return stream.output_stream
+
+
+@_registry.cl_function('ECHO-STREAM-INPUT-STREAM')
+def echo_stream_input_stream(stream):
+    """ECHO-STREAM-INPUT-STREAM (CLHS 21.1.2)."""
+    if not isinstance(stream, EchoStream):
+        raise lisptype.LispTypeError(
+            f"ECHO-STREAM-INPUT-STREAM: not an echo-stream: {stream!r}",
+            expected_type='ECHO-STREAM', actual_value=stream)
+    return stream.input_stream
+
+
+@_registry.cl_function('ECHO-STREAM-OUTPUT-STREAM')
+def echo_stream_output_stream(stream):
+    """ECHO-STREAM-OUTPUT-STREAM (CLHS 21.1.2)."""
+    if not isinstance(stream, EchoStream):
+        raise lisptype.LispTypeError(
+            f"ECHO-STREAM-OUTPUT-STREAM: not an echo-stream: {stream!r}",
+            expected_type='ECHO-STREAM', actual_value=stream)
+    return stream.output_stream
+
+
+@_registry.cl_function('CONCATENATED-STREAM-STREAMS')
+def concatenated_stream_streams(stream):
+    """CONCATENATED-STREAM-STREAMS (CLHS 21.1.2).
+
+    Returns a proper Lisp list (not a Python list, which is a *vector* here --
+    plan.md Finding M) of the stream's remaining constituents -- those from
+    the current read position onward. A constituent already exhausted
+    *before any read was attempted* still counts (`concatenated-stream-
+    streams.4`): the composite only ever drops one once an actual read has
+    walked past it (`.5`), so this must not itself trigger that advance by
+    probing ahead.
+    """
+    if not isinstance(stream, ConcatenatedStream):
+        raise lisptype.LispTypeError(
+            f"CONCATENATED-STREAM-STREAMS: not a concatenated-stream: {stream!r}",
+            expected_type='CONCATENATED-STREAM', actual_value=stream)
+    from .sequence_protocol import make_lisp_list
+    return make_lisp_list(stream.streams[stream._index:])
+
+
+@_registry.cl_function('BROADCAST-STREAM-STREAMS')
+def broadcast_stream_streams(stream):
+    """BROADCAST-STREAM-STREAMS (CLHS 21.1.2)."""
+    if not isinstance(stream, BroadcastStream):
+        raise lisptype.LispTypeError(
+            f"BROADCAST-STREAM-STREAMS: not a broadcast-stream: {stream!r}",
+            expected_type='BROADCAST-STREAM', actual_value=stream)
+    from .sequence_protocol import make_lisp_list
+    return make_lisp_list(stream.streams)
+
+
+@_registry.cl_function('SYNONYM-STREAM-SYMBOL')
+def synonym_stream_symbol(stream):
+    """SYNONYM-STREAM-SYMBOL (CLHS 21.1.2)."""
+    if not isinstance(stream, SynonymStream):
+        raise lisptype.LispTypeError(
+            f"SYNONYM-STREAM-SYMBOL: not a synonym-stream: {stream!r}",
+            expected_type='SYNONYM-STREAM', actual_value=stream)
+    return stream.symbol

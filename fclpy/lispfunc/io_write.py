@@ -54,8 +54,13 @@ def stream_element_type(stream):
 
 
 def stream_external_format(stream):
-    """STREAM-EXTERNAL-FORMAT (CLHS 21.1.2, implementation-defined)."""
-    return lisptype.intern_keyword('UTF-8')
+    """STREAM-EXTERNAL-FORMAT (CLHS 21.1.2, implementation-defined).
+
+    `:DEFAULT` per CLHS glossary's own default-value note, not `:UTF-8` --
+    the latter is a real, more specific answer this implementation has no
+    per-stream external-format model to actually back up.
+    """
+    return lisptype.intern_keyword('DEFAULT')
 
 
 def resolve_output_stream(designator):
@@ -390,34 +395,14 @@ def get_output_stream_string(stream):
     return _get_oss(stream)
 
 
-@_registry.cl_function('MAKE-BROADCAST-STREAM')
-def make_broadcast_stream(*streams):
-    """Make broadcast stream."""
-    return streams[0] if streams else None
-
-
-@_registry.cl_function('MAKE-CONCATENATED-STREAM')
-def make_concatenated_stream(*streams):
-    """Make concatenated stream."""
-    return streams[0] if streams else None
-
-
-@_registry.cl_function('MAKE-ECHO-STREAM')
-def make_echo_stream(input_stream, output_stream):
-    """Make echo stream."""
-    return output_stream
-
-
-@_registry.cl_function('MAKE-SYNONYM-STREAM')
-def make_synonym_stream(symbol):
-    """Make synonym stream."""
-    return str(symbol)
-
-
-@_registry.cl_function('MAKE-TWO-WAY-STREAM')
-def make_two_way_stream(input_stream, output_stream):
-    """Make two-way stream."""
-    return output_stream
+# MAKE-BROADCAST-STREAM, MAKE-CONCATENATED-STREAM, MAKE-ECHO-STREAM,
+# MAKE-SYNONYM-STREAM and MAKE-TWO-WAY-STREAM now live in streams.py, next to
+# the Stream object model and the composite-stream classes (TwoWayStream,
+# EchoStream, ConcatenatedStream, BroadcastStream, SynonymStream) they build --
+# they used to be here as stubs that returned one of their own arguments
+# unchanged (or, for MAKE-SYNONYM-STREAM, `str(symbol)`), which is a Python
+# object standing in for a Lisp stream (standing rule 2), not a real
+# implementation of the CLHS 21.1.2 composition.
 
 
 # === Pretty printing operations ===
@@ -2307,7 +2292,16 @@ def file_position(stream, position=None):
 
 @_registry.cl_function('FILE-STRING-LENGTH')
 def file_string_length(stream, string):
-    """Length of string in file."""
+    """Length of string in file (CLHS 21.1.2).
+
+    "If stream has no component streams, then the result is 1" is CLHS's own
+    special case for a broadcast-stream with nothing to broadcast to --
+    `make-broadcast-stream.7`/`broadcast-stream-streams.4` require it
+    literally, not `(length string)`.
+    """
+    from .streams import BroadcastStream
+    if isinstance(stream, BroadcastStream) and not stream.streams:
+        return 1
     return len(string)
 
 
@@ -2439,8 +2433,6 @@ __all__ = [
     'finish_output', 'force_output',
     # Stream creation
     'make_string_output_stream', 'get_output_stream_string',
-    'make_broadcast_stream', 'make_concatenated_stream',
-    'make_echo_stream', 'make_synonym_stream', 'make_two_way_stream',
     # Pretty printing
     'copy_pprint_dispatch', 'pprint', 'pprint_dispatch',
     'pprint_exit_if_list_exhausted', 'pprint_indent', 'pprint_linear',

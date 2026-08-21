@@ -1137,46 +1137,60 @@ def defparameter(name, value, doc=None):
 
 
 # --- Stream type predicates ---
+#
+# Not ANSI operators (CLHS asks these of TYPEP, not a dedicated predicate),
+# but already registered here and exported from CL (plan.md's "114 non-ANSI
+# symbols" deviation, M1) -- unconditional NIL was simply wrong once the
+# composite stream classes existed. `stream_type_matches` is the same
+# predicate TYPEP now consults for these type names, so this cannot disagree
+# with `(typep obj 'echo-stream)` etc.
 @_registry.cl_function('ECHO-STREAM-P')
 def echo_stream_p(obj):
     """Test if object is echo stream."""
-    return lisptype.NIL
+    from .streams import stream_type_matches
+    return lisptype.lisp_bool(stream_type_matches(obj, 'ECHO-STREAM'))
 
 
 @_registry.cl_function('BROADCAST-STREAM-P')
 def broadcast_stream_p(obj):
     """Test if object is broadcast stream."""
-    return lisptype.NIL
+    from .streams import stream_type_matches
+    return lisptype.lisp_bool(stream_type_matches(obj, 'BROADCAST-STREAM'))
 
 
 @_registry.cl_function('CONCATENATED-STREAM-P')
 def concatenated_stream_p(obj):
     """Test if object is concatenated stream."""
-    return lisptype.NIL
+    from .streams import stream_type_matches
+    return lisptype.lisp_bool(stream_type_matches(obj, 'CONCATENATED-STREAM'))
 
 
 @_registry.cl_function('FILE-STREAM-P')
 def file_stream_p(obj):
     """Test if object is file stream."""
-    return lisptype.NIL
+    from .streams import stream_type_matches
+    return lisptype.lisp_bool(stream_type_matches(obj, 'FILE-STREAM'))
 
 
 @_registry.cl_function('STRING-STREAM-P')
 def string_stream_p(obj):
     """Test if object is string stream."""
-    return lisptype.NIL
+    from .streams import stream_type_matches
+    return lisptype.lisp_bool(stream_type_matches(obj, 'STRING-STREAM'))
 
 
 @_registry.cl_function('SYNONYM-STREAM-P')
 def synonym_stream_p(obj):
     """Test if object is synonym stream."""
-    return lisptype.NIL
+    from .streams import stream_type_matches
+    return lisptype.lisp_bool(stream_type_matches(obj, 'SYNONYM-STREAM'))
 
 
 @_registry.cl_function('TWO-WAY-STREAM-P')
 def two_way_stream_p(obj):
     """Test if object is two-way stream."""
-    return lisptype.NIL
+    from .streams import stream_type_matches
+    return lisptype.lisp_bool(stream_type_matches(obj, 'TWO-WAY-STREAM'))
 
 
 # --- Debugging and development tools ---

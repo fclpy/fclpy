@@ -591,6 +591,17 @@ def typep(object, type_specifier):
         # predicate and the type specifier cannot disagree.
         from fclpy.readtable import Readtable
         return lisptype.lisp_bool(isinstance(object, Readtable))
+    elif type_name in ('STREAM', 'TWO-WAY-STREAM', 'ECHO-STREAM',
+                       'CONCATENATED-STREAM', 'BROADCAST-STREAM',
+                       'SYNONYM-STREAM', 'STRING-STREAM', 'FILE-STREAM'):
+        # TYPEP had no branch for STREAM or any of its subtypes at all, so it
+        # fell through to the CLOS `find_class` branch below, which requires
+        # a `classes.LispInstance` -- a `streams.Stream` is never one, so
+        # `(typep s 'stream)` was NIL for every real stream. Asked of the same
+        # object model STREAMP answers for (`streams.stream_type_matches`), so
+        # the predicate and every one of these type specifiers agree.
+        from .streams import stream_type_matches
+        return lisptype.lisp_bool(stream_type_matches(object, type_name))
     elif type_name == 'BOOLEAN':
         # In Common Lisp, BOOLEAN is equivalent to (OR NULL (EQL T))
         # i.e., only NIL and T are booleans

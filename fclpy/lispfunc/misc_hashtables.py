@@ -118,46 +118,15 @@ def upgraded_complex_part_type(typespec, environment=None):
 
 
 # --- Stream operations ---
-@_registry.cl_function('ECHO-STREAM-INPUT-STREAM')
-def echo_stream_input_stream(echo_stream):
-    """Get input stream from echo stream."""
-    return echo_stream
-
-
-@_registry.cl_function('ECHO-STREAM-OUTPUT-STREAM')
-def echo_stream_output_stream(echo_stream):
-    """Get output stream from echo stream."""
-    return echo_stream
-
-
-@_registry.cl_function('BROADCAST-STREAM-STREAMS')
-def broadcast_stream_streams(broadcast_stream):
-    """Get streams from broadcast stream."""
-    return []
-
-
-@_registry.cl_function('CONCATENATED-STREAM-STREAMS')
-def concatenated_stream_streams(concatenated_stream):
-    """Get streams from concatenated stream."""
-    return []
-
-
-@_registry.cl_function('SYNONYM-STREAM-SYMBOL')
-def synonym_stream_symbol(synonym_stream):
-    """Get symbol from synonym stream."""
-    return synonym_stream
-
-
-@_registry.cl_function('TWO-WAY-STREAM-INPUT-STREAM')
-def two_way_stream_input_stream(two_way_stream):
-    """Get input stream from two-way stream."""
-    return two_way_stream
-
-
-@_registry.cl_function('TWO-WAY-STREAM-OUTPUT-STREAM')
-def two_way_stream_output_stream(two_way_stream):
-    """Get output stream from two-way stream."""
-    return two_way_stream
+#
+# ECHO-STREAM-INPUT-STREAM, ECHO-STREAM-OUTPUT-STREAM, BROADCAST-STREAM-STREAMS,
+# CONCATENATED-STREAM-STREAMS, SYNONYM-STREAM-SYMBOL, TWO-WAY-STREAM-INPUT-STREAM
+# and TWO-WAY-STREAM-OUTPUT-STREAM now live in streams.py, next to the
+# TwoWayStream/EchoStream/ConcatenatedStream/BroadcastStream/SynonymStream
+# classes they accessed -- these used to be stubs that returned the composite
+# stream object itself (or an empty Python list, i.e. a vector, for the two
+# `-STREAMS` accessors) because there was no real composite-stream object to
+# accessor into yet.
 
 
 __all__ = [
@@ -173,11 +142,4 @@ __all__ = [
     'hash_table_rehash_size',
     'hash_table_rehash_threshold',
     'upgraded_complex_part_type',
-    'echo_stream_input_stream',
-    'echo_stream_output_stream',
-    'broadcast_stream_streams',
-    'concatenated_stream_streams',
-    'synonym_stream_symbol',
-    'two_way_stream_input_stream',
-    'two_way_stream_output_stream',
 ]

@@ -211,19 +211,27 @@ def setup_standard_environment():
     # created inside `*STANDARD-OUTPUT*`'s guard, yet the four variables below
     # it referenced that name whether or not the guard had run.
     import sys
-    from fclpy.lispfunc.streams import Stream
+    from fclpy.lispfunc.streams import Stream, TwoWayStream
 
     stdin_stream = Stream('*STANDARD-INPUT*', sys.stdin, 'input')
     stdout_stream = Stream('*STANDARD-OUTPUT*', sys.stdout, 'output')
     stderr_stream = Stream('*ERROR-OUTPUT*', sys.stderr, 'output')
+    # *DEBUG-IO*, *QUERY-IO* and *TERMINAL-IO* are bidirectional (CLHS
+    # Figure 21-2), not output-only -- `(input-stream-p *terminal-io*)` must
+    # be true (make-synonym-stream.4 asks exactly that of a synonym stream
+    # onto *TERMINAL-IO*). A real two-way-stream over the same stdin/stdout
+    # objects everything else uses keeps a write through it visible on
+    # *STANDARD-OUTPUT* and vice versa, rather than introducing a second,
+    # disconnected pair of streams.
+    terminal_io_stream = TwoWayStream(stdin_stream, stdout_stream)
     for stream_var, stream in (
             ('*STANDARD-INPUT*', stdin_stream),
             ('*STANDARD-OUTPUT*', stdout_stream),
             ('*ERROR-OUTPUT*', stderr_stream),
             ('*TRACE-OUTPUT*', stdout_stream),
-            ('*DEBUG-IO*', stdout_stream),
-            ('*QUERY-IO*', stdout_stream),
-            ('*TERMINAL-IO*', stdout_stream)):
+            ('*DEBUG-IO*', terminal_io_stream),
+            ('*QUERY-IO*', terminal_io_stream),
+            ('*TERMINAL-IO*', terminal_io_stream)):
         state.current_environment.add_variable(
             fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol(stream_var), stream)
 

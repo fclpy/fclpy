@@ -7,7 +7,11 @@ This module re-exports I/O functions from specialized submodules:
 
 from .io_read import *
 from .io_write import *
-from .streams import open_file, close_stream
+from .streams import (
+    open_file, close_stream,
+    make_broadcast_stream, make_concatenated_stream, make_echo_stream,
+    make_synonym_stream, make_two_way_stream,
+)
 
 # Add special symbol-safe name for PRINT (expected by __init__)
 _s_print_ = print_fn
