@@ -538,15 +538,28 @@ def typep(object, type_specifier):
         return lisptype.lisp_bool(lisptype.is_keyword(object))
     elif type_name == 'FUNCTION':
         return lisptype.lisp_bool(callable(object))
-    elif type_name == 'GENERIC-FUNCTION':
+    elif type_name in ('GENERIC-FUNCTION', 'STANDARD-GENERIC-FUNCTION'):
         # A DEFINE-CONDITION :READER is marked as a generic function (CLHS
         # 9.4) at the point it's built -- see evaluation_conditions.py's
         # `_make_condition_reader` -- because this codebase's CLOS
         # `GenericFunction` (fclpy/classes.py) is not wired into FUNCALL/APPLY
         # at all (plan.md Finding L) and so cannot serve as a real accessor.
+        # There is exactly one generic-function metaclass here, so every
+        # `GenericFunction` answers both the generic name and its standard
+        # subtype -- a reader-generic, which is never a real GenericFunction
+        # object, only ever answers the generic name.
         return lisptype.lisp_bool(
             isinstance(object, classes.GenericFunction)
-            or (callable(object) and getattr(object, '_condition_reader_generic', False)))
+            or (type_name == 'GENERIC-FUNCTION' and callable(object)
+                and getattr(object, '_condition_reader_generic', False)))
+    elif type_name in ('METHOD', 'STANDARD-METHOD'):
+        # Same one-metaclass reasoning as GENERIC-FUNCTION/STANDARD-
+        # GENERIC-FUNCTION above: a `classes.Method` is always a standard
+        # method here, so both names answer T for it. Before this, DEFMETHOD
+        # tests like `(typep (eval '(defmethod ...)) 'standard-method)` were
+        # NIL no matter what DEFMETHOD returned, because TYPEP had no branch
+        # for a Method object at all and fell through to the final NIL.
+        return lisptype.lisp_bool(isinstance(object, classes.Method))
     elif type_name == 'STANDARD-OBJECT' or type_name == 'INSTANCE':
         return lisptype.lisp_bool(isinstance(object, classes.LispInstance))
     elif _arrays.is_array_type_name(type_name):
@@ -657,6 +670,19 @@ def type_of(object):
             return lisptype.LispSymbol('STRING')
     elif isinstance(object, (list, tuple)):
         return lisptype.LispSymbol('VECTOR')
+    elif isinstance(object, classes.Method):
+        # Checked ahead of the general `callable(object)` branch below: a
+        # Method is not itself callable (only CALL-METHOD/standard
+        # combination invoke `.function`), but even if it were, "FUNCTION"
+        # would be the wrong answer -- CLHS 7.6.6.2's method object is a
+        # STANDARD-METHOD, disjoint from FUNCTION.
+        return lisptype.LispSymbol('STANDARD-METHOD')
+    elif isinstance(object, classes.GenericFunction):
+        # Checked ahead of `callable(object)` for the same reason: a
+        # GenericFunction *is* callable (CLHS 7.6.6 dispatch), so the
+        # generic branch would otherwise answer the wrong, less-specific
+        # "FUNCTION" for it.
+        return lisptype.LispSymbol('STANDARD-GENERIC-FUNCTION')
     elif callable(object):
         return lisptype.LispSymbol('FUNCTION')
     else:

@@ -4151,7 +4151,12 @@ def eval_defgeneric(form, env):
         global_env = global_env.parent
     global_env.add_function(func_name, gf)
 
-    return func_name
+    # CLHS 7.7: "new-generic -- The result is the generic function object."
+    # This used to return func_name (a symbol), which is what DEFUN/DEFCLASS
+    # return -- so `(let ((fn (eval '(defgeneric ...)))) (typep fn
+    # 'generic-function))` was NIL regardless of TYPEP's own correctness,
+    # because fn was never the object TYPEP was asked about.
+    return gf
 
 
 def eval_defmethod(form, env):
@@ -4167,32 +4172,55 @@ def eval_defmethod(form, env):
                (= x y)))
     """
     import fclpy.classes as classes
+    from .utilities_functions import _function_spec_to_key
 
     args = cdr(form)
     if not _consp_internal(args):
         raise lisptype.LispNotImplementedError("DEFMETHOD requires at least a name")
 
-    func_name = car(args)
+    func_name_spec = car(args)
     rest = cdr(args)
 
-    if not isinstance(func_name, lisptype.LispSymbol):
-        raise lisptype.LispNotImplementedError("DEFMETHOD: function name must be a symbol")
+    # CLHS 7.6.2: function-name is a symbol or (SETF symbol). The implicit
+    # per-method block (7.6.5) is named `symbol` in the (SETF symbol) case,
+    # not the two-element list -- the same split DEFUN makes for its own
+    # implicit block, and DEFMETHOD.6 pins it with a bare
+    # `(return-from ,sym ...)` inside a `(setf ,sym)` method body.
+    if isinstance(func_name_spec, lisptype.LispSymbol):
+        func_name = func_name_spec
+        block_name = func_name_spec
+    elif _consp_internal(func_name_spec):
+        setf_sym = car(func_name_spec)
+        setf_rest = cdr(func_name_spec)
+        if not (isinstance(setf_sym, lisptype.LispSymbol) and setf_sym.name == 'SETF'
+                and _consp_internal(setf_rest) and isinstance(car(setf_rest), lisptype.LispSymbol)):
+            raise lisptype.LispNotImplementedError(
+                "DEFMETHOD: function name must be a symbol or (SETF symbol)")
+        func_name = func_name_spec
+        block_name = car(setf_rest)
+    else:
+        raise lisptype.LispNotImplementedError(
+            "DEFMETHOD: function name must be a symbol or (SETF symbol)")
 
     qualifiers, specialized_lambda_list, method_body = _parse_defmethod_tail(rest)
     required_params, specializers, optional_lambda_list = _parse_specialized_lambda_list(
         specialized_lambda_list, env)
 
-    method_fn = _make_method_function(required_params, optional_lambda_list, method_body, env, func_name)
+    method_fn = _make_method_function(required_params, optional_lambda_list, method_body, env, block_name)
 
     gf = classes.ensure_generic_function(func_name)
     classes.add_method(gf, specializers, method_fn, qualifiers=qualifiers)
+    new_method = next(m for m in gf.methods if m.function is method_fn)
 
     global_env = env
     while global_env.parent is not None:
         global_env = global_env.parent
-    global_env.add_function(func_name, gf)
+    global_env.add_function(_function_spec_to_key(func_name), gf)
 
-    return func_name
+    # CLHS 7.6.2: "new-method -- The result is the new method object."
+    # Same defect as DEFGENERIC above: this returned func_name, so no
+    # `(typep (eval '(defmethod ...)) 'standard-method)` could ever be true.
+    return new_method
 
 
 __all__ = [
