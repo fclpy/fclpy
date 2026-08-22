@@ -921,6 +921,24 @@ def eval(form, env=None):
                     op = car(name)
                     if isinstance(op, lisptype.LispSymbol) and op.name == 'LAMBDA':
                         return eval_lambda(name, env)
+                    # CLHS 3.2: a function name may also be `(SETF symbol)`,
+                    # naming the writer function DEFCLASS's :accessor,
+                    # DEFSTRUCT and `(defun (setf foo) ...)` all register
+                    # under the synthetic "(SETF FOO)" symbol --
+                    # `_function_spec_to_key` is the one place that key is
+                    # built, shared with FBOUNDP/FDEFINITION. Without this,
+                    # `#'(setf foo)` returned the unevaluated list `(SETF
+                    # FOO)` as if it were a function object, so any place
+                    # whose SETF expansion falls to CLHS 5.1.2.9's generic
+                    # `(funcall #'(setf fn) ...)` fallback -- every place
+                    # reached only through a SYMBOL-MACROLET, e.g.
+                    # WITH-ACCESSORS's bindings -- failed with "not a
+                    # function designator" for `(SETF FN)` instead of
+                    # calling the writer.
+                    from .utilities_functions import _function_spec_to_key
+                    key = _function_spec_to_key(name)
+                    if key is not None:
+                        name = key
                 # Handle symbol names
                 if isinstance(name, lisptype.LispSymbol):
                     # First look in environment

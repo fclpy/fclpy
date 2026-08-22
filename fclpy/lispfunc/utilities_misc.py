@@ -105,9 +105,7 @@ from .pathnames import (
 )
 
 from .misc_macros import (
-    with_accessors,
     with_pprint_logical_block,
-    with_slots,
     complex_fn,
     load_time_value,
     load,
@@ -250,9 +248,7 @@ __all__ = [
     'generic_function_lambda_list',
     'generic_function_methods',
     'generic_function_name',
-    'with_accessors',
     'with_pprint_logical_block',
-    'with_slots',
     'complex_fn',
     'load_time_value',
     'load',

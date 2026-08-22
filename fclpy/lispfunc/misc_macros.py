@@ -5,13 +5,12 @@ from fclpy.lispfunc import registry as _registry
 
 
 # --- WITH- macros ---
-@_registry.cl_function('WITH-ACCESSORS')
-def with_accessors(slot_entries, instance_form, *body):
-    """WITH-ACCESSORS macro."""
-    result = None
-    for form in body:
-        result = form
-    return result
+# WITH-ACCESSORS is a real macro expander in evaluation_special_forms.py,
+# for the same reason as the macros below: it was a `cl_function` stub here
+# whose body was "evaluate every argument eagerly, return the last", so its
+# `(slot-entry*)` list was evaluated as a call instead of being bound as a
+# SYMBOL-MACROLET around the body. Keeping a second registration would
+# silently win or lose depending on module import order (standing rule 3).
 
 
 # WITH-COMPILATION-UNIT is a real macro expander in
@@ -40,13 +39,8 @@ def with_pprint_logical_block(stream_object_options, *body):
     return result
 
 
-@_registry.cl_function('WITH-SLOTS')
-def with_slots(slot_entries, instance_form, *body):
-    """WITH-SLOTS macro."""
-    result = None
-    for form in body:
-        result = form
-    return result
+# WITH-SLOTS is a real macro expander in evaluation_special_forms.py, for
+# the same reason as WITH-ACCESSORS above.
 
 
 # WITH-STANDARD-IO-SYNTAX is a real macro expander in
@@ -1422,9 +1416,7 @@ def is_variable_special(symbol, env=None):
 
 
 __all__ = [
-    'with_accessors',
     'with_pprint_logical_block',
-    'with_slots',
     'complex_fn',
     'load_time_value',
     'load',

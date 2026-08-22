@@ -235,6 +235,17 @@ def eval_incf(form, env):
     place = car(args)
     delta_args = cdr(args)
 
+    # CLHS 5.1.2.8: a bare symbol may name a symbol-macro (e.g. a
+    # WITH-SLOTS/WITH-ACCESSORS binding), in which case it is not a
+    # "simple variable" at all -- resolve it to its expansion first so the
+    # fast path below only ever applies to a genuine variable, matching
+    # SETF/SETQ's own resolution loop.
+    while isinstance(place, lisptype.LispSymbol):
+        expansion = env.get_symbol_macro(place)
+        if expansion is None:
+            break
+        place = expansion
+
     # Handle simple variable case. CLHS 5.1.3: place's subforms (none, for
     # a bare variable) are evaluated before delta.
     if isinstance(place, lisptype.LispSymbol):
@@ -284,6 +295,14 @@ def eval_decf(form, env):
 
     place = car(args)
     delta_args = cdr(args)
+
+    # CLHS 5.1.2.8: resolve a symbol-macro place before the fast path below
+    # -- see INCF's identical loop above for why.
+    while isinstance(place, lisptype.LispSymbol):
+        expansion = env.get_symbol_macro(place)
+        if expansion is None:
+            break
+        place = expansion
 
     # Handle simple variable case. CLHS 5.1.3: place's subforms (none, for
     # a bare variable) are evaluated before delta.
@@ -614,6 +633,99 @@ def with_open_stream_macro(spec, *body):
         _cons_from([binding]),
         unwind,
     ])
+
+
+def _slot_entries(spec):
+    """Parse a WITH-SLOTS/WITH-ACCESSORS binding-spec list into
+    `(variable-name, accessor-or-slot-name)` pairs (CLHS 7.5.5).
+
+    Each entry is a bare symbol -- WITH-SLOTS' shorthand for a variable
+    named the same as its slot -- or a `(variable-name name)` pair. The
+    spec itself is syntax (its symbols name slots/accessors, not variables
+    to evaluate), which is why WITH-SLOTS/WITH-ACCESSORS must be macros:
+    registered as plain functions, `(with-slots (a b c) obj ...)` evaluated
+    `(a b c)` as a call and failed with `Undefined function A` regardless
+    of whether the class under test was otherwise correct.
+    """
+    entries = []
+    current = spec
+    while _consp_internal(current):
+        entry = car(current)
+        if isinstance(entry, lisptype.LispSymbol):
+            entries.append((entry, entry))
+        elif _consp_internal(entry):
+            var = car(entry)
+            rest = cdr(entry)
+            name = car(rest) if _consp_internal(rest) else var
+            entries.append((var, name))
+        current = cdr(current)
+    return entries
+
+
+def _with_slot_macro(slot_entries, instance_form, body, expansion_of):
+    """Shared expansion for WITH-SLOTS and WITH-ACCESSORS: bind the
+    instance to a fresh (uncapturable) variable, then SYMBOL-MACROLET each
+    entry's variable to `expansion_of(instance_var, name)` around the body.
+
+    Binding the instance through a gensym rather than through the user's
+    own variable name is what CLHS means by evaluating instance-form
+    "exactly once" while keeping it invisible to the body (`with-slots.14`/
+    `.15`/`.16` rebind an unrelated variable of the same name inside the
+    body and must not see it).
+    """
+    from .utilities_symbols import gensym as _gensym_fn
+
+    instance_var = _gensym_fn()
+    bindings = [
+        _cons_from([var, expansion_of(instance_var, name)])
+        for var, name in _slot_entries(slot_entries)
+    ]
+    symbol_macrolet = _cons_from(
+        [lisptype.LispSymbol('SYMBOL-MACROLET'), _cons_from(bindings)] + list(body))
+    let_binding = _cons_from([_cons_from([instance_var, instance_form])])
+    return _cons_from([lisptype.LispSymbol('LET'), let_binding, symbol_macrolet])
+
+
+@_registry.cl_macro('WITH-SLOTS', documentation='WITH-SLOTS macro expander (CLHS 7.5.5)')
+def with_slots_macro(slot_entries, instance_form, *body):
+    """Macro expander for WITH-SLOTS (CLHS 7.5.5).
+
+    Transforms:
+      (WITH-SLOTS (slot-entry*) instance-form decl* form*)
+    into:
+      (LET ((#:instance instance-form))
+        (SYMBOL-MACROLET ((var1 (SLOT-VALUE #:instance 'slot1)) ...)
+          decl* form*))
+
+    Was a `cl_function` stub that evaluated every body form and discarded
+    all but the last, establishing none of the slot bindings -- the same
+    defect class as WITH-STANDARD-IO-SYNTAX and the WITH-*-STRING macros
+    before they were fixed.
+    """
+    def slot_value_of(instance_var, slot_name):
+        quoted = _cons_from([lisptype.LispSymbol('QUOTE'), slot_name])
+        return _cons_from([lisptype.LispSymbol('SLOT-VALUE'), instance_var, quoted])
+
+    return _with_slot_macro(slot_entries, instance_form, body, slot_value_of)
+
+
+@_registry.cl_macro('WITH-ACCESSORS', documentation='WITH-ACCESSORS macro expander (CLHS 7.5.5)')
+def with_accessors_macro(slot_entries, instance_form, *body):
+    """Macro expander for WITH-ACCESSORS (CLHS 7.5.5).
+
+    Transforms:
+      (WITH-ACCESSORS ((var1 accessor1) ...) instance-form decl* form*)
+    into:
+      (LET ((#:instance instance-form))
+        (SYMBOL-MACROLET ((var1 (accessor1 #:instance)) ...)
+          decl* form*))
+
+    Same defect as WITH-SLOTS above: a `cl_function` stub with no bindings.
+    """
+    def accessor_call_of(instance_var, accessor_name):
+        return _cons_from([accessor_name, instance_var])
+
+    return _with_slot_macro(slot_entries, instance_form, body, accessor_call_of)
 
 
 def _cl(name):
@@ -3207,6 +3319,21 @@ def _place_accessor(place_form, env):
     place kinds raise LispNotImplementedError.
     """
     from .evaluation_core import eval
+
+    # CLHS 5.1.2.8: a symbol place may name a symbol-macro (SYMBOL-MACROLET,
+    # e.g. the bindings WITH-SLOTS/WITH-ACCESSORS establish), in which case
+    # every place operator that reaches this function operates on the
+    # macro's expansion rather than treating the name as an ordinary
+    # variable -- the same resolution SETF/SETQ's own inline loops already
+    # apply for their symbol branch (`setf-symbol-macro.*`). Without this,
+    # `(incf a)` inside a WITH-ACCESSORS body silently read and wrote a
+    # fresh, unrelated lexical/dynamic variable named A instead of the
+    # accessor's expansion.
+    while isinstance(place_form, lisptype.LispSymbol):
+        expansion = env.get_symbol_macro(place_form)
+        if expansion is None:
+            break
+        place_form = expansion
 
     def _setattr_return(obj, attr, v):
         """setattr returns None; every place setter here must return the
