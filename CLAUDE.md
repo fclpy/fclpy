@@ -1,16 +1,29 @@
 # fclpy — CLAUDE.md
 
 fclpy is a Common Lisp interpreter written in Python. The goal is **full ANSI Common
-Lisp compliance**, measured by running the real ANSI test suite (`ansi-test/`, a
-sibling directory one level above this repo) to completion without crashing, and
-passing as many of its tests as possible.
+Lisp compliance**: the real ANSI test suite (`ansi-test/`, a sibling directory one
+level above this repo) runs to completion and reports **zero failures**, with no
+test skipped, suppressed, or declared expected.
 
-> **Current status.** Last full run 2026-08-18: `COMPLETENESS: OK`,
-> 22124/22124 accounted, **17087 passing (77.2%)**, ~86 minutes. Targeted runs
-> since have taken it well past that — `docs/ansi_checklist.md` is amended
-> after every one and is **the** number to read; do not quote the full-run
-> figure as current. (History: 08-16 66.8%; 08-15 52.2%; first complete run
-> 08-12 40.7% in ~7.5 hours.)
+"As many tests as possible" was the objective while the suite still crashed. It
+is not the objective now, and the difference matters: it is the wording under
+which a hard test gets quietly reclassified. **Zero failures is necessary but
+not sufficient** — ansi-test does not exercise everything, so a known defect it
+happens to miss is still a defect (plan.md §5, and the final gate in §7).
+
+> **Current status.** Last full run **2026-08-22**: `COMPLETENESS: OK`,
+> 22132/22132 accounted, 0 missing, 0 extra, **19703 passing (89.0%)**,
+> 2429 failing, ~125 minutes. `docs/ansi_checklist.md` is regenerated from it
+> and carries no merge amendments. (History: 08-18 77.2%; 08-16 66.8%;
+> 08-15 52.2%; first complete run 08-12 40.7% in ~7.5 hours.)
+>
+> **Six files regressed** against the 08-18 baseline and the baseline was
+> deliberately not refreshed — `scripts/gate.py` will report them until they
+> are fixed or accepted in writing. That is intended; see plan.md §7.
+> `system-construction` and `auxiliary` are at 100%, `pathnames` 99.5%,
+> `arrays` and `cons` 98.9%. The worst *rates* — `structures` 32.2%,
+> `hash-tables` 55.7%, `environment` 57.8% — each have one named cause, and
+> two of the three are duplicate registrations, not missing features.
 >
 > **The mode has changed, and this is the most important thing on this page.**
 > Crashes stopped being the constraint on 08-12; *clusters* stopped being the
@@ -68,7 +81,7 @@ passing as many of its tests as possible.
 > one, that one is fclpy's implementation-defined choice** — that is how the
 > SUBTYPEP lattice was decided rather than declaring `subtypep.member.27`
 > unpassable. Adding a `*FEATURES*` keyword to make a test disappear is the
-> same evasion in a different hat. See plan.md, "Demonstrating completion".
+> same evasion in a different hat. See plan.md, "The final compliance gate" and "Ways to fake compliance".
 
 ## Environment
 
@@ -475,14 +488,21 @@ name and is usually 2–30 seconds:
    ```powershell
    pipenv run python scripts/run_ansi.py <dir>/<file>.lsp --update-checklist
    ```
-5. **`pipenv run pytest -q`** (~50s) for unit regressions, and
-   **`pipenv run python scripts/duplicates.py --baseline`** (under a second).
-   The second is the only automatic check for standing rule 3, which is the
-   defect class that has cost this project the most: `registry.cl_function`
-   ends in `function_registry[name] = entry`, so a second implementation of
-   an operator wins or loses on *import order*, silently. There are 22 such
+5. **`pipenv run python scripts/gate.py`** (~50s) — the three cheap checks in
+   one, exiting non-zero if any fails: `pytest -q` for unit regressions,
+   `duplicates.py --baseline` for standing rule 3, and
+   `ansi_checklist.py --baseline` for per-file ANSI regressions. **A file that
+   got worse is a failure even when the total improved** — a total can hide a
+   mechanism trade where one fix breaks another subsystem.
+   The duplicates check is the only automatic guard on the defect class that
+   has cost this project the most: `registry.cl_function` ends in
+   `function_registry[name] = entry`, so a second implementation of an
+   operator wins or loses on *import order*, silently. There are 22 such
    operators today — deleting one side of a pair is some of the cheapest
    remaining work in the suite (plan.md §2, "The duplicate register").
+   **Never clear a gate failure with `--save-baseline`.** Both baselines are
+   committed so that changing one shows up in `git diff` as the reviewable
+   event it is; see plan.md, "Ways to fake compliance".
 6. **Re-run the directories the change could plausibly reach.** A change to a
    binder, the printer, the reader or the type lattice reaches nearly
    everything: run several directories, not just the one you targeted. A fix
@@ -490,8 +510,26 @@ name and is usually 2–30 seconds:
    only the one you aimed at is a symptom fix, and worth a second look.
 7. `pipenv run python scripts/ansi_checklist.py --baseline docs/ansi_checklist_baseline.json`
    to classify it — every file you did not touch must show no `+N REGRESSION`.
-8. **Only then**, and only to move the official scoreboard or close a
-   milestone, run the full suite.
+8. **Run the full suite when it is required — and it sometimes is.** It is not
+   the inner loop and must never be used as one, but "targeted runs passed" is
+   *not* full-suite verification, and there are three cases where only a full
+   run can tell you anything:
+
+   - **Mandatory** after touching any operator on the ansi-test bootstrap
+     path — `APPEND`, `DIRECTORY`, `MAPC`, `MAKE-PATHNAME`,
+     `COMPILE-FILE-PATHNAME`, `LOAD`, `COMPILE-FILE`, `DELETE-FILE`, `OPEN`,
+     or the reader/printer paths they use. `scripts/run_ansi.py` starts at
+     `gclload1.lsp` and **never loads `init.lsp`**, so a defect here reports
+     as "0 tests ran", not as a failing test. See
+     ["The one thing a targeted run cannot verify"](#the-one-thing-a-targeted-run-cannot-verify)
+     below, and run the `(listp (directory "*.lsp"))` probe there *first*.
+   - **Mandatory** before moving the official scoreboard in plan.md §1, before
+     `--save-baseline`, and at the final compliance gate. An amended checklist
+     count is an **index, not a scoreboard**.
+   - Worth it after a change with wide blast radius (a binder, the printer,
+     the reader, the type lattice) even when step 6 looked clean.
+
+   Otherwise, don't. It is ~86 minutes.
 
 ### Rules for this loop
 1. One mechanism at a time — fix it, verify it, move on. Don't batch unrelated
@@ -529,6 +567,10 @@ pipenv run python -c "import sys; sys.path.insert(0,'.'); from fclpy import lisp
 
 ## Secondary checks
 
+- `pipenv run python scripts/gate.py` — **the three cheap checks together**,
+  non-zero exit if any fails. This is what to run after a repair;
+  `--skip-pytest` drops it under a second. It is not a substitute for a full
+  run: see step 8 of the loop for when a full run is mandatory.
 - `pipenv run pytest -q` — the `tests/` unit-test suite (fast regression net for
   individual functions/forms; not the same thing as the ANSI conformance run).
 - `pipenv run python scripts/coverage.py` — compares `docs/ansi_targets.txt`

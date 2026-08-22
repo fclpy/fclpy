@@ -26,18 +26,76 @@ history is preserved in condensed form in [Changelog](docs/changelog.md).
 
 ## 1. Status
 
-> **Current, as amended by targeted runs (2026-08-22): 2522 failing, 363 files.**
-> `docs/ansi_checklist.md` is the live number; everything in this section below
-> is the last *full* run and is now well behind it. Directory pass rates as of
-> the same reading: `printer` 73.5%, `data-and-control-flow` 88.5%, `objects`
-> 80.9%, `numbers` 89.1%, `iteration` 83.3%, `streams` 83.0%, `strings` 82.2%,
-> `sequences` 97.7%, `structures` 32.2%, `hash-tables` 55.7%,
-> `environment` 57.8%.
->
+**Latest full run: 2026-08-22. Just under 90% passing, and the suite is
+complete.**
+
+```
+COMPLETENESS: total=22132 passed=19703 failed=2429 accounted=22132 missing=0 extra=0
+COMPLETENESS: OK
+```
+
+| | value | previous full run (2026-08-18) |
+|---|---|---|
+| Registered tests | 22132 | 22124 |
+| Executed (`accounted`) | **22132 (100%)** | 22124 (100%) |
+| Passed | **19703 (89.0%)** | 17087 (77.2%) |
+| Failed | **2429** | 5037 |
+| Never executed | **0** | 0 |
+| Wall time | ~125 minutes (7445s) | ~86 minutes |
+
+**+2616 passing, and this run spans nine commits, not one** — `743581f`
+(files), `2567fb9` (FORMAT `~<~:>`), `9e27ab5` ((SETF FIND-CLASS)), `48ce713`
+(DEFGENERIC/DEFMETHOD congruence), `8609009` (binary streams, macro `&key`
+ordering), `a351743` (conditions), `a34ab2e` (numbers), `37ead34` (objects)
+and `679452f` (the ordinary lambda list). The total is theirs jointly; per
+mechanism deltas measured on both sides of a specific change are in
+`docs/changelog.md`.
+
+**The run is healthy, and that was checked rather than assumed.** Exit code 0,
+`COMPLETENESS: OK`, `accounted == total`, 0 missing and 0 extra. The watchdog
+warned three times that no progress had been made for ~120s, and each warning
+was followed by `RESOLVED: progress resumed` — so there were three slow
+stretches and **no hang**; the 900s hard stop never fired.
+
+**Wall time rose 86 → 125 minutes (+45%), and that is expected rather than a
+regression** — the same shape as 08-15 → 08-16. 2616 more tests pass, which
+means 2616 more assertions actually execute instead of failing early, and the
+new lambda-list arity checks make `check-type-error`-style helpers call the
+function under test where they previously did not. A measured ~5% of it is the
+`BindingFrame` construction every function call now does (see
+[§7](#preventing-regression) on the absence of a speed gate — this is the
+number that would have been caught automatically if one existed). Treat wall
+time as a measurement, not a constant.
+
+**Six files regressed against the 2026-08-18 baseline** — recorded in
+[§7](#open-regressions-carried-by-the-2026-08-22-full-run) rather than cleared.
+The baseline was **not** refreshed: under
+[Ways to fake compliance](#ways-to-fake-compliance) it may be refreshed only
+once a regression is understood and accepted in writing or fixed, and these
+six are neither yet.
+
+**`system-construction` (75) and `auxiliary` (2) are at 100%**, `pathnames` is
+1 of 215 from it, and `arrays` and `cons` are both at 98.9%. The constraint is
+now `printer` (203), `numbers` (157), `objects` (155) and `iteration` (140);
+by *rate* it is `structures` (32.2%), `hash-tables` (55.7%) and `environment`
+(57.8%), all three of which are dominated by an identified absent or duplicated
+mechanism rather than by many separate bugs.
+
 > **The working mode has changed** — see
 > [§2's Working mode](#working-mode-tail-mode-2026-08-22). The failure
-> distribution is now a tail, not a set of clusters, and the Tier 1/2 rankings
+> distribution is a tail, not a set of clusters, and the Tier 1/2 rankings
 > in [§3](#3-the-checklist) are kept as history rather than as a plan.
+>
+> **`docs/ansi_checklist.md` is regenerated from this run** and carries no
+> merge amendments: a full run supersedes them and `run_all_tests.py` deletes
+> `ansi_results/merges.log`. Every number in it is therefore from one
+> self-consistent run — including the cross-session merge of 2026-08-22T13:23,
+> which was made against a half-edited tree and is now gone.
+
+<details>
+<summary>Previous full run (2026-08-18), kept for the analysis it carries</summary>
+
+**Latest full run: 2026-08-18. Over three quarters passing.**
 
 **Latest full run: 2026-08-18. Over three quarters passing.**
 
@@ -176,6 +234,50 @@ the subsystems where one absent mechanism fails everything downstream of it.
 > namestring syntax to round-trip through when `NAME`/`TYPE` are both NIL, so
 > `(make-pathname :version :newest)` and `(make-pathname :version :wild)`
 > both print as `#P""` and read back with `VERSION` NIL. See the Changelog.
+
+</details>
+
+### Per-directory scoreboard (2026-08-22 full run, complete)
+
+Ordered by failures. Regenerate from `docs/ansi_checklist.md`, which is
+generated from this run's raw output.
+
+| directory | failed | total | pass rate |
+|---|---|---|---|
+| printer | 203 | 788 | 74.2% |
+| numbers | 157 | 1438 | 89.1% |
+| objects | 155 | 824 | 81.2% |
+| iteration | 140 | 838 | 83.3% |
+| data-and-control-flow | 101 | 1420 | 92.9% |
+| streams | 93 | 547 | 83.0% |
+| strings | 89 | 501 | 82.2% |
+| environment | 81 | 192 | **57.8%** |
+| packages | 79 | 340 | 76.8% |
+| structures | 78 | 115 | **32.2%** |
+| sequences | 72 | 3158 | 97.7% |
+| hash-tables | 70 | 158 | **55.7%** |
+| reader | 55 | 165 | 66.7% |
+| eval-and-compile | 50 | 318 | 84.3% |
+| types-and-classes | 40 | 545 | 92.7% |
+| symbols | 29 | 1145 | 97.5% |
+| misc | 26 | 740 | 96.5% |
+| conditions | 21 | 303 | 93.1% |
+| cons | 18 | 1638 | 98.9% |
+| files | 18 | 87 | 79.3% |
+| characters | 17 | 259 | 93.4% |
+| arrays | 14 | 1245 | 98.9% |
+| pathnames | 1 | 215 | **99.5%** |
+| auxiliary | 0 | 2 | **100%** |
+| system-construction | 0 | 75 | **100%** |
+
+**The three worst *rates* each have a named cause, and none of them is "many
+small bugs".** `hash-tables` (55.7%) is nine operators registered twice, with
+the dead `hashtables.py` copy winning `HASH-TABLE-P` — see
+[the duplicate register](#the-duplicate-register--the-one-place-a-cluster-argument-still-holds).
+`environment` (57.8%) is `GET-UNIVERSAL-TIME`/`DECODE-UNIVERSAL-TIME`
+duplicated plus `TIME` absent. `structures` (32.2%) is the one that is
+genuinely a subsystem gap ([C4](#c4-defstruct-generates-no-accessors-and-no-class)).
+
 
 ---
 
@@ -1155,6 +1257,14 @@ Lisp conditional is silently *true*. A live landmine. And tests that cannot fail
 (`test_phase3_unwind_protect.py:131`, `test_phase4_multiple_values.py:330`) occupy
 the place real coverage should be.
 
+> **These are audit items, not trivia**, and
+> [the final compliance gate](#half-two--the-known-non-compliance-audit)
+> requires them closed. A unit test that asserts a bug is how a known defect
+> survives to the end: fixing the bug shows up as a broken test, so it gets
+> deferred. Each of the three is either corrected or explicitly renamed and
+> documented as a test of *non-ANSI* behaviour. `is_truthy(False)` belongs in
+> [§5](#5-known-temporary-deviations) until it is fixed — it already is.
+
 ---
 
 ## 4. Milestones — re-scoped
@@ -1163,7 +1273,7 @@ Milestones now describe *mechanisms*, and map onto the clusters above.
 
 | | milestone | state | clusters |
 |---|---|---|---|
-| **M0** | Trustworthy measurement | **DONE** — `COMPLETENESS: OK`, 22036/22036 accounted. `expected-failures/` is not an open item: it stays unwired **by policy**, see [Demonstrating completion](#demonstrating-completion) | — |
+| **M0** | Trustworthy measurement | **DONE** — `COMPLETENESS: OK`, 22036/22036 accounted. `expected-failures/` is not an open item: it stays unwired **by policy**, see [Why `expected-failures/` stays unwired](#why-expected-failures-stays-unwired--deliberately) | — |
 | **M1** | Symbol, NIL, package identity | canonical CL symbol table **done**; package model outstanding | C10, C18, C19 |
 | **M2** | Environment model | **binding forms done**, and **the global environment done (2026-08-15)** — one `BindingFrame` decides lexical vs. dynamic for LET, LET* and all eight iteration forms, and a global variable has one home, the symbol's value cell. Outstanding: `is_truthy(False)`, and the lambda-list binders, which are M3's | C1, X2 |
 | **M3** | One lambda-list engine | **ordinary lambda list done (2026-08-22)** — LAMBDA/DEFUN/FLET/LABELS share `make_ordinary_function`, which binds through `BindingFrame` and signals the CLHS 3.5.1 arity errors; DEFMETHOD shares its tail binder. Outstanding: the **macro** lambda list (`_create_macro_function`) and `bind_destructuring_pattern` are still two more binders, neither signalling a PROGRAM-ERROR | C17, X2 |
@@ -1387,6 +1497,27 @@ mechanism" this plan has warned about since the beginning.
 Anything knowingly non-ANSI, with the milestone that removes it. Empty means
 "nothing is knowingly wrong" — keep it honest.
 
+> **This table is the known-non-compliance audit list, and
+> [the final compliance gate](#half-two--the-known-non-compliance-audit)
+> requires it to be empty or fully resolved.** That is what makes it binding
+> rather than decorative: zero ansi-test failures does not clear a row here,
+> because ansi-test does not exercise everything. Several rows are known
+> *wrong answers* that no current test catches — `is_truthy(False)` is true,
+> `EQUAL` descends a general vector where CLHS 5.3 says it must not, a
+> length-1 `str` satisfies both `CHARACTER` and `STRING` (disjoint, CLHS
+> 4.2.2), 114 non-ANSI symbols are exported from `CL`.
+>
+> A row leaves this table exactly four ways: **(a)** fixed, **(b)** shown to be
+> conforming already with the CLHS section cited, **(c)** documented as an
+> allowed implementation-defined choice with the CLHS section that grants the
+> latitude, or **(d)** shown no longer to exist. Record which in
+> `docs/changelog.md`. **Deleting a row is not a fifth way**, and "no test
+> covers it" is not a resolution.
+>
+> Adding a row is cheap and expected — standing rule 5 exists so a shortcut is
+> *tracked* rather than forgotten. The cost is only that it must be discharged
+> before compliance is claimed.
+
 | deviation | why tolerated | removed by |
 |---|---|---|
 | LOOP: one accumulation destination per *type*; `INTO` of mixed types into one var unsupported | accumulator state is typed on first use | C1 follow-up |
@@ -1474,55 +1605,147 @@ complete.**
 ASDF is the rung that converts this from "a conforming Lisp" into "a Lisp with an
 ecosystem," and **nothing in the ANSI suite tests it.**
 
-### Demonstrating completion
+### The final compliance gate
 
-**The target is zero failures. There are no expected failures.**
+**Zero ansi-test failures is necessary and not sufficient.** ansi-test does not
+exercise everything, so a defect it happens to miss is still a defect. Both
+halves have to be closed before fclpy is called ANSI compliant.
 
-1. `ansi-test` reports **0 failures**, verified independently by
-   `scripts/ansi_score.py` parsing raw output — not by a `FORMAT`-rendered
-   summary produced by the implementation under test.
-2. All four ecosystem rungs load and run.
-3. A conformance statement documenting every implementation-defined choice —
-   as a *record* of what was chosen, never as a list of what was skipped.
+#### Half one — the suite
 
-> #### Why `expected-failures/` stays unwired — deliberately
->
-> RT supports it: `rt.lsp` defines `*expected-failures*`, and
-> `rt:load-expected-failures` reads a `.sexp` list of test names that then
-> stop counting as failures. Five implementations ship one in
-> `../ansi-test/expected-failures/`. **fclpy will not.**
->
-> That mechanism exists so an implementation can decline a feature whose cost
-> it does not want to pay — usually for speed — and still report a clean run.
-> It is the wrong trade for this project, whose entire point is a *reference*
-> implementation of the standard: correctness first, and no line in the
-> tooling that lets a real gap read as an accepted one. **A faster Lisp can be
-> forked from this one and make those trades explicitly.** It cannot be
-> recovered the other way round, because once a test is on the list nothing
-> ever measures it again.
->
-> This is not a new policy so much as the one already being followed. When
-> `SUBTYPEP` could not answer the twelve certainty questions
-> `check-equivalence` asks, the response was to build a real type lattice with
-> a complement-closed representation per sort — not to declare
-> `subtypep.member.27` expected to fail, which every clause of CLHS 4.4's
-> "may return NIL NIL" would have licensed. `MOST-POSITIVE-FIXNUM`,
-> `(subtypep '(and A (not B)) nil)` and the randomised `subtypep.cons.44`
-> pairs are all cases where the standard permits latitude and ansi-test asserts
-> a specific answer, and each was met by supplying that answer.
->
-> **The operative rule, then:** *where CLHS permits several conforming
-> behaviours and ansi-test asserts one of them, that one is fclpy's
-> implementation-defined choice.* Record it in the conformance statement
-> (criterion 3) and implement it. A test that looks unpassable is a claim that
-> needs a CLHS citation and a written argument in
-> [§5](#5-known-temporary-deviations) — not an entry on a skip list.
->
-> One consequence worth knowing: `*FEATURES*` is
-> `(:FCLPY :COMMON-LISP :ANSI-CL)` and ansi-test branches on `#+`/`#-`
-> throughout, so `*FEATURES*` decides *which tests exist* — the denominator.
-> Adding a feature keyword to make something pass is the same evasion as an
-> expected-failures entry, wearing a different hat.
+1. **`COMPLETENESS: OK`.** Not the "N failures out of 22036" summary, which
+   prints the initial pending count unconditionally and looks complete even
+   when a run died partway.
+2. **Zero failures**, from a **full** `run_all_tests.py`, read out of raw RT
+   output by `scripts/ansi_score.py` — not from a `FORMAT`-rendered summary
+   produced by the implementation under test, and not from an amended
+   checklist count (see [the merge rules](#keeping-the-checklist-current-without-a-full-run):
+   a merged total is an index, not a scoreboard).
+3. **`expected-failures/` is unwired**, `rt:load-expected-failures` is called
+   from nowhere, and `docs/expected-failures.sexp` does not exist.
+4. **`*FEATURES*` is unchanged** from `(:FCLPY :COMMON-LISP :ANSI-CL)` unless a
+   keyword was added because fclpy genuinely has that feature, argued in
+   writing. ansi-test branches on `#+`/`#-`, so `*FEATURES*` sets the
+   denominator; adding a keyword to shrink it is an expected-failure in a hat.
+5. **No per-file regression** — `scripts/ansi_checklist.py --baseline` marks no
+   file `(+N REGRESSION)`, and the baseline it compares against was saved from
+   a full run, not refreshed to clear one.
+
+#### Half two — the known non-compliance audit
+
+**Every known deviation must be resolved, whether or not ansi-test catches
+it.** This is the half that does not happen automatically, and the half a
+green scoreboard will otherwise be mistaken for. Each item below is *resolved*
+only when it is one of:
+
+  **a.** fixed;
+  **b.** demonstrated to be conforming already, with the CLHS section cited;
+  **c.** documented as an allowed **implementation-defined** choice, with the
+  CLHS section that grants the latitude and a statement of what fclpy chose;
+  or **d.** shown to no longer exist.
+
+"ansi-test does not test it" is **not** a resolution. Neither is deleting the
+row.
+
+6. **[§5, Known temporary deviations](#5-known-temporary-deviations), is empty
+   or fully resolved.** Its own header already says empty means "nothing is
+   knowingly wrong"; this is the gate that makes that binding. It currently
+   holds ~34 rows, several of which are known *wrong answers* rather than
+   latitude — `is_truthy(False)` being true, `EQUAL` descending a general
+   vector (CLHS 5.3 says it must not), a length-1 `str` satisfying both
+   `CHARACTER` and `STRING` (disjoint types, CLHS 4.2.2), 114 non-ANSI symbols
+   exported from `CL`. None of those becomes acceptable by being untested.
+7. **The known non-ANSI assertions in the *unit* suite are gone** — see
+   [§3](#known-non-ansi-assertions-in-the-unit-suite). Each of the three is
+   either corrected, or explicitly renamed and documented as a test of
+   *non-ANSI* behaviour so it cannot be mistaken for a conformance assertion.
+   A unit test that asserts a bug makes fixing the bug look like a regression,
+   which is the mechanism by which a known defect survives to the end.
+   The tests that *cannot fail* (`test_phase3_unwind_protect.py:131`,
+   `test_phase4_multiple_values.py:330`) are fixed or removed: a test that
+   cannot fail is worse than no test, because it occupies the slot.
+8. **The duplicate register is empty.** `scripts/duplicates.py` reports no
+   operator registered from two modules and no module-level name defined twice
+   in one file. Standing rule 3 admits no exception, and
+   `docs/duplicates_baseline.json` is debt to be worked down — **never an
+   approval list**. Two implementations of one operator means the answer
+   depends on import order, which is not a property a conforming
+   implementation can have.
+9. **No Python object appears as a Lisp value** anywhere reachable — standing
+   rule 2. Grep the full-run log for the leak shapes in
+   [X1](#x1-python-exceptions-leaking-as-lisp-values); zero occurrences.
+10. **No silent-acceptance path remains** — standing rule 4. The known one is
+    LOOP dropping an unrecognized clause keyword ([§5](#5-known-temporary-deviations)).
+
+#### Half three — the record
+
+11. **All four ecosystem rungs load and run**
+    ([the ladder above](#7-acceptance--the-ecosystem-ladder)). Nothing in
+    ansi-test tests ASDF, and "runs unmodified ANSI source" is the actual goal.
+12. **A conformance statement** listing every implementation-defined choice
+    with its CLHS citation. It is a *record of what was chosen*, never a list
+    of what was skipped, and every item admitted under (c) above appears in it.
+
+#### Why `expected-failures/` stays unwired — deliberately
+
+RT supports it: `rt.lsp` defines `*expected-failures*`, and
+`rt:load-expected-failures` reads a `.sexp` list of test names that then stop
+counting as failures. Five implementations ship one in
+`../ansi-test/expected-failures/`. **fclpy will not.**
+
+That mechanism exists so an implementation can decline a feature whose cost it
+does not want to pay — usually for speed — and still report a clean run. It is
+the wrong trade for this project, whose entire point is a *reference*
+implementation of the standard: correctness first, and no line in the tooling
+that lets a real gap read as an accepted one. **A faster Lisp can be forked
+from this one and make those trades explicitly.** It cannot be recovered the
+other way round, because once a test is on the list nothing ever measures it
+again.
+
+This is not a new policy so much as the one already being followed. When
+`SUBTYPEP` could not answer the twelve certainty questions `check-equivalence`
+asks, the response was to build a real type lattice with a complement-closed
+representation per sort — not to declare `subtypep.member.27` expected to
+fail, which every clause of CLHS 4.4's "may return NIL NIL" would have
+licensed. `MOST-POSITIVE-FIXNUM`, `(subtypep '(and A (not B)) nil)` and the
+randomised `subtypep.cons.44` pairs are all cases where the standard permits
+latitude and ansi-test asserts a specific answer, and each was met by
+supplying that answer.
+
+**The operative rule, then:** *where CLHS permits several conforming
+behaviours and ansi-test asserts one of them, that one is fclpy's
+implementation-defined choice.* Record it in the conformance statement
+(criterion 12) and implement it. A test that looks unpassable is a claim that
+needs a CLHS citation and a written argument in
+[§5](#5-known-temporary-deviations) — not an entry on a skip list.
+
+Note the direction of that rule. It resolves latitude *toward* the test; it
+never resolves a failing test *into* latitude. Where ansi-test does not assert
+a choice, the choice is still fclpy's to make — but **implementation-defined
+is not implementation-arbitrary**: the standard has to actually grant the
+latitude, and the grant gets cited.
+
+### Ways to fake compliance
+
+Each of these produces a green result without changing what fclpy does. They
+are listed because several are one command away, and two of them are switches
+this project added itself.
+
+| evasion | why it is available | the rule |
+|---|---|---|
+| `rt:load-expected-failures` | RT supports it; five implementations ship a file | **Never.** See [Why `expected-failures/` stays unwired](#why-expected-failures-stays-unwired--deliberately) |
+| push a keyword onto `*FEATURES*` | ansi-test branches on `#+`/`#-`, so this deletes tests | Only if fclpy genuinely has the feature, argued in writing |
+| `scripts/duplicates.py --save-baseline` after adding a duplicate | the switch exists so real debt can be recorded | A baseline change is a **reviewable event, not a fix**. Both baselines are committed for this reason: it shows up in `git diff` |
+| `scripts/ansi_checklist.py --save-baseline` after a regression | same | Full-run-only, and only once the regression is understood and *accepted in writing* or fixed |
+| delete or soften a [§5](#5-known-temporary-deviations) row | it is a hand-maintained table | A row leaves only by (a)–(d) above, and the Changelog records which |
+| call a defect "implementation-defined" | ANSI does grant latitude in many places | Requires the CLHS section that grants it. **Implementation-*defined* is not implementation-*arbitrary*** — the standard has to actually permit the choice |
+| weaken a unit test to match fclpy | pytest is ours to edit | ansi-test is the authority; when they disagree the unit test is wrong ([§3](#known-non-ansi-assertions-in-the-unit-suite)) |
+| catch an exception in the runner so a test "passes" | the runner is ours | Standing rules 2 and 4. A Python exception surfacing as a Lisp value is a bug, not an error to hide |
+| quote an amended checklist count as the scoreboard | the checklist is the day-to-day authority | A merged total is an **index**; the official number moves only on a full run |
+
+**The general form:** if a change makes the number better without making the
+Lisp better, it is one of these. The test is whether the same change would
+have been worth making if nobody were counting.
 
 
 ### Preventing regression
@@ -1538,13 +1761,23 @@ ecosystem," and **nothing in the ANSI suite tests it.**
 - CI runs the full suite; **any increase in failures is a build failure.** Commit
   the scoreboard so deltas are reviewable.
 
-  > **There is no CI.** No `.github/workflows`, no config for any other
-  > runner. Every gate in this section is therefore something a person or an
-  > agent has to remember, and the 2026-08-22 cross-session merge above shows
-  > what that is worth. The cheap version is worth having even without a
-  > server: one script that runs `pytest -q`, `scripts/duplicates.py
-  > --baseline` and `scripts/ansi_checklist.py --baseline`, and exits
-  > non-zero. All three already exist; nothing composes them.
+  > **There is no CI** — no `.github/workflows`, no config for any other
+  > runner — so every gate in this section is something a person or an agent
+  > has to remember, and the 2026-08-22 cross-session merge above shows what
+  > that is worth. **`scripts/gate.py` is the cheap standing-in-for-CI
+  > version** (added 2026-08-22): it runs `pytest -q`,
+  > `scripts/duplicates.py --baseline` and
+  > `scripts/ansi_checklist.py --baseline` and exits non-zero if any fails.
+  > Run it after every repair; it is ~50s, almost all of it pytest
+  > (`--skip-pytest` drops it to under a second).
+  >
+  > **Its third check reads the generated checklist, not the command's
+  > output**, and that detail is the point. `ansi_checklist.py --baseline`
+  > writes `(+N REGRESSION)` markers *into `docs/ansi_checklist.md`* and exits
+  > 0 either way — so the obvious implementation of this gate passed
+  > unconditionally, and did on its first run. It found six regressed files
+  > the moment it was corrected. A gate that cannot fail is worse than no
+  > gate, because it is mistaken for one.
 
 - **Nothing measures speed, and speed is a first-order constraint here.** The
   entire working mode is shaped by run cost — 86 minutes for the authority,
@@ -1567,6 +1800,40 @@ ecosystem," and **nothing in the ANSI suite tests it.**
   Without it, attributing a regression to a commit costs a second full run
   (`git stash`, re-run, diff by test *name*), because the baseline stores
   counts and not names. With it, attribution is a diff.
+
+#### Open regressions carried by the 2026-08-22 full run
+
+**Six files, +17 tests, against the 2026-08-18 baseline — which was
+deliberately *not* refreshed.** Under
+[Ways to fake compliance](#ways-to-fake-compliance) a baseline may be
+refreshed only once a regression is understood and accepted in writing or
+fixed, and none of these six is yet. Leaving it stale costs nothing but a
+little noise; refreshing it would erase the only record that these files got
+worse.
+
+| file | Δ | now |
+|---|---|---|
+| `characters/character.lsp` | **+9** | 16 failing of 124 |
+| `printer/pprint-dispatch.lsp` | +2 | 10 of 15 |
+| `numbers/boole.lsp` | +2 | 10 of 15 |
+| `cons/nintersection.lsp` | +2 | 4 of 48 |
+| `numbers/oneminus.lsp` | +1 | 3 of 18 |
+| `streams/write-sequence.lsp` | +1 | 7 of 16 |
+
+**Not yet attributed, and attribution is harder than usual here.** Nine
+commits sit between the two runs, so the `git stash` instrument the 08-18
+entry used does not apply — that works for *uncommitted* work. This needs
+either a bisect over the nine, or a targeted run of each file against each
+commit. `characters/character.lsp` at +9 is the one worth doing first: it is
+the largest single regression, it is a directory otherwise at 93.4%, and a
+9-test jump in one file is far more likely to be one mechanism than nine
+bugs.
+
+**A note on the instrument itself.** These six were invisible until
+`scripts/gate.py` was corrected on 2026-08-22: `ansi_checklist.py --baseline`
+writes its `(+N REGRESSION)` markers *into the generated checklist* and exits
+0 regardless, so the obvious gate — inspect the command's exit status — passed
+unconditionally. Six regressed files had been sitting in a file nothing read.
 
 #### Open regressions carried by the 2026-08-18 (b) full run
 
@@ -1699,6 +1966,7 @@ rather than discovering these one crash at a time.
 | `CLAUDE.md` | architecture map **and the canonical development loop** — read first |
 | `plan.md` | this document — status, working mode, live items, deviations, acceptance |
 | `docs/changelog.md` | the mechanism-by-mechanism record, including the diagnoses that were wrong — archive, not required reading |
+| `scripts/gate.py` | **the cheap gate** — `pytest -q` + `duplicates.py --baseline` + `ansi_checklist.py --baseline`, non-zero exit if any fails. Run after every repair; never a substitute for a full run |
 | `scripts/duplicates.py` | **the duplicate register** — operators registered from two modules, and names defined twice in one file; `--baseline` is a one-second gate |
 | `docs/duplicates_baseline.json` | the *known* duplicates. Debt, not an approval list; the gate is "no new ones" |
 | `scripts/run_ansi.py` | **targeted runner — the development inner loop**; `--update-checklist` amends the checklist with the run |
