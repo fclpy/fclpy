@@ -5,22 +5,26 @@ Lisp compliance**, measured by running the real ANSI test suite (`ansi-test/`, a
 sibling directory one level above this repo) to completion without crashing, and
 passing as many of its tests as possible.
 
-> **Current status (2026-08-18).** The suite runs to completion and is **over
-> three quarters passing**: `COMPLETENESS: OK`, 22124/22124 accounted, 0 missing,
-> **17087 passing (77.2%)**, ~86 minutes. Crashes are no longer the constraint;
-> **semantics are**. (08-16: 14772, 66.8%, ~113 min. 08-15: 11548, 52.2%. First
-> complete run 2026-08-12: 8960 of 22036, 40.7%, ~7.5 hours.)
+> **Current status.** Last full run 2026-08-18: `COMPLETENESS: OK`,
+> 22124/22124 accounted, **17087 passing (77.2%)**, ~86 minutes. Targeted runs
+> since have taken it well past that — `docs/ansi_checklist.md` is amended
+> after every one and is **the** number to read; do not quote the full-run
+> figure as current. (History: 08-16 66.8%; 08-15 52.2%; first complete run
+> 08-12 40.7% in ~7.5 hours.)
 >
-> `cons` is at 99.0% and `sequences` at 94.9%; `objects` (422 failures),
-> `streams` (319) and `printer` (302) are now the constraint.
->
-> **`system-construction` is 77 of 77 as of 2026-08-20** (targeted run; the
-> full-run number above predates it), and `files` is 47 of 87. Read that
-> Changelog entry in plan.md before ranking any other low-percentage directory
-> as a "subsystem gap": eight of the eleven mechanisms it took were core
-> defects — a lambda-list rule, a type predicate, a string's own length, a
-> readtable's identity, a control-transfer rule — that a 75-test directory
-> happened to be the only place exercising all of them at once.
+> **The mode has changed, and this is the most important thing on this page.**
+> Crashes stopped being the constraint on 08-12; *clusters* stopped being the
+> constraint around 08-22. The evidence, from the live checklist: the median
+> failing file has **3** failures, 217 of 363 failing files have ≤3, the single
+> largest failing file is **3.6%** of the remainder, and only **20 files still
+> fail 100%** (132 tests, down from 49 files / 493 tests on 08-16). Work the
+> checklist **file by file** now — see plan.md §2's "Working mode". Keep the
+> old discipline *inside* each file (smallest reproduction, fix the mechanism,
+> check what else moved), and keep looking for a shared mechanism when one
+> surfaces on its own; just stop *assuming* one is there before you look.
+> The last big one found this way was the ordinary lambda list (2026-08-22):
+> 79 failures across four files in three directories, because FLET/LABELS,
+> LAMBDA and DEFUN each had their own binder.
 >
 > **Hang detection now lives in `fclpy/watchdog.py`, not in the loop forms.**
 > `LoopWatchdog` evaluates its 120s warning and 600s cap inside `tick()`, once
@@ -33,9 +37,13 @@ passing as many of its tests as possible.
 > all. Runner output is line-buffered — block buffering once left the log ~30
 > minutes behind the form actually executing.
 >
-> **[plan.md](plan.md) is the roadmap**, organised around the mechanism at fault
-> rather than test counts, and **`docs/ansi_checklist.md` is the authority for
-> what is failing and where.** Read both before starting. The checklist is
+> **`docs/ansi_checklist.md` is the authority for what is failing and where**,
+> and at this stage it is also the *ranking* — read it first. **[plan.md](plan.md)**:
+> read §1 (status), §2 (how to work — including **the duplicate register**,
+> the one place a cluster argument still holds) and §5 (temporary deviations);
+> treat its Tier 1/2 cluster lists as history — they were written against a
+> 12,000-failure suite and their ordering no longer holds, and
+> `docs/changelog.md` is the archive. The checklist is
 > generated — never hand-edit it — and it is kept current *without* a full run
 > by folding targeted runs into it:
 >
@@ -48,7 +56,19 @@ passing as many of its tests as possible.
 >
 > Trust the `COMPLETENESS:` line, not the "N failures ... out of 22036 tests"
 > summary, which prints the initial pending count unconditionally and looks
-> complete even when a run died partway. `expected-failures/` is still unwired.
+> complete even when a run died partway.
+>
+> **The target is zero failures, and there are no expected failures.** RT's
+> `expected-failures/` mechanism — which five other implementations ship a
+> file for — stays unwired **by policy, not as an open item**: it exists so an
+> implementation can decline a feature it does not want to pay for and still
+> report a clean run, and this one is a reference implementation. Correctness
+> first; a faster Lisp can be forked from it and make those trades explicitly.
+> **Where CLHS permits several conforming behaviours and ansi-test asserts
+> one, that one is fclpy's implementation-defined choice** — that is how the
+> SUBTYPEP lattice was decided rather than declaring `subtypep.member.27`
+> unpassable. Adding a `*FEATURES*` keyword to make a test disappear is the
+> same evasion in a different hat. See plan.md, "Demonstrating completion".
 
 ## Environment
 
@@ -62,12 +82,14 @@ passing as many of its tests as possible.
   90 seconds by itself, so even a single isolated test via `run_do_test.py` takes
   ~90s+ before it prints a result — don't assume a run has hung just because
   nothing has printed yet; give it at least 2 minutes. The full ANSI suite via
-  `run_all_tests.py` takes **about 113 minutes** end to end (measured
-  2026-08-16; it was ~67 minutes at 08-15 and ~7.5 hours before LOOP got one
-  iteration engine). **The rise is expected, not a regression:** fixing LOOP's
-  `unless` clause means `check-type-error` now actually calls the function
-  under test, so a large amount of work that used to be skipped is really run.
-  A single `scripts/run_ansi.py` *group* is usually 2–30s, but a few are far
+  `run_all_tests.py` takes **about 86 minutes** end to end (measured 2026-08-18;
+  113 min at 08-16, ~67 min at 08-15, ~7.5 hours before LOOP got one iteration
+  engine). That figure has moved in *both* directions for real reasons — up
+  when a LOOP fix made `check-type-error` actually call the function under
+  test, down when the printer stopped burning minutes and gigabytes on
+  circular structure — so treat it as a measurement, not a constant.
+  **`scripts/run_ansi.py` is the development loop, not this:** a single group
+  is usually 2–30s, though a few are far
   slower because one form in them burns the 600s LOOP cap. **Do not conclude a
   run has hung from silence alone** — `fclpy/watchdog.py` warns to stderr after
   120s without progress and dumps every thread's traceback, so a genuine wedge
@@ -234,6 +256,29 @@ passing as many of its tests as possible.
     `_split_inferred_keywords`; the families are being migrated cluster by
     cluster (plan.md §5), so **when you touch a builtin, spell its `&key`
     parameters keyword-only**.
+  - **A *user* function's ordinary lambda list has one constructor**,
+    `evaluation_special_forms.make_ordinary_function`, and LAMBDA, DEFUN, FLET
+    and LABELS all go through it (DEFMETHOD shares its binder,
+    `_bind_ordinary_lambda_list_tail`). There used to be three: LAMBDA located
+    the keyword region by *scanning the arguments* for the first
+    keyword-shaped value, so `&rest` never saw the keyword arguments and a
+    repeated keyword took the rightmost value; FLET/LABELS had a hand-rolled
+    parser that did not call `parse_lambda_list` at all and dropped every
+    supplied-p variable, `&aux` and `&allow-other-keys` on the floor; and none
+    of the three signalled a PROGRAM-ERROR for a wrong argument count, an odd
+    keyword list or an unrecognized keyword. Three things it owns:
+    **arity checking** (`_check_ordinary_arity` — a missing required argument
+    used to be padded with NIL and a surplus one discarded, which are wrong
+    *values*, not just missing errors); **`BindingFrame`**, so a parameter the
+    body declares SPECIAL binds the value cell and is undone on exit, with
+    free declarations installed only *after* the parameters are bound because
+    CLHS 3.3.4 excludes init forms from their scope; and the fact that **the
+    implicit block encloses the body only**, so a `RETURN-FROM` in an `&aux`
+    init form leaves the function rather than returning from it.
+    A `&key` parameter and an actual argument match on
+    `keyword_argument_key` — *(package, name)*, not name — because `&key b`
+    declares `:B` while `((b var) ...)` declares whatever symbol was written,
+    and comparing names alone let `((lambda (&key b) b) 'b 100)` bind B.
 - **Packages**: `lispfunc/misc_packages.py` — `coerce_to_package` (the package
   *designator* rule, CLHS 11.1.1.1) and `package_symbols(pkg, kind)` for the
   accessible / present / external symbol sets. `DO-SYMBOLS`,
@@ -407,34 +452,64 @@ passing as many of its tests as possible.
 - **Environment bootstrap**: `lispenv.py` — `setup_standard_environment()` builds
   the initial global environment from the registries above.
 
-## The development loop (crash repair)
+## The development loop
 
-The full step-by-step SOP is in **REPAIR.md** — follow it exactly rather than
-improvising. Summary:
+**Never start with `run_all_tests.py`.** It is ~86 minutes, it moves the
+official scoreboard and nothing else, and it is not how a fix is verified. The
+loop is `scripts/run_ansi.py`, which loads only the harness plus the files you
+name and is usually 2–30 seconds:
 
-1. `pipenv run python run_all_tests.py > run_all_tests.log 2> run_all_tests.err`
-   loads `../ansi-test/doit.lsp` end to end. This is slow — expect a long run.
-2. Find the crash: the crashing test is the one *after* the last test name printed
-   in `run_all_tests.log`; confirm with the traceback in `run_all_tests.err`. If
-   the log's last test is ambiguous (e.g. it's also the last test in that `.lsp`
-   file), use `doit.log` to recover execution order.
-3. Isolate: point `run_do_test.py`'s `test_lisp` line at just that test
-   (`(in-package :cl-test) (do-test 'TESTNAME.N)`) and run
-   `pipenv run python run_do_test.py` to reproduce it in isolation.
-4. Fix the root cause — prefer reader fixes over evaluator hacks when the input
-   syntax is the real problem; prioritize matching ANSI semantics over whatever is
-   locally convenient.
-5. Re-run the isolated test to confirm the fix, `git diff` to strip every debug
-   `print()`/temp variable, then re-run the full suite to confirm no regression
-   and that the previously-crashing test now appears in the log.
-6. Repeat until `doit.lsp` runs to completion (tests failing is fine — the loop's
-   goal is *zero crashes*, not zero failures).
+1. **Pick a file from `docs/ansi_checklist.md`.** At the current failure
+   distribution that is the right unit — see the status note above. Cheapest
+   first is fine; the 20 files still failing 100% are the cheapest of all.
+2. **Reproduce it in the smallest expression that shows the defect**, not by
+   running the test. A one-liner through `eval_string` is seconds:
+   ```powershell
+   pipenv run python -c "import sys; sys.path.insert(0,'.'); from fclpy import lispenv; from fclpy.lispfunc import eval_string; lispenv.setup_standard_environment(); print(eval_string('(flet ((f (&key (a 1 p)) (list a p))) (f))'))"
+   ```
+3. **Fix the mechanism, not the test.** Consolidate onto an existing shared
+   helper if one exists — the architecture map above lists which module owns
+   what, and "there are two of these" is the single most common root cause left.
+4. **Verify with the targeted command the checklist prints next to that file**,
+   and fold the result back in the same step:
+   ```powershell
+   pipenv run python scripts/run_ansi.py <dir>/<file>.lsp --update-checklist
+   ```
+5. **`pipenv run pytest -q`** (~50s) for unit regressions, and
+   **`pipenv run python scripts/duplicates.py --baseline`** (under a second).
+   The second is the only automatic check for standing rule 3, which is the
+   defect class that has cost this project the most: `registry.cl_function`
+   ends in `function_registry[name] = entry`, so a second implementation of
+   an operator wins or loses on *import order*, silently. There are 22 such
+   operators today — deleting one side of a pair is some of the cheapest
+   remaining work in the suite (plan.md §2, "The duplicate register").
+6. **Re-run the directories the change could plausibly reach.** A change to a
+   binder, the printer, the reader or the type lattice reaches nearly
+   everything: run several directories, not just the one you targeted. A fix
+   that moves files you did not target is a mechanism fix; a fix that moves
+   only the one you aimed at is a symptom fix, and worth a second look.
+7. `pipenv run python scripts/ansi_checklist.py --baseline docs/ansi_checklist_baseline.json`
+   to classify it — every file you did not touch must show no `+N REGRESSION`.
+8. **Only then**, and only to move the official scoreboard or close a
+   milestone, run the full suite.
 
 ### Rules for this loop
-1. One crash at a time — fix it, verify it, move on. Don't batch unrelated fixes.
-2. No refactoring beyond what the fix requires.
+1. One mechanism at a time — fix it, verify it, move on. Don't batch unrelated
+   fixes; a combined diff makes an untargeted improvement unattributable.
+2. No refactoring beyond what the fix requires — *except* deleting a duplicate
+   implementation of the thing you are fixing, which is always in scope.
 3. Never leave debug `print()`/diagnostic code in a fix.
 4. Never commit automatically or with failing tests — commits are the user's call.
+
+### If the suite stops completing
+
+Crashes have not been the constraint since 2026-08-12, but if a full run dies
+partway, **REPAIR.md** is the step-by-step SOP for that case: find the crashing
+test (the one *after* the last name printed in `run_all_tests.log`, confirmed
+by the traceback in `run_all_tests.err`, with `doit.log` to disambiguate
+execution order), isolate it with `run_do_test.py`, fix the root cause, and
+re-run. Prefer reader fixes over evaluator hacks when the input syntax is the
+real problem.
 
 ### The one thing a targeted run cannot verify
 
@@ -458,6 +533,11 @@ pipenv run python -c "import sys; sys.path.insert(0,'.'); from fclpy import lisp
   individual functions/forms; not the same thing as the ANSI conformance run).
 - `pipenv run python scripts/coverage.py` — compares `docs/ansi_targets.txt`
   against the live function/special registries to report symbol coverage.
+- `pipenv run python scripts/duplicates.py` — every operator registered from
+  two modules, and every module-level name defined twice in one file. Static
+  (no import), so it also sees a *dead* module that still competes for a name,
+  which is the case that costs the most. `--baseline` gates against
+  `docs/duplicates_baseline.json` (the known debt) and exits 1 on a new one.
 
 ## Architectural gotchas learned from prior repairs
 

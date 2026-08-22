@@ -395,11 +395,28 @@ class Environment(lispT):
         Returns:
             The expansion form if a symbol-macro binding exists, else None
         """
-        if isinstance(symbol, LispSymbol):
-            if symbol.name in self.symbol_macros:
-                return self.symbol_macros[symbol.name]
-            if self.parent:
-                return self.parent.get_symbol_macro(symbol)
+        if not isinstance(symbol, LispSymbol):
+            return None
+        name = symbol.name
+        env = self
+        while env is not None:
+            expansion = env.symbol_macros.get(name)
+            if expansion is not None:
+                return expansion
+            # CLHS 3.1.2.1.1: a *variable* binding shadows a symbol macro of
+            # the same name established further out. Variables and symbol
+            # macros live in separate structures, and a child shares its
+            # parent's `variable_bindings` list, so neither can out-rank the
+            # other by position on its own -- this walk compares them, using
+            # `_variable_map`, which holds only *this* environment's own
+            # bindings. Without it, `(let ((x :a)) (let ((x :b)) (declare
+            # (special x)) ...))` -- where the inner binding installs a
+            # `%SPECIAL-REF` redirection -- would leave that redirection
+            # visible to any *enclosing* lexical X, and a plain
+            # `(symbol-macrolet ((x 1)) (let ((x 2)) x))` answered 1.
+            if name in env._variable_map:
+                return None
+            env = env.parent
         return None
     
     def read_module(self, mod):

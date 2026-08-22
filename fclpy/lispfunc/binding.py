@@ -233,10 +233,18 @@ class BindingFrame:
         specials = declared_specials(split_declarations(body)[0]) if body is not None else []
         self._special_names = {var.name for var in specials}
 
-        bound_names = {name for name in map(_symbol_name, _flatten_vars(bound_vars))
-                       if name is not None}
-        self._free_specials = [var for var in specials if var.name not in bound_names]
-        if not defer_free_declarations:
+        # `bound_vars` is only ever consulted to separate free declarations
+        # from bound ones, so with no declarations there is nothing to
+        # separate. Flattening it unconditionally cost a set construction on
+        # every function call once parameter binding started coming through
+        # here, for a question that could not have a non-empty answer.
+        if specials:
+            bound_names = {name for name in map(_symbol_name, _flatten_vars(bound_vars))
+                           if name is not None}
+            self._free_specials = [var for var in specials if var.name not in bound_names]
+        else:
+            self._free_specials = []
+        if self._free_specials and not defer_free_declarations:
             self.install_free_declarations()
 
     def install_free_declarations(self):
@@ -315,6 +323,26 @@ class BindingFrame:
             had_value = getattr(var, 'value', None) is not None
             self._dynamic[name] = (var, had_value, getattr(var, 'value', None))
             var.value = value
+            if name in self._special_names:
+                # A *locally* declared special binds the value cell and adds
+                # nothing to this environment -- so an enclosing LEXICAL
+                # binding of the same name would still be found first by the
+                # ordinary "environment chain, then value cell" lookup, and
+                # the binding this form just established would be invisible
+                # inside its own body:
+                #
+                #   (let ((y :bad))                 ; lexical
+                #     (let ((y :other))             ; dynamic
+                #       (declare (special y))
+                #       (flet ((f () y)) (f))))     ; => :BAD, not :OTHER
+                #
+                # Redirect references in this environment to the value cell,
+                # the same `%SPECIAL-REF` mechanism a *free* declaration uses
+                # (CLHS 3.3.4 draws the free/bound distinction, but both
+                # kinds of declaration make the reference dynamic).
+                # A globally proclaimed special needs none of this: a global
+                # variable *is* the value cell, so nothing can shadow it.
+                self.env.add_symbol_macro(var, special_reference(var))
         else:
             # add_variable *prepends* to this environment's own binding list,
             # so the per-iteration assignment above -- and any SETQ in the body

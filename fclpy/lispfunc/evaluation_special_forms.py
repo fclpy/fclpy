@@ -983,9 +983,29 @@ def eval_pprint_logical_block(form, env):
         bf.unwind()
 
 
+def keyword_argument_key(symbol):
+    """The identity on which a `&key` parameter and an actual argument match.
+
+    CLHS 3.4.1.4: `&key b` declares the keyword `:B` -- the symbol B in the
+    KEYWORD package -- whereas `((b var) init)` declares whatever symbol B
+    names in the package it was read in, and CLHS 3.4.1.4.1.1 allows *any*
+    symbol there, not only a keyword. Matching on the upper-cased name alone
+    conflates the two, so `((lambda (&key b) b) 'b 100)` bound B from a
+    non-keyword symbol the lambda list never named -- it should be an
+    unrecognized keyword argument.
+
+    Symbols are compared by (package name, symbol name) rather than by
+    identity because a lambda list may be built in Python, where the symbol
+    object differs from the interned one of the same name.
+    """
+    package = getattr(symbol, 'package', None)
+    package_name = getattr(package, 'name', None)
+    return (package_name, symbol.name.upper())
+
+
 def _keyword_param_parts(param_spec):
     """Decompose one `&key` parameter spec into
-    ``(keyword-name, variable, default-form, supplied-p)``.
+    ``(keyword-symbol, variable, default-form, supplied-p)``.
 
     CLHS 3.4.1.4 gives four shapes -- ``var``, ``(var init)``,
     ``(var init supplied-p)`` and ``((keyword-name var) init [supplied-p])``.
@@ -997,11 +1017,14 @@ def _keyword_param_parts(param_spec):
     disagreed -- only one of them read the default form -- which is the
     ordinary consequence of writing the same decomposition twice.
 
-    The keyword name is returned as an upper-case string, since that is what
-    matching against a `lispKeyword`'s name needs.
+    The keyword is returned as a *symbol*, not a name: in the first three
+    shapes CLHS 3.4.1.4 says the parameter answers to the keyword of the same
+    name -- ``&key b`` means ``:B``, regardless of the package the variable B
+    itself lives in -- while in the fourth it answers to the symbol written,
+    whatever package that is. Compare two of them with `keyword_argument_key`.
     """
     if not _consp_internal(param_spec):
-        return param_spec.name.upper(), param_spec, None, None
+        return lisptype.intern_keyword(param_spec.name), param_spec, None, None
 
     head = car(param_spec)
     tail = cdr(param_spec)
@@ -1013,14 +1036,15 @@ def _keyword_param_parts(param_spec):
         # ((keyword-name var) init [supplied-p])
         keyword_name = car(head)
         variable = car(cdr(head)) if _consp_internal(cdr(head)) else None
-        name = (keyword_name.name.upper()
-                if isinstance(keyword_name, lisptype.LispSymbol) else str(keyword_name).upper())
-        return name, variable, default_form, supplied_p
+        if not isinstance(keyword_name, lisptype.LispSymbol):
+            raise lisptype.LispProgramError(
+                f"&key parameter name must be a symbol, not {keyword_name!r}")
+        return keyword_name, variable, default_form, supplied_p
 
-    return head.name.upper(), head, default_form, supplied_p
+    return lisptype.intern_keyword(head.name), head, default_form, supplied_p
 
 
-def _bind_keyword_parameters(parsed, trailing, func_env, eval_fn):
+def _bind_keyword_parameters(parsed, trailing, func_env, eval_fn, frame):
     """Bind a user lambda list's `&key` parameters from the keyword region
     (CLHS 3.4.1.4, 3.5.1.5).
 
@@ -1037,6 +1061,10 @@ def _bind_keyword_parameters(parsed, trailing, func_env, eval_fn):
     cannot be one function -- one reads a Lisp lambda list and binds into an
     environment, the other reads a Python signature and builds a kwargs dict --
     but they must agree, and this is the copy that did not.
+
+    `frame` is the caller's `BindingFrame`, so a parameter the body declares
+    SPECIAL binds in the symbol's value cell rather than lexically
+    (CLHS 3.4.1/11.1.2.1.2). Every parameter in every section goes through it.
     """
     keyword_params = parsed['keyword']
     allow_other_keys = bool(parsed.get('allow_other_keys'))
@@ -1047,32 +1075,42 @@ def _bind_keyword_parameters(parsed, trailing, func_env, eval_fn):
         raise lisptype.LispProgramError(
             f"odd number of keyword arguments: {trailing[-1]!r} has no value")
 
+    allow_other_keys_key = keyword_argument_key(
+        lisptype.intern_keyword('ALLOW-OTHER-KEYS'))
+
     pairs = []
     for i in range(0, len(trailing), 2):
         key = trailing[i]
         if not lisptype.is_symbol(key) or key is lisptype.NIL:
             raise lisptype.LispProgramError(
                 f"{key!r} is not a valid keyword argument name")
-        pairs.append((key.name.upper(), trailing[i + 1]))
+        pairs.append((keyword_argument_key(key), trailing[i + 1]))
 
     # CLHS 3.4.1.4.1: the leftmost :ALLOW-OTHER-KEYS pair governs.
     for name, value in pairs:
-        if name == 'ALLOW-OTHER-KEYS':
+        if name == allow_other_keys_key:
             allow_other_keys = allow_other_keys or lisptype.is_truthy(value)
             break
 
-    declared_names = {name for name, _variable, _default, _supplied in specs}
+    declared_names = {keyword_argument_key(keyword)
+                      for keyword, _variable, _default, _supplied in specs}
 
     # Leftmost pair wins for a repeated keyword; an unrecognized name is a
     # PROGRAM-ERROR resolved before any default-value form runs, matching
     # CLHS 3.4.1.4's argument-processing pass.
+    #
+    # `:ALLOW-OTHER-KEYS` is *always* permissible (CLHS 3.4.1.4.1) but it is
+    # not thereby excluded from the argument list: a lambda list may declare
+    # `((:allow-other-keys aok))` as an ordinary `&key` parameter and must
+    # then receive the value, which skipping the pair outright prevented.
     supplied_values = {}
     for name, value in pairs:
-        if name in supplied_values or name == 'ALLOW-OTHER-KEYS':
+        if name in supplied_values:
             continue
-        if name not in declared_names and not allow_other_keys:
+        if (name not in declared_names and name != allow_other_keys_key
+                and not allow_other_keys):
             raise lisptype.LispProgramError(
-                f"unrecognized keyword argument: {name}")
+                f"unrecognized keyword argument: {name[1]}")
         supplied_values[name] = value
 
     # CLHS 3.4.1.1: a parameter's init-form is evaluated, in left-to-right
@@ -1089,23 +1127,24 @@ def _bind_keyword_parameters(parsed, trailing, func_env, eval_fn):
     # `(make-pathname-test :defaults *default-pathname-defaults*)` derived
     # every expected component from `defaults`, which read back NIL for
     # every parameter after the first regardless of what was passed.
-    for name, variable, default_form, supplied_p in specs:
+    for keyword, variable, default_form, supplied_p in specs:
         if variable is None:
             continue
+        name = keyword_argument_key(keyword)
         if name in supplied_values:
-            func_env.add_variable(variable, supplied_values[name])
+            frame.bind(variable, supplied_values[name])
             if supplied_p is not None:
-                func_env.add_variable(supplied_p, lisptype.T)
+                frame.bind(supplied_p, lisptype.T)
         else:
             if default_form is not None:
-                func_env.add_variable(variable, eval_fn(default_form, func_env))
+                frame.bind(variable, eval_fn(default_form, func_env))
             else:
-                func_env.add_variable(variable, lisptype.NIL)
+                frame.bind(variable, lisptype.NIL)
             if supplied_p is not None:
-                func_env.add_variable(supplied_p, lisptype.NIL)
+                frame.bind(supplied_p, lisptype.NIL)
 
 
-def _bind_ordinary_lambda_list_tail(parsed, call_args, arg_index, func_env, eval_fn):
+def _bind_ordinary_lambda_list_tail(parsed, call_args, arg_index, func_env, eval_fn, frame):
     """Bind &optional/&rest/&key/&aux parameters (CLHS 3.4.1) into `func_env`
     from `call_args`, starting at `arg_index` -- i.e. after any required
     parameters already bound positionally by the caller. Shared by DEFUN's
@@ -1118,6 +1157,12 @@ def _bind_ordinary_lambda_list_tail(parsed, call_args, arg_index, func_env, eval
     supplied-p variable was never bound at all (raising Unbound variable on
     first read), and &key/&rest/&aux were not supported in a method lambda
     list at all.
+
+    `frame` is the caller's `BindingFrame`. Every parameter is established
+    through it rather than through `func_env.add_variable`, because a
+    parameter the function body declares SPECIAL must bind dynamically
+    (CLHS 3.4.1, 11.1.2.1.2) and be undone on exit however the function
+    exits. `add_variable` can express neither.
     """
     optional_params = parsed['optional']
     rest_param = parsed['rest']
@@ -1138,19 +1183,19 @@ def _bind_ordinary_lambda_list_tail(parsed, call_args, arg_index, func_env, eval
             supplied_p = None
 
         if arg_index < len(call_args):
-            func_env.add_variable(param, call_args[arg_index])
+            frame.bind(param, call_args[arg_index])
             if supplied_p is not None:
-                func_env.add_variable(supplied_p, lisptype.T)
+                frame.bind(supplied_p, lisptype.T)
             arg_index += 1
         else:
             # Use default value if provided, otherwise NIL
             if default_form is not None:
                 default_value = eval_fn(default_form, func_env)
-                func_env.add_variable(param, default_value)
+                frame.bind(param, default_value)
             else:
-                func_env.add_variable(param, lisptype.NIL)
+                frame.bind(param, lisptype.NIL)
             if supplied_p is not None:
-                func_env.add_variable(supplied_p, lisptype.NIL)
+                frame.bind(supplied_p, lisptype.NIL)
 
     # From here on, `arg_index` is the start of the *keyword region*: CLHS
     # 3.4.1 puts it immediately after the required and &optional parameters,
@@ -1178,7 +1223,7 @@ def _bind_ordinary_lambda_list_tail(parsed, call_args, arg_index, func_env, eval
 
         # Support destructuring rest spec: either a symbol or a cons
         if isinstance(rest_param, lisptype.LispSymbol):
-            func_env.add_variable(rest_param, rest_list)
+            frame.bind(rest_param, rest_list)
         elif _consp_internal(rest_param):
             # Dotted pair like (head . tail): bind head to first element,
             # tail to the cdr (list) of the rest_list.
@@ -1192,15 +1237,17 @@ def _bind_ordinary_lambda_list_tail(parsed, call_args, arg_index, func_env, eval
                 rest_tail = lisptype.NIL
 
             if isinstance(head, lisptype.LispSymbol):
-                func_env.add_variable(head, first)
+                frame.bind(head, first)
             if isinstance(tail, lisptype.LispSymbol):
-                func_env.add_variable(tail, rest_tail)
-            else:
-                # If tail isn't a symbol, bind the whole rest_list
-                func_env.add_variable(rest_param, rest_list)
+                frame.bind(tail, rest_tail)
 
-    if keyword_params or parsed.get('allow_other_keys'):
-        _bind_keyword_parameters(parsed, trailing, func_env, eval_fn)
+    # `mentions_key`, not `keyword_params`: `&key` naming no parameters at all
+    # still opens the keyword region, so `(lambda (&rest x &key) x)` must
+    # reject `(:w 5)` as an unrecognized keyword (CLHS 3.4.1.4) rather than
+    # accept anything. Testing the parameter *list* made a bare `&key`
+    # indistinguishable from no `&key` at all.
+    if keyword_params or parsed.get('mentions_key') or parsed.get('allow_other_keys'):
+        _bind_keyword_parameters(parsed, trailing, func_env, eval_fn, frame)
 
     # Bind &aux parameters
     for param_spec in aux_params:
@@ -1208,27 +1255,242 @@ def _bind_ordinary_lambda_list_tail(parsed, call_args, arg_index, func_env, eval
             param = car(param_spec)
             init_form = car(cdr(param_spec))
             init_value = eval_fn(init_form, func_env)
-            func_env.add_variable(param, init_value)
+            frame.bind(param, init_value)
         else:
-            func_env.add_variable(param_spec, lisptype.NIL)
+            frame.bind(param_spec, lisptype.NIL)
+
+
+def split_function_body(body):
+    """Split a function body into ``(docstring, declaration_forms, forms)``.
+
+    CLHS 3.4.11: a body may open with any number of declarations and at most
+    one documentation string, interleaved in any order. A *lone* string is the
+    body, not documentation -- documentation must be followed by at least one
+    form -- which is why `(defun f () "x")` returns "x".
+    """
+    docstring = None
+    declarations = []
+    rest = body
+    while _consp_internal(rest):
+        first = car(rest)
+        if (_consp_internal(first) and isinstance(car(first), lisptype.LispSymbol)
+                and car(first).name.upper() == 'DECLARE'):
+            declarations.append(first)
+            rest = cdr(rest)
+            continue
+        if (docstring is None and isinstance(first, (str, lisptype.LispString))
+                and _consp_internal(cdr(rest))):
+            docstring = str(first)
+            rest = cdr(rest)
+            continue
+        break
+    return docstring, declarations, rest
+
+
+def _lambda_list_variables(parsed):
+    """Every variable an ordinary lambda list binds, supplied-p variables
+    included -- what `BindingFrame` needs in order to tell a *bound* SPECIAL
+    declaration (which changes where the parameter itself is bound) from a
+    *free* one (which only redirects references in the body). CLHS 3.3.4
+    turns on exactly that distinction.
+    """
+    variables = []
+
+    def add(var):
+        if isinstance(var, lisptype.LispSymbol):
+            variables.append(var)
+
+    for param in parsed['required']:
+        add(param)
+    for spec in parsed['optional']:
+        if _consp_internal(spec):
+            add(car(spec))
+            tail = cdr(spec)
+            tail2 = cdr(tail) if _consp_internal(tail) else None
+            if _consp_internal(tail2):
+                add(car(tail2))
+        else:
+            add(spec)
+    rest_param = parsed['rest']
+    if rest_param is not None:
+        if _consp_internal(rest_param):
+            add(car(rest_param))
+            add(rest_param.cdr)
+        else:
+            add(rest_param)
+    for spec in parsed['keyword']:
+        _name, variable, _default, supplied_p = _keyword_param_parts(spec)
+        add(variable)
+        add(supplied_p)
+    for spec in parsed.get('aux', []):
+        add(car(spec) if _consp_internal(spec) else spec)
+    environment = parsed.get('environment')
+    if environment is not None:
+        add(environment)
+    return variables
+
+
+def _check_ordinary_arity(parsed, call_args, name):
+    """CLHS 3.5.1.2/3.5.1.3: too few or too many arguments is a PROGRAM-ERROR.
+
+    Every binder in this implementation used to pad a missing required
+    argument with NIL and discard a surplus one, so `((lambda (a) a))`
+    answered NIL and `((lambda (a) a) 1 2)` answered 1. Those are wrong
+    *values*, not merely missing errors: a caller cannot tell a legitimately
+    NIL argument from one that was never passed.
+    """
+    supplied = len(call_args)
+    required = len(parsed['required'])
+    if supplied < required:
+        raise lisptype.LispProgramError(
+            f"{name} called with {supplied} argument(s), but requires "
+            f"at least {required}")
+
+    # A lambda list that mentions &rest, &body, &key or &allow-other-keys
+    # accepts everything past its positional parameters; only one without any
+    # of them has an upper bound.
+    if (parsed['rest'] is not None or parsed.get('mentions_rest')
+            or parsed.get('mentions_key') or parsed.get('allow_other_keys')):
+        return
+    maximum = required + len(parsed['optional'])
+    if supplied > maximum:
+        raise lisptype.LispProgramError(
+            f"{name} called with {supplied} argument(s), but accepts "
+            f"at most {maximum}")
+
+
+def make_ordinary_function(lambda_list, body, env, block_name=None, name=None):
+    """Build the callable for a function defined by an *ordinary* lambda list.
+
+    The one constructor behind LAMBDA, DEFUN, FLET and LABELS. Before this
+    there were three, and they agreed on almost nothing: LAMBDA located the
+    keyword region by scanning the arguments for the first keyword-shaped
+    value (so `&rest` never saw the keyword arguments and a repeated keyword
+    took the *rightmost* value), FLET/LABELS had a hand-rolled parser that did
+    not use `parse_lambda_list` at all and silently dropped every supplied-p
+    variable, `&aux` and `&allow-other-keys`, and none of the three signalled
+    a PROGRAM-ERROR for a wrong argument count or an unrecognized keyword.
+    DEFUN alone reached `_bind_ordinary_lambda_list_tail`, which is correct --
+    so the fix is to delete the other two rather than repair them.
+
+    Three properties the shape of this function encodes:
+
+    * **Parameters bind through a `BindingFrame`**, so `(declare (special x))`
+      on a parameter binds the symbol's value cell for the call's dynamic
+      extent (CLHS 11.1.2.1.2) and is undone however the call exits.
+    * **Free special declarations are installed only after the parameters are
+      bound.** CLHS 3.3.4 excludes initialization forms from a free
+      declaration's scope, so `(lambda (&aux (y x)) (declare (special x)) y)`
+      reads the *lexical* X for the init form. That is what
+      `defer_free_declarations` is for.
+    * **The implicit block encloses the body only, not the lambda list.**
+      A `(return-from f ...)` in an `&aux` init form therefore leaves the
+      function rather than returning from it -- FLET.6 asserts exactly that.
+    """
+    from .evaluation_core import eval, parse_lambda_list
+    from .evaluation_loops_conditionals import _run_with_nil_block
+    from .binding import BindingFrame
+
+    parsed = parse_lambda_list(lambda_list)
+    docstring, declarations, forms = split_function_body(body)
+    parameters = _lambda_list_variables(parsed)
+    required_params = parsed['required']
+    environment_param = parsed.get('environment')
+
+    # `BindingFrame` reads the declarations governing its bindings off the
+    # body it is handed, and `split_declarations` stops at the first non-
+    # DECLARE form -- so hand it just the declarations, which a docstring
+    # sitting in front of them would otherwise hide.
+    declaration_body = lisptype.NIL
+    for decl in reversed(declarations):
+        declaration_body = lisptype.lispCons(decl, declaration_body)
+
+    if isinstance(name, lisptype.LispSymbol):
+        display_name = name.name
+    elif name:
+        display_name = str(name)
+    else:
+        display_name = 'anonymous function'
+
+    def call(*call_args):
+        # NIL has three Python spellings; canonicalise on the way in so a
+        # parameter bound from an argument compares EQ to NIL.
+        call_args = tuple(
+            lisptype.NIL
+            if (isinstance(a, lisptype.LispSymbol) and a.name.upper() == 'NIL')
+            else a
+            for a in call_args)
+
+        _check_ordinary_arity(parsed, call_args, display_name)
+
+        func_env = lisptype.Environment(env)
+        frame = BindingFrame(func_env, body=declaration_body,
+                             bound_vars=parameters,
+                             defer_free_declarations=True)
+        try:
+            for index, param in enumerate(required_params):
+                frame.bind(param, call_args[index])
+
+            _bind_ordinary_lambda_list_tail(
+                parsed, call_args, len(required_params), func_env, eval, frame)
+
+            if environment_param is not None:
+                frame.bind(environment_param, env)
+
+            frame.install_free_declarations()
+
+            def run_body():
+                result = lisptype.NIL
+                current = forms
+                while _consp_internal(current):
+                    result = eval(car(current), func_env)
+                    current = cdr(current)
+                return result
+
+            if block_name is None:
+                return run_body()
+            return _run_with_nil_block(run_body, block_name)
+        finally:
+            frame.unwind()
+
+    call.__lisp_docstring__ = docstring
+    call.__lisp_lambda_list__ = lambda_list
+    return call
+
+
+def function_name_parts(spec, operator):
+    """A function-name designator's ``(storage-symbol, block-name)``.
+
+    CLHS 3.1.2.1.2.2 / 5.1: a function name is a symbol or ``(SETF symbol)``,
+    and the implicit block a defining form establishes is named by `symbol`
+    in both cases -- so ``(defun (setf foo) ...)`` may say
+    ``(return-from foo ...)``. `operator` only names the caller in the error.
+
+    DEFUN, FLET and LABELS all need both halves; FLET and LABELS previously
+    tested `isinstance(name, LispSymbol)` and silently defined nothing for
+    every other shape, which is why a local ``(setf %f)`` function -- and a
+    local function named NIL -- simply did not exist.
+    """
+    from .utilities_functions import _function_spec_to_key
+
+    if lisptype.is_symbol(spec):
+        symbol = spec if isinstance(spec, lisptype.LispSymbol) else lisptype.LispSymbol('NIL')
+        return symbol, symbol
+    key = _function_spec_to_key(spec)
+    if key is None:
+        raise lisptype.LispProgramError(
+            f"{operator}: function name must be a symbol or (SETF symbol), not {spec!r}")
+    return key, car(cdr(spec))
 
 
 def eval_defun(form, env):
     """Evaluate DEFUN special form.
-    
-    DEFUN defines a function in the GLOBAL environment, not the local one.
-    This is standard Common Lisp behavior - DEFUN creates top-level function bindings.
-    
-    Supports:
-    - Required parameters
-    - &optional parameters with default values
-    - &rest parameter for collecting remaining arguments
-    - &key parameters for keyword arguments
-    - Function names as symbols or (SETF symbol) for setf functions
-    """
-    from .evaluation_core import eval, parse_lambda_list, ReturnFromException
-    import fclpy.state as state
 
+    DEFUN defines a function in the GLOBAL environment, not the local one.
+    This is standard Common Lisp behavior - DEFUN creates top-level function
+    bindings. The lambda list is bound by `make_ordinary_function`, the one
+    constructor shared with LAMBDA, FLET and LABELS.
+    """
     args = cdr(form)
     if not _consp_internal(args) or not _consp_internal(cdr(args)):
         raise lisptype.LispNotImplementedError("DEFUN requires at least 2 arguments")
@@ -1237,88 +1499,12 @@ def eval_defun(form, env):
     param_list = car(cdr(args))
     body = cdr(cdr(args))
 
-    # func_name_spec can be a symbol or (SETF symbol) for setf functions
-    if isinstance(func_name_spec, lisptype.LispSymbol):
-        # Simple function name
-        func_name = func_name_spec
-        is_setf = False
-        # DEFUN establishes an implicit block named after the function
-        block_name_symbol = func_name
-    elif _consp_internal(func_name_spec):
-        # (SETF symbol) form for setf functions
-        setf_sym = car(func_name_spec)
-        if not (isinstance(setf_sym, lisptype.LispSymbol) and setf_sym.name == 'SETF'):
-            raise lisptype.LispNotImplementedError("DEFUN: function name must be a symbol or (SETF symbol)")
-        rest = cdr(func_name_spec)
-        if not _consp_internal(rest):
-            raise lisptype.LispNotImplementedError("DEFUN: (SETF symbol) requires a symbol")
-        actual_func_name = car(rest)
-        if not isinstance(actual_func_name, lisptype.LispSymbol):
-            raise lisptype.LispNotImplementedError("DEFUN: (SETF symbol) requires symbol as second element")
-        # Create a synthetic symbol for the setf function: (SETF |name|)
-        # For storage, we create a LispSymbol with a compound name
-        func_name = lisptype.LispSymbol(f"(SETF {actual_func_name.name})")
-        is_setf = True
-        # The implicit block for a (SETF symbol) function is named by symbol
-        block_name_symbol = actual_func_name
-    else:
-        raise lisptype.LispNotImplementedError("DEFUN: function name must be a symbol or (SETF symbol)")
-    
-    # Extract docstring if present (first form in body can be a string)
-    docstring = None
-    actual_body = body
-    if _consp_internal(body):
-        first_form = car(body)
-        if isinstance(first_form, (str, lisptype.LispString)):
-            docstring = str(first_form)  # Convert to Python str for storage
-            actual_body = cdr(body)
-    
-    # Parse the lambda list
-    parsed = parse_lambda_list(param_list)
-    required_params = parsed['required']
+    func_name, block_name_symbol = function_name_parts(func_name_spec, 'DEFUN')
 
-    # Create function closure
-    # The closure captures the current lexical environment for variable lookups
-    def user_function(*call_args):
-        # Create new environment for function execution
-        func_env = lisptype.Environment(env)
-        
-        arg_index = 0
-        
-        # Bind required parameters
-        for param in required_params:
-            if arg_index < len(call_args):
-                func_env.add_variable(param, call_args[arg_index])
-                arg_index += 1
-            else:
-                func_env.add_variable(param, lisptype.NIL)
-        
-        # Bind &optional/&rest/&key/&aux (CLHS 3.4.1), shared with
-        # DEFMETHOD/DEFGENERIC's specialized-lambda-list tail.
-        _bind_ordinary_lambda_list_tail(parsed, call_args, arg_index, func_env, eval)
+    user_function = make_ordinary_function(
+        param_list, body, env, block_name=block_name_symbol, name=func_name)
+    docstring = user_function.__lisp_docstring__
 
-        # Execute body, enclosed in the implicit block DEFUN establishes
-        # around the function body (named after the function).
-        result = None
-        try:
-            current_body = actual_body
-            while _consp_internal(current_body):
-                result = eval(car(current_body), func_env)
-                current_body = cdr(current_body)
-        except ReturnFromException as e:
-            tag = e.tag
-            block_match = False
-            if tag == block_name_symbol:
-                block_match = True
-            elif isinstance(tag, lisptype.LispSymbol) and isinstance(block_name_symbol, lisptype.LispSymbol):
-                block_match = (tag.name == block_name_symbol.name)
-            if block_match:
-                result = e.value
-            else:
-                raise
-
-        return result
-    
     # Find the global/root environment for defining the function
     # DEFUN always creates global function bindings
     global_env = env
@@ -1866,187 +2052,19 @@ def eval_destructuring_bind(form, env):
 
 
 def eval_lambda(form, env):
-    """Evaluate LAMBDA special form."""
-    from .evaluation_core import eval, parse_lambda_list
+    """Evaluate a LAMBDA expression to the function it denotes.
 
+    CLHS 3.1.2.1.2.4: a lambda expression's parameters are an *ordinary*
+    lambda list, the same one DEFUN/FLET/LABELS take, so it is built by the
+    same `make_ordinary_function`. LAMBDA establishes no implicit block
+    (CLHS 3.1.2.1.2.4 -- only the defining forms do), hence `block_name=None`.
+    """
     args = cdr(form)
     if not _consp_internal(args):
         raise lisptype.LispNotImplementedError("LAMBDA requires at least 1 argument")
 
-    param_list = car(args)
-    body = cdr(args)
+    return make_ordinary_function(car(args), cdr(args), env)
 
-    # Parse the lambda list to support &optional, &rest, &key, &aux, &environment
-    parsed = parse_lambda_list(param_list)
-    required_params = parsed.get('required', [])
-    optional_params = parsed.get('optional', [])
-    rest_param = parsed.get('rest', None)
-    keyword_params = parsed.get('keyword', [])
-    aux_params = parsed.get('aux', [])
-    environment_param = parsed.get('environment', None)
-
-    # Create function closure
-    def lambda_function(*call_args):
-        # Create new environment for function execution
-        func_env = lisptype.Environment(env)
-
-        # Normalize NIL symbol arguments to canonical NIL
-        new_args = []
-        for a in call_args:
-            if isinstance(a, lisptype.LispSymbol) and a.name.upper() == 'NIL':
-                new_args.append(lisptype.NIL)
-            else:
-                new_args.append(a)
-        call_args = tuple(new_args)
-
-        arg_index = 0
-
-        # Bind required parameters
-        for param in required_params:
-            if arg_index < len(call_args):
-                func_env.add_variable(param, call_args[arg_index])
-                arg_index += 1
-            else:
-                func_env.add_variable(param, lisptype.NIL)
-
-        # Bind optional parameters (support supplied-p variable)
-        for param_spec in optional_params:
-            if _consp_internal(param_spec):
-                param = car(param_spec)
-                rest = cdr(param_spec)
-                default_form = car(rest) if _consp_internal(rest) else None
-                rest2 = cdr(rest) if _consp_internal(rest) else None
-                supplied_p = car(rest2) if _consp_internal(rest2) else None
-            else:
-                param = param_spec
-                default_form = None
-                supplied_p = None
-
-            if arg_index < len(call_args):
-                func_env.add_variable(param, call_args[arg_index])
-                if supplied_p is not None:
-                    func_env.add_variable(supplied_p, lisptype.T)
-                arg_index += 1
-            else:
-                if default_form is not None:
-                    default_value = eval(default_form, func_env)
-                    func_env.add_variable(param, default_value)
-                else:
-                    func_env.add_variable(param, lisptype.NIL)
-                if supplied_p is not None:
-                    func_env.add_variable(supplied_p, lisptype.NIL)
-
-        # Collect remaining positional arguments for &rest
-        remaining_positional = []
-
-        # Find where keyword arguments start
-        keyword_start = arg_index
-        for i in range(arg_index, len(call_args)):
-            if isinstance(call_args[i], lisptype.lispKeyword):
-                keyword_start = i
-                break
-            remaining_positional.append(call_args[i])
-            arg_index = i + 1
-
-        # Bind &rest parameter if present
-        if rest_param:
-            if remaining_positional:
-                rest_list = lisptype.NIL
-                for item in reversed(remaining_positional):
-                    rest_list = lisptype.lispCons(item, rest_list)
-            else:
-                rest_list = lisptype.NIL
-
-            if isinstance(rest_param, lisptype.LispSymbol):
-                func_env.add_variable(rest_param, rest_list)
-            elif _consp_internal(rest_param):
-                head = car(rest_param)
-                tail_sym = _extract_tail_symbol_from_rest(rest_param)
-                if _consp_internal(rest_list):
-                    first = car(rest_list)
-                    rest_tail = cdr(rest_list)
-                else:
-                    first = lisptype.NIL
-                    rest_tail = lisptype.NIL
-                if isinstance(head, lisptype.LispSymbol):
-                    func_env.add_variable(head, first)
-                if tail_sym is not None:
-                    func_env.add_variable(tail_sym, rest_tail)
-
-        # Bind keyword parameters: initialize to defaults and supplied-p to NIL
-        for param_spec in keyword_params:
-            if _consp_internal(param_spec):
-                param = car(param_spec)
-                rest = cdr(param_spec)
-                default_form = car(rest) if _consp_internal(rest) else None
-                rest2 = cdr(rest) if _consp_internal(rest) else None
-                supplied_p = car(rest2) if _consp_internal(rest2) else None
-            else:
-                param = param_spec
-                default_form = None
-                supplied_p = None
-
-            if default_form is not None:
-                default_value = eval(default_form, func_env)
-                func_env.add_variable(param, default_value)
-            else:
-                func_env.add_variable(param, lisptype.NIL)
-
-            if supplied_p is not None:
-                func_env.add_variable(supplied_p, lisptype.NIL)
-
-        # Now process actual keyword arguments from the call
-        i = keyword_start
-        while i < len(call_args) - 1:
-            key = call_args[i]
-            value = call_args[i + 1]
-
-            if isinstance(key, lisptype.lispKeyword):
-                key_name = key.name.upper()
-                # Find matching parameter
-                for param_spec in keyword_params:
-                    if _consp_internal(param_spec):
-                        param = car(param_spec)
-                        rest = cdr(param_spec)
-                        rest2 = cdr(rest) if _consp_internal(rest) else None
-                        supplied_p = car(rest2) if _consp_internal(rest2) else None
-                    else:
-                        param = param_spec
-                        supplied_p = None
-
-                    if isinstance(param, lisptype.LispSymbol) and param.name.upper() == key_name:
-                        func_env.add_variable(param, value)
-                        if supplied_p is not None:
-                            func_env.add_variable(supplied_p, lisptype.T)
-                        break
-                i += 2
-            else:
-                i += 1
-
-        # Bind &aux parameters
-        for param_spec in aux_params:
-            if _consp_internal(param_spec):
-                param = car(param_spec)
-                init_form = car(cdr(param_spec))
-                init_value = eval(init_form, func_env)
-                func_env.add_variable(param, init_value)
-            else:
-                func_env.add_variable(param_spec, lisptype.NIL)
-
-        # Bind &environment if requested
-        if environment_param is not None:
-            func_env.add_variable(environment_param, env)
-
-        # Execute body
-        result = None
-        current_body = body
-        while _consp_internal(current_body):
-            result = eval(car(current_body), func_env)
-            current_body = cdr(current_body)
-
-        return result
-
-    return lambda_function
 
 
 def eval_declare(form, env):
@@ -3266,7 +3284,7 @@ def _setf_needs_expansion_bridge(op_name, place_op, env):
     GETF, ...) returns False so that existing, unchanged code path keeps
     running.
     """
-    if op_name in ('VALUES', 'THE', 'APPLY'):
+    if op_name in ('VALUES', 'THE', 'APPLY', '%SPECIAL-REF'):
         return True
     global_env = env
     while global_env.parent is not None:
@@ -3359,6 +3377,18 @@ def _place_accessor(place_form, env):
     if _consp_internal(place_form) and isinstance(car(place_form), lisptype.LispSymbol):
         op_name = car(place_form).name
         place_args = cdr(place_form)
+
+        if op_name == '%SPECIAL-REF' and _consp_internal(place_args):
+            # A SPECIAL declaration redirects references to the variable
+            # through `(%SPECIAL-REF x)` (`binding.special_reference`), so
+            # every place operator -- SETQ, SETF, INCF, PUSH, ROTATEF --
+            # meets the declaration as a *place*. Read and write are the
+            # matched pair in `evaluation_core`, so the two cannot disagree
+            # about which cell holds the value.
+            from .evaluation_core import _get_special_reference, _set_special_reference
+            symbol = car(place_args)
+            return (lambda: _get_special_reference(symbol, env),
+                    lambda v: _set_special_reference(symbol, v, env))
 
         if op_name in ('CAR', 'FIRST') and _consp_internal(place_args):
             target = eval(car(place_args), env)
@@ -4138,28 +4168,46 @@ def _make_method_function(required_params, optional_lambda_list, body, captured_
     """
     from .evaluation_loops_conditionals import _run_with_nil_block
     from .evaluation_core import eval
+    from .binding import BindingFrame
+
+    _docstring, declarations, forms = split_function_body(body)
+    declaration_body = lisptype.NIL
+    for decl in reversed(declarations):
+        declaration_body = lisptype.lispCons(decl, declaration_body)
+    parameters = list(required_params) + _lambda_list_variables(optional_lambda_list)
 
     def method_func(*call_args):
         method_env = lisptype.Environment(captured_env)
-        arg_index = 0
-        for param in required_params:
-            if arg_index < len(call_args):
-                method_env.add_variable(param, call_args[arg_index])
-                arg_index += 1
-            else:
-                method_env.add_variable(param, lisptype.NIL)
+        # A method's parameters obey the same CLHS 3.4.1/11.1.2.1.2 rule as
+        # any other function's: one declared SPECIAL binds dynamically and is
+        # undone on exit. `BindingFrame` is the one place that decides which.
+        frame = BindingFrame(method_env, body=declaration_body,
+                             bound_vars=parameters,
+                             defer_free_declarations=True)
+        try:
+            arg_index = 0
+            for param in required_params:
+                if arg_index < len(call_args):
+                    frame.bind(param, call_args[arg_index])
+                    arg_index += 1
+                else:
+                    frame.bind(param, lisptype.NIL)
 
-        _bind_ordinary_lambda_list_tail(optional_lambda_list, call_args, arg_index, method_env, eval)
+            _bind_ordinary_lambda_list_tail(
+                optional_lambda_list, call_args, arg_index, method_env, eval, frame)
+            frame.install_free_declarations()
 
-        def _run_body():
-            result = lisptype.NIL
-            body_current = body
-            while _consp_internal(body_current):
-                result = eval(car(body_current), method_env)
-                body_current = cdr(body_current)
-            return result
+            def _run_body():
+                result = lisptype.NIL
+                body_current = forms
+                while _consp_internal(body_current):
+                    result = eval(car(body_current), method_env)
+                    body_current = cdr(body_current)
+                return result
 
-        return _run_with_nil_block(_run_body, block_name)
+            return _run_with_nil_block(_run_body, block_name)
+        finally:
+            frame.unwind()
     return method_func
 
 
@@ -4222,7 +4270,8 @@ def _congruence_shape(required_count, tail):
     mentions_rest_or_key = tail['mentions_rest'] or tail['mentions_key']
     keywords = None
     if tail['mentions_key']:
-        keywords = {_keyword_param_parts(k)[0] for k in tail['keyword']}
+        keywords = {keyword_argument_key(_keyword_param_parts(k)[0])
+                    for k in tail['keyword']}
     return required_count, len(tail['optional']), mentions_rest_or_key, keywords, tail['allow_other_keys']
 
 
@@ -4266,7 +4315,8 @@ def _check_method_congruent(gf_name, gf_lambda_list, required_params, optional_l
         if missing:
             raise lisptype.LispProgramError(
                 f"{name}: method does not accept keyword argument(s) "
-                f"{sorted(missing)} named by the generic function's lambda list")
+                f"{sorted(name for _package, name in missing)} "
+                f"named by the generic function's lambda list")
 
 
 def eval_defgeneric(form, env):
