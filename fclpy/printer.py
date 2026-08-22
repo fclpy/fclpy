@@ -973,6 +973,19 @@ def _write(value, ctx, depth):
     if isinstance(value, Pathname):
         return '#P' + _write_string(value.namestring(), ctx.with_escape(True))
 
+    if isinstance(value, lisptype.Restart):
+        # CLHS 9.1: under PRINC (escape false), a restart's printed
+        # representation is produced by its report function; under PRIN1
+        # there is no readable syntax for a restart, so it prints as an
+        # ordinary unreadable object naming its restart-name.
+        name = value.name.name if isinstance(value.name, lisptype.LispSymbol) else 'NIL'
+        if not ctx.escape and value.report_function is not None:
+            from fclpy.lispfunc.evaluation_conditions import restart_report_text
+            report = restart_report_text(value)
+            if report is not None:
+                return report
+        return f'#<RESTART {name}>'
+
     if isinstance(value, lisptype.Condition):
         # A condition's printed representation is its report (CLHS 9.1.3), and
         # under escape the type is named too.

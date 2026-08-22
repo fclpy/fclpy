@@ -37,7 +37,7 @@ __all__ = [
     'UndefinedFunction',
     'UnboundVariable',
     'FloatingPointInvalidOperation', 'FloatingPointOverflow', 'FloatingPointUnderflow',
-    'Restart', 'RestartException',
+    'Restart',
     'resolve_environment',
     'py_str_to_sym'
 ]

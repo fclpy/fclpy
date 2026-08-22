@@ -6,7 +6,7 @@ from .core import car, cdr, cons, _consp_internal
 from . import registry as _registry
 from .evaluation_core import (
     ConditionException, ThrowException, ReturnFromException, GoException,
-    HandlerCaseTag, HandlerCaseTransfer)
+    HandlerCaseTag, HandlerCaseTransfer, RestartCaseTag, RestartCaseTransfer)
 import fclpy.lispfunc as lispfunc
 
 
@@ -20,6 +20,24 @@ import fclpy.lispfunc as lispfunc
 _USER_CONDITION_CLASSES = {}
 
 _MISSING = object()
+
+
+def _iter_list(form):
+    """Yield the elements of a Lisp list `form` (a lispCons chain, or NIL for
+    none). Shared by every restart-parsing walk below instead of each
+    re-writing its own `while _consp_internal(cur): ... cur = cdr(cur)`."""
+    cur = form
+    while _consp_internal(cur):
+        yield car(cur)
+        cur = cdr(cur)
+
+
+def _list_from(seq):
+    """Build a Lisp list from a Python sequence -- the inverse of `_iter_list`."""
+    result = lisptype.NIL
+    for element in reversed(list(seq)):
+        result = cons(element, result)
+    return result
 
 
 def _condition_class_for_name(name):
@@ -327,6 +345,21 @@ def eval_define_condition(form, env):
     return name
 
 
+def restart_report_text(restart):
+    """Render a restart's report function (CLHS 9.1) into a string, for the
+    printer's PRINC/`~A`-style representation of a `lisptype.Restart`
+    (restart-bind.16/20-22). Returns None if the restart has no report
+    function at all.
+    """
+    if restart.report_function is None:
+        return None
+    from .evaluation_core import funcall
+    from .streams import StringOutputStream
+    stream = StringOutputStream()
+    funcall(restart.report_function, stream)
+    return stream.peek_string()
+
+
 def condition_report_text(condition):
     """Render a condition's :REPORT (CLHS 9.1.3), or None if it (and none of
     its ancestors) declared one -- the caller then falls back to the
@@ -366,10 +399,26 @@ def make_condition_of_type(type_designator, arguments):
     already evaluated its arguments by the time it needs a condition, so the
     evaluated form is the only one actually required.
     """
-    if not isinstance(type_designator, (lisptype.LispSymbol, lisptype.lispKeyword)):
-        return None
-    condition_class = _condition_class_for_name(type_designator.name)
-    if condition_class is None:
+    import fclpy.classes as classes
+    if isinstance(type_designator, type) and issubclass(type_designator, lisptype.Condition):
+        # A raw Python condition class, as some callers pass directly.
+        condition_class = type_designator
+    elif isinstance(type_designator, classes.LispClass):
+        # FIND-CLASS returns a CLOS `LispClass` wrapper even for a built-in
+        # condition type (classes._init_builtin_classes registers one for
+        # every name in its `condition_classes` set), so
+        # `(make-condition (find-class 'error))` -- make-condition.2/.3/.4's
+        # own construction, over every condition type in
+        # *CL-CONDITION-TYPE-SYMBOLS* -- handed this designator shape, not a
+        # symbol, and `_condition_class_for_name` only understands a name.
+        condition_class = _condition_class_for_name(type_designator.name.name)
+        if condition_class is None:
+            return None
+    elif isinstance(type_designator, (lisptype.LispSymbol, lisptype.lispKeyword)):
+        condition_class = _condition_class_for_name(type_designator.name)
+        if condition_class is None:
+            return None
+    else:
         return None
 
     if '_direct_condition_slots' in condition_class.__dict__ or any(
@@ -762,58 +811,89 @@ def eval_error(form, env):
     return signal_error_object(condition)
 
 
-def eval_cerror(form, env):
-    """Implement CERROR special form.
-    
-    Syntax: (CERROR continue-format-control condition &optional (format-control) format-args...)
-    
-    Signal an error that has a built-in continue restart. If the user continues,
-    CERROR returns NIL and execution resumes.
+def _make_case_transfer(tag, clause_index):
+    """The `function` slot of a RESTART-CASE-style `Restart`: invoking it
+    never performs the recovery itself, it captures the arguments and
+    performs the clause's implicit non-local exit (CLHS 9.2) back to
+    whichever form established it -- RESTART-CASE itself, or one of the
+    built-in restarts below that are RESTART-CASE in spirit (CERROR's
+    CONTINUE, WARN's MUFFLE-WARNING) without the user-facing macro syntax."""
+    def _transfer(*args):
+        raise RestartCaseTransfer(tag, clause_index, args)
+    return _transfer
+
+
+def _string_report_function(text):
+    """A `report_function` that writes a fixed string -- CLHS 9.1's rule that
+    a literal-string :REPORT/report-generation-argument is used directly,
+    never coerced to a function the way a symbol or lambda-expression is."""
+    def _report(stream):
+        from .io_write import write_text
+        write_text(text, stream)
+    return _report
+
+
+def _format_report_function(format_control):
+    """A `report_function` that writes `format_control` via FORMAT with no
+    arguments -- CERROR's continue-format-control (CLHS 9.1), which may
+    itself be a function (a FORMATTER result), so this must go through
+    FORMAT's own dispatch rather than assuming a string."""
+    def _report(stream):
+        from .io_write import format_fn
+        format_fn(stream, format_control)
+    return _report
+
+
+def _signal_warning_object(condition):
+    """WARN's runtime core given an already-built condition: offer it to the
+    handlers, with an implicit MUFFLE-WARNING restart around the offer (CLHS
+    9.1: WARN's protected form behaves as if wrapped in a RESTART-CASE whose
+    only clause is MUFFLE-WARNING); if nothing transfers control or invokes
+    that restart, WARN reports the warning itself and returns NIL.
+
+    Shared by the WARN special form (`eval_warn`), the WARN function
+    designator (`warn_fn` in utilities_errors.py), and RESTART-CASE's
+    auto-association dispatch (`_dispatch_restart_case_signal`) for a
+    protected form that is literally `(WARN ...)` -- one place that knows how
+    a warning is reported, not three.
     """
-    args = cdr(form)
-    if not _consp_internal(args) or not _consp_internal(cdr(args)):
-        raise lisptype.LispNotImplementedError("CERROR requires at least condition argument")
+    tag = RestartCaseTag()
+    restart = lisptype.Restart(
+        lisptype.LispSymbol('MUFFLE-WARNING'), _make_case_transfer(tag, 0),
+        report_function=_string_report_function("Skip the warning."))
+    restart.associated_conditions.append(condition)
 
-    continue_format = car(args)  # Format for the continue option
-    condition_form = car(cdr(args))
-    # CLHS 9.1: cerror's datum/arguments behave "as if by (apply #'error
-    # datum arguments)" -- same dispatch as ERROR, including string datums
-    # from a variable building a proper SIMPLE-ERROR.
-    remaining_args_form = cdr(cdr(args))
+    state.restart_stack.append([restart])
+    try:
+        try:
+            signal_condition(condition)
+        except RestartCaseTransfer as exc:
+            if exc.tag is not tag:
+                raise
+            return lisptype.NIL
+    finally:
+        state.restart_stack.pop()
 
-    condition = _build_condition_from_forms(
-        condition_form, remaining_args_form, env, lisptype.SimpleError)
-
-    # Recoverable: CERROR's condition carries a CONTINUE restart. Handlers get
-    # to run before any unwinding, same as ERROR.
-    return signal_error_object(condition, recoverable=True, continue_format=continue_format)
+    # No handler transferred control and MUFFLE-WARNING was not invoked, so
+    # WARN reports the warning itself, on the *value* of *ERROR-OUTPUT* --
+    # not unconditionally on Python's stdout, which is what a plain print()
+    # did and is why `(with-output-to-string (*error-output*) (warn ...))`
+    # (warn.4) always saw the empty string no matter what WARN did.
+    from .binding import dynamic_value
+    from .io_write import write_text
+    report = condition_report_text(condition)
+    error_output_symbol = lisptype.COMMON_LISP_PACKAGE.intern_symbol('*ERROR-OUTPUT*')
+    write_text(f"Warning: {report if report is not None else condition}\n",
+               dynamic_value(error_output_symbol))
+    return lisptype.NIL
 
 
 def signal_warning(datum, arguments):
-    """WARN's runtime behavior: build the warning designated by an already
-    evaluated (DATUM &rest ARGUMENTS), offer it to the handlers, and report it
-    on *ERROR-OUTPUT* only if no handler took control. Returns NIL.
-
-    Shared by the WARN special form (eval_warn) and the WARN function
-    designator (warn_fn in utilities_errors.py, used by FUNCALL/APPLY/#'WARN)
-    so there is exactly one place that knows how a warning is built and
-    reported. Condition construction is now `build_condition`'s job, the same
-    dispatch ERROR/CERROR/SIGNAL use, rather than a fourth private copy of it.
-
-    Now that handlers run before unwinding, a HANDLER-BIND on WARNING /
-    SIMPLE-WARNING / STYLE-WARNING actually sees the warning and can transfer
-    control out of it -- previously WARN never consulted a handler at all and
-    unconditionally printed.
-    """
+    """WARN's runtime behavior given an unevaluated (DATUM &rest ARGUMENTS)
+    condition designator: build it (`build_condition`, the same dispatch
+    ERROR/CERROR/SIGNAL use) and delegate to `_signal_warning_object`."""
     condition = build_condition(datum, arguments, lisptype.SimpleWarning)
-    signal_condition(condition)
-
-    # No handler transferred control, so WARN reports the warning itself.
-    # MUFFLE-WARNING -- the restart that suppresses this report -- needs the
-    # restart system M8's second half covers; until then a declining handler
-    # cannot suppress the report, which is WARN's correct *unhandled* behavior.
-    print(f"Warning: {condition}")
-    return lisptype.NIL
+    return _signal_warning_object(condition)
 
 
 def eval_warn(form, env):
@@ -828,181 +908,499 @@ def eval_warn(form, env):
 
     args = cdr(form)
     if not _consp_internal(args):
-        raise lisptype.LispNotImplementedError("WARN requires at least one argument")
+        raise lisptype.LispProgramError("WARN requires at least one argument")
 
     datum = eval(car(args), env)
-    arguments = []
-    cur = cdr(args)
-    while _consp_internal(cur):
-        arguments.append(eval(car(cur), env))
-        cur = cdr(cur)
-
+    arguments = [eval(a, env) for a in _iter_list(cdr(args))]
     return signal_warning(datum, arguments)
 
 
-def eval_restart_case(form, env):
-    """Implement RESTART-CASE special form.
-    
-    Syntax: (RESTART-CASE protected-form {restart-clause}*)
-    
-    Establishes named restarts with handlers that can be invoked during condition handling.
+def _signal_cerror_object(condition, continue_format):
+    """CERROR's runtime core given an already-built condition: offer it to
+    the handlers with an implicit CONTINUE restart around the offer (CLHS
+    9.1); if that restart is invoked (directly, or via the CONTINUE
+    function), CERROR returns NIL and its caller resumes. Otherwise -- no
+    handler transferred control -- CERROR does not return, same as ERROR.
+
+    Shared by the CERROR special form (`eval_cerror`), a CERROR function
+    designator, and RESTART-CASE's auto-association dispatch for a protected
+    form that is literally `(CERROR ...)`.
+    """
+    tag = RestartCaseTag()
+    restart = lisptype.Restart(
+        lisptype.LispSymbol('CONTINUE'), _make_case_transfer(tag, 0),
+        report_function=_format_report_function(continue_format))
+    restart.associated_conditions.append(condition)
+
+    state.restart_stack.append([restart])
+    try:
+        try:
+            return signal_error_object(condition)
+        except RestartCaseTransfer as exc:
+            if exc.tag is not tag:
+                raise
+            return lisptype.NIL
+    finally:
+        state.restart_stack.pop()
+
+
+def eval_cerror(form, env):
+    """Implement CERROR special form.
+
+    Syntax: (CERROR continue-format-control datum &rest arguments)
+
+    Signals an error that has a built-in CONTINUE restart (CLHS 9.1). If that
+    restart is invoked, CERROR returns NIL and execution resumes; otherwise it
+    does not return.
     """
     from .evaluation_core import eval
-    
+
+    args = cdr(form)
+    if not _consp_internal(args) or not _consp_internal(cdr(args)):
+        raise lisptype.LispProgramError(
+            "CERROR requires a continue-format-control and a datum")
+
+    continue_format = eval(car(args), env)
+    condition_form = car(cdr(args))
+    # CLHS 9.1: cerror's datum/arguments behave "as if by (apply #'error
+    # datum arguments)" -- same dispatch as ERROR, including string datums
+    # from a variable building a proper SIMPLE-ERROR.
+    remaining_args_form = cdr(cdr(args))
+
+    condition = _build_condition_from_forms(
+        condition_form, remaining_args_form, env, lisptype.SimpleError)
+    return _signal_cerror_object(condition, continue_format)
+
+
+_RESTART_CASE_OPTION_KEYWORDS = {'REPORT', 'INTERACTIVE', 'TEST'}
+
+
+def _parse_restart_case_options(forms):
+    """Split a RESTART-CASE clause's trailing forms into its leading
+    :report/:interactive/:test option pairs (CLHS 9.1) and the remaining
+    forms (declarations, then body). Options are recognized only as a
+    prefix, exactly like a DEFSTRUCT slot option list -- the first form that
+    is not a `(:report|:interactive|:test value)` pair ends the options,
+    even if a later body form happens to start with one of those keywords.
+    """
+    options = {}
+    cur = forms
+    while _consp_internal(cur):
+        item = car(cur)
+        rest = cdr(cur)
+        if (isinstance(item, lisptype.lispKeyword) and item.name in _RESTART_CASE_OPTION_KEYWORDS
+                and _consp_internal(rest)):
+            options[item.name] = car(rest)
+            cur = cdr(rest)
+            continue
+        break
+    return options, cur
+
+
+def _eval_function_designator_option(option_form, env):
+    """Evaluate a RESTART-CASE :interactive/:test option (or a non-string
+    :report) value: CLHS 9.1 coerces it via FUNCTION, which is what handles
+    both a bare function-name symbol (e.g. an FLET-local name, restart-
+    case.21) and a lambda-expression (restart-case.18) the same way #' does.
+    """
+    from .evaluation_core import eval
+    function_form = cons(lisptype.LispSymbol('FUNCTION'), cons(option_form, lisptype.NIL))
+    return eval(function_form, env)
+
+
+def _eval_report_option(option_form, env):
+    """RESTART-CASE's :report is a `report-generation-argument` (CLHS
+    glossary): a literal string is used directly (never coerced to a
+    function -- restart-case.20), anything else is a function designator."""
+    if isinstance(option_form, (str, lisptype.LispString)):
+        return _string_report_function(str(option_form))
+    return _eval_function_designator_option(option_form, env)
+
+
+def _parse_keyword_plist(forms):
+    """A plist of `:keyword value` pairs -- RESTART-BIND's per-binding
+    options (`:report-function`/`:interactive-function`/`:test-function`),
+    whose values are ordinary forms evaluated directly (CLHS 9.1: unlike
+    RESTART-CASE's :report/:interactive/:test, these are not coerced via
+    FUNCTION -- the caller already writes `#'(lambda ...)` explicitly)."""
+    result = {}
+    cur = forms
+    while _consp_internal(cur) and _consp_internal(cdr(cur)):
+        key = car(cur)
+        if isinstance(key, lisptype.lispKeyword):
+            result[key.name] = car(cdr(cur))
+        cur = cdr(cdr(cur))
+    return result
+
+
+def _restart_case_signal_target(protected_form, env):
+    """CLHS 9.1: if RESTART-CASE's protected form is, after fully expanding
+    any macro or symbol-macro call in `env` (restart-case.29/.30/.31 exercise
+    exactly this through MACROLET/SYMBOL-MACROLET), literally a call to
+    SIGNAL, ERROR, CERROR or WARN, then RESTART-CASE associates its own
+    restarts with the specific condition *that call* signals -- not with
+    whatever some other, nested signal happens to raise while a handler
+    runs (restart-case.25-.28's whole point). Returns None if the protected
+    form is not such a call, else (operator-name, condition, extra), where
+    `extra` is CERROR's evaluated continue-format-control, else None.
+    """
+    from .misc_packages import macroexpand as _macroexpand
+
+    expanded = protected_form
+    for _ in range(20):
+        if isinstance(expanded, lisptype.LispSymbol):
+            expansion = env.get_symbol_macro(expanded)
+            if expansion is None:
+                break
+            expanded = expansion
+            continue
+        if _consp_internal(expanded):
+            new = _macroexpand(expanded, env)
+            if new is expanded:
+                break
+            expanded = new
+            continue
+        break
+
+    if not _consp_internal(expanded):
+        return None
+    operator = car(expanded)
+    if not isinstance(operator, lisptype.LispSymbol):
+        return None
+
+    call_args = cdr(expanded)
+    op_name = operator.name
+    if op_name == 'SIGNAL':
+        if not _consp_internal(call_args):
+            return None
+        condition = _build_condition_from_forms(
+            car(call_args), cdr(call_args), env, lisptype.SimpleCondition)
+        return ('SIGNAL', condition, None)
+    if op_name == 'ERROR':
+        if not _consp_internal(call_args):
+            return None
+        condition = _build_condition_from_forms(
+            car(call_args), cdr(call_args), env, lisptype.SimpleError)
+        return ('ERROR', condition, None)
+    if op_name == 'WARN':
+        if not _consp_internal(call_args):
+            return None
+        condition = _build_condition_from_forms(
+            car(call_args), cdr(call_args), env, lisptype.SimpleWarning)
+        return ('WARN', condition, None)
+    if op_name == 'CERROR':
+        if not (_consp_internal(call_args) and _consp_internal(cdr(call_args))):
+            return None
+        from .evaluation_core import eval
+        continue_format = eval(car(call_args), env)
+        condition = _build_condition_from_forms(
+            car(cdr(call_args)), cdr(cdr(call_args)), env, lisptype.SimpleError)
+        return ('CERROR', condition, continue_format)
+    return None
+
+
+def _dispatch_restart_case_signal(op_name, condition, extra):
+    if op_name == 'ERROR':
+        return signal_error_object(condition)
+    if op_name == 'SIGNAL':
+        return signal_condition_object(condition)
+    if op_name == 'WARN':
+        return _signal_warning_object(condition)
+    if op_name == 'CERROR':
+        return _signal_cerror_object(condition, extra)
+    raise AssertionError(f"unreachable: {op_name}")  # pragma: no cover
+
+
+def eval_restart_case(form, env):
+    """Implement RESTART-CASE special form (CLHS 9.2).
+
+    Syntax: (RESTART-CASE protected-form {(case-name arglist
+             [:report r] [:interactive i] [:test t] {form}*)}*)
+
+    Each clause becomes a `Restart` whose `function` performs the clause's
+    implicit non-local exit rather than running the clause body directly
+    (`_make_case_transfer`); the body itself is compiled once, as an ordinary
+    LAMBDA closure over `arglist`, so full CLHS 3.4.1 lambda-list support
+    (&optional/&rest/&key/&aux, DECLARE) is LAMBDA's, not a second binder
+    duplicating it (CLAUDE.md's standing warning about copy-pasted binders).
+
+    The clause's restarts must be disestablished -- popped off
+    `state.restart_stack` -- *before* the clause body runs, not after: CLHS
+    9.2's own example (restart-case.12) nests two RESTART-CASE forms under
+    the same name and has the inner clause's body re-invoke that name,
+    which must resolve to the *outer* restart once the inner one has exited.
+    That is why the clause funcall happens after the `try/finally` below has
+    already popped, not inside the `except` clause.
+    """
+    from .evaluation_core import eval, funcall
+
     args = cdr(form)
     if not _consp_internal(args):
-        raise lisptype.LispNotImplementedError("RESTART-CASE requires a protected form")
-    
+        raise lisptype.LispProgramError("RESTART-CASE requires a protected form")
+
     protected_form = car(args)
-    restart_clauses = cdr(args)
-    
-    # Parse restart clauses into handlers
-    restarts = {}
-    current = restart_clauses
-    while _consp_internal(current):
-        clause = car(current)
-        if _consp_internal(clause):
-            restart_name = car(clause)
-            clause_body = cdr(clause)
-            
-            if isinstance(restart_name, lisptype.LispSymbol):
-                # Create handler that evaluates the clause body
-                def make_handler(body):
-                    def handler(*args):
-                        result = lisptype.NIL
-                        current_body = body
-                        while _consp_internal(current_body):
-                            result = eval(car(current_body), env)
-                            current_body = cdr(current_body)
-                        return result
-                    return handler
-                
-                restarts[restart_name.name] = make_handler(clause_body)
-        
-        current = cdr(current)
-    
-    # Push restarts onto stack
+    tag = RestartCaseTag()
+    restarts = []
+    clause_closures = []
+
+    for clause in _iter_list(cdr(args)):
+        if not _consp_internal(clause):
+            continue
+        name = car(clause)
+        rest = cdr(clause)
+        arglist = car(rest) if _consp_internal(rest) else lisptype.NIL
+        trailing = cdr(rest) if _consp_internal(rest) else lisptype.NIL
+        options, body_forms = _parse_restart_case_options(trailing)
+
+        lambda_form = cons(lisptype.LispSymbol('LAMBDA'), cons(arglist, body_forms))
+        clause_closures.append(eval(lambda_form, env))
+        index = len(clause_closures) - 1
+
+        report_fn = _eval_report_option(options['REPORT'], env) if 'REPORT' in options else None
+        interactive_fn = (_eval_function_designator_option(options['INTERACTIVE'], env)
+                           if 'INTERACTIVE' in options else None)
+        test_fn = (_eval_function_designator_option(options['TEST'], env)
+                   if 'TEST' in options else None)
+        restart_name = name if isinstance(name, lisptype.LispSymbol) else lisptype.NIL
+        restarts.append(lisptype.Restart(
+            restart_name, _make_case_transfer(tag, index),
+            report_function=report_fn, interactive_function=interactive_fn,
+            test_function=test_fn))
+
+    def _run_protected():
+        target = _restart_case_signal_target(protected_form, env)
+        if target is None:
+            return eval(protected_form, env)
+        op_name, condition, extra = target
+        for r in restarts:
+            r.associated_conditions.append(condition)
+        try:
+            return _dispatch_restart_case_signal(op_name, condition, extra)
+        finally:
+            for r in restarts:
+                r.associated_conditions.remove(condition)
+
     state.restart_stack.append(restarts)
-    
+    outcome = lisptype.NIL
+    pending_transfer = None
     try:
-        # Evaluate protected form
-        result = eval(protected_form, env)
-        return result
-    except lisptype.RestartException as e:
-        # Restart was invoked
-        if e.restart_name in restarts:
-            handler = restarts[e.restart_name]
-            return handler(*e.args)
-        raise
+        try:
+            outcome = _run_protected()
+        except RestartCaseTransfer as exc:
+            if exc.tag is not tag:
+                raise
+            pending_transfer = exc
     finally:
-        # Pop restarts from stack
         state.restart_stack.pop()
+
+    if pending_transfer is not None:
+        return funcall(clause_closures[pending_transfer.clause_index], *pending_transfer.args)
+    return outcome
 
 
 def eval_restart_bind(form, env):
-    """Implement RESTART-BIND special form.
-    
-    Syntax: (RESTART-BIND ((name function) ...) {body}*)
-    
-    Binds restart functions for invocation.
+    """Implement RESTART-BIND special form (CLHS 9.2).
+
+    Syntax: (RESTART-BIND ((name function-form
+                            [:report-function r] [:interactive-function i]
+                            [:test-function t]) ...) {form}*)
+
+    Unlike RESTART-CASE, invoking one of these restarts does not itself
+    unwind: `function-form` is evaluated once, at binding time, to produce
+    the function INVOKE-RESTART funcalls directly, in the dynamic
+    environment of the invocation -- any non-local exit is the function
+    body's own doing (RETURN-FROM/GO/THROW), which is exactly why it must be
+    invoked through `evaluation_core.funcall` (RESTART-BIND.ERROR.1-3: a
+    wrong argument count is a PROGRAM-ERROR, the same conversion funcall
+    already does for any other misapplied function).
     """
     from .evaluation_core import eval
-    
+
     args = cdr(form)
     if not _consp_internal(args):
-        raise lisptype.LispNotImplementedError("RESTART-BIND requires bindings")
-    
+        raise lisptype.LispProgramError("RESTART-BIND requires a binding list")
+
     binding_clauses = car(args)
     body_forms = cdr(args)
-    
-    # Parse bindings
-    restarts = {}
-    current = binding_clauses
-    while _consp_internal(current):
-        binding = car(current)
-        if _consp_internal(binding) and _consp_internal(cdr(binding)):
-            restart_name = car(binding)
-            handler_form = car(cdr(binding))
-            
-            handler = eval(handler_form, env)
-            
-            if isinstance(restart_name, lisptype.LispSymbol):
-                restarts[restart_name.name] = handler
-        
-        current = cdr(current)
-    
-    # Push restarts onto stack
+
+    restarts = []
+    for binding in _iter_list(binding_clauses):
+        if not _consp_internal(binding):
+            continue
+        name = car(binding)
+        rest = cdr(binding)
+        if not _consp_internal(rest):
+            continue
+        function = eval(car(rest), env)
+        options = _parse_keyword_plist(cdr(rest))
+        report_fn = eval(options['REPORT-FUNCTION'], env) if 'REPORT-FUNCTION' in options else None
+        interactive_fn = (eval(options['INTERACTIVE-FUNCTION'], env)
+                           if 'INTERACTIVE-FUNCTION' in options else None)
+        test_fn = eval(options['TEST-FUNCTION'], env) if 'TEST-FUNCTION' in options else None
+        restart_name = name if isinstance(name, lisptype.LispSymbol) else lisptype.NIL
+        restarts.append(lisptype.Restart(
+            restart_name, function, report_function=report_fn,
+            interactive_function=interactive_fn, test_function=test_fn))
+
     state.restart_stack.append(restarts)
-    
     try:
-        # Evaluate body
         result = lisptype.NIL
-        current = body_forms
-        while _consp_internal(current):
-            result = eval(car(current), env)
-            current = cdr(current)
+        for f in _iter_list(body_forms):
+            result = eval(f, env)
         return result
     finally:
-        # Pop restarts from stack
         state.restart_stack.pop()
+
+
+def compute_restarts_list(condition=None):
+    """CLHS 9.1 COMPUTE-RESTARTS: every currently active restart applicable
+    to `condition` (all of them, if `condition` is NIL/omitted), most
+    recently established frame first, clause order preserved within a
+    frame -- the same search order INVOKE-RESTART's by-name lookup uses, so
+    `(find 'foo (compute-restarts) :key #'restart-name)` and
+    `(invoke-restart 'foo)` agree about which restart named foo is "the"
+    one (compute-restarts.3-.6)."""
+    result = []
+    for frame in reversed(state.restart_stack):
+        for restart in frame:
+            if restart.applies_to(condition):
+                result.append(restart)
+    return result
+
+
+def find_restart_obj(identifier, condition=None):
+    """CLHS 9.1 FIND-RESTART. `identifier` is a restart name designator
+    (symbol/string) or a restart object itself, in which case it is returned
+    only if it is still active and still applicable to `condition`."""
+    if isinstance(identifier, lisptype.Restart):
+        for frame in reversed(state.restart_stack):
+            if identifier in frame:
+                return identifier if identifier.applies_to(condition) else None
+        return None
+    for frame in reversed(state.restart_stack):
+        for restart in frame:
+            if restart.name_matches(identifier) and restart.applies_to(condition):
+                return restart
+    return None
+
+
+def invoke_restart_obj(restart, args):
+    """CLHS 9.1 INVOKE-RESTART given an already-resolved restart object: call
+    its function the same way any other Lisp function call is made, so a
+    wrong argument count converts to PROGRAM-ERROR rather than a bare Python
+    TypeError (plan.md's "Python exceptions must not appear as Lisp
+    values")."""
+    from .evaluation_core import funcall
+    return funcall(restart.function, *args)
+
+
+def _invoke_named_restart(name, condition, args, error_if_missing):
+    """The shared shape of ABORT/CONTINUE/MUFFLE-WARNING/USE-VALUE/
+    STORE-VALUE (CLHS 9.1): find the restart named `name` applicable to
+    `condition`, invoke it if found, else either signal CONTROL-ERROR
+    (ABORT, MUFFLE-WARNING) or simply return NIL (CONTINUE, USE-VALUE,
+    STORE-VALUE) -- one function parameterized by that single difference,
+    not five near-identical copies."""
+    restart = find_restart_obj(lisptype.LispSymbol(name), condition)
+    if restart is None:
+        if error_if_missing:
+            return signal_error_object(lisptype.ControlError(
+                message=f"No {name} restart is currently active."))
+        return lisptype.NIL
+    return invoke_restart_obj(restart, args)
 
 
 def eval_invoke_restart(form, env):
     """Implement INVOKE-RESTART special form.
-    
-    Syntax: (INVOKE-RESTART restart-name &rest arguments)
-    
-    Invokes a restart by name.
+
+    Syntax: (INVOKE-RESTART restart-designator &rest arguments)
+
+    Every argument position is evaluated normally -- CLHS gives INVOKE-RESTART
+    no unevaluated syntax at all; it is a special form here only so the
+    function-designator entry point (`utilities_errors.invoke_restart`, used
+    by FUNCALL/APPLY/#'INVOKE-RESTART) and this direct-call path can share
+    `find_restart_obj`/`invoke_restart_obj` as the one resolution+invocation
+    mechanism.
     """
     from .evaluation_core import eval
-    
+
     args = cdr(form)
     if not _consp_internal(args):
-        raise lisptype.LispNotImplementedError("INVOKE-RESTART requires a restart name")
-    
-    restart_name_form = car(args)
-    restart_args = cdr(args)
-    
-    # Evaluate restart name
-    if isinstance(restart_name_form, lisptype.LispSymbol):
-        restart_name = restart_name_form.name
+        raise lisptype.LispProgramError("INVOKE-RESTART requires a restart designator")
+
+    designator = eval(car(args), env)
+    call_args = [eval(a, env) for a in _iter_list(cdr(args))]
+
+    if isinstance(designator, lisptype.Restart):
+        restart = designator
     else:
-        restart_name = str(eval(restart_name_form, env))
-    
-    # Evaluate arguments
-    evaluated_args = []
-    current = restart_args
-    while _consp_internal(current):
-        evaluated_args.append(eval(car(current), env))
-        current = cdr(current)
-    
-    # Search restart stack
-    for restarts in reversed(state.restart_stack):
-        if restart_name in restarts:
-            handler = restarts[restart_name]
-            result = handler(*evaluated_args) if evaluated_args else handler()
-            raise lisptype.RestartException(restart_name, [result])
-    
-    # Restart not found
-    raise lisptype.LispError(f"No restart named {restart_name}")
+        restart = find_restart_obj(designator)
+        if restart is None:
+            name = designator.name if isinstance(designator, lisptype.LispSymbol) else str(designator)
+            return signal_error_object(lisptype.ControlError(
+                message=f"No restart named {name} is currently active."))
+    return invoke_restart_obj(restart, call_args)
 
 
 def eval_abort(form, env):
     """Implement ABORT special form.
-    
-    Syntax: (ABORT)
-    
-    Invokes the ABORT restart.
+
+    Syntax: (ABORT &optional condition)
+
+    Invokes the ABORT restart applicable to `condition`; signals CONTROL-ERROR
+    if none is active (CLHS 9.1).
     """
-    # Try to invoke ABORT restart
-    for restarts in reversed(state.restart_stack):
-        if 'ABORT' in restarts:
-            handler = restarts['ABORT']
-            result = handler()
-            raise lisptype.RestartException('ABORT', [result])
-    
-    # No ABORT restart found
-    raise lisptype.LispError("ABORT: No abort restart available")
+    from .evaluation_core import eval
+
+    args = cdr(form)
+    condition = eval(car(args), env) if _consp_internal(args) else None
+    return _invoke_named_restart('ABORT', condition, (), error_if_missing=True)
+
+
+def eval_with_condition_restarts(form, env):
+    """Implement WITH-CONDITION-RESTARTS special form (CLHS 9.1).
+
+    Syntax: (WITH-CONDITION-RESTARTS condition-form restarts-form {form}*)
+
+    Temporarily associates the value of `condition-form` with each restart in
+    the (already-established) list `restarts-form` evaluates to, for the
+    dynamic extent of the body -- restricting COMPUTE-RESTARTS/FIND-RESTART
+    queries naming any *other* condition from seeing them
+    (`Restart.applies_to`). This is the general form of the association
+    RESTART-CASE performs automatically for a literal SIGNAL/ERROR/CERROR/
+    WARN protected form (`_restart_case_signal_target`) -- one mechanism,
+    used two ways, rather than RESTART-CASE reimplementing it privately.
+
+    A special form rather than a macro because the body forms must run
+    *while* the association is in effect, which a `cl_function` (whose
+    arguments are all evaluated before the call) cannot arrange.
+    """
+    from .evaluation_core import eval
+
+    args = cdr(form)
+    if not (_consp_internal(args) and _consp_internal(cdr(args))):
+        raise lisptype.LispProgramError(
+            "WITH-CONDITION-RESTARTS requires a condition form and a restarts form")
+
+    condition = eval(car(args), env)
+    restarts_value = eval(car(cdr(args)), env)
+    body = cdr(cdr(args))
+
+    restart_list = [r for r in _iter_list(restarts_value) if isinstance(r, lisptype.Restart)]
+    real_condition = None if condition in (None, lisptype.NIL) else condition
+
+    if real_condition is not None:
+        for r in restart_list:
+            r.associated_conditions.append(real_condition)
+    try:
+        result = lisptype.NIL
+        for f in _iter_list(body):
+            result = eval(f, env)
+        return result
+    finally:
+        if real_condition is not None:
+            for r in restart_list:
+                r.associated_conditions.remove(real_condition)
 
 
 def _assign_variable_or_place(var, result, env):
@@ -1373,6 +1771,15 @@ def eval_handler_case(form, env):
             # Belongs to an enclosing HANDLER-CASE; let it through.
             raise
         return _run_handler_case_clause(transfer.clause, transfer.condition, env)
+    except RestartCaseTransfer:
+        # A restart invocation in transit to its own establishing form (an
+        # enclosing RESTART-CASE, or CERROR/WARN's built-in CONTINUE/
+        # MUFFLE-WARNING restart) -- not a Lisp-level THROW at all, so it
+        # must never be mistaken for one below. Without this, any
+        # RESTART-CASE/CERROR/WARN whose restart is invoked from inside a
+        # HANDLER-CASE clause's protected form (handler-case.20-.26/.29) had
+        # its transfer intercepted here and misreported as an uncaught THROW.
+        raise
     except ThrowException as e:
         # An uncaught THROW is a CONTROL-ERROR (CLHS 5.2). Converting it here
         # rather than at the THROW itself is a known approximation: it needs a

@@ -1188,12 +1188,6 @@ def break_fn(format_string=None, *args):
     return None
 
 
-@_registry.cl_function('CONTINUE')
-def continue_fn():
-    """Continue from break."""
-    return None
-
-
 @_registry.cl_function('ED')
 def ed(file=None):
     """Edit file."""
@@ -1497,7 +1491,6 @@ __all__ = [
     'synonym_stream_p',
     'two_way_stream_p',
     'break_fn',
-    'continue_fn',
     'ed',
     'dribble',
     'disassemble',

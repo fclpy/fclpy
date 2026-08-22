@@ -108,11 +108,21 @@ class TestSignalFunction:
 
 
 class TestCerrorFunction:
-    """Test CERROR function for errors with continue restart."""
-    
-    def test_cerror_raises_recoverable_exception(self, env):
-        """CERROR raises an exception marked as recoverable."""
-        # (CERROR "Continue anyway" "the error")
+    """Test CERROR function for errors with a built-in CONTINUE restart.
+
+    `ConditionException.recoverable`/`.continue_format` (asserted by the two
+    tests this replaces) were flags set at the raise site and never read by
+    anything -- CERROR had no actual restart behind them, so nothing could
+    ever "continue" from one. Recoverability is now a real CONTINUE restart
+    (CLHS 9.1, `evaluation_conditions._signal_cerror_object`), so these test
+    that instead: invoking it (directly, or via a handler calling CONTINUE)
+    makes CERROR return NIL and resume, exactly what the dead flags claimed
+    to represent but never delivered.
+    """
+
+    def test_cerror_raises_when_uncaught(self, env):
+        """CERROR signals an error, same as ERROR, when nothing invokes its
+        CONTINUE restart."""
         form = cons(
             ls('CERROR'),
             cons(
@@ -125,24 +135,34 @@ class TestCerrorFunction:
             eval(form, env)
 
         assert isinstance(exc_info.value.condition, Condition)
-        assert exc_info.value.recoverable is True
 
-    def test_cerror_stores_continue_format(self, env):
-        """CERROR stores the continue format string."""
-        continue_msg = "Press space to continue"
-        form = cons(
-            ls('CERROR'),
-            cons(
-                continue_msg,
-                cons("the error", NIL)
-            )
-        )
+    def test_cerror_continue_restart_resumes_execution(self, env):
+        """A handler that invokes CERROR's CONTINUE restart makes CERROR
+        return NIL instead of unwinding, and the enclosing form resumes."""
+        from fclpy.lispfunc import eval_string
 
-        with pytest.raises(ConditionException) as exc_info:
-            eval(form, env)
+        result = eval_string(
+            "(handler-bind"
+            "  ((error #'(lambda (c) (invoke-restart (find-restart 'continue c)))))"
+            "  (progn (cerror \"Continue anyway\" \"the error\") 'resumed))",
+            env)
+        assert getattr(result, 'name', result) == 'RESUMED'
 
-        assert hasattr(exc_info.value, 'continue_format')
-        assert exc_info.value.continue_format == continue_msg
+    def test_cerror_continue_restart_report_uses_continue_format(self, env):
+        """CERROR's CONTINUE restart reports itself via the given
+        continue-format-control (CLHS 9.1)."""
+        from fclpy.lispfunc import eval_string
+
+        result = eval_string(
+            "(with-output-to-string (s)"
+            "  (handler-bind"
+            "    ((error #'(lambda (c)"
+            "                (let ((*print-escape* nil))"
+            "                  (format s \"~A\" (find-restart 'continue c)))"
+            "                (invoke-restart (find-restart 'continue c)))))"
+            "    (cerror \"Press space to continue\" \"the error\")))",
+            env)
+        assert "Press space to continue" in str(result)
 
 
 class TestWarnFunction:
@@ -316,14 +336,18 @@ class TestConditionExceptionProperties:
         assert isinstance(exc_info.value.condition, Condition)
     
     def test_condition_exception_has_recoverable_attribute(self, env):
-        """ConditionException tracks recoverability."""
+        """ERROR's ConditionException is not recoverable; CERROR's carries a
+        real CONTINUE restart instead of the `recoverable` flag (see
+        TestCerrorFunction above for that restart actually being invoked)."""
         # Non-recoverable (ERROR)
         form1 = cons(ls('ERROR'), NIL)
         with pytest.raises(ConditionException) as exc_info:
             eval(form1, env)
         assert exc_info.value.recoverable is False
-        
-        # Recoverable (CERROR) -- CERROR's condition carries a CONTINUE restart
+
+        # CERROR, uncaught, still raises -- its CONTINUE restart was never
+        # invoked -- but the condition it carries is the one that restart
+        # was associated with.
         form2 = cons(
             ls('CERROR'),
             cons(
@@ -333,7 +357,7 @@ class TestConditionExceptionProperties:
         )
         with pytest.raises(ConditionException) as exc_info:
             eval(form2, env)
-        assert exc_info.value.recoverable is True
+        assert isinstance(exc_info.value.condition, Condition)
 
 
 class TestSignalingEdgeCases:

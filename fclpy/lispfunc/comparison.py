@@ -604,6 +604,13 @@ def typep(object, type_specifier):
         # what a sequence is.
         from .sequence_protocol import is_sequence
         return lisptype.lisp_bool(is_sequence(object))
+    elif type_name == 'RESTART':
+        # TYPEP had no branch for RESTART, so it fell through to the CLOS
+        # `find_class` branch below (which requires a `classes.LispInstance`)
+        # and answered NIL for every real `lisptype.Restart` -- failing
+        # compute-restarts.1/.2's `(typep r 'restart)`/`(typep r (find-class
+        # 'restart))` regardless of what COMPUTE-RESTARTS actually returned.
+        return lisptype.lisp_bool(isinstance(object, lisptype.Restart))
     elif type_name == 'HASH-TABLE':
         return lisptype.lisp_bool(isinstance(object, dict))
     elif type_name == 'RANDOM-STATE':

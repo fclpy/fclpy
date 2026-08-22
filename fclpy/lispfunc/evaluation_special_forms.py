@@ -551,9 +551,16 @@ def assert_macro(test_form, *rest):
     have passed -- the same defect class as the WITH-*-STRING macros above.
 
     This runtime has no interactive user to drive the retry loop, so
-    `place*` is accepted per the grammar and otherwise ignored, matching
-    every non-interactive caller of ASSERT in the ANSI suite: on failure
-    they want an error signaled, not a prompt.
+    `place*` is accepted per the grammar and otherwise ignored -- but the
+    *retry* itself is real: ASSERT's failure is a CONTINUE-restart-bearing
+    error (CLHS 5.1: "assert ... repeatedly evaluates test-form until it is
+    true"), and now that RESTART-CASE auto-associates a literal `(ERROR
+    ...)` protected form with the condition it signals, invoking that
+    restart -- directly, or via `(continue)`/`(continue condition)` from a
+    handler that has fixed up whatever `test-form` reads -- re-enters the
+    loop rather than merely being accepted and ignored. Every non-interactive
+    caller in the ANSI suite that does *not* invoke CONTINUE still just gets
+    an error signaled, as before.
     """
     datum_and_args = list(rest[1:]) if len(rest) > 1 else []
     if datum_and_args:
@@ -565,7 +572,17 @@ def assert_macro(test_form, *rest):
             lisptype.LispString("Assertion failed: ~S"),
             quoted_test,
         ])
-    return _cons_from([lisptype.LispSymbol('IF'), test_form, lisptype.NIL, error_call])
+    continue_clause = _cons_from([
+        lisptype.LispSymbol('CONTINUE'), lisptype.NIL,
+        lisptype.intern_keyword('REPORT'), lisptype.LispString("Retry the assertion."),
+        lisptype.NIL,
+    ])
+    restart_case_form = _cons_from(
+        [lisptype.LispSymbol('RESTART-CASE'), error_call, continue_clause])
+    when_form = _cons_from([
+        lisptype.LispSymbol('WHEN'), test_form,
+        _cons_from([lisptype.LispSymbol('RETURN'), lisptype.NIL])])
+    return _cons_from([lisptype.LispSymbol('LOOP'), when_form, restart_case_form])
 
 
 @_registry.cl_macro('WITH-OPEN-STREAM',

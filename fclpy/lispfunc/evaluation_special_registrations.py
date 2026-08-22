@@ -160,6 +160,12 @@ def special_abort(*args):
     raise lisptype.LispNotImplementedError('ABORT (evaluated in evaluator)')
 
 
+@_registry.cl_special('WITH-CONDITION-RESTARTS')
+def special_with_condition_restarts(*args):
+    """WITH-CONDITION-RESTARTS special form (handled by evaluator)."""
+    raise lisptype.LispNotImplementedError('WITH-CONDITION-RESTARTS (evaluated in evaluator)')
+
+
 @_registry.cl_special('HANDLER-BIND')
 def special_handler_bind(*args):
     """HANDLER-BIND special form (handled by evaluator)."""

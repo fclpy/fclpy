@@ -1187,85 +1187,78 @@ def py_str_to_sym(s):
 
 
 class Restart(lispT):
-    """A restart point for error recovery.
-    
-    Restarts provide named recovery points that error handlers can use
-    to continue execution from a known state with corrected values.
+    """A CLHS 9.1 restart: a named dynamic recovery point.
+
+    `function` is what INVOKE-RESTART funcalls -- for a RESTART-BIND restart
+    it is exactly the user's function (so calling it performs the recovery
+    directly, with no unwinding of its own); for a RESTART-CASE restart it is
+    a closure that performs RESTART-CASE's implicit non-local exit back to
+    the establishing form. INVOKE-RESTART treats both the same way, through
+    `evaluation_core.funcall`, which is what makes a wrong argument count
+    signal PROGRAM-ERROR (RESTART-BIND.ERROR.*) for either kind rather than
+    needing two invocation paths.
+
+    `associated_conditions` implements CLHS 9.1's condition-restart
+    association: empty means "visible regardless of which condition, if any,
+    is asked about"; once WITH-CONDITION-RESTARTS (used automatically by
+    RESTART-CASE when its protected form is literally a call to SIGNAL/
+    ERROR/CERROR/WARN) adds a condition to this list, the restart becomes
+    invisible to COMPUTE-RESTARTS/FIND-RESTART queries naming any *other*
+    condition. `test_function` is the orthogonal, user-supplied `:test`/
+    `:test-function` filter, consulted independently of association.
     """
-    
-    def __init__(self, name, handler, report=None, test=None):
+
+    def __init__(self, name, function, report_function=None,
+                 interactive_function=None, test_function=None):
         """Initialize a Restart.
-        
+
         Args:
-            name: Restart name (string or symbol)
-            handler: Callable that performs the restart
-            report: Optional function that reports restart to user
-            test: Optional predicate to test if restart is applicable
+            name: restart name -- a LispSymbol, or NIL for an anonymous restart
+            function: callable invoked (via funcall) by INVOKE-RESTART
+            report_function: optional callable of one argument (a stream)
+            interactive_function: optional callable of no arguments, called
+                by INVOKE-RESTART-INTERACTIVELY to produce the argument list
+            test_function: optional callable of one argument (a condition,
+                or NIL) deciding whether this restart applies; defaults to
+                "always applies"
         """
         if isinstance(name, str):
             self.name = LispSymbol(name)
         else:
             self.name = name
-        self.handler = handler
-        self.report = report
-        self.test = test
-    
-    def test_applicability(self, condition=None):
-        """Test if this restart is applicable to a condition.
-        
-        Args:
-            condition: Condition object to test against
-            
-        Returns:
-            True if restart is applicable, False otherwise
-        """
-        if self.test is None:
-            return True
-        return self.test(condition)
-    
-    def get_report(self):
-        """Get the restart's report message.
-        
-        Returns:
-            String describing the restart
-        """
-        if self.report is None:
-            return f"Restart {self.name.name}"
-        if callable(self.report):
-            return self.report()
-        return str(self.report)
-    
+        self.function = function
+        self.report_function = report_function
+        self.interactive_function = interactive_function
+        self.test_function = test_function
+        self.associated_conditions = []
+
+    def name_matches(self, identifier):
+        """CLHS 9.1's restart-name designator match: a symbol matches by
+        `string=`-equivalent name (case already normalized by the reader);
+        this restart is never matched by name if it is anonymous (NIL)."""
+        if self.name is NIL or not isinstance(self.name, LispSymbol):
+            return False
+        target = identifier.name if isinstance(identifier, LispSymbol) else str(identifier)
+        return self.name.name == target
+
+    def applies_to(self, condition):
+        """Whether this restart is a candidate for a COMPUTE-RESTARTS/
+        FIND-RESTART/INVOKE-RESTART query naming `condition` (NIL/None for
+        "no condition given" -- CLHS: no filtering at all in that case)."""
+        real_condition = None if condition in (None, NIL) else condition
+        if real_condition is not None and self.associated_conditions:
+            if not any(c is real_condition for c in self.associated_conditions):
+                return False
+        if self.test_function is not None:
+            from fclpy.lispfunc.evaluation_core import funcall as _funcall
+            result = _funcall(self.test_function, real_condition if real_condition is not None else NIL)
+            if result is NIL or result is None or result is False:
+                return False
+        return True
+
     def __repr__(self):
-        return f"<Restart {self.name.name}>"
-
-
-class RestartException(Exception):
-    """Internal exception used to invoke a restart.
-    
-    When a restart is invoked, this exception is raised to unwind the stack
-    to the restart point, carrying the restart's values with it.
-    """
-    
-    def __init__(self, restart, values=None):
-        """Initialize a RestartException.
-        
-        Args:
-            restart: Restart object or restart name (string/symbol) being invoked
-            values: Optional values to return from the restart
-        """
-        self.restart = restart
-        self.values = values or []
-        # Handle both Restart objects and string names
-        if isinstance(restart, str):
-            self.restart_name = restart
-            super().__init__(f"Restart: {restart}")
-        elif isinstance(restart, Restart):
-            self.restart_name = restart.name.name if hasattr(restart.name, 'name') else str(restart.name)
-            super().__init__(f"Restart: {self.restart_name}")
-        else:
-            # Assume it has a name attribute
-            self.restart_name = str(restart)
-            super().__init__(f"Restart: {self.restart_name}")
+        name = self.name.name if isinstance(self.name, LispSymbol) else 'NIL'
+        return f"#<RESTART {name}>"
 
 
 __all__ = [
@@ -1286,7 +1279,7 @@ __all__ = [
     'FloatingPointInvalidOperation', 'FloatingPointOverflow', 'FloatingPointUnderflow',
     'FloatingPointInexact',
     # Restarts
-    'Restart', 'RestartException',
+    'Restart',
     # Utilities
     'resolve_environment',
     'py_str_to_sym'

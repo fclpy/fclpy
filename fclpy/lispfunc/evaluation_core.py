@@ -399,6 +399,46 @@ class HandlerCaseTransfer(ThrowException):
         self.condition = condition
 
 
+class RestartCaseTag:
+    """A unique tag identifying one RESTART-CASE (or RESTART-BIND-derived
+    convenience: CERROR's CONTINUE, WARN's MUFFLE-WARNING, WITH-SIMPLE-
+    RESTART) frame, used the same way `HandlerCaseTag` is: identity equality
+    only, so an unrelated frame's transfer can never be mistaken for this
+    one's."""
+    __slots__ = ()
+
+    def __eq__(self, other):
+        return self is other
+
+    def __hash__(self):
+        return id(self)
+
+    def __repr__(self):
+        return f"#<restart-case-tag {id(self):#x}>"
+
+
+class RestartCaseTransfer(ThrowException):
+    """Carries control from an invoked RESTART-CASE-style restart back to the
+    form that established it (CLHS 9.2: "each restart-clause implicitly
+    includes a non-local exit ... to right after the invocation of the
+    restart-case form itself").
+
+    Subclasses `ThrowException` for exactly the reason `HandlerCaseTransfer`
+    does (see its docstring): every place that already lets a THROW pass
+    through untouched -- APPLY, FUNCALL, every special form's control-transfer
+    re-raise clause -- does the right thing for this automatically, instead of
+    needing `lisptype.RestartException` added to each of those tuples by hand
+    (the exact gap plan.md recorded: "`RestartException` does not subclass any
+    of them ... `funcall` wraps it into a condition, which is why a handler
+    still cannot invoke a restart").
+    """
+
+    def __init__(self, tag, clause_index, args):
+        super().__init__(tag, args)
+        self.clause_index = clause_index
+        self.args = args
+
+
 class ConditionException(Exception):
     """Exception raised when a Lisp condition is signaled.
 
@@ -769,6 +809,7 @@ def eval(form, env=None):
     from .evaluation_conditions import (
         eval_signal, eval_error, eval_cerror, eval_warn,
         eval_restart_case, eval_restart_bind, eval_invoke_restart, eval_abort,
+        eval_with_condition_restarts,
         eval_multiple_value_call, eval_multiple_value_bind, eval_multiple_value_setq,
         eval_multiple_value_prog1,
         eval_handler_bind, eval_handler_case, eval_ignore_errors,
@@ -1549,6 +1590,8 @@ def eval(form, env=None):
                 return eval_invoke_restart(form, env)
             elif operator.name == 'ABORT':
                 return eval_abort(form, env)
+            elif operator.name == 'WITH-CONDITION-RESTARTS':
+                return eval_with_condition_restarts(form, env)
             elif operator.name == 'HANDLER-BIND':
                 return eval_handler_bind(form, env)
             elif operator.name == 'HANDLER-CASE':
