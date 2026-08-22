@@ -808,10 +808,79 @@ def string_trim(character_bag, string):
     return string_left_trim(character_bag, string_right_trim(character_bag, string))
 
 
-@_registry.cl_function('PARSE-INTEGER')
-def parse_integer(string, **kwargs):
-    """Parse integer from string."""
-    try:
-        return int(string.strip())
-    except ValueError:
+def _parse_integer_digit_weight(ch, radix):
+    """The digit weight of `ch` in `radix`, or None if it names no digit
+    in that radix -- the same rule `DIGIT-CHAR-P` applies, restated here
+    over a plain Python character instead of a Lisp one."""
+    if '0' <= ch <= '9':
+        weight = ord(ch) - ord('0')
+    elif ch.isalpha():
+        weight = ord(ch.upper()) - ord('A') + 10
+    else:
         return None
+    return weight if weight < radix else None
+
+
+@_registry.cl_function('PARSE-INTEGER')
+def parse_integer(string, *, start=0, end=None, radix=10, junk_allowed=None):
+    """CLHS PARSE-INTEGER: parse a signed integer, in `radix`, out of the
+    bounded substring, skipping surrounding whitespace.
+
+    Returns two values -- the integer (or NIL if :junk-allowed is true and
+    none could be parsed) and the index where parsing stopped. Without
+    :junk-allowed, anything left in the substring that is not trailing
+    whitespace is a PARSE-ERROR rather than a value silently computed from
+    a truncated prefix -- the previous implementation was `int(string.strip())`,
+    which ignored :start/:end/:radix/:junk-allowed entirely, returned Python
+    `None` (not a Lisp value) on failure instead of signaling, and had no
+    second return value at all.
+    """
+    from .comparison import _string_characters
+    from .sequence_protocol import bounding_indices
+    from .evaluation_conditions import signal_error_object
+
+    text = _string_characters(string)
+    if text is None:
+        raise lisptype.LispTypeError(
+            "PARSE-INTEGER: argument is not a string",
+            expected_type="STRING", actual_value=string)
+    length = len(text)
+    start, end = bounding_indices(length, start, end, 'PARSE-INTEGER')
+    radix = int(radix)
+    junk_allowed = lisptype.is_truthy(junk_allowed)
+
+    i = start
+    while i < end and text[i].isspace():
+        i += 1
+    ws_end = i
+
+    sign = -1 if (i < end and text[i] == '-') else 1
+    if i < end and text[i] in '+-':
+        i += 1
+
+    digits_start = i
+    value = 0
+    while i < end:
+        weight = _parse_integer_digit_weight(text[i], radix)
+        if weight is None:
+            break
+        value = value * radix + weight
+        i += 1
+
+    if i == digits_start:
+        # No digits were parsed -- the sign, if any, was never confirmed.
+        if junk_allowed:
+            return lisptype.MultipleValues(lisptype.NIL, ws_end)
+        return signal_error_object(lisptype.ParseError(
+            f"PARSE-INTEGER: no integer found in {text[start:end]!r}"))
+
+    if junk_allowed:
+        return lisptype.MultipleValues(sign * value, i)
+
+    j = i
+    while j < end and text[j].isspace():
+        j += 1
+    if j != end:
+        return signal_error_object(lisptype.ParseError(
+            f"PARSE-INTEGER: junk in string {text[start:end]!r}"))
+    return lisptype.MultipleValues(sign * value, end)
