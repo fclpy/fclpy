@@ -384,6 +384,27 @@ def cell_error_name(*args):
     return lisptype.NIL
 
 
+@_registry.cl_function('STREAM-ERROR-STREAM')
+def stream_error_stream(condition):
+    """CLHS STREAM-ERROR-STREAM: the STREAM slot of a STREAM-ERROR (and its
+    subtypes END-OF-FILE, READER-ERROR).
+
+    Every reader entry point (READ, READ-FROM-STRING, LOAD's per-form loop)
+    signals end-of-file as `lisptype.LispEndOfFileError`, a legacy Python
+    exception with a `.stream` attribute set to the actual stream being read
+    -- not the real `lisptype.Condition` class in lisptype_extended.py,
+    which predates it. This reads whichever shape `condition` turns out to
+    be, so ansi-test's own `signals-error` fixture -- which asserts
+    `(streamp (stream-error-stream c))` for every END-OF-FILE/STREAM-ERROR/
+    READER-ERROR test, not just the ones this session touched -- gets a
+    real stream back either way.
+    """
+    stream = getattr(condition, 'stream', None)
+    if stream is None and isinstance(condition, lisptype.Condition):
+        stream = condition.get_slot('stream')
+    return stream if stream is not None else lisptype.NIL
+
+
 @_registry.cl_macro('CHECK-TYPE')
 def check_type_macro(place, type_spec, *string):
     """Macro expander for CHECK-TYPE (CLHS 7.9).

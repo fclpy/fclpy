@@ -115,20 +115,36 @@ def _reader_bridge(target):
     return _lispreader.STDIN
 
 
-def _read_via_reader(stream, eof_error_p, eof_value, what):
+def _read_via_reader(stream, eof_error_p, eof_value, what, preserve_whitespace=False):
     """READ / READ-PRESERVING-WHITESPACE's shared body: resolve the stream
     designator, read one form through the existing reader machinery
     (`lispreader.LispReader`), and hand any character it looked ahead past
     the form's end back to the stream so a second call sees it.
+
+    `preserve_whitespace` is CLHS 23.1.2's whole distinction between READ and
+    READ-PRESERVING-WHITESPACE: ordinary READ consumes the single whitespace
+    character that terminates a token, and READ-PRESERVING-WHITESPACE must
+    not. `LispReader.read_8` is the one place a token's terminating character
+    is decided, so this only threads the flag there rather than duplicating
+    the token loop.
     """
     target = resolve_input_stream(stream)
     bridge = _reader_bridge(target)
     readtable = _rt.get_current_readtable()
     reader = _lispreader.LispReader(readtable.get_macro_character, bridge)
     try:
-        result = reader.read_1()
+        result = reader.read_1(preserve_whitespace)
     except EOFError:
-        result = None
+        # CLHS glossary "eof-error-p": that argument governs only the case
+        # where the stream is *already* at end of file before any part of an
+        # object has been read -- `read_1` reports that case by returning
+        # None, not by raising. An `EOFError` here means a macro-character
+        # handler (`_left_paren_reader` et al.) started reading a compound
+        # form and ran out of input, which is unconditionally an error no
+        # matter what `eof-error-p` says (`(read-from-string "(A B " nil)`
+        # must still signal). Conflating the two here used to make a
+        # truncated list silently answer NIL instead of erroring.
+        raise lisptype.LispEndOfFileError(target, what)
     if isinstance(target, Stream):
         while bridge.buff:
             target.unread_char(bridge.buff.pop())
@@ -355,16 +371,34 @@ def read_from_string(string, eof_error_p=True, eof_value=None, *,
       exception surfacing as the form's value.
     * it returned one value where CLHS requires two -- the object and the
       index reading stopped at.
+
+    A third defect, found afterward: `string` is typed as STRING (CLHS
+    23.2), and CLAUDE.md's array model gives a string three representations
+    -- `str`, `LispString`, and a rank-1 character `LispArray` (what a
+    displaced, adjustable or fill-pointered string actually is). The
+    `isinstance(string, str)` check here saw only the first two and fell
+    back to `str(string)` for the third, which is Python's object-repr
+    fallback, not the array's characters -- so
+    `(read-from-string displaced-string)` read the text
+    `"<LISPARRAY ...>"` instead of what the array held.
+    `comparison._string_characters` is the one place that already resolves
+    all three representations (built for EQUAL/EQUALP, plan.md Finding I);
+    this reuses it rather than adding a fourth copy.
     """
     from .streams import StringInputStream
+    from .comparison import _string_characters
 
-    text = string if isinstance(string, str) else str(string)
+    text = _string_characters(string)
+    if text is None:
+        raise lisptype.LispTypeError(
+            f"READ-FROM-STRING: {type(string).__name__} is not a string",
+            expected_type="STRING", actual_value=string)
     stop = len(text) if end is None or end is lisptype.NIL else int(end)
     begin = 0 if start is None or start is lisptype.NIL else int(start)
 
     stream = StringInputStream(text, begin, stop)
-    result = _read_via_reader(stream, eof_error_p, eof_value,
-                              "READ-FROM-STRING")
+    result = _read_via_reader(stream, eof_error_p, eof_value, "READ-FROM-STRING",
+                              preserve_whitespace=_supplied_true(preserve_whitespace))
     return lisptype.MultipleValues(result, begin + stream.position)
 
 
@@ -372,14 +406,13 @@ def read_from_string(string, eof_error_p=True, eof_value=None, *,
 def read_preserving_whitespace(stream=None, eof_error_p=True, eof_value=None, recursive_p=None):
     """READ-PRESERVING-WHITESPACE (CLHS 2.1, 23.1.2).
 
-    Shares READ's reader-bridge plumbing. It does not yet implement the one
-    thing that distinguishes it from READ -- leaving the single whitespace
-    character that terminates a token unconsumed -- because the reader has
-    no signal for "this whitespace ended the token" versus "this whitespace
-    was skipped looking for the token to start" (plan.md C12: no character
-    syntax-type model yet).
+    Shares READ's reader-bridge plumbing, and now also the one thing that
+    distinguishes it from READ: `LispReader.read_8` leaves the single
+    whitespace character that terminates a token on the stream instead of
+    consuming it, so a subsequent READ-CHAR sees it.
     """
-    return _read_via_reader(stream, eof_error_p, eof_value, "READ-PRESERVING-WHITESPACE")
+    return _read_via_reader(stream, eof_error_p, eof_value,
+                            "READ-PRESERVING-WHITESPACE", preserve_whitespace=True)
 
 
 @_registry.cl_function('MAKE-STRING-INPUT-STREAM')

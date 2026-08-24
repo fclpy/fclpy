@@ -38,7 +38,7 @@ class LispReader():
         self.stream = stream
         self.get_macro_character = get_macro_character
     
-    def read_1(self):
+    def read_1(self, preserve_whitespace=False):
         toss = True
         while(toss):
             toss = False
@@ -63,17 +63,23 @@ class LispReader():
             elif self.single_escape_character(x):
                 y = self.stream.read_char()
                 if y is None or self.stream.eof():
-                    raise Exception("reader-error")
+                    # A single escape (`\`) with nothing after it is a
+                    # truncated token, not a malformed one -- the same
+                    # unconditional END-OF-FILE readtable.py's own
+                    # mid-form handlers now raise (io_read.py's
+                    # `_read_via_reader` converts either into the real
+                    # condition).
+                    raise EOFError("EOF after single escape")
                 # Use placeholder for escaped colons
                 if y == ':':
-                    return self.read_8('\x00')  # Placeholder for escaped colon
+                    return self.read_8('\x00', preserve_whitespace)  # Placeholder for escaped colon
                 else:
-                    return self.read_8(y.upper())
+                    return self.read_8(y.upper(), preserve_whitespace)
             elif self.multiple_escape_character(x):
                 return self.read_9("")
             else:
-                return self.read_8(x.upper())
-    def read_8(self, token):
+                return self.read_8(x.upper(), preserve_whitespace)
+    def read_8(self, token, preserve_whitespace=False):
         more = True
         while(more):
             y = self.stream.read_char()
@@ -83,7 +89,7 @@ class LispReader():
                 # Handle backslash escape within token
                 escaped = self.stream.read_char()
                 if escaped is None:
-                    raise Exception("reader-error: EOF after escape")
+                    raise EOFError("EOF after single escape in token")
                 # Use placeholder for escaped colons
                 if escaped == ':':
                     token = token + '\x00'
@@ -93,6 +99,13 @@ class LispReader():
                 self.stream.unread_char(y)
                 more = False
             elif self.whitespace_char(y):
+                # CLHS 23.1.2: ordinary READ consumes the single whitespace
+                # character that terminates a token; READ-PRESERVING-
+                # WHITESPACE must not, so the character stays available for
+                # whatever reads the stream next (READ-PRESERVING-
+                # WHITESPACE.16/READ-FROM-STRING's :PRESERVE-WHITESPACE).
+                if preserve_whitespace:
+                    self.stream.unread_char(y)
                 more = False
             else:
                 token = token + y.upper()

@@ -188,16 +188,29 @@ class Readtable:
         return target
     
     # Simple macro character implementations that don't create circular dependencies
+    #
+    # Every "ran out of input mid-form" site below raises the builtin
+    # `EOFError`, not `ValueError` -- this module deliberately avoids
+    # importing `lisptype` (it would be circular), so it cannot raise
+    # `lisptype.LispEndOfFileError` directly. `EOFError` is already the
+    # convention every reader entry point catches and converts (READ,
+    # READ-FROM-STRING, LOAD's per-form loop, the REPL reader in runtime.py)
+    # -- attaching the real outer stream there, which these inner handlers
+    # never see. A plain `ValueError` here used to fall through those
+    # `except EOFError` clauses uncaught, past the reader's own dispatcher,
+    # into a generic Python-exception-to-condition fallback that reported it
+    # as a bare `ERROR`, not `END-OF-FILE` -- so `(signals-error (read ...)
+    # end-of-file)` failed for every compound form truncated mid-read.
     def _left_paren_reader(self, char, stream):
         """Read a list starting with ("""
         result = []
         dotted_tail = None
-        
+
         while True:
             # Skip whitespace
             c = stream.read_char()
             if not c:
-                raise ValueError("EOF during list read")
+                raise EOFError("EOF during list read")
             if c.isspace():
                 continue
             if c == ')':
@@ -337,14 +350,14 @@ class Readtable:
         while True:
             c = stream.read_char()
             if not c:
-                raise ValueError("EOF in string literal")
+                raise EOFError("EOF in string literal")
             if c == '"':
                 break
             if c == '\\':
                 # Handle escape sequences
                 next_c = stream.read_char()
                 if not next_c:
-                    raise ValueError("EOF after escape in string")
+                    raise EOFError("EOF after escape in string")
                 if next_c == 'n':
                     result += '\n'
                 elif next_c == 't':
@@ -596,7 +609,7 @@ class Readtable:
         """
         sub_char = stream.read_char()
         if not sub_char:
-            raise ValueError("EOF after #")
+            raise EOFError("EOF after #")
         
         sub_char_upper = sub_char.upper()
         
@@ -715,7 +728,7 @@ class Readtable:
         while depth > 0:
             c = stream.read_char()
             if not c:
-                raise ValueError("EOF in block comment")
+                raise EOFError("EOF in block comment")
             
             if prev_char == '|' and c == '#':
                 depth -= 1
@@ -732,7 +745,7 @@ class Readtable:
         
         c = stream.read_char()
         if not c:
-            raise ValueError("EOF in character literal")
+            raise EOFError("EOF in character literal")
         
         # Check for named characters
         if c.isalpha():
@@ -787,7 +800,7 @@ class Readtable:
             # Skip whitespace
             c = stream.read_char()
             if not c:
-                raise ValueError("EOF in vector literal")
+                raise EOFError("EOF in vector literal")
             if c.isspace():
                 continue
             if c == ')':
@@ -1024,7 +1037,7 @@ class Readtable:
         while True:
             c = stream.read_char()
             if not c:
-                raise ValueError("EOF after #C")
+                raise EOFError("EOF after #C")
             if not c.isspace():
                 break
         
@@ -1046,7 +1059,7 @@ class Readtable:
         while True:
             c = stream.read_char()
             if not c:
-                raise ValueError("EOF in #C(...)")
+                raise EOFError("EOF in #C(...)")
             if c.isspace():
                 continue
             if c == ')':
