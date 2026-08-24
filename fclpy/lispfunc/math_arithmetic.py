@@ -862,17 +862,25 @@ def _s_one_s_minus_(x):
     return x - 1
 
 
-# Fixed arithmetic limits
+# Fixed arithmetic limits.
+#
+# The bound comes from `typespec.py`, which owns it, rather than from a literal
+# here. CLHS 12.1.1.1 ties the constant and the type together --
+# `(typep most-positive-fixnum 'fixnum)` must be true -- so a literal in this
+# file is a second home for one fact, and the *third* copy (a local
+# `2**29 - 1` inside `comparison.typep`) is what made that form answer NIL.
 @_registry.cl_function('MOST-POSITIVE-FIXNUM')
 def most_positive_fixnum():
-    """Most positive fixnum."""
-    return 2**63 - 1
+    """Most positive fixnum (CLHS 12.1.1.1)."""
+    from fclpy.typespec import MOST_POSITIVE_FIXNUM
+    return MOST_POSITIVE_FIXNUM
 
 
 @_registry.cl_function('MOST-NEGATIVE-FIXNUM')
 def most_negative_fixnum():
-    """Most negative fixnum."""
-    return -2**63
+    """Most negative fixnum (CLHS 12.1.1.1)."""
+    from fclpy.typespec import MOST_NEGATIVE_FIXNUM
+    return MOST_NEGATIVE_FIXNUM
 
 
 @_registry.cl_function('BOOLE')

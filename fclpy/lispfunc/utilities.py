@@ -108,8 +108,12 @@ __all__ = [
     'type_error_expected_type',
     
     # Hash tables, arrays, CLOS, WITH macros, misc (utilities_misc)
+    'LispHashTable',
+    'is_hash_table',
     'make_hash_table',
+    'hash_table_p',
     'gethash',
+    'puthash',
     'remhash',
     'maphash',
     'clrhash',

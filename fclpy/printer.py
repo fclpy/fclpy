@@ -863,14 +863,18 @@ def _write_structure(value, ctx, depth):
     return '#S(' + ' '.join(parts) + ')'
 
 
-def _write_hash_table_dict(value, ctx):
-    """Print the dict-based hash table as ``#<HASH-TABLE ...>``.
+def _write_hash_table(value, ctx):
+    """Print a hash table as ``#<HASH-TABLE ...>``.
 
-    ``MAKE-HASH-TABLE`` returns a ``HashTableDict``, whose test and sizing are
-    attributes rather than entries, so every key in it is a real key.
+    A hash table has no readable representation, so this goes through
+    `_write_unreadable_checked`'s promise-keeping rather than emitting
+    ``#<...>`` unconditionally -- see that function on ``*PRINT-READABLY*``.
+    The test is `HASH-TABLE-TEST`'s symbol; `len()` is not asked of the table
+    because a hash table is no longer a `dict` (see `misc_hashtables`).
     """
-    test = getattr(value, 'test', 'EQL')
-    return f'#<HASH-TABLE :TEST {test} :COUNT {len(value)}>'
+    if ctx.readably:
+        return _write_unreadable_checked(value, 'HASH-TABLE', ctx)
+    return f'#<HASH-TABLE :TEST {value.test} :COUNT {value.count()}>'
 
 
 def _unreadable(value, kind):
@@ -963,8 +967,9 @@ def _write(value, ctx, depth):
     if isinstance(value, (list, tuple)):
         return _in_progress(value, ctx, _write_vector, depth)
 
-    if isinstance(value, dict):
-        return _write_hash_table_dict(value, ctx)
+    from fclpy.lispfunc.misc_hashtables import is_hash_table
+    if is_hash_table(value):
+        return _write_hash_table(value, ctx)
 
     if isinstance(value, lisptype.Package):
         return f'#<PACKAGE {value.name}>'

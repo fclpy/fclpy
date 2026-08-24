@@ -9,8 +9,12 @@ This module re-exports all functions from the split modules:
 
 # Re-export everything from split modules
 from .misc_hashtables import (
+    LispHashTable,
+    is_hash_table,
     make_hash_table,
+    hash_table_p,
     gethash,
+    puthash,
     remhash,
     maphash,
     clrhash,
@@ -190,8 +194,12 @@ from .misc_macros import (
 
 
 __all__ = [
+    'LispHashTable',
+    'is_hash_table',
     'make_hash_table',
+    'hash_table_p',
     'gethash',
+    'puthash',
     'remhash',
     'maphash',
     'clrhash',

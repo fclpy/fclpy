@@ -21,7 +21,6 @@ from .sequences import *
 from .arrays import *
 from .streams import *
 from .pathnames import *
-from .hashtables import *
 from .evaluation import *
 from .comparison import *
 from .characters import *

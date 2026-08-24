@@ -6,9 +6,16 @@ from fclpy.lispfunc.comparison import typep
 from fclpy.lispfunc.math_arithmetic import most_positive_fixnum, most_negative_fixnum
 
 
-# Fixnum boundary constants (matching the implementation)
-FIXNUM_MAX = 2**29 - 1
-FIXNUM_MIN = -2**29
+# The fixnum boundary, asked of the module that owns it.
+#
+# These were `2**29 - 1` / `-2**29` literals, commented "matching the
+# implementation" -- and they did match one of the three implementations of the
+# same constant. `comparison.typep` used 2**29 while `typespec.py` and
+# MOST-POSITIVE-FIXNUM used 2**63, so `(typep most-positive-fixnum 'fixnum)`
+# was NIL and `(typep 1000000000 'bignum)` was T. Restating the bound here is
+# how a test locks in whichever copy it happened to be written against.
+from fclpy.typespec import MOST_POSITIVE_FIXNUM as FIXNUM_MAX
+from fclpy.typespec import MOST_NEGATIVE_FIXNUM as FIXNUM_MIN
 
 
 class TestFixnumBignum:
@@ -30,14 +37,27 @@ class TestFixnumBignum:
     def test_large_positive_integer_is_bignum(self):
         """Large positive integers are BIGNUM."""
         assert typep(FIXNUM_MAX + 1, 'BIGNUM') == T
-        assert typep(2**30, 'BIGNUM') == T
         assert typep(2**64, 'BIGNUM') == T
-        
+
     def test_large_negative_integer_is_bignum(self):
         """Large negative integers are BIGNUM."""
         assert typep(FIXNUM_MIN - 1, 'BIGNUM') == T
-        assert typep(-2**30, 'BIGNUM') == T
         assert typep(-2**64, 'BIGNUM') == T
+
+    def test_fixnum_range_agrees_with_the_constant(self):
+        """FIXNUM the type and MOST-POSITIVE-FIXNUM the constant agree.
+
+        CLHS 12.1.1.1: MOST-POSITIVE-FIXNUM is "the fixnum closest in value
+        to positive infinity", so it is itself a fixnum and one more is not.
+        TYPEP kept its own 2**29 bound, so both halves of this were wrong at
+        once -- `2**30` was a BIGNUM while SUBTYPEP called it a FIXNUM.
+        """
+        assert typep(most_positive_fixnum(), 'FIXNUM') == T
+        assert typep(most_negative_fixnum(), 'FIXNUM') == T
+        assert typep(most_positive_fixnum() + 1, 'FIXNUM') == NIL
+        assert typep(most_negative_fixnum() - 1, 'FIXNUM') == NIL
+        assert typep(2**30, 'FIXNUM') == T
+        assert typep(2**30, 'BIGNUM') == NIL
         
     def test_fixnum_is_not_bignum(self):
         """Fixnums should not be classified as BIGNUM."""

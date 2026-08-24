@@ -1280,7 +1280,8 @@ def _class_cell_of(obj):
         return 'STANDARD-CLASS'
     if isinstance(obj, _classes.GenericFunction):
         return 'STANDARD-GENERIC-FUNCTION'
-    if isinstance(obj, dict):
+    from fclpy.lispfunc.misc_hashtables import is_hash_table
+    if is_hash_table(obj):
         return 'HASH-TABLE'
     if isinstance(obj, lisptype.Package):
         return 'PACKAGE'

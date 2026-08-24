@@ -444,6 +444,29 @@ without which the failures are harness artifacts rather than defects.
 
 ### The duplicate register — the one place a cluster argument still holds
 
+> **Updated 2026-08-24: 22 → 13.** The nine hash-table operators are resolved
+> — `lispfunc/hashtables.py` is deleted and `misc_hashtables.py` is the one
+> model. `hash-tables/` went **55.7% → 100%** (70 failing → 0), which is the
+> largest single-directory move this register has produced and the first
+> confirmation of its central claim. Two things about *how* it went are worth
+> more than the number:
+>
+> - **Deleting the dead copy was necessary and nowhere near sufficient.** The
+>   register predicted ~29 tests from `HASH-TABLE-P` alone; the actual cause of
+>   the other ~40 was that the *live* implementation had no key-equivalence
+>   model at all — `HashTableDict` was a `dict` whose `test` attribute nothing
+>   read, so the declared test was decoration and an EQUAL table could not find
+>   a list key it had just stored. A duplicate-registration entry names *where*
+>   two answers compete; it does not tell you the surviving answer is right.
+> - **The fix reached outside the directory**, which is the tail-mode signal
+>   §2 asks for. `(SETF GETHASH)` had **four** separate writers all doing
+>   `table[key] = value` on the raw dict, EQUALP had no hash-table clause
+>   (CLHS 5.3 — `data-and-control-flow`'s `equalp.21`–`.29`), LOOP's
+>   `being the hash-keys` error path raised a Python `TypeError` from its own
+>   `LispTypeError` call, and SXHASH's specified *return type* exposed three
+>   surviving copies of the fixnum boundary (see §1's note). None of those is
+>   in `hash-tables/`.
+
 **22 operators are registered from two different modules, and nothing said so
 until 2026-08-22.** `registry.cl_function` ends in
 `function_registry[lisp_name] = entry` — last writer wins, silently — so which
@@ -464,7 +487,7 @@ The gate is "no *new* duplicate"; the 23 in it are work.
 
 | duplicated operators | modules | what it plausibly costs |
 |---|---|---|
-| `MAKE-HASH-TABLE`, `GETHASH`, `REMHASH`, `CLRHASH`, `MAPHASH`, `HASH-TABLE-P/-COUNT/-SIZE/-TEST` (9) | `hashtables.py` (dead) vs `misc_hashtables.py` (live) | **confirmed:** `hashtables.py`'s `HASH-TABLE-P` tests `isinstance(obj, HashTable)` — its own dead class — and wins, so it answers **NIL** for the `HashTableDict` `MAKE-HASH-TABLE` actually returns. All 29 tests in `make-hash-table.lsp` open with `(notnot (hash-table-p ht))`; `hash-tables/` is at 55.7% |
+| ~~`MAKE-HASH-TABLE`, `GETHASH`, `REMHASH`, `CLRHASH`, `MAPHASH`, `HASH-TABLE-P/-COUNT/-SIZE/-TEST` (9)~~ | ~~`hashtables.py` (dead) vs `misc_hashtables.py` (live)~~ | **done 2026-08-24.** `hashtables.py` deleted; `misc_hashtables.py` is the one object model. The dead copy's `HASH-TABLE-P` was indeed answering NIL for every real table, but the *live* copy had no key-equivalence model either — see the note above. `hash-tables/` **55.7% → 100%** |
 | `MAKE-INSTANCE`, `CLASS-OF`, `FIND-CLASS`, `CALL-NEXT-METHOD`, `ENSURE-GENERIC-FUNCTION` (5) | `lispfunc/classes.py` vs `misc_clos.py` | the "two CLOS implementations" of [§5](#5-known-temporary-deviations), now enumerated. `objects/` 80.9%, and `ensure-generic-function.lsp` is 13 failing of 16 |
 | `MAKE-STRING-INPUT-STREAM`, `MAKE-STRING-OUTPUT-STREAM`, `GET-OUTPUT-STREAM-STRING` (3) | `io_read.py`/`io_write.py` vs `streams.py` | `streams/` 83.0% |
 | `GET-UNIVERSAL-TIME`, `DECODE-UNIVERSAL-TIME` (2) | `core.py` vs `utilities_system.py` | `environment/decode-universal-time.lsp` 13 of 14 failing, `environment/time.lsp` 8 of 8 |
@@ -1800,6 +1823,53 @@ have been worth making if nobody were counting.
   Without it, attributing a regression to a commit costs a second full run
   (`git stash`, re-run, diff by test *name*), because the baseline stores
   counts and not names. With it, attribution is a diff.
+
+#### Gate status at 2026-08-24 (hash-table work)
+
+`scripts/gate.py` fails on **4 files**, and none of them is attributable to
+the hash-table change. Recorded here rather than cleared, per
+[Ways to fake compliance](#ways-to-fake-compliance).
+
+- **Three were already failing the gate at HEAD** — `numbers/boole.lsp` (+2),
+  `numbers/oneminus.lsp` (+1), `streams/write-sequence.lsp` (+1). All three
+  are in the 08-22 table below already, and HEAD's *committed* checklist
+  carries the identical `(+N REGRESSION)` annotations, from the
+  `2026-08-24T11:25:48` merge. `streams` was not even in the target list of
+  the run that produced the current numbers.
+- **`types-and-classes/standard-generic-function.lsp` (baseline 1 → 2) is new
+  to the register and is not new breakage.** Attributed by direct measurement,
+  which is worth recording because the *cheap* comparison said the opposite:
+  - Run at HEAD in a sibling `git worktree` (so `../ansi-test` resolves), the
+    file fails **0 of 2** — exactly as it does now.
+  - Same runner, same directory: HEAD `passed=537 failed=82 registered=619`,
+    current `passed=538 failed=81 registered=619`. One test *better*, with the
+    registration count unchanged.
+  - The tests want `(sgf-cpl-gf.1 #'make-instance)` to be 1, i.e. dispatch to
+    the GENERIC-FUNCTION method. `#'make-instance` is a plain Python function
+    in both trees and `(typep #'make-instance 'generic-function)` is NIL in
+    both, so the answer is 2 in both. This is the absent class precedence list
+    ([§5](#5-known-temporary-deviations)) plus `MAKE-INSTANCE` not being a
+    generic function object — not the hash table.
+
+**Two measurement traps this cost time to, both worth avoiding next time.**
+
+1. **"Absent from the checklist" does not mean "zero failures".** It means no
+   failures were *attributed*, which conflates *passed* with *never ran*. A
+   per-file diff of two checklists that reads a missing key as 0 will
+   manufacture regressions. The baseline JSON had this file at **1**; the
+   merged checklist had it at 0; a targeted run says 2.
+2. **The annotation for a worse file is `(+N REGRESSION)`, not
+   `(+N since baseline)`** — that second wording is used for files that
+   *improved*. Grepping the generated checklist for "since baseline" to look
+   for regressions finds nothing and looks like a clean result. Use
+   `scripts/gate.py`, which reads the markers properly, rather than grepping
+   the artifact.
+
+Also worth knowing: **a targeted run of `types-and-classes` registers 619
+tests where the 08-22 full run recorded 545.** [§2](#keeping-the-checklist-current-without-a-full-run)
+says a targeted run "can register a slightly different test set"; a 74-test
+difference is not slight, and it means merged per-file counts for this
+directory are not comparable with full-run ones.
 
 #### Open regressions carried by the 2026-08-22 full run
 

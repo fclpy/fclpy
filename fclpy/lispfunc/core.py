@@ -208,15 +208,11 @@ def keywordp(object):
     return lisptype.lisp_bool(lisptype.is_keyword(object))
 
 
-@_registry.cl_function('HASH-TABLE-P')
-def hash_table_p(*args):
-    """Test if object is a hash table."""
-    if len(args) != 1:
-        raise lisptype.LispProgramError(
-            f"HASH-TABLE-P: wrong number of arguments (got {len(args)}, expected 1)"
-        )
-    obj = args[0]
-    return lisptype.lisp_bool(isinstance(obj, dict))
+# HASH-TABLE-P lives with the hash table object model it asks about, in
+# `misc_hashtables.py`. It was registered here *and* in the dead
+# `hashtables.py`, whose copy won on import order and tested its own unused
+# class -- so the predicate answered NIL for every table `MAKE-HASH-TABLE`
+# returns. Two registrations, one of them unreachable, is standing rule 3.
 
 
 from . import registry as _registry  # ensure decorator availability for new predicates

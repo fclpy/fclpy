@@ -9,6 +9,118 @@ Each entry is a *mechanism* landed, not a test count. Several also record a
 diagnosis that turned out to be **wrong**, and how; that is the part worth
 keeping, and the reason this is an archive rather than a deletion.
 
+- **2026-08-24** — **One hash table, and it honours its test.** `hash-tables/`
+  **70 failing of 158 → 0 (55.7% → 100%)**. `pytest` 2004 passed, 3 xfailed.
+  Nine duplicate registrations resolved (the register goes 22 → 13).
+
+  **1. The diagnosis in the duplicate register was right about the mechanism
+  and wrong about the size of it.** That table predicted ~29 tests from one
+  cause: `hashtables.py`'s `HASH-TABLE-P` tested `isinstance(obj, HashTable)`
+  — its own dead class — won on import order, and therefore answered NIL for
+  every table `MAKE-HASH-TABLE` returns, while `TYPEP` answered T for the same
+  object. All true. But deleting the dead module fixed about a third of the
+  directory, because **the surviving implementation had no key-equivalence
+  model at all.** `HashTableDict` was a `dict` subclass whose `test` was an
+  attribute *nothing ever read*, so keys were compared by Python's
+  `__eq__`/`__hash__` and the declared test was decoration:
+
+  | form | answered | should be |
+  |---|---|---|
+  | `(let ((h (make-hash-table :test 'equal))) (setf (gethash (list 1 2) h) 9) (gethash (list 1 2) h))` | **NIL** | 9 |
+  | `(let ((h (make-hash-table))) (setf (gethash "ab" h) 9) (gethash (copy-seq "ab") h))` | **9** | NIL |
+  | `(let ((h (make-hash-table))) (setf (gethash 1.0 h) 1) (gethash 1 h))` | **1** | NIL |
+
+  An EQUAL table could not find a key it had just stored; an EQL table behaved
+  like an EQUAL one; and `1` and `1.0` were the same key because Python says
+  `hash(1) == hash(1.0)`. Wrong *values*, silently, and invisible in review
+  because a Python dict is a convincing hash table. **The general lesson: a
+  duplicate-registration entry tells you where two answers compete, not that
+  the surviving answer is right.**
+
+  **2. The model buckets by a coarse surrogate and compares with the canonical
+  predicate.** `LispHashTable` is deliberately *not* a `dict` — being one is
+  what let every `table[key]` in the tree keep working and keep being wrong.
+  A lookup narrows to a bucket by a test-appropriate surrogate hash, then
+  decides membership by calling `comparison.py`'s `eq`/`eql`/`equal`/`equalp`.
+  So the equivalence relation a table implements *is* the Lisp predicate by
+  construction, rather than by a second copy being made to agree —
+  `hashtables.py`'s own `_compare_keys` ladder over Python `==` was that
+  second copy. The operative rule is **when in doubt, collide**: a surrogate
+  need only put equivalent keys in one bucket, so coarsening is free and a
+  missed collision is a wrong answer.
+
+  **3. `SXHASH` is the EQUAL surrogate, not a function beside it.** CLHS
+  18.2.2's "(equal x y) implies (= (sxhash x) (sxhash y))" is not a property to
+  test for afterwards — it is what makes an EQUAL table work — so they are one
+  function. It had been `hash(obj)` with a `hash(str(obj))` fallback, which
+  broke the contract for every aggregate EQUAL descends into and could return a
+  negative number where CLHS requires an `(and unsigned-byte fixnum)`. Falling
+  out of the contract: a symbol hashes by **name** only (`sxhash.13`/`.15`/`.23`
+  — two uninterned `FOO`s agree, and a symbol's hash survives its package being
+  deleted), a general array by **identity** (`sxhash.7` — EQUAL does not descend
+  into one, so mutating an element must not change its hash), and structural
+  hashing is **depth-bounded** because a key may be circular (`sxhash.16`).
+
+  **4. `(SETF GETHASH)` had four writers and none went through the table.**
+  `evaluation_core`'s SETF ladder, `_fclpy_setf_gethash`,
+  `get_setf_expansion`'s GETHASH branch and `evaluation_special_forms`'
+  getter/setter pair each did `table[key] = value` on the raw dict — so all
+  four bypassed the test even after the test existed, which is standing rule 3's
+  defect exactly: a fix that silently fails to apply. `puthash` is now the one
+  write and `entries()` the one traversal (a *snapshot*, because CLHS 18.2 lets
+  MAPHASH's and WITH-HASH-TABLE-ITERATOR's bodies remove entries while
+  traversing). The expansion also dropped GETHASH's optional *default* subform,
+  which CLHS 5.1.1.1 still requires be evaluated — `gethash.5` and
+  `gethash.order.4` count the evaluations.
+
+  **5. `GETHASH` returned one value.** It is `(values value present-p)`, and
+  with one value `present-p` was NIL for a key that was present holding NIL.
+  `hash-table-aux.lsp` asserts `(equal (multiple-value-list (gethash k table))
+  '(nil nil))` on every one of its 1000 iterations.
+
+  **6. `WITH-HASH-TABLE-ITERATOR` was a `cl_function` returning a Python
+  iterator** (standing rule 2) that took a table and ignored the body. It is a
+  macro binding a local **macro**, so it is now a `cl_macro` expanding to
+  `(LET ((#:s (%MAKE-HASH-TABLE-ITERATOR table))) (MACROLET ((name () '(...)))
+  (LOCALLY body...)))`. The `LOCALLY` is load-bearing — `MACROLET` evaluates a
+  `DECLARE` as a form — and the table form sits in the `LET` init position so a
+  body-level `(declare (special x))` cannot reach back into it
+  (`with-hash-table-iterator.12`). `WITH-PACKAGE-ITERATOR` is still the same
+  stub this was, and now has a template.
+
+  **7. `HASH-TABLE-SIZE` was an alias for `HASH-TABLE-COUNT`**, so
+  `(hash-table-size (make-hash-table :size 100))` answered 0. Making it a real
+  capacity surfaced a latent **hang** that no test would have caught: if the
+  threshold sets the growth *target*, `:rehash-threshold 0`
+  (`make-hash-table.16`) makes `size * threshold < count` unfalsifiable and
+  `:rehash-threshold least-positive-short-float` (`make-hash-table.26`) implies
+  a size around 10**45. Both tests pass either way — they insert nothing — so
+  this was waiting for the first program to store a key in such a table. The
+  threshold now decides *whether* to grow and the count decides *how far*.
+
+  **8. Three defects outside `hash-tables/`, which is the tail-mode signal.**
+  `EQUALP` had no hash-table clause (CLHS 5.3), which
+  `data-and-control-flow`'s `equalp.21`–`.29` test — and the subtlety there is
+  that "a key in the other table" is decided by *that table's* test, not by
+  EQUALP, so two EQ tables holding `#\a` and `#\A` are not EQUALP even though
+  EQUALP equates those characters. LOOP's `being the hash-keys` type-error path
+  called `LispTypeError(datum=..., message=...)` against a signature of
+  `(message, expected_type, actual_value)`, so it raised a Python `TypeError` —
+  standing rule 2, in the code written to prevent it. And SXHASH's specified
+  *return type* exposed the fixnum boundary below.
+
+  **9. The fixnum boundary had three surviving homes, and `typespec.py`'s
+  header already claimed it had one.** `comparison.typep` carried a local
+  `FIXNUM_MAX = 2**29 - 1`; `math_arithmetic`'s `MOST-POSITIVE-FIXNUM` a
+  `2**63 - 1` literal; `tests/test_big_integers.py` a third, commented
+  "matching the implementation" — and it did match, one of them. Consequences:
+  `(typep most-positive-fixnum 'fixnum)` was **NIL**, and TYPEP called 10**9 a
+  BIGNUM while SUBTYPEP called `(integer 0 1000000000)` a subtype of FIXNUM.
+  Found only because SXHASH must return a fixnum, so eight `sxhash` tests
+  failed on values that *were* in range. **A note asserting a constant has one
+  home is not the same as it having one**; the check that caught it was two
+  operators contradicting each other about the same object.
+
 - **2026-08-22** — **One ordinary lambda list.** `flet.lsp` + `labels.lsp` +
   `lambda.lsp` + `macrolet.lsp` **170 → 232 passing of 249** (79 → 17
   failures): FLET 34 → 1, LABELS 19 → 0, LAMBDA 18 → 8, MACROLET unchanged at

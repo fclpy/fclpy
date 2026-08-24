@@ -1113,12 +1113,23 @@ def eval(form, env=None):
                                     except (TypeError, IndexError) as e:
                                         raise lisptype.LispError(f"SETF ELT: {e}")
                             elif op_name == 'GETHASH':
+                                # Through the hash table's own write primitive,
+                                # which is what consults the table's test.
+                                # `table[key] = result` wrote a Python dict
+                                # entry, so an EQUAL table could not find the
+                                # key it had just stored.
+                                from .misc_hashtables import puthash
                                 key = eval(car(place_args), env)
                                 table = eval(car(cdr(place_args)), env)
-                                try:
-                                    table[key] = result
-                                except (TypeError, KeyError) as e:
-                                    raise lisptype.LispError(f"SETF GETHASH: {e}")
+                                # The optional default is a subform of the
+                                # place and is evaluated once, left to right,
+                                # even though the store ignores it
+                                # (CLHS 5.1.1.1; `gethash.order.4`).
+                                rest = cdr(cdr(place_args))
+                                while _consp_internal(rest):
+                                    eval(car(rest), env)
+                                    rest = cdr(rest)
+                                puthash(key, table, result)
                             elif op_name == 'SLOT-VALUE':
                                 obj = eval(car(place_args), env)
                                 slot_name = eval(car(cdr(place_args)), env)

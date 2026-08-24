@@ -163,7 +163,19 @@ happens to miss is still a defect (plan.md §5, and the final gate in §7).
   *nothing ever read*. They also disagreed on facts — `TYPEP` called an integer a
   FIXNUM below 2**29 while `MOST-POSITIVE-FIXNUM` answered 2**63-1, so
   `(typep most-positive-fixnum 'fixnum)` was false. `MOST_POSITIVE_FIXNUM` here is
-  now that constant's one home.
+  now that constant's one home — **and as of 2026-08-24 that is actually true**,
+  which it was not when the sentence was first written. Three copies survived
+  the consolidation and were found by an unrelated failure (SXHASH is specified
+  to return a fixnum, so every `sxhash` test that checked its result's *type*
+  failed on a value that was in range): a local `FIXNUM_MAX = 2**29 - 1` inside
+  `comparison.typep`, a `2**63 - 1` literal in `math_arithmetic`'s
+  `MOST-POSITIVE-FIXNUM`, and a third in `tests/test_big_integers.py` commented
+  "matching the implementation". All three now read this constant. The lesson is
+  the one standing rule 3 keeps teaching: *a note saying a constant has one home
+  is not the same as it having one*, and the way this pair was caught is that
+  TYPEP and SUBTYPEP contradicted each other about the same integer —
+  `(typep 1000000000 'bignum)` was T while
+  `(subtypep '(integer 0 1000000000) 'fixnum)` was T as well.
   The universe is partitioned into disjoint **sorts** (INTEGER, RATIO, FLOAT,
   COMPLEX, CHARACTER, SYMBOL, CONS, ARRAY, CLASS), each with a representation
   closed under union, intersection **and complement** — which is the requirement,
@@ -299,13 +311,50 @@ happens to miss is still a defect (plan.md §5, and the final gate in §7).
   them; the copies they replaced disagreed, because `Package.use_packages` holds
   package **names** as well as `Package` objects and a copy that read
   `external_symbols` off a string silently dropped every inherited symbol.
-- **Hash tables**: `MAKE-HASH-TABLE` returns `misc_hashtables.HashTableDict`, a
-  `dict` subclass whose test/size/rehash options are **attributes**. They used
-  to be `'__hashmeta__...'` *keys*, i.e. entries in the table, so every
-  traversal needed to know to skip them and only four did. Note there is still a
-  second, dead hash-table implementation (`lispfunc/hashtables.py`'s
-  `HashTable`) that registers the same operators and loses the registration —
-  standing rule 3, not yet resolved.
+- **Hash tables**: `lispfunc/misc_hashtables.py` — **the one hash-table object
+  model**, and the one home of every CLHS 18.2 operator. A hash table *is* its
+  test: two keys denote the same entry exactly when the table's test says they
+  are equivalent, and that is the property the module exists to hold.
+  `MAKE-HASH-TABLE` returns a `LispHashTable`, which is deliberately **not** a
+  `dict` subclass — being one is what let the previous implementation compare
+  keys with Python's `__eq__`/`__hash__` while its `test` attribute went
+  unread, so `:test 'equal` could not find a list key it had just stored,
+  `:test 'eql` matched two `equal` strings, and `(gethash 1 h)` found the value
+  stored under `1.0`. Ask `is_hash_table` rather than testing `isinstance`
+  (`HASH-TABLE-P`, `TYPEP`, `typespec`'s class cell and the printer all do, so
+  they cannot disagree — they did: `HASH-TABLE-P` answered NIL for the very
+  object `MAKE-HASH-TABLE` returns while `TYPEP` answered T). Three invariants:
+  - **A key is bucketed by a coarse surrogate, then compared with the canonical
+    predicate from `comparison.py`.** The equivalence relation a table
+    implements is therefore the Lisp predicate *by construction* — there is no
+    second copy of EQL to drift from it. `hashtables.py`'s `HashTable` was that
+    second copy (its own `_compare_keys` ladder over Python `==`) and is gone.
+  - **When in doubt, collide.** A surrogate must satisfy only "equivalent keys
+    share a bucket", so making it coarser is always safe; a *missed* collision
+    is a wrong answer. That is why a `Character` and a one-character Python
+    `str` hash alike (`comparison.eql` crosses them) and why anything
+    undecidable hashes by identity.
+  - **`SXHASH` is the EQUAL surrogate**, not a function beside it — CLHS
+    18.2.2's "(equal x y) implies (= (sxhash x) (sxhash y))" is what makes an
+    EQUAL table work at all, so the two are the same function. It follows that
+    a symbol hashes by *name* only, a general array by identity (EQUAL does not
+    descend into one), and structural hashing is depth-bounded because a key
+    may be circular.
+  **`puthash` is the one place an entry is written.** There were four, each
+  doing `table[key] = value` on the raw dict — `evaluation_core`'s SETF ladder,
+  `_fclpy_setf_gethash`, `get_setf_expansion`'s GETHASH branch and
+  `evaluation_special_forms`' getter/setter pair — so all four bypassed the
+  table's test even once the test existed. `entries()` is likewise the one
+  traversal, and it is a *snapshot* because CLHS 18.2 lets MAPHASH's and
+  WITH-HASH-TABLE-ITERATOR's bodies remove entries while traversing.
+  `WITH-HASH-TABLE-ITERATOR` is a `cl_macro` expanding to a `MACROLET` (it
+  defines a local *macro*, not a function); `%MAKE-HASH-TABLE-ITERATOR` and
+  `%HASH-TABLE-ITERATOR-NEXT` are its runtime. **`HASH-TABLE-SIZE` is a
+  capacity, not the count** — it was an alias for `HASH-TABLE-COUNT` — and
+  `_grow_if_needed` takes its growth *target* from the count rather than from
+  the threshold, because `:rehash-threshold 0` and
+  `:rehash-threshold least-positive-short-float` are both legal and neither
+  terminates if the threshold sets the target.
 - **Sequences**: `lispfunc/sequence_protocol.py` — **the one place that answers
   both halves of CLHS 17.1**: `seq_elements` (what are the elements of this Lisp
   sequence — `lispCons`, Python `list`/`tuple` vector, `LispString`, `str`,

@@ -168,6 +168,28 @@ def equalp(obj1, obj2):
         return lisptype.NIL
 
 
+    # Hash tables -- CLHS 5.3: two hash tables are EQUALP if they have the
+    # same test, the same number of entries, and for each key in one there is
+    # a key in the other whose value is EQUALP.
+    #
+    # "A key in the other" is decided by *that table's own test*, not by
+    # EQUALP, which is the whole subtlety and what `equalp.26`/`.28` measure:
+    # two EQ tables holding `#\a` and `#\A` are not EQUALP, because EQ does
+    # not equate those keys -- even though EQUALP itself would. So the lookup
+    # goes through the table, the one thing that knows its test.
+    from .misc_hashtables import is_hash_table
+    h1, h2 = is_hash_table(obj1), is_hash_table(obj2)
+    if h1 or h2:
+        if not (h1 and h2):
+            return lisptype.NIL
+        if obj1.test != obj2.test or obj1.count() != obj2.count():
+            return lisptype.NIL
+        for key, value in obj1.entries():
+            other, present = obj2.lookup(key)
+            if not present or equalp(value, other) != lisptype.T:
+                return lisptype.NIL
+        return lisptype.T
+
     # Vectors -- CLHS 5.3: two arrays are EQUALP if they have the same
     # dimensions and EQUALP elements. Which *Python* container holds those
     # elements is not part of the question, and testing `isinstance(x, list)`
@@ -214,10 +236,17 @@ def typep(object, type_specifier):
     from fractions import Fraction
     from .core import _consp_internal
     
-    # Constants for fixnum boundary (2^29 is common choice for 32-bit-like semantics)
-    FIXNUM_MAX = 2**29 - 1
-    FIXNUM_MIN = -2**29
-    
+    # The fixnum boundary, from its one home. This used to be a local
+    # `2**29 - 1`, a second copy of a constant `typespec.py` already owns --
+    # and the two disagreed by 34 bits, so `(typep most-positive-fixnum
+    # 'fixnum)` was NIL and `(typep 1000000000 'bignum)` was T while SUBTYPEP
+    # correctly answered that `(integer 0 1000000000)` is a subtype of FIXNUM.
+    # TYPEP contradicting SUBTYPEP about the same integer is standing rule 3;
+    # `typespec.py`'s own header records this constant being consolidated, and
+    # this was the copy it missed.
+    from fclpy.typespec import MOST_POSITIVE_FIXNUM as FIXNUM_MAX
+    from fclpy.typespec import MOST_NEGATIVE_FIXNUM as FIXNUM_MIN
+
     # Helper to convert list to Python list for iteration
     def list_to_pylist(lst):
         """Convert a Lisp list to a Python list."""
@@ -612,7 +641,13 @@ def typep(object, type_specifier):
         # 'restart))` regardless of what COMPUTE-RESTARTS actually returned.
         return lisptype.lisp_bool(isinstance(object, lisptype.Restart))
     elif type_name == 'HASH-TABLE':
-        return lisptype.lisp_bool(isinstance(object, dict))
+        # Asked of the same object model HASH-TABLE-P answers for, so the
+        # predicate and the type specifier cannot disagree. They did: this
+        # branch tested `isinstance(object, dict)` while the live
+        # `HASH-TABLE-P` tested a dead class, so `(typep ht 'hash-table)` was
+        # T and `(hash-table-p ht)` was NIL for the same object.
+        from .misc_hashtables import is_hash_table
+        return lisptype.lisp_bool(is_hash_table(object))
     elif type_name == 'RANDOM-STATE':
         from .utilities_system import RandomState
         return lisptype.lisp_bool(isinstance(object, RandomState))

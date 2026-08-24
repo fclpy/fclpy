@@ -517,6 +517,72 @@ def with_output_to_string_macro(spec, *body):
     )
 
 
+@_registry.cl_macro('WITH-HASH-TABLE-ITERATOR',
+                    documentation='WITH-HASH-TABLE-ITERATOR macro expander (CLHS 18.2)')
+def with_hash_table_iterator_macro(spec, *body):
+    """Macro expander for WITH-HASH-TABLE-ITERATOR (CLHS 18.2).
+
+    Transforms:
+      (WITH-HASH-TABLE-ITERATOR (name hash-table) body...)
+    into:
+      (LET ((#:state (%MAKE-HASH-TABLE-ITERATOR hash-table)))
+        (MACROLET ((name () '(%HASH-TABLE-ITERATOR-NEXT #:state)))
+          (LOCALLY body...)))
+
+    Three properties of that shape are the specification, not style.
+
+    **`name` becomes a local *macro*, not a function.** CLHS 18.2 defines it
+    as one, and `with-hash-table-iterator.9` checks it directly by asking
+    ``(macroexpand '(%x) env)`` to differ from ``(%x)``. It was previously
+    registered as a `cl_function` taking a table and returning
+    ``iter(table.items())`` -- a raw Python iterator as a Lisp value
+    (standing rule 2) -- which is a different operator wearing the name.
+
+    **The table form is evaluated in the `LET`'s init position**, i.e. outside
+    the body and before any of the body's declarations take effect. That is
+    what `with-hash-table-iterator.12` measures: a body-level
+    ``(declare (special x))`` must not reach back into the table form, so
+    ``(with-hash-table-iterator (m (return-from done x)) (declare (special
+    x)))`` sees the *lexical* X.
+
+    **The body is wrapped in `LOCALLY`** so leading `DECLARE` forms are
+    declarations rather than forms to evaluate (`.8`, `.8a`), an empty body
+    is NIL (`.1`), and the body's values pass through unmolested -- `.2`
+    returns *zero* values and `.3` returns four. `MACROLET` alone would
+    evaluate a `DECLARE` as a call.
+    """
+    from .utilities_symbols import gensym as _gensym_fn
+
+    var, rest = _binding_parts(spec)
+    table_form = rest[0] if rest else lisptype.NIL
+
+    state = _gensym_fn()
+    make_iterator = _cons_from(
+        [lisptype.LispSymbol('%MAKE-HASH-TABLE-ITERATOR'), table_form])
+    binding = _cons_from([state, make_iterator])
+
+    # The MACROLET body is *evaluated* to produce the expansion, so the form
+    # it must expand to has to be quoted.
+    next_call = _cons_from(
+        [lisptype.LispSymbol('%HASH-TABLE-ITERATOR-NEXT'), state])
+    macro_binding = _cons_from([
+        var,
+        lisptype.NIL,
+        _cons_from([lisptype.LispSymbol('QUOTE'), next_call]),
+    ])
+    macrolet = _cons_from([
+        lisptype.LispSymbol('MACROLET'),
+        _cons_from([macro_binding]),
+        _cons_from([lisptype.LispSymbol('LOCALLY')] + list(body)),
+    ])
+
+    return _cons_from([
+        lisptype.LispSymbol('LET'),
+        _cons_from([binding]),
+        macrolet,
+    ])
+
+
 @_registry.cl_macro('WITH-INPUT-FROM-STRING',
                     documentation='WITH-INPUT-FROM-STRING macro expander')
 def with_input_from_string_macro(spec, *body):
@@ -3057,8 +3123,8 @@ def _fclpy_setf_symbol_plist(sym, value):
 
 
 def _fclpy_setf_gethash(key, table, value):
-    table[key] = value
-    return value
+    from .misc_hashtables import puthash
+    return puthash(key, table, value)
 
 
 for _helper_name, _helper_fn in (
@@ -3173,11 +3239,17 @@ def get_setf_expansion(place, env):
         return temps, list(place_args), [store], store_form, access_form
 
     if op_name == 'GETHASH' and len(place_args) >= 2:
-        temps = [_gensym_fn(), _gensym_fn()]
+        # *Every* subform gets a temp, the optional default included. CLHS
+        # 5.1.1.1 evaluates a place's subforms left to right exactly once, and
+        # `place_args[:2]` dropped the default form -- so
+        # `(setf (gethash 'x table (incf i)) 'y)` never incremented I
+        # (`gethash.5`, `gethash.order.4`). The default takes no part in the
+        # *store*, but it is still a subform and must still be evaluated.
+        temps = [_gensym_fn() for _ in place_args]
         store = _gensym_fn()
         store_form = _setf_form('PROGN', _setf_form('%FCLPY-SETF-GETHASH', temps[0], temps[1], store), store)
-        access_form = _setf_form('GETHASH', temps[0], temps[1])
-        return temps, list(place_args[:2]), [store], store_form, access_form
+        access_form = _setf_form('GETHASH', *temps)
+        return temps, list(place_args), [store], store_form, access_form
 
     if op_name in ('SYMBOL-VALUE', 'SYMBOL-FUNCTION', 'SYMBOL-PLIST') and len(place_args) == 1:
         setter_name = {'SYMBOL-VALUE': '%FCLPY-SETF-SYMBOL-VALUE',
@@ -3521,9 +3593,14 @@ def _place_accessor(place_form, env):
             return (_get_getter, _get_setter)
 
         if op_name == 'GETHASH' and _consp_internal(place_args) and _consp_internal(cdr(place_args)):
+            # Both halves go through the hash table model: `table.get(...)`
+            # and `table[key] = v` were Python dict operations that ignored
+            # the table's test entirely.
+            from .misc_hashtables import puthash, gethash as _gethash
             key = eval(car(place_args), env)
             table = eval(car(cdr(place_args)), env)
-            return (lambda: table.get(key, lisptype.NIL), lambda v: _setitem_return(table, key, v))
+            return (lambda: lisptype.primary_value(_gethash(key, table)),
+                    lambda v: puthash(key, table, v))
 
         if op_name == 'FIND-CLASS' and _consp_internal(place_args):
             import fclpy.classes as _classes

@@ -2124,12 +2124,18 @@ def eval_loop(form, env):
                 # iterated lazily: the body may add to or remove from the table,
                 # and a live Python view would raise "dictionary changed size
                 # during iteration" as a Python error leaking into Lisp.
+                # Through the hash table model's own traversal, which is
+                # already a snapshot for exactly this reason. `hasattr(table,
+                # 'items')` accepted any Python mapping and rejected the real
+                # table once it stopped being a `dict`; worse, the raise
+                # itself passed `datum=`/`message=` to a `LispTypeError`
+                # whose signature is `(message, expected_type, actual_value)`,
+                # so the type error surfaced as a Python `TypeError` --
+                # standing rule 2, in the code meant to prevent it.
+                from .misc_hashtables import check_hash_table
                 table = eval(driver['list'], loop_env)
-                if not hasattr(table, 'items'):
-                    raise lisptype.LispTypeError(
-                        datum=table, expected_type='HASH-TABLE',
-                        message='LOOP BEING THE HASH-KEYS requires a hash table')
-                driver['_items'] = list(table.items())
+                check_hash_table(table, 'LOOP BEING THE HASH-KEYS')
+                driver['_items'] = table.entries()
                 driver['_idx'] = 0
                 return True
             if kind == 'for-being-package':

@@ -103,9 +103,19 @@ class TestBuiltInTypePredicates:
         assert lispfunc.typep(42, 'VECTOR') == lisptype.NIL
     
     def test_typep_hash_table(self):
-        """Test TYPEP for hash tables."""
-        ht = {'key1': 'value1', 'key2': 'value2'}
+        """Test TYPEP for hash tables.
+
+        A bare Python `dict` is *not* a Lisp hash table. This test used to
+        assert that it was, which is the defect it was written against: TYPEP
+        decided HASH-TABLE by `isinstance(obj, dict)` while HASH-TABLE-P asked
+        about a different class entirely, so the two disagreed about the very
+        object MAKE-HASH-TABLE returns. Both now ask
+        `misc_hashtables.is_hash_table`.
+        """
+        ht = lispfunc.make_hash_table()
         assert lispfunc.typep(ht, 'HASH-TABLE') == lisptype.T
+        assert lispfunc.hash_table_p(ht) == lisptype.T
+        assert lispfunc.typep({'a': 1}, 'HASH-TABLE') == lisptype.NIL
         assert lispfunc.typep([1, 2, 3], 'HASH-TABLE') == lisptype.NIL
     
     def test_typep_t(self):
