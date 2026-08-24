@@ -1,6 +1,7 @@
 """I/O write operations - stream output, printing, pathnames, and file operations."""
 
 import re
+from fractions import Fraction
 
 import fclpy.lisptype as lisptype
 from . import registry as _registry
@@ -858,8 +859,40 @@ def pprint_fill(stream, object, colon_p=None, at_sign_p=None):
 
 @_registry.cl_function('SET-PPRINT-DISPATCH')
 def set_pprint_dispatch(type_specifier, function, priority=0, table=None):
-    """Set pretty print dispatch."""
-    return None
+    """Set a pretty-print dispatch table entry (CLHS 22.2.1.4).
+
+    The dispatch table's *entries* are still not consulted by anything --
+    see `PprintDispatchTable`'s docstring, the pretty printer itself is
+    unimplemented -- but `priority` is a required argument type CLHS spells
+    out ("priority --- a real") independent of the rest of the mechanism
+    ever being finished, and skipping the check here was a silent-acceptance
+    path (CLAUDE.md standing rule 4): `set-pprint-dispatch.error.4`/`-unsafe`
+    hand every non-real in `*mini-universe*` through as `priority` and
+    require an error for each. `table` omitted defaults to the current
+    `*PRINT-PPRINT-DISPATCH*`, NIL denotes the standard table (the same
+    designator convention `COPY-PPRINT-DISPATCH` uses just above), matching
+    the entries list the docstring above says this operator writes.
+    """
+    if priority is None:
+        # Only a truly *omitted* argument defaults -- NIL is not "omitted"
+        # (CLAUDE.md's OMITTED-vs-NIL distinction): `priority` NIL must
+        # still fail the type check below, which is exactly what
+        # `set-pprint-dispatch.error.4`'s NIL element of `*mini-universe*`
+        # requires an error for.
+        priority = 0
+    if isinstance(priority, bool) or not isinstance(priority, (int, float, Fraction)):
+        raise lisptype.LispTypeError(
+            f"SET-PPRINT-DISPATCH: priority must be a real number, got {priority!r}",
+            expected_type="REAL", actual_value=priority)
+    if table is None or table is lisptype.NIL:
+        from .binding import dynamic_value
+        dispatch_table = dynamic_value(
+            lisptype.COMMON_LISP_PACKAGE.intern_symbol('*PRINT-PPRINT-DISPATCH*'),
+            default=standard_pprint_dispatch())
+    else:
+        dispatch_table = table
+    dispatch_table.entries.append((type_specifier, function, priority))
+    return lisptype.T
 
 
 # Format operations

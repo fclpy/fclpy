@@ -347,8 +347,15 @@ class LispArray:
 
     def __repr__(self):
         # The printed representation is the printer's job; this is for Python
-        # tracebacks only.
-        return (f"<LispArray {self.dimensions} of {self.element_type.name}"
+        # tracebacks only. `element_type` is one of NIL_TYPE/BIT_TYPE/
+        # CHARACTER_TYPE/T_TYPE (see `upgraded_element_type`), and NIL_TYPE is
+        # `lisptype.NIL`, a `lispNull` singleton with no `.name` -- unlike the
+        # other three, which are `LispSymbol`s. `(array nil (*))` reaching this
+        # unconditionally raised AttributeError instead of ever returning a
+        # string, which is what ansi-test's own universe of test objects
+        # includes one of.
+        type_name = getattr(self.element_type, 'name', 'NIL')
+        return (f"<LispArray {self.dimensions} of {type_name}"
                 f"{'' if self.fill_pointer is None else f' fp={self.fill_pointer}'}>")
 
     # --- growth, for the adjustable operators ---
