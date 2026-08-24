@@ -784,60 +784,12 @@ def boole_xor():
     return 12
 
 
-@_registry.cl_function('INTERNAL-TIME-UNITS-PER-SECOND')
-def internal_time_units_per_second():
-    """Internal time units per second."""
-    return 1000
-
-
-@_registry.cl_function('DECODE-UNIVERSAL-TIME')
-def decode_universal_time(universal_time, time_zone=None):
-    """Decode universal time."""
-    import time
-    t = time.gmtime(universal_time - 2208988800)  # Lisp epoch offset
-    return t.tm_sec, t.tm_min, t.tm_hour, t.tm_mday, t.tm_mon, t.tm_year, t.tm_wday, False, 0
-
-
-@_registry.cl_function('ENCODE-UNIVERSAL-TIME')
-def encode_universal_time(second, minute, hour, date, month, year, time_zone=None):
-    """Encode universal time."""
-    import time
-    t = (year, month, date, hour, minute, second, 0, 0, 0)
-    return int(time.mktime(t)) + 2208988800  # Lisp epoch offset
-
-
-@_registry.cl_function('GET-UNIVERSAL-TIME')
-def get_universal_time():
-    """Get current universal time."""
-    import time
-    return int(time.time()) + 2208988800  # Lisp epoch offset
-
-
-@_registry.cl_function('GET-INTERNAL-REAL-TIME')
-def get_internal_real_time():
-    """Get internal real time."""
-    import time
-    return int(time.time() * 1000)
-
-
-@_registry.cl_function('GET-INTERNAL-RUN-TIME')
-def get_internal_run_time():
-    """Get internal run time."""
-    import time
-    return int(time.process_time() * 1000)
-
-
-@_registry.cl_function('SLEEP')
-def sleep_fn(*args):
-    """Sleep for seconds."""
-    if len(args) != 1:
-        raise lisptype.LispProgramError(
-            f"SLEEP: wrong number of arguments (got {len(args)}, expected 1)"
-        )
-    seconds = args[0]
-    import time
-    time.sleep(seconds)
-    return None
+# The universal-time model (CLHS 25.1.4) lives in `utilities_system.py`, which
+# is its one home. This module used to carry a second copy of
+# DECODE-/ENCODE-/GET-UNIVERSAL-TIME, both internal-time clocks, SLEEP and
+# INTERNAL-TIME-UNITS-PER-SECOND; `registry.cl_function` is last-writer-wins,
+# so which of the two ran was decided by import order and neither implemented
+# the chapter. See that module's docstring.
 
 
 def standard_char_p(char):

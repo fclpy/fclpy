@@ -26,13 +26,75 @@ history is preserved in condensed form in [Changelog](docs/changelog.md).
 
 ## 1. Status
 
-**Latest full run: 2026-08-22. Just under 90% passing, and the suite is
-complete.**
+**Latest full run: 2026-08-24. Over 90% passing, and the suite is complete
+again — it was not, on the committed tree, for the two commits before this.**
 
 ```
-COMPLETENESS: total=22132 passed=19703 failed=2429 accounted=22132 missing=0 extra=0
+COMPLETENESS: total=21881 passed=19779 failed=2102 accounted=21881 missing=0 extra=0
 COMPLETENESS: OK
 ```
+
+| | value | previous full run (2026-08-22) |
+|---|---|---|
+| Registered tests | 21881 | 22132 |
+| Executed (`accounted`) | **21881 (100%)** | 22132 (100%) |
+| Passed | **19779 (90.4%)** | 19703 (89.0%) |
+| Failed | **2102** | 2429 |
+| Never executed | **0** | 0 |
+| Wall time | ~131 minutes | ~125 minutes |
+
+> ### ⚠️ `ae7e4ca` and the two runs that reported nothing
+>
+> **The committed tree at `ae7e4ca` ("Repaired hash tables") ran _zero_ tests**,
+> and said so only in the completeness line:
+>
+> ```
+> COMPLETENESS: total=20612 passed=0 failed=0 accounted=0 missing=20612 extra=0
+> Error loading file '...ansi-test\doit.lsp': CADR: invalid structure
+> ```
+>
+> `ae7e4ca` did not introduce the defect — it made GETHASH return its
+> specified *two* values (CLHS 18.2) and thereby exposed one that had been
+> latent for as long as `BindingFrame` has existed: **a binding held the
+> `MultipleValues` wrapper instead of the primary value**, so
+> `(let ((x (floor 7 2))) x)` answered `#<MULTIPLEVALUES 3 1>`. RT's
+> `add-entry` is `(let* ((pred (gethash ...))) ... (setf (cadr pred) entry))`,
+> so `pred` was the wrapper and the SETF signalled. `init.lsp` loads the test
+> files through the Lisp `LOAD`, which propagates, so the whole suite aborted
+> at load. Fixed in `binding.BindingFrame.bind` — the one place every binding
+> form goes through.
+>
+> **Three lessons, in descending order of how much they cost:**
+>
+> 1. **`ae7e4ca` was committed without a full run.** `scripts/run_ansi.py`
+>    starts at `gclload1.lsp` and *stands in for* `gclload2.lsp` (its own
+>    comment says so), so it never loads `init.lsp` and every targeted run
+>    looked healthy. This is the asymmetry CLAUDE.md already names as the one
+>    thing the targeted loop structurally cannot verify — and the operator
+>    list it gives (APPEND/DIRECTORY/MAPC/…) is **not** the whole exposure:
+>    the trigger here was GETHASH plus variable binding.
+> 2. **A run can look finished and be a fraud.** Exit code 0, a normal
+>    "Results written to…", and RT's own `N failures … out of 21881 tests`
+>    line all print regardless. Only `COMPLETENESS:` and `accounted == total`
+>    distinguish them, which is why merging a run into the checklist must be
+>    gated on `unaccounted == 0`.
+> 3. **A single test can end the run.** RT's `do-entries` iterates with
+>    `DOLIST`, which establishes an implicit NIL block, so *any* stray
+>    `(return ...)` escaping a test is caught there and silently truncates the
+>    suite — no error, no diagnostic, just a short run. `loop.13.9` did
+>    exactly this (see [§7](#preventing-regression)).
+>
+> **Registered tests fell 22132 → 21881 (−251) and that is not yet
+> explained.** The per-file attribution in `docs/ansi_checklist.md` is
+> unchanged directory for directory, so the difference is in the
+> load-time-*generated* population, and `reader/set-syntax-from-char.lsp`
+> alone now logs 27 `Redefining test` warnings (a redefinition replaces an
+> entry rather than adding one). That accounts for a fraction, not all, of it.
+> Treat `total` as an outcome — but a *fall* wants explaining, where a rise
+> usually does not.
+
+<details>
+<summary>Previous full run (2026-08-22), kept for the analysis it carries — note its numbers were the last ones measured before <code>ae7e4ca</code> stopped the suite running at all</summary>
 
 | | value | previous full run (2026-08-18) |
 |---|---|---|
@@ -91,6 +153,9 @@ mechanism rather than by many separate bugs.
 > `ansi_results/merges.log`. Every number in it is therefore from one
 > self-consistent run — including the cross-session merge of 2026-08-22T13:23,
 > which was made against a half-edited tree and is now gone.
+
+</details>
+
 
 <details>
 <summary>Previous full run (2026-08-18), kept for the analysis it carries</summary>
@@ -237,46 +302,51 @@ the subsystems where one absent mechanism fails everything downstream of it.
 
 </details>
 
-### Per-directory scoreboard (2026-08-22 full run, complete)
+### Per-directory scoreboard (2026-08-24 full run, complete)
 
 Ordered by failures. Regenerate from `docs/ansi_checklist.md`, which is
 generated from this run's raw output.
 
 | directory | failed | total | pass rate |
 |---|---|---|---|
-| printer | 203 | 788 | 74.2% |
-| numbers | 157 | 1438 | 89.1% |
-| objects | 155 | 824 | 81.2% |
-| iteration | 140 | 838 | 83.3% |
-| data-and-control-flow | 101 | 1420 | 92.9% |
+| printer | 201 | 788 | 74.5% |
+| objects | 149 | 824 | 81.9% |
+| numbers | 118 | 1438 | 91.8% |
+| iteration | 110 | 838 | 86.9% |
 | streams | 93 | 547 | 83.0% |
-| strings | 89 | 501 | 82.2% |
-| environment | 81 | 192 | **57.8%** |
-| packages | 79 | 340 | 76.8% |
-| structures | 78 | 115 | **32.2%** |
+| strings | 88 | 501 | 82.4% |
+| data-and-control-flow | 83 | 1420 | 94.2% |
+| packages | 78 | 340 | 77.1% |
+| structures | 77 | 115 | 33.0% |
 | sequences | 72 | 3158 | 97.7% |
-| hash-tables | 70 | 158 | **55.7%** |
 | reader | 55 | 165 | 66.7% |
-| eval-and-compile | 50 | 318 | 84.3% |
+| eval-and-compile | 45 | 318 | 85.8% |
 | types-and-classes | 40 | 545 | 92.7% |
 | symbols | 29 | 1145 | 97.5% |
-| misc | 26 | 740 | 96.5% |
+| misc | 25 | 740 | 96.6% |
 | conditions | 21 | 303 | 93.1% |
-| cons | 18 | 1638 | 98.9% |
-| files | 18 | 87 | 79.3% |
-| characters | 17 | 259 | 93.4% |
-| arrays | 14 | 1245 | 98.9% |
-| pathnames | 1 | 215 | **99.5%** |
-| auxiliary | 0 | 2 | **100%** |
-| system-construction | 0 | 75 | **100%** |
+| files | 17 | 87 | 80.5% |
+| cons | 14 | 1638 | 99.1% |
+| arrays | 12 | 1245 | 99.0% |
+| characters | 8 | 259 | 96.9% |
+| environment | 8 | 192 | 95.8% |
+| pathnames | 1 | 215 | 99.5% |
+| auxiliary | 0 | 2 | 100.0% |
+| hash-tables | 0 | 158 | 100.0% |
+| system-construction | 0 | 75 | 100.0% |
 
-**The three worst *rates* each have a named cause, and none of them is "many
-small bugs".** `hash-tables` (55.7%) is nine operators registered twice, with
-the dead `hashtables.py` copy winning `HASH-TABLE-P` — see
-[the duplicate register](#the-duplicate-register--the-one-place-a-cluster-argument-still-holds).
-`environment` (57.8%) is `GET-UNIVERSAL-TIME`/`DECODE-UNIVERSAL-TIME`
-duplicated plus `TIME` absent. `structures` (32.2%) is the one that is
-genuinely a subsystem gap ([C4](#c4-defstruct-generates-no-accessors-and-no-class)).
+**`hash-tables` is at 100%, and `environment` went 57.8% -> 95.8%** — the two
+directories the duplicate register named. `system-construction`, `auxiliary`
+and `hash-tables` are complete; `pathnames` is one test from it.
+
+**`printer` is now the constraint on its own**, at 201 of the 2102 remaining
+failures and holding all twelve of the largest failing files. `structures`
+(33.0%) remains the one genuine subsystem gap
+([C4](#c4-defstruct-generates-no-accessors-and-no-class)).
+
+**Tail mode still holds, and has tightened**: 308 files contain failures, the
+median failing file has **3**, the largest is **62 (4.6% of the remainder)**,
+and only **17 files / 82 tests** fail 100% (was 20 files / 132 tests).
 
 
 ---
@@ -444,7 +514,7 @@ without which the failures are harness artifacts rather than defects.
 
 ### The duplicate register — the one place a cluster argument still holds
 
-> **Updated 2026-08-24: 22 → 13.** The nine hash-table operators are resolved
+> **Updated 2026-08-24: 22 → 11.** The nine hash-table operators are resolved
 > — `lispfunc/hashtables.py` is deleted and `misc_hashtables.py` is the one
 > model. `hash-tables/` went **55.7% → 100%** (70 failing → 0), which is the
 > largest single-directory move this register has produced and the first
@@ -490,7 +560,7 @@ The gate is "no *new* duplicate"; the 23 in it are work.
 | ~~`MAKE-HASH-TABLE`, `GETHASH`, `REMHASH`, `CLRHASH`, `MAPHASH`, `HASH-TABLE-P/-COUNT/-SIZE/-TEST` (9)~~ | ~~`hashtables.py` (dead) vs `misc_hashtables.py` (live)~~ | **done 2026-08-24.** `hashtables.py` deleted; `misc_hashtables.py` is the one object model. The dead copy's `HASH-TABLE-P` was indeed answering NIL for every real table, but the *live* copy had no key-equivalence model either — see the note above. `hash-tables/` **55.7% → 100%** |
 | `MAKE-INSTANCE`, `CLASS-OF`, `FIND-CLASS`, `CALL-NEXT-METHOD`, `ENSURE-GENERIC-FUNCTION` (5) | `lispfunc/classes.py` vs `misc_clos.py` | the "two CLOS implementations" of [§5](#5-known-temporary-deviations), now enumerated. `objects/` 80.9%, and `ensure-generic-function.lsp` is 13 failing of 16 |
 | `MAKE-STRING-INPUT-STREAM`, `MAKE-STRING-OUTPUT-STREAM`, `GET-OUTPUT-STREAM-STRING` (3) | `io_read.py`/`io_write.py` vs `streams.py` | `streams/` 83.0% |
-| `GET-UNIVERSAL-TIME`, `DECODE-UNIVERSAL-TIME` (2) | `core.py` vs `utilities_system.py` | `environment/decode-universal-time.lsp` 13 of 14 failing, `environment/time.lsp` 8 of 8 |
+| ~~`GET-UNIVERSAL-TIME`, `DECODE-UNIVERSAL-TIME` (2)~~ | ~~`core.py` vs `utilities_system.py`~~ | **done 2026-08-24.** `utilities_system.py` is the one home of the universal-time model (CLHS 25.1.4) and `core.py`'s five time operators are deleted. The register understated it: the copy that *won* on import order took **no `time-zone` argument at all**, so every test passing one got a Python `TypeError`, and the loser's ENCODE went through `time.mktime` (local-zone, and out of range before 1970). `environment/` **57.8% -> 95.8%** |
 | `ERROR` | `io_write.py`(!) vs `utilities_errors.py` | `ERROR` is the condition system's entry point; which one runs decides whether a raise site signals |
 | `FILE-WRITE-DATE` | `io_write.py` vs `pathnames.py` | |
 | `GRAPHIC-CHAR-P` | `characters.py` vs `core.py` | |
@@ -514,14 +584,17 @@ the suite failing, a small number of core mechanisms binds most of the
 failures, so a fix that only moves the file you targeted is suspect. Measured
 against the live checklist, that premise no longer holds:
 
-| | 2026-08-16 | 2026-08-22 |
-|---|---|---|
-| failing tests | 7341 | **2522** |
-| files containing failures | — | 363 |
-| median failures per failing file | — | **3** |
-| files with ≤3 failures | — | **217 of 363** |
-| largest single failing file | — | **62 (3.6% of the remainder)** |
-| files failing **100%** | 49 files / 493 tests | **20 files / 132 tests** |
+| | 2026-08-16 | 2026-08-22 | 2026-08-24 |
+|---|---|---|---|
+| failing tests | 7341 | 2522 | **2102** |
+| files containing failures | — | 363 | 308 |
+| median failures per failing file | — | 3 | **3** |
+| largest single failing file | — | 62 (3.6% of the remainder) | **62 (4.6%)** |
+| files failing **100%** | 49 files / 493 tests | 20 files / 132 tests | **17 files / 82 tests** |
+
+**The largest file is a larger *share* of a smaller remainder**, which is the
+shape tail mode predicts: nothing is left to lead with, and `printer` holds all
+twelve of the biggest files.
 
 Regenerate any of those:
 
@@ -1871,7 +1944,35 @@ says a targeted run "can register a slightly different test set"; a 74-test
 difference is not slight, and it means merged per-file counts for this
 directory are not comparable with full-run ones.
 
-#### Open regressions carried by the 2026-08-22 full run
+#### Open regressions carried by the 2026-08-24 full run
+
+**Three files, +5 tests, against the committed baseline — and none of them is
+from this run's work.** Verified by running the three files on this tree and on
+`ae7e4ca` in a `git worktree`: **99 passed / 26 failed on both**, identically.
+They entered with `34fc95f`/`ae7e4ca`, and the checklist header's own merge log
+shows a previous session touching exactly these three files.
+
+| file | baseline | now | Δ |
+|---|---|---|---|
+| `numbers/boole.lsp` | 8 | 10 | +2 |
+| `cons/nintersection.lsp` | 2 | 4 | +2 |
+| `streams/write-sequence.lsp` | 6 | 7 | +1 |
+
+**The baseline was not refreshed.** Under
+[Ways to fake compliance](#ways-to-fake-compliance) it may be refreshed only
+once a regression is understood *and* accepted in writing or fixed. These three
+are now understood and attributed, but attributing a regression is not the same
+as accepting it, and `--save-baseline` is the maintainer's call — it is
+committed precisely so that moving it shows up in `git diff` as the reviewable
+event it is. `scripts/gate.py` will keep reporting them until then. That is
+intended.
+
+**The six files carried by the 2026-08-22 run are no longer reported**, since
+this run supersedes those counts; if any of them mattered, the diff to check is
+against the same committed baseline, not against the 08-22 numbers.
+
+<details>
+<summary>Open regressions carried by the 2026-08-22 full run (superseded)</summary>
 
 **Six files, +17 tests, against the 2026-08-18 baseline — which was
 deliberately *not* refreshed.** Under
@@ -1904,6 +2005,8 @@ bugs.
 writes its `(+N REGRESSION)` markers *into the generated checklist* and exits
 0 regardless, so the obvious gate — inspect the command's exit status — passed
 unconditionally. Six regressed files had been sitting in a file nothing read.
+
+</details>
 
 #### Open regressions carried by the 2026-08-18 (b) full run
 

@@ -138,6 +138,33 @@ def coerce_to_package(designator, default=None):
     return pkg
 
 
+def all_packages():
+    """Every package that currently exists, as a Python list -- the one enumerator.
+
+    `state.packages` is *not* the package registry: COMMON-LISP,
+    COMMON-LISP-USER and KEYWORD are module-level constants in
+    `lisptype_extended`, and `find_package` special-cases their names before it
+    consults `state.packages` at all. So a caller that enumerated
+    `state.packages` saw only the packages a program had created -- which is
+    why `LIST-ALL-PACKAGES` omitted the three packages every program uses, and
+    why `(apropos-list "CAR")` with no package argument could not find CL:CAR
+    while `(apropos-list "CAR" "CL")` found it.
+
+    One enumerator, so a *lookup* and an *enumeration* cannot disagree about
+    which packages exist. Deduplicated by identity, since `state.packages` is
+    keyed by name *and* nickname and holds the same object under several keys.
+    """
+    found = {}
+    for pkg in (lisptype.COMMON_LISP_PACKAGE,
+                lisptype.COMMON_LISP_USER_PACKAGE,
+                lisptype.KEYWORD_PACKAGE):
+        found[id(pkg)] = pkg
+    for pkg in list((getattr(state, 'packages', None) or {}).values()):
+        if isinstance(pkg, lisptype.Package):
+            found[id(pkg)] = pkg
+    return list(found.values())
+
+
 def package_symbols(package, kind):
     """The symbols of `package` that `kind` names, as a Python list.
 
@@ -323,9 +350,12 @@ def package_internal_symbols(package):
 
 @_registry.cl_function('LIST-ALL-PACKAGES')
 def list_all_packages():
-    """List all known packages."""
-    unique = {id(p): p for p in state.packages.values()}
-    return _lisp_list(unique.values())
+    """LIST-ALL-PACKAGES (CLHS 11.2) -- every package, through `all_packages`.
+
+    It used to read `state.packages` directly and so omitted COMMON-LISP,
+    COMMON-LISP-USER and KEYWORD; see `all_packages`.
+    """
+    return _lisp_list(all_packages())
 
 
 @_registry.cl_function('UNINTERN')

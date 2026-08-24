@@ -2458,11 +2458,12 @@ def eval_defconstant(form, env):
             name.plist['DOCUMENTATION'] = docstring
             name.plist['VARIABLE-DOCUMENTATION'] = docstring
     
-    # Mark as constant in global environment
-    if not hasattr(global_env, '_constants'):
-        global_env._constants = {}
-    global_env._constants[name.name] = True
-    
+    # Record that the name is constant, through the one table CONSTANTP reads.
+    # This used to write a private `global_env._constants` dict that nothing
+    # ever consulted, so `(constantp 'a-defconstant-name)` was NIL.
+    from .binding import proclaim_constant
+    proclaim_constant(name, global_env)
+
     return name
 
 

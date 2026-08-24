@@ -154,6 +154,61 @@ def is_proclaimed_special(var, env):
     return bool(specials) and name in specials
 
 
+def proclaim_constant(var, env):
+    """Record that `var` names a constant variable (CLHS 3.1.2.1.1.3), and return it.
+
+    The one writer of the table `is_constant_variable` reads -- DEFCONSTANT and
+    the bootstrap's standard constants (`lispenv`'s PI, MOST-POSITIVE-FIXNUM,
+    INTERNAL-TIME-UNITS-PER-SECOND and the float limits) both come through
+    here. A constant variable is also special, so the proclamation is made
+    too rather than left to whoever establishes the value.
+
+    DEFCONSTANT used to write a private ``global_env._constants`` dict keyed by
+    name that **nothing ever read**, and `lispenv` established its constants as
+    plain global variables with no record at all -- so `CONSTANTP` answered NIL
+    for `PI` and for every DEFCONSTANT'd symbol, and the bootstrap's
+    INTERNAL-TIME-UNITS-PER-SECOND was not even a variable (it was registered
+    as a *function*, so the symbol evaluated to a Python function object).
+    That is the same shape as DEFTYPE's expander store before `typespec`: a
+    store with a writer and no reader is indistinguishable from an absent
+    mechanism.
+    """
+    name = _symbol_name(var)
+    if name is None:
+        raise lisptype.LispNotImplementedError(
+            f"cannot proclaim {var} constant: a variable must be a symbol")
+    proclaim_special(var, env)
+    root = root_environment(env)
+    constants = getattr(root, '_constant_variables', None)
+    if constants is None:
+        constants = {}
+        root._constant_variables = constants
+    constants[name] = True
+    return var
+
+
+def is_constant_variable(var, env=None):
+    """Does `var` name a constant variable?
+
+    Only the root environment is consulted, for the same reason
+    `is_proclaimed_special` consults only the root: being constant is a global
+    property of the name, not of the form it is read in. `env` may be omitted,
+    in which case the live global environment is used -- CONSTANTP's
+    `environment` argument is a *lexical* environment and says nothing about
+    which names are constant.
+    """
+    name = _symbol_name(var)
+    if name is None:
+        return False
+    if env is None:
+        import fclpy.state as state
+        env = getattr(state, 'current_environment', None)
+        if env is None:
+            return False
+    constants = getattr(root_environment(env), '_constant_variables', None)
+    return bool(constants) and name in constants
+
+
 def dynamic_value(symbol, default=None):
     """The current value of a dynamic variable, read from Python.
 
@@ -304,6 +359,30 @@ class BindingFrame:
             raise lisptype.LispNotImplementedError(
                 f"cannot bind {var}: a variable must be a symbol")
         name = var.name
+
+        # A variable holds exactly one value, so an init form's result is read
+        # in a single-value context (CLHS 2.4.1/5.1.3) -- and this is the one
+        # place every binding form goes through, so it is the one place the
+        # rule needs stating. Without it a `MultipleValues` *object* became the
+        # binding's value (standing rule 2): `(let ((x (floor 7 2))) x)`
+        # answered `#<MULTIPLEVALUES 3 1>` rather than 3.
+        #
+        # That was not a cosmetic leak -- it broke the entire ansi-test
+        # bootstrap. RT's `add-entry` reads
+        #
+        #     (let* ((pred (gethash (name entry) *entries-table*)))
+        #       (cond (pred (setf (cadr pred) entry) ...)))
+        #
+        # so once GETHASH correctly returned its specified *two* values
+        # (CLHS 18.2), `pred` was bound to the wrapper instead of to the cons
+        # and `(setf (cadr pred) entry)` signalled "CADR: invalid structure".
+        # `init.lsp` loads the test files through the Lisp LOAD, which
+        # propagates, so the whole suite aborted at load with **0 tests run** --
+        # and `scripts/run_ansi.py` never loads `init.lsp`, so no targeted run
+        # could see it. FLOOR has always returned two values, so the defect
+        # was latent for as long as this frame has existed; making GETHASH
+        # conform is what exposed it.
+        value = lisptype.primary_value(value)
 
         # Already bound by this frame: assign, never establish a second one.
         if name in self._dynamic:

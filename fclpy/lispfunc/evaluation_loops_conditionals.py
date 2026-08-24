@@ -2,6 +2,14 @@
 
 import fclpy.lisptype as lisptype
 from .core import car, cdr, _consp_internal, _null_internal, cons
+
+
+def _list_from(elements):
+    """A Lisp list from a Python sequence -- NIL when empty."""
+    result = lisptype.NIL
+    for element in reversed(list(elements)):
+        result = cons(element, result)
+    return result
 from . import registry as _registry
 from .binding import BindingFrame, body_specials, special_reference
 import time
@@ -1321,43 +1329,57 @@ def eval_prog_star(form, env):
 
 
 def eval_time(form, env):
-    """Evaluate TIME special form.
-    
-    TIME evaluates the form and prints timing information to *TRACE-OUTPUT*.
-    Returns the result of evaluating the form.
-    
-    Usage: (TIME form)
+    """TIME (CLHS 25.1.3): evaluate `form`, report timing, return its values.
+
+    Two things here are the specification rather than presentation.
+
+    **The report goes to `*TRACE-OUTPUT*`**, through `io_write.write_text` --
+    the one place text is written to a Lisp stream. It used to go to Python's
+    `sys.stderr` with `print()`, which is not a Lisp stream at all, so
+    `(with-output-to-string (*trace-output*) (time nil))` captured the empty
+    string and all eight of `environment/time.lsp`'s tests -- every one of
+    which asserts the captured string is *non*-empty -- could not pass however
+    TIME behaved. The same defect the printer had before
+    `resolve_output_stream` existed.
+
+    **All of the form's values are returned**, not just the primary one: the
+    result of `eval` is passed straight through, so `(time (values))` yields no
+    values and `(time (values 'a 'b 'c 'd))` yields four.
+
+    A missing subform is a PROGRAM-ERROR rather than a quiet NIL -- `(time)` is
+    not a legal form, and answering NIL for it makes a malformed program look
+    like a working one (standing rule 4).
     """
     from .evaluation_core import eval
-    
+    from .io_write import write_text
+    from .binding import dynamic_value
+
     args = cdr(form)
     if not _consp_internal(args):
-        return lisptype.NIL
-    
+        raise lisptype.LispProgramError("TIME requires exactly one form")
+    if _consp_internal(cdr(args)):
+        raise lisptype.LispProgramError(
+            "TIME requires exactly one form, not several")
+
     form_to_time = car(args)
-    
-    # Record start time (using process time for execution time)
-    start_real = time.time()
+
+    start_real = time.perf_counter()
     start_cpu = time.process_time()
-    
-    # Evaluate the form
-    result = eval(form_to_time, env)
-    
-    # Record end time
-    end_real = time.time()
-    end_cpu = time.process_time()
-    
-    # Calculate elapsed times
-    real_elapsed = end_real - start_real
-    cpu_elapsed = end_cpu - start_cpu
-    
-    # Print timing info (like SBCL format) to stderr (*TRACE-OUTPUT*)
-    # Convert to seconds with 3 decimal places
-    print(f"Evaluation took:", file=sys.stderr)
-    print(f"  {cpu_elapsed:.6f} seconds of CPU time", file=sys.stderr)
-    print(f"  {real_elapsed:.6f} seconds of real time", file=sys.stderr)
-    
-    return result
+    try:
+        return eval(form_to_time, env)
+    finally:
+        # In a `finally`, so a non-local exit out of the timed form -- a
+        # RETURN-FROM, a THROW, a signalled condition -- still reports. Both
+        # clocks are monotonic, so an elapsed time is never negative.
+        real_elapsed = time.perf_counter() - start_real
+        cpu_elapsed = time.process_time() - start_cpu
+        trace_output = dynamic_value(
+            lisptype.COMMON_LISP_PACKAGE.intern_symbol('*TRACE-OUTPUT*'))
+        write_text(
+            f"Evaluation took:\n"
+            f"  {real_elapsed:.6f} seconds of real time\n"
+            f"  {cpu_elapsed:.6f} seconds of total run time\n",
+            trace_output)
 
 
 def eval_loop(form, env):
@@ -1502,7 +1524,6 @@ def eval_loop(form, env):
 
     initially_forms = []  # INITIALLY prologue, run once before the first iteration
     finally_forms = []
-    return_form = None  # RETURN clause form to evaluate during loop
     finally_return_form = None  # RETURN clause in FINALLY section (evaluated at end)
     loop_block_name = None  # NIL unless a NAMED clause gives the loop its own block name
 
@@ -1822,13 +1843,49 @@ def eval_loop(form, env):
             accumulations.append(clause)
 
         elif name == 'RETURN':
-            # Store return form for evaluation during loop execution
-            if i + 1 < len(forms):
-                return_form = forms[i+1]
-                i += 2
-            else:
-                i += 1
-            
+            # CLHS 6.1.5.3: `return expr` **is** `do (return expr)`, so it is
+            # parsed as an ordinary body clause containing a RETURN form. That
+            # is not a shortcut -- it is what gives the clause every property
+            # the standard assigns it, for free and without a second copy of
+            # any of them:
+            #
+            # - its WHEN/UNLESS guards apply, because `add_body_clause` takes
+            #   the pending conditionals. As its own mechanism it ignored them
+            #   completely, so `when (= x 2) return (* x 10)` returned on the
+            #   *first* iteration and answered 10;
+            # - several RETURN clauses in one loop all survive, where a single
+            #   `return_form` slot kept only the last one parsed;
+            # - it leaves through the loop's implicit NIL block, so the
+            #   epilogue does not run and an accumulation clause cannot
+            #   override the value.
+            # The block it returns from is the *loop's own* block, which a
+            # NAMED clause renames -- so this is `RETURN-FROM <loop-block>`,
+            # not `RETURN`. The two are not the same thing, and `loop13.lsp`
+            # pins the difference down with a pair of tests::
+            #
+            #   (loop named foo return 'a)                        => A
+            #   (block nil (loop named foo do (return :good)) :bad) => :GOOD
+            #
+            # The first shows the `return` *clause* returning from FOO; the
+            # second shows a `(return ...)` written inside a `do` clause
+            # meaning `(return-from nil ...)` and escaping the named loop
+            # entirely. Emitting `RETURN` here made the clause behave like the
+            # second: in a NAMED loop the NIL-tagged transfer sailed past
+            # `_run_with_nil_block` (which is watching for FOO) and was caught
+            # by whatever enclosing NIL block happened to be running -- for
+            # ansi-test that is RT's own `do-entries` DOLIST, so `loop.13.9`
+            # silently *ended the test run*, losing every test after it.
+            #
+            # CLHS 6.1.1.4 requires NAMED to be the loop's first clause, so
+            # `loop_block_name` is already known here.
+            block_name = (loop_block_name if loop_block_name is not None
+                          else lisptype.NIL)
+            return_args = [forms[i+1]] if i + 1 < len(forms) else []
+            add_body_clause([cons(lisptype.LispSymbol('RETURN-FROM'),
+                                  _list_from([block_name] + return_args))])
+            i += 2 if return_args else 1
+
+
         elif name == 'FINALLY':
             i += 1
             while i < len(forms) and sym_name(forms[i]) not in LOOP_CLAUSE_KEYWORDS:
@@ -1860,8 +1917,24 @@ def eval_loop(form, env):
             i += 1
     
     # Execute the loop
-    result = None
-    return_triggered = False  # Flag for when RETURN is executed
+    #
+    # CLHS 6.1.1.4 gives the LOOP form exactly four possible values, and every
+    # one of them comes from a clause that *names* a value: an explicit RETURN
+    # (body clause or epilogue), an ALWAYS/NEVER/THEREIS decision, a
+    # destination-less accumulation clause, or -- when none of those is
+    # present -- NIL. A `do` clause's forms and a `finally` clause's forms are
+    # evaluated for effect and their values are discarded.
+    #
+    # `result` used to be assigned from *three* places: the RETURN clause, and
+    # then again from every body-clause form and every FINALLY form, so the
+    # last side effect the loop happened to perform became its value.
+    # `(loop for x = 1 repeat 3 do (list x))` answered `(1)` and
+    # `(loop repeat 100000 do (assert ...) do (setf prev next))` answered the
+    # last `next` -- both must be NIL. There is now no such slot at all: the
+    # three clause families that *can* name a value each have their own
+    # channel (`early_decision`, `acc_states`, and the implicit NIL block a
+    # RETURN form leaves through), and nothing else can reach the value.
+    return_triggered = False  # Flag for when the loop should stop iterating
 
     # ALWAYS/NEVER/THEREIS decide the loop's value outright (CLHS 6.1.2.2)
     # instead of accumulating, and they end the loop the moment they decide, so
@@ -1929,13 +2002,7 @@ def eval_loop(form, env):
 
     def execute_iteration_body(loop_env):
         """Execute one iteration of the loop body."""
-        nonlocal result, return_triggered
-
-        # Check for RETURN form and evaluate it if present
-        if return_form is not None:
-            result = eval(return_form, loop_env)
-            return_triggered = True
-            return
+        nonlocal return_triggered
 
         # Each body clause carries its own WHEN/UNLESS guards, so a condition
         # applies to the clause it precedes and to nothing after it.
@@ -1943,7 +2010,9 @@ def eval_loop(form, env):
             if not _conditionals_pass(clause['conditionals'], loop_env):
                 continue
             for f in clause['forms']:
-                result = eval(f, loop_env)
+                # For effect only -- a `do` clause never supplies the loop's
+                # value (CLHS 6.1.1.4).
+                eval(f, loop_env)
                 if return_triggered:
                     return
 
@@ -2024,7 +2093,6 @@ def eval_loop(form, env):
         enclosing DO/DOLIST/DOTIMES/LOOP happens to be running the dynamic
         extent (see plan.md Finding under M0 step 1).
         """
-        nonlocal result
         # Main loop execution, watched for runaway iteration. The watchdog is
         # created in the enclosing scope so the RESOLVED/ABORTED counterpart can
         # be emitted around the whole loop, including its non-local exits.
@@ -2331,8 +2399,7 @@ def eval_loop(form, env):
 
         # With no drivers, no termination test and nothing to execute there is
         # nothing to iterate; running would just spin until the hard cap.
-        if iteration_drivers or termination_tests or body_clauses or accumulations \
-                or (return_form is not None):
+        if iteration_drivers or termination_tests or body_clauses or accumulations:
             while all(_driver_has_value(d) for d in iteration_drivers):
                 check_loop_timeout()
 
@@ -2364,9 +2431,10 @@ def eval_loop(form, env):
 
         # Execute FINALLY forms -- in the loop environment, so they can see the
         # iteration variables and any INTO accumulator (CLHS 6.1.4: the epilogue
-        # is inside the loop's variable bindings).
+        # is inside the loop's variable bindings). For effect only; only a
+        # FINALLY (RETURN ...) supplies a value, and it is handled below.
         for f in finally_forms:
-            result = eval(f, loop_env)
+            eval(f, loop_env)
 
         # Execute FINALLY RETURN if present (overrides early RETURN)
         if finally_return_form is not None:
@@ -2381,12 +2449,8 @@ def eval_loop(form, env):
         if None in acc_states:
             return _accumulated_value(None)
 
-        # Ensure we always return a Lisp value, never None
-        # If result is still None (no body executed, no return form), return NIL
-        if result is None:
-            return lisptype.NIL
-    
-        return result
+        # No clause named a value, so the LOOP form's value is NIL.
+        return lisptype.NIL
 
     try:
         with loop_watchdog:

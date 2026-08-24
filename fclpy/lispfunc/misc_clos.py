@@ -303,6 +303,19 @@ def _default_slot_missing(class_obj, instance, slot_name, operation, *new_value)
 # MAKE-INSTANCE before this module could otherwise ever see it empty, so
 # lazily-only installation would leave those user methods with no fallback
 # to combine with.
+def _describe_object_default():
+    """DESCRIBE-OBJECT's default method, fetched lazily.
+
+    Imported at call time rather than at module scope because `misc_macros`
+    imports the printer and the stream machinery, and this module is imported
+    from the CLOS bootstrap -- a module-level import would close the cycle.
+    """
+    def _describe(obj, stream):
+        from .misc_macros import default_describe_object
+        return default_describe_object(obj, stream)
+    return _describe
+
+
 _PROTOCOL_DEFAULTS = [
     ('MAKE-INSTANCE', [None], _default_make_instance),
     ('ALLOCATE-INSTANCE', [None], _default_allocate_instance),
@@ -314,6 +327,12 @@ _PROTOCOL_DEFAULTS = [
     ('CHANGE-CLASS', [None, None], _default_change_class),
     ('SLOT-UNBOUND', [None, None, None], _default_slot_unbound),
     ('SLOT-MISSING', [None, None, None, None], _default_slot_missing),
+    # DESCRIBE-OBJECT (CLHS 25.1.2) is a generic function for the same reason
+    # the metaobject protocol operations above are: `(defmethod
+    # describe-object ((x my-class) stream) ...)` is the specified way to
+    # describe your own objects, and a plain `cl_function` registration is
+    # something no DEFMETHOD can reach.
+    ('DESCRIBE-OBJECT', [None, None], _describe_object_default()),
 ]
 def _make_installer(specializers, fn):
     return lambda gf: classes.add_method(gf, specializers, fn)

@@ -429,16 +429,103 @@ def gentemp(*args):
     return intern(name, package)
 
 
-@_registry.cl_function('APROPOS')
-def apropos(string, package=None):
-    """Find symbols matching string."""
-    raise lisptype.LispNotImplementedError("APROPOS")
+def _apropos_matches(string, package):
+    """The symbols APROPOS and APROPOS-LIST both look for (CLHS 25.1.2).
+
+    One search for the two operators, because they are specified as the same
+    search with two different reports -- APROPOS-LIST answers the symbols,
+    APROPOS prints them. Two copies of the traversal would be two chances to
+    disagree about what "matching" means.
+
+    `string` is a *string designator*, resolved through the existing single
+    resolver rather than a fourth copy of that rule: the tests pass "F", `#\\F`,
+    `:|F|` and `'#:|X|` for the same search, plus every specialized
+    character-array shape (`do-special-strings`).
+
+    `package` NIL or omitted searches every package; a package designator
+    searches the symbols *accessible* in that package, which is CLHS's wording
+    and what `package_symbols(..., 'symbols')` already answers. Matching is
+    case-insensitive, as it is in every implementation -- CLHS leaves it
+    unspecified and a case-sensitive search would make APROPOS useless on a
+    readtable that downcases.
+    """
+    from .misc_packages import (_designator_to_string, package_symbols,
+                                coerce_to_package, all_packages)
+
+    needle = _designator_to_string(string)
+    if needle is None:
+        raise lisptype.LispTypeError(
+            f"APROPOS: not a string designator: {string}",
+            expected_type="STRING-DESIGNATOR", actual_value=string)
+    needle = needle.upper()
+
+    if package is None or package is lisptype.NIL \
+            or isinstance(package, lisptype.lispNull):
+        candidates = []
+        for pkg in all_packages():
+            candidates.extend(package_symbols(pkg, 'present-symbols'))
+    else:
+        candidates = package_symbols(coerce_to_package(package), 'symbols')
+
+    # Identity is the key: a symbol inherited into several packages, or present
+    # in one and accessible from another, is one symbol and must be reported
+    # once -- `apropos-list.1` requires `(equal result (list sym))` exactly.
+    seen = set()
+    matches = []
+    for symbol in candidates:
+        name = getattr(symbol, 'name', None)
+        if not isinstance(name, str) or id(symbol) in seen:
+            continue
+        if needle in name.upper():
+            seen.add(id(symbol))
+            matches.append(symbol)
+    return matches
 
 
 @_registry.cl_function('APROPOS-LIST')
 def apropos_list(string, package=None):
-    """List symbols matching string."""
-    raise lisptype.LispNotImplementedError("APROPOS-LIST")
+    """APROPOS-LIST (CLHS 25.1.2) -- the matching symbols, as a *list*.
+
+    A Lisp list, built with `make_lisp_list`: a Python list is a simple
+    general *vector* in this implementation, and returning one here would make
+    `(member sym (apropos-list "X"))` and `(equal result (list sym))` both
+    fail against something that prints convincingly as a list
+    (CLAUDE.md, sequence protocol).
+    """
+    from .sequence_protocol import make_lisp_list
+    return make_lisp_list(_apropos_matches(string, package))
+
+
+@_registry.cl_function('APROPOS')
+def apropos(string, package=None):
+    """APROPOS (CLHS 25.1.2): print the matching symbols, return no values.
+
+    Prints nothing at all when nothing matches -- `apropos.1` searches for a
+    random string until `APROPOS-LIST` says there are no matches and then
+    requires the captured output to be exactly `""`, so a header line printed
+    unconditionally fails it.
+
+    Each symbol is printed with its home package, and with what its bindings
+    are, because that is what makes the operator useful; the only part the
+    tests constrain is that the symbol's name appears.
+    """
+    from .io_write import write_text
+    from fclpy.printer import write_object
+    import fclpy.state as state
+
+    for symbol in _apropos_matches(string, package):
+        home = getattr(symbol, 'package', None)
+        home_name = getattr(home, 'name', None)
+        prefix = f"{home_name}::" if isinstance(home_name, str) else ""
+        notes = []
+        env = getattr(state, 'current_environment', None)
+        if env is not None and env.find_func(symbol) is not None:
+            notes.append("function")
+        if getattr(symbol, 'value', None) is not None:
+            notes.append("value")
+        suffix = f" [{', '.join(notes)}]" if notes else ""
+        write_text(f"{prefix}{write_object(symbol, escape=False)}{suffix}\n", None)
+    return lisptype.MultipleValues()
 
 
 __all__ = [

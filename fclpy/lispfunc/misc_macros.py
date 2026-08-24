@@ -584,38 +584,65 @@ def proclaim(form):
     return lisptype.NIL
 
 
+@_registry.cl_function('DESCRIBE')
 def describe(object, stream=None):
-    """Describe object, return structured info."""
-    try:
-        info = {'TYPE': type(object).__name__}
-        if hasattr(object, 'name'):
-            info['NAME'] = getattr(object, 'name')
-        if hasattr(object, '__dict__'):
-            info['ATTRS'] = list(object.__dict__.keys())[:8]
-        info['REPR'] = repr(object)
-        return info
-    except Exception:
-        return {'REPR': str(object)}
+    """DESCRIBE (CLHS 25.1.2): report about `object` on a stream, no values.
+
+    DESCRIBE is defined as "print a description ... to `stream`" and is
+    specified to do it *by calling DESCRIBE-OBJECT*, which is a generic
+    function -- so a program can describe its own classes by defining a
+    method. Both halves were missing: this function built a Python **dict**
+    and returned it as the Lisp value (standing rule 2), writing nothing
+    anywhere, and DESCRIBE-OBJECT was a plain `cl_function` that no DEFMETHOD
+    could ever extend (plan.md Finding L, the same shape SHARED-INITIALIZE
+    had). It now resolves the stream designator once and dispatches, which is
+    what `environment/describe.lsp` measures: with no stream argument the
+    output must appear on `*STANDARD-OUTPUT*`, with T on `*TERMINAL-IO*`, and
+    with an explicit stream on *that* stream and nowhere else.
+
+    Returns no values, so `(multiple-value-list (describe x))` is NIL.
+    """
+    from .io_write import resolve_output_stream
+    import fclpy.classes as classes
+
+    target = resolve_output_stream(stream)
+    classes.call_generic_function(
+        classes.ensure_generic_function(lisptype.py_str_to_sym('DESCRIBE-OBJECT')),
+        [object, target])
+    return lisptype.MultipleValues()
 
 
 @_registry.cl_function('INSPECT')
 def inspect_object(obj):
-    """Inspect object."""
+    """INSPECT (CLHS 25.1.2) -- interactive inspection is unavailable, so this
+    reports the same description DESCRIBE does rather than pretending to be an
+    interactive session."""
     return describe(obj)
 
 
-@_registry.cl_function('DESCRIBE-OBJECT')
-def describe_object(obj, stream=None):
-    """Print description of object to stream.
-    
-    This is the generic function called by DESCRIBE. Users can add methods
-    for their own classes to customize the description output.
+def default_describe_object(obj, stream):
+    """The default DESCRIBE-OBJECT method, specialized on T.
+
+    Installed through `misc_clos`'s protocol-default mechanism, so a user
+    `(defmethod describe-object ((x my-class) stream) ...)` overrides it by
+    ordinary dispatch instead of competing with it for a registry entry.
+
+    The report has to be *non-empty for every object*, which is what
+    `describe.1` checks across the whole of ansi-test's `*universe*`, so it is
+    built from the printer and the object's class rather than from any
+    per-type knowledge.
     """
-    if stream is None:
-        stream = True  # *standard-output*
-    info = describe(obj)
-    # Format output (simplified version)
-    return info
+    from .io_write import write_text
+    from fclpy.printer import write_object
+    import fclpy.classes as classes
+
+    lisp_class = classes.class_of(obj)
+    class_name = getattr(lisp_class, 'name', None) or type(obj).__name__
+    if isinstance(class_name, lisptype.LispSymbol):
+        class_name = class_name.name
+    write_text(f"{write_object(obj, escape=True)}\n"
+               f"  is an object of type {class_name}.\n", stream)
+    return lisptype.MultipleValues()
 
 
 @_registry.cl_function('PRINT-OBJECT')
@@ -1087,10 +1114,11 @@ def declare(*declarations):
     return lisptype.NIL
 
 
-@_registry.cl_function('DEFCONSTANT')
-def defconstant(name, value, doc=None):
-    """Define constant."""
-    return name
+# DEFCONSTANT is a *macro* (CLHS 3.1.2.1.1.3) and its semantics live in
+# `evaluation_special_forms.eval_defconstant`. The `cl_function` registration
+# that used to stand here defined nothing at all -- it returned the name and
+# discarded the value -- and, being a function, would have had its value form
+# evaluated before it ran. Standing rule 3: one implementation.
 
 
 @_registry.cl_function('DEFGENERIC')
@@ -1201,9 +1229,40 @@ def disassemble(object):
 
 
 @_registry.cl_function('ROOM')
-def room(option=None):
-    """Show memory status."""
-    return None
+def room(x=lisptype.OMITTED):
+    """ROOM (CLHS 25.1.2): report about the state of internal storage.
+
+    What the report *says* is implementation-defined -- CLHS gives no format
+    at all -- but that it is printed on `*STANDARD-OUTPUT*` is not, and that
+    is the whole of what `environment/room.lsp` checks: all four of its tests
+    capture the output and assert it is non-empty. Returning NIL and printing
+    nothing (which is what this did) fails every one of them.
+
+    `x` is `&optional` and its three legal values (NIL, T, `:DEFAULT`) select
+    how much detail to print. There is one level of detail available here, so
+    the argument is validated and the same report is printed either way --
+    validated rather than ignored, so `(room :bogus)` is not silently accepted.
+    """
+    import sys
+    from .io_write import write_text
+
+    if lisptype.supplied(x):
+        keyword = isinstance(x, lisptype.lispKeyword) and x.name == 'DEFAULT'
+        if not (keyword or x is lisptype.T or x is True
+                or x is lisptype.NIL or x is None
+                or isinstance(x, lisptype.lispNull)):
+            raise lisptype.LispTypeError(
+                f"ROOM: not a valid verbosity: {x}",
+                expected_type="(MEMBER NIL T :DEFAULT)", actual_value=x)
+
+    from fclpy.lispfunc import registry
+    write_text(
+        f"Dynamic space: {len(registry.function_registry)} functions, "
+        f"{len(registry.special_registry)} special operators.\n"
+        f"Python implementation: {sys.implementation.name} "
+        f"{'.'.join(str(n) for n in sys.version_info[:3])}.\n",
+        None)
+    return lisptype.MultipleValues()
 
 
 @_registry.cl_function('STEP')
@@ -1212,16 +1271,191 @@ def step(form):
     return form
 
 
-@_registry.cl_function('TRACE')
-def trace(*fns):
-    """Trace function calls."""
-    return list(fns)
+# --- TRACE / UNTRACE (CLHS 25.1.2) ---
+#
+# Tracing is a property of a function *name*, so the one table below is keyed
+# by the storage symbol a function-name designator resolves to -- the same key
+# DEFUN, FBOUNDP and FMAKUNBOUND use, so `(setf f)` is traceable as itself
+# rather than as F. Each entry keeps the *spec as written*, because `(trace)`
+# with no arguments answers the specs (`(setf function-to-trace)` must come
+# back as that list, not as the internal `|(SETF FUNCTION-TO-TRACE)|` symbol),
+# and the untraced definition, so UNTRACE can put it back.
+#
+# TRACE and UNTRACE were `cl_function`s taking `*fns` and returning a Python
+# `list` -- two defects in four lines. A `cl_function` has its arguments
+# *evaluated*, so `(trace function-to-trace)` evaluated the function name as a
+# variable, and a Python list is a simple general vector here, not a list.
+# They are macros: their arguments are function names, which are syntax.
+_TRACED = {}
+
+#: Nesting depth of traced calls, so nested calls indent like every other
+#: implementation's trace output.
+_TRACE_DEPTH = [0]
 
 
-@_registry.cl_function('UNTRACE')
-def untrace(*fns):
-    """Untrace function calls."""
-    return list(fns)
+def _trace_output_stream():
+    from .binding import dynamic_value
+    return dynamic_value(
+        lisptype.COMMON_LISP_PACKAGE.intern_symbol('*TRACE-OUTPUT*'))
+
+
+def _make_trace_wrapper(key, spec):
+    """A callable that reports the call on `*TRACE-OUTPUT*` and delegates.
+
+    `functools.wraps` is load-bearing rather than cosmetic: `inspect.signature`
+    follows the `__wrapped__` attribute it sets, and
+    `evaluation_core.LambdaListShape` reads a builtin's ANSI lambda list *out
+    of its Python signature*. Without it a traced builtin would appear to take
+    `(&rest args &key &allow-other-keys)`, so tracing a function would change
+    how its arguments are checked and split -- the observable behaviour of the
+    function under test, which is exactly what tracing must not do.
+    """
+    import functools
+
+    entry = _TRACED[key]
+
+    def traced(*args, **kwargs):
+        from .io_write import write_text
+        from fclpy.printer import write_object
+
+        stream = _trace_output_stream()
+        indent = '  ' * _TRACE_DEPTH[0]
+        name = write_object(spec, escape=True)
+        printed = ' '.join(write_object(a, escape=True) for a in args)
+        write_text(f"{indent}{_TRACE_DEPTH[0]}: ({name}"
+                   f"{' ' + printed if printed else ''})\n", stream)
+        _TRACE_DEPTH[0] += 1
+        try:
+            result = entry['target'](*args, **kwargs)
+        except BaseException:
+            _TRACE_DEPTH[0] -= 1
+            write_text(f"{indent}{_TRACE_DEPTH[0]}: {name} exited non-locally\n",
+                       stream)
+            raise
+        _TRACE_DEPTH[0] -= 1
+        values = (result.values if isinstance(result, lisptype.MultipleValues)
+                  else (result,))
+        returned = ' '.join(write_object(v, escape=True) for v in values)
+        write_text(f"{indent}{_TRACE_DEPTH[0]}: {name} returned {returned}\n",
+                   stream)
+        return result
+
+    target = entry['target']
+    if callable(target):
+        try:
+            traced = functools.wraps(target)(traced)
+        except (AttributeError, TypeError):
+            # A callable that refuses attribute copying (a bound method of a
+            # __slots__ class, a Python builtin) simply keeps the generic
+            # signature; it is still traced.
+            pass
+    return traced
+
+
+def _trace_one(spec, env):
+    """Start tracing one function name. True if it was not already traced."""
+    from .evaluation_special_forms import function_name_parts
+    from .binding import root_environment
+
+    key, _ = function_name_parts(spec, 'TRACE')
+    global_env = root_environment(env)
+    if key.name in _TRACED:
+        return False
+    target = global_env.find_func(key)
+    if target is None:
+        raise lisptype.UndefinedFunction(
+            name=key, message=f"TRACE: {key.name} is not defined")
+    _TRACED[key.name] = {'spec': spec, 'target': target, 'key': key}
+    global_env.add_function(key, _make_trace_wrapper(key.name, spec))
+    return True
+
+
+def _untrace_one(key_name, env):
+    """Stop tracing one recorded name, restoring its definition."""
+    from .binding import root_environment
+
+    entry = _TRACED.pop(key_name, None)
+    if entry is None:
+        return False
+    global_env = root_environment(env)
+    # Only put the original back if the trace wrapper is still what the name
+    # holds. If the program redefined the function while it was traced, that
+    # newer definition is the live one and restoring would silently undo it.
+    if getattr(global_env.find_func(entry['key']), '__wrapped__', None) is not None:
+        global_env.add_function(entry['key'], entry['target'])
+    return True
+
+
+@_registry.cl_macro('TRACE', documentation='TRACE macro expander (CLHS 25.1.2)')
+def trace_macro(*names):
+    """(TRACE name*) -- the names are unevaluated, so this is a macro.
+
+    Expands to `(%TRACE '(name*))`: the specs travel to the runtime quoted,
+    which is what keeps `(trace (setf function-to-trace))` from being read as a
+    call to SETF.
+    """
+    from .evaluation_special_forms import _cons_from
+    return _cons_from([lisptype.LispSymbol('%TRACE'),
+                       _cons_from([lisptype.LispSymbol('QUOTE'),
+                                   _cons_from(list(names))])])
+
+
+@_registry.cl_macro('UNTRACE', documentation='UNTRACE macro expander (CLHS 25.1.2)')
+def untrace_macro(*names):
+    """(UNTRACE name*) -- unevaluated names, as for TRACE. No names untraces all."""
+    from .evaluation_special_forms import _cons_from
+    return _cons_from([lisptype.LispSymbol('%UNTRACE'),
+                       _cons_from([lisptype.LispSymbol('QUOTE'),
+                                   _cons_from(list(names))])])
+
+
+@_registry.cl_function('%TRACE')
+def percent_trace(specs):
+    """TRACE's runtime. With no names, answers the list of traced specs."""
+    import fclpy.state as state
+    from fclpy.printer import write_object
+    from .sequence_protocol import list_elements, make_lisp_list
+
+    env = state.current_environment
+    given = list(list_elements(specs)) if specs is not lisptype.NIL else []
+    if not given:
+        # CLHS: "trace with no arguments returns a list of the functions
+        # currently being traced". The *specs*, in no specified order --
+        # `trace.9` sorts them itself before comparing.
+        return make_lisp_list([entry['spec'] for entry in _TRACED.values()])
+
+    for spec in given:
+        if not _trace_one(spec, env):
+            # CLHS allows an implementation to warn about a redundant request,
+            # and the tests muffle a warning here rather than forbidding one.
+            # Warning (rather than staying silent) keeps a double TRACE from
+            # looking like it did something.
+            from .utilities_errors import warn_fn
+            warn_fn(f"{write_object(spec, escape=True)} is already being traced")
+    return lisptype.MultipleValues()
+
+
+@_registry.cl_function('%UNTRACE')
+def percent_untrace(specs):
+    """UNTRACE's runtime. With no names, stops tracing everything."""
+    import fclpy.state as state
+    from fclpy.printer import write_object
+    from .evaluation_special_forms import function_name_parts
+    from .sequence_protocol import list_elements
+
+    env = state.current_environment
+    given = list(list_elements(specs)) if specs is not lisptype.NIL else []
+    if not given:
+        for key_name in list(_TRACED):
+            _untrace_one(key_name, env)
+        return lisptype.MultipleValues()
+
+    for spec in given:
+        key, _ = function_name_parts(spec, 'UNTRACE')
+        if not _untrace_one(key.name, env):
+            from .utilities_errors import warn_fn
+            warn_fn(f"{write_object(spec, escape=True)} is not being traced")
+    return lisptype.MultipleValues()
 
 
 # --- Modules (CLHS 24.1.5) ---
@@ -1472,7 +1706,6 @@ __all__ = [
     'declare',
     # NOTE: defclass, defgeneric, defpackage, defstruct are NOT exported here
     # because they are stubs that would override real implementations from classes.py
-    'defconstant',
     'deftype',
     'defparameter',
     'echo_stream_p',
@@ -1488,8 +1721,6 @@ __all__ = [
     'disassemble',
     'room',
     'step',
-    'trace',
-    'untrace',
     'provide',
     'require',
     'make_load_form',

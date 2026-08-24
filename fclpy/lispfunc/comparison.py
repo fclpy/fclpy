@@ -1,5 +1,7 @@
 """Comparison and equality functions."""
 
+from fractions import Fraction
+
 import fclpy.lisptype as lisptype
 from .core import atom, car, cdr, consp
 from . import arrays as _arrays
@@ -58,16 +60,54 @@ def eq(obj1, obj2):
     return lisptype.lisp_bool(obj1 is obj2)
 
 
+def _eql_number_key(x):
+    """``(lisp-type, value)`` for a number, or None if `x` is not one.
+
+    CLHS 5.3: two numbers are EQL when they are "of the same type and the same
+    value". Both halves need care.
+
+    **"Number" includes RATIO.** This used to read
+    ``isinstance(x, (int, float, complex))``, and a Lisp ratio is a
+    `fractions.Fraction` here, so it was not a number as far as EQL was
+    concerned and *every* ratio fell through to NIL: `(eql 7/2 7/2)` and
+    `(equal 7/2 7/2)` were both false. EQUAL delegates to EQL, EQL is the
+    default hash-table test, and it is the default `:test` of MEMBER, ASSOC,
+    FIND, POSITION, REMOVE, DELETE, SUBST and the rest of CLHS 14/17 -- so one
+    missing type made all of them wrong about ratios.
+
+    **"Same type" is the *Lisp* type, not the Python one.** A rational whose
+    denominator is 1 *is* an integer (CLHS 12.1.1.2), so it keys as one:
+    `_canonicalize_rational` normalizes such a `Fraction` back to `int` at the
+    points that produce them, but keying by `type()` alone would make EQL the
+    one place that could still disagree with the arithmetic about whether
+    `(/ 4 2)` and `2` are the same object type.
+    """
+    if isinstance(x, bool):
+        # Python's bool is a subclass of int; a Lisp boolean is not a number.
+        return None
+    if isinstance(x, int):
+        return ('integer', x)
+    if isinstance(x, Fraction):
+        return ('integer', x.numerator) if x.denominator == 1 else ('ratio', x)
+    if isinstance(x, float):
+        return ('float', x)
+    if isinstance(x, complex):
+        return ('complex', x)
+    return None
+
+
 @_registry.cl_function('EQL')
 def eql(obj1, obj2):
-    """Test for object equality (numbers and characters)."""
+    """EQL (CLHS 5.3): EQ, plus numbers by type-and-value and characters by code."""
     if obj1 is obj2:
         return lisptype.T
-    
-    # Numbers are eql if they are the same type and value
-    if isinstance(obj1, (int, float, complex)) and isinstance(obj2, (int, float, complex)):
-        return lisptype.lisp_bool(type(obj1) == type(obj2) and obj1 == obj2)
-    
+
+    key1 = _eql_number_key(obj1)
+    if key1 is not None:
+        key2 = _eql_number_key(obj2)
+        return lisptype.lisp_bool(key2 is not None and key1 == key2)
+
+
     # Characters are eql if they are the same character
     if isinstance(obj1, str) and isinstance(obj2, str) and len(obj1) == 1 and len(obj2) == 1:
         return lisptype.lisp_bool(obj1 == obj2)
@@ -83,16 +123,30 @@ def eql(obj1, obj2):
 
 @_registry.cl_function('EQUAL')
 def equal(obj1, obj2):
-    """Test for structural equality."""
-    if eql(obj1, obj2) == lisptype.T:
-        return lisptype.T
-    
-    # Cons cells
-    if consp(obj1) and consp(obj2):
-        car_equal = equal(car(obj1), car(obj2))
-        cdr_equal = equal(cdr(obj1), cdr(obj2))
-        return lisptype.lisp_bool(car_equal == lisptype.T and cdr_equal == lisptype.T)
-    
+    """EQUAL (CLHS 5.3): EQL, and structural descent into the four aggregates.
+
+    **The cdr spine is walked iteratively, not recursed into.** A Lisp list is
+    a chain of conses, so recursing on the cdr costs one Python frame per
+    *element*: two 1000-element lists exhausted the default 1000-frame limit
+    and `(equal vals vals2)` answered `RecursionError` -- a Python exception as
+    the value of a Lisp form (standing rule 2) rather than T. A list's length
+    is unbounded in a way its nesting depth is not, so only the `car` may
+    recurse; `loop.13.8` compares exactly such a pair and is what exposed it.
+    """
+    while True:
+        if eql(obj1, obj2) == lisptype.T:
+            return lisptype.T
+
+        # Cons cells: compare the cars (which may nest, so recurse) and then
+        # continue along both cdrs in this frame.
+        if consp(obj1) and consp(obj2):
+            if equal(car(obj1), car(obj2)) != lisptype.T:
+                return lisptype.NIL
+            obj1, obj2 = cdr(obj1), cdr(obj2)
+            continue
+        break
+
+
     # Strings - CLHS 5.3: EQUAL compares strings element-wise and is
     # case-sensitive.
     s1 = _string_characters(obj1)
@@ -832,17 +886,45 @@ def identity(object):
 
 @_registry.cl_function('CONSTANTP')
 def constantp(form, environment=None):
-    """Test if form is a constant."""
-    if isinstance(form, (int, float, str, bool)):
-        return lisptype.T
-    elif isinstance(form, lisptype.lispKeyword):
-        return lisptype.T
-    elif null(form):
-        return lisptype.T
-    elif consp(form) and car(form) == lisptype.LispSymbol('QUOTE'):
-        return lisptype.T
-    else:
-        return lisptype.NIL
+    """CONSTANTP (CLHS 3.1.2.1) -- is `form` a constant form?
+
+    CLHS gives exactly three kinds of constant form, and this is written as
+    those three rather than as a list of types:
+
+    - a **self-evaluating object** -- which is *anything that is not a symbol
+      and not a cons*, so there is nothing to enumerate. The previous version
+      enumerated (`int`, `float`, `str`, `bool`, keyword, NIL) and therefore
+      answered NIL for a character, a ratio, a complex, a `LispString`, an
+      array, a hash table, a pathname and a structure instance. `constantp.1`
+      asks the question the other way round -- every object in `*universe*`
+      that is neither a symbol nor a cons must be CONSTANTP -- which is why an
+      enumeration cannot pass it however long the list gets;
+    - a **constant variable**: T, NIL, any keyword, and any name DEFCONSTANT
+      has proclaimed. That last group is what `binding.is_constant_variable`
+      answers, and until it existed `(constantp 'pi)` was NIL;
+    - a **QUOTE form**.
+
+    `environment` is accepted (a `&optional` lexical environment, so a
+    supplied NIL means the null environment) but a lexical environment cannot
+    make a name constant, so it does not enter the decision.
+    """
+    from .binding import is_constant_variable
+
+    if lisptype.is_symbol(form):
+        if null(form) or form is lisptype.T or form is True:
+            return lisptype.T
+        if lisptype.is_keyword(form):
+            return lisptype.T
+        # A symbol whose name happens to be T in some other package is not the
+        # constant T; identity is what matters, and `is_symbol` already
+        # accepted NIL in all three of its Python spellings above.
+        return lisptype.lisp_bool(is_constant_variable(form))
+    if consp(form):
+        head = car(form)
+        return lisptype.lisp_bool(
+            isinstance(head, lisptype.LispSymbol) and head.name == 'QUOTE')
+    # Self-evaluating.
+    return lisptype.T
 
 
 @_registry.cl_function('COMPLEMENT')

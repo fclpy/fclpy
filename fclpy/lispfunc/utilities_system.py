@@ -1,58 +1,349 @@
-"""System information, time operations, and environment access."""
+"""System information, time operations, and environment access.
+
+**This module is the one home of the universal-time model (CLHS 25.1.4).**
+There used to be two, and neither implemented the chapter: this module's
+`DECODE-UNIVERSAL-TIME` took no `time-zone` argument at all, `core.py`'s took
+one and ignored it, and which of the two ran was decided by import order --
+this one won, so *every* test that passed a time zone signalled a Python
+`TypeError` about positional arguments. `core.py`'s `ENCODE-UNIVERSAL-TIME`
+went through `time.mktime`, which is expressed in the *local* zone and raises
+outside the platform's `time_t` range, so `(encode-universal-time 0 0 0 1 1
+1900 0)` -- the inverse of the chapter's own first example -- was an error
+rather than 0.
+
+Three properties the model holds, and the reason each is here:
+
+- **The calendar is computed, never asked of the OS.** `_decode_calendar` and
+  `_encode_calendar` are pure Gregorian arithmetic over
+  `datetime.date.toordinal`, so a universal time in 1900 or in 5000 decodes as
+  exactly as one in 2026. The OS is consulted for one thing only -- what the
+  *local* zone and daylight-saving rule are -- and only when the caller
+  omitted `time-zone`.
+- **A time zone is a rational number of hours west of GMT**, not an integer of
+  hours and not a number of seconds. `decode-universal-time.4` and
+  `encode-universal-time.3` build one as `(/ <seconds> 3600)`, require the
+  same value back out under EQL, and require the round trip to be exact -- so
+  the offset is carried as a `Fraction` and the returned zone is the caller's
+  own object.
+- **`_local_offset_seconds` is the single definition of the local offset**, so
+  DECODE and ENCODE cannot disagree about it. They are inverses by
+  construction rather than by two matching sign conventions.
+"""
 
 import time
 import socket
 import platform
 import os
+import datetime
+from fractions import Fraction
+
 import fclpy.lisptype as lisptype
 from fclpy.lispfunc import registry as _registry
 
 
-# --- Time functions ---
-@_registry.cl_function('GET-UNIVERSAL-TIME')
-def get_universal_time():
-    """Get current time as universal time (seconds since 1900-01-01)."""
-    import datetime
-    epoch = datetime.datetime(1900, 1, 1)
-    return int((datetime.datetime.utcnow() - epoch).total_seconds())
+# =====================================================================
+# The universal time model (CLHS 25.1.4)
+# =====================================================================
+
+#: A universal time counts seconds from 1900-01-01 00:00:00 GMT (CLHS
+#: 25.1.4.1); a Unix timestamp counts from 1970-01-01 00:00:00 GMT. This is
+#: the one place the two epochs are related.
+UNIX_EPOCH_UNIVERSAL_TIME = 2208988800
+
+#: `datetime.date.toordinal()` of the universal-time epoch day.
+_EPOCH_ORDINAL = datetime.date(1900, 1, 1).toordinal()
+
+#: The Gregorian calendar repeats exactly every 400 years -- same weekday for
+#: the same month and day, same leap years -- so shifting a date by a whole
+#: number of these cycles moves it into a range the platform's `mktime` can
+#: represent *without changing the answer* to "is daylight saving in effect on
+#: this date". That is what lets the DST rule be applied to a date in 1900 or
+#: 4000 at all. The bounds below are one cycle apart, so one pass of each
+#: while-loop always lands inside them.
+_GREGORIAN_CYCLE_YEARS = 400
+_DST_PROBE_MIN_YEAR = 1972      # first leap year the Unix epoch fully contains
+_DST_PROBE_MAX_YEAR = _DST_PROBE_MIN_YEAR + _GREGORIAN_CYCLE_YEARS - 1
+
+
+def _canonical_zone(value):
+    """A `Fraction` whose denominator reduced to 1 *is* an integer (CLHS 12.1.1.2).
+
+    The same normalization `math_arithmetic._canonicalize_rational` performs,
+    applied to a time zone: a whole-hour offset must answer EQL to an integer,
+    or `(eql tz zone)` fails for the common case.
+    """
+    if isinstance(value, Fraction) and value.denominator == 1:
+        return value.numerator
+    return value
+
+
+def _time_zone_offset_seconds(time_zone, operator):
+    """A time-zone designator as an exact number of seconds west of GMT.
+
+    CLHS glossary, *time zone*: a rational multiple of 1/3600 between -24 and
+    24 inclusive. Anything else is a TYPE-ERROR rather than a silently
+    truncated offset -- a wrong offset is a wrong *time*, which no caller can
+    detect.
+    """
+    if isinstance(time_zone, bool) or not isinstance(time_zone, (int, Fraction)):
+        raise lisptype.LispTypeError(
+            f"{operator}: time zone must be a rational: {time_zone}",
+            expected_type="RATIONAL", actual_value=time_zone)
+    offset = Fraction(time_zone) * 3600
+    if offset.denominator != 1 or not (-24 * 3600 <= offset <= 24 * 3600):
+        raise lisptype.LispTypeError(
+            f"{operator}: time zone must be a multiple of 1/3600 "
+            f"between -24 and 24: {time_zone}",
+            expected_type="(RATIONAL -24 24)", actual_value=time_zone)
+    return offset.numerator
+
+
+def _decode_calendar(local_seconds):
+    """Seconds since the epoch *in some local zone* -> the calendar fields.
+
+    Returns `(second, minute, hour, date, month, year, day)` where `day` is
+    CLHS's day of the week: 0 is Monday, which is exactly what
+    `datetime.date.weekday()` answers -- and 1900-01-01 really was a Monday,
+    so `(decode-universal-time 0 0)` yields day 0.
+
+    Python's `divmod` floors, so a negative `local_seconds` (a time east of
+    GMT in the first hours of 1900) decodes into 1899 rather than wrapping.
+    """
+    days, rest = divmod(local_seconds, 86400)
+    hour, rest = divmod(rest, 3600)
+    minute, second = divmod(rest, 60)
+    try:
+        day = datetime.date.fromordinal(_EPOCH_ORDINAL + days)
+    except (ValueError, OverflowError):
+        raise lisptype.LispTypeError(
+            f"universal time is outside the representable calendar: "
+            f"{local_seconds}",
+            expected_type="UNSIGNED-BYTE", actual_value=local_seconds)
+    return (second, minute, hour, day.day, day.month, day.year, day.weekday())
+
+
+def _encode_calendar(second, minute, hour, date, month, year):
+    """The inverse of `_decode_calendar`: calendar fields -> local seconds."""
+    try:
+        ordinal = datetime.date(year, month, date).toordinal()
+    except (ValueError, OverflowError, TypeError):
+        raise lisptype.LispTypeError(
+            f"ENCODE-UNIVERSAL-TIME: not a valid date: "
+            f"{year}-{month}-{date}",
+            expected_type="(INTEGER 1 9999)", actual_value=year)
+    return ((ordinal - _EPOCH_ORDINAL) * 86400
+            + hour * 3600 + minute * 60 + second)
+
+
+def _daylight_saving_in_effect(second, minute, hour, date, month, year):
+    """Is daylight saving in effect at this local date and time?
+
+    Determined from the *calendar date*, not from a timestamp, because that is
+    how a daylight-saving rule is written ("the second Sunday in March") and
+    because a timestamp for 1900 or 4000 is not representable. The year is
+    shifted by whole Gregorian cycles into the platform's range first, which
+    preserves the weekday-and-leap-year structure the rule reads.
+
+    A machine with no daylight-saving rule answers False without consulting
+    the OS at all, so `_local_offset_seconds` collapses to `time.timezone`.
+    """
+    if not time.daylight:
+        return False
+    probe_year = year
+    while probe_year < _DST_PROBE_MIN_YEAR:
+        probe_year += _GREGORIAN_CYCLE_YEARS
+    while probe_year > _DST_PROBE_MAX_YEAR:
+        probe_year -= _GREGORIAN_CYCLE_YEARS
+    try:
+        stamp = time.mktime((probe_year, month, date, hour, minute, second,
+                             0, 1, -1))
+        return time.localtime(stamp).tm_isdst > 0
+    except (OSError, OverflowError, ValueError):
+        # The platform cannot say. Reporting "no daylight saving" is the
+        # honest answer for a zone whose rule is unavailable, and it keeps
+        # DECODE and ENCODE mutual inverses, which is what the round-trip
+        # tests actually require.
+        return False
+
+
+def _local_offset_seconds(daylight_p):
+    """The local zone's offset in seconds west of GMT.
+
+    One definition, read by both DECODE and ENCODE, so they are inverses by
+    construction. `time.timezone`/`time.altzone` are already seconds west of
+    GMT -- the same sign convention CLHS uses for a time zone.
+    """
+    return time.altzone if daylight_p else time.timezone
+
+
+def _local_zone_hours(daylight_p):
+    """The offset `_local_offset_seconds` reports, as CLHS's hours west of GMT.
+
+    CLHS DECODE-UNIVERSAL-TIME returns the *standard* zone even when daylight
+    saving is in effect -- the extra hour is reported by `daylight-p`, not
+    folded into `zone` -- so this is always asked with `daylight_p` false for
+    the returned value.
+    """
+    return _canonical_zone(Fraction(_local_offset_seconds(daylight_p), 3600))
+
+
+def _decode_in_local_zone(universal_time):
+    """Decode with the *current* time zone and daylight-saving rule.
+
+    Two passes, because the daylight-saving rule is keyed on the local date
+    and the local date depends on whether daylight saving applies: decode with
+    the standard offset to learn the date, ask the rule, then decode again
+    with the offset the rule selects. Reversing that order would need the
+    answer to compute the question.
+    """
+    provisional = _decode_calendar(universal_time - _local_offset_seconds(False))
+    daylight_p = _daylight_saving_in_effect(*provisional[:6])
+    if not daylight_p:
+        return provisional, False
+    fields = _decode_calendar(universal_time - _local_offset_seconds(True))
+    return fields, True
 
 
 @_registry.cl_function('DECODE-UNIVERSAL-TIME')
-def decode_universal_time(universal_time=None):
-    """Decode universal time into components (second, minute, hour, day, month, year, day-of-week)."""
-    import datetime
-    if universal_time is None:
-        universal_time = get_universal_time()
-    epoch = datetime.datetime(1900, 1, 1)
-    dt = epoch + datetime.timedelta(seconds=universal_time)
-    return (dt.second, dt.minute, dt.hour, dt.day, dt.month, dt.year, None)
+def decode_universal_time(universal_time, time_zone=lisptype.OMITTED):
+    """DECODE-UNIVERSAL-TIME (CLHS 25.1.4.2) -- nine values.
+
+    `time-zone` is genuinely optional rather than defaulted, and the
+    distinction is observable: supplied, no daylight-saving adjustment is
+    performed and `daylight-p` is NIL; omitted, the current zone and rule
+    apply. NIL is not a time zone, so `OMITTED` is the sentinel -- the same
+    reason `lisptype.OMITTED` exists everywhere else in this codebase.
+    """
+    if not isinstance(universal_time, int) or isinstance(universal_time, bool):
+        raise lisptype.LispTypeError(
+            f"DECODE-UNIVERSAL-TIME: not a universal time: {universal_time}",
+            expected_type="UNSIGNED-BYTE", actual_value=universal_time)
+
+    if time_zone is lisptype.OMITTED:
+        fields, daylight_p = _decode_in_local_zone(universal_time)
+        zone = _local_zone_hours(False)
+    else:
+        offset = _time_zone_offset_seconds(time_zone, 'DECODE-UNIVERSAL-TIME')
+        fields = _decode_calendar(universal_time - offset)
+        daylight_p = False
+        # The caller's own object, so `(eql tz zone)` holds for a ratio as
+        # well as for an integer.
+        zone = time_zone
+
+    second, minute, hour, date, month, year, day = fields
+    return lisptype.MultipleValues(second, minute, hour, date, month, year,
+                                   day, lisptype.lisp_bool(daylight_p), zone)
+
+
+@_registry.cl_function('ENCODE-UNIVERSAL-TIME')
+def encode_universal_time(second, minute, hour, date, month, year,
+                          time_zone=lisptype.OMITTED):
+    """ENCODE-UNIVERSAL-TIME (CLHS 25.1.4.3) -- the inverse of DECODE.
+
+    With `time-zone` omitted the current zone applies, *including* its
+    daylight-saving rule, which is what makes `(encode-universal-time
+    (decode-universal-time t))` recover `t`.
+    """
+    for name, value in (('SECOND', second), ('MINUTE', minute),
+                        ('HOUR', hour), ('DATE', date), ('MONTH', month),
+                        ('YEAR', year)):
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise lisptype.LispTypeError(
+                f"ENCODE-UNIVERSAL-TIME: {name} must be an integer: {value}",
+                expected_type="INTEGER", actual_value=value)
+
+    # CLHS 25.1.4.3: a year between 0 and 99 names a year in the hundred-year
+    # span beginning fifty years before the current one.
+    if 0 <= year <= 99:
+        current_year = _decode_in_local_zone(get_universal_time())[0][5]
+        century = (current_year - 50) // 100 * 100
+        year = century + year
+        if year < current_year - 50:
+            year += 100
+
+    local_seconds = _encode_calendar(second, minute, hour, date, month, year)
+    if time_zone is lisptype.OMITTED:
+        daylight_p = _daylight_saving_in_effect(second, minute, hour,
+                                                date, month, year)
+        offset = _local_offset_seconds(daylight_p)
+    else:
+        offset = _time_zone_offset_seconds(time_zone, 'ENCODE-UNIVERSAL-TIME')
+    return local_seconds + offset
+
+
+@_registry.cl_function('GET-UNIVERSAL-TIME')
+def get_universal_time():
+    """GET-UNIVERSAL-TIME (CLHS 25.1.4.4) -- the current time, GMT-based."""
+    return int(time.time()) + UNIX_EPOCH_UNIVERSAL_TIME
 
 
 @_registry.cl_function('GET-DECODED-TIME')
 def get_decoded_time():
-    """Get current time in decoded form."""
+    """GET-DECODED-TIME (CLHS 25.1.4.4) -- the current time, decoded.
+
+    Defined as `(decode-universal-time (get-universal-time))`, and written
+    that way: it returned *seven* values from a private conversion, so
+    `get-universal-time.2` -- which asserts both are nine values long and
+    agree field by field -- could not pass however DECODE behaved.
+    """
     return decode_universal_time(get_universal_time())
+
+
+#: `INTERNAL-TIME-UNITS-PER-SECOND` (CLHS 25.1.4.1). Milliseconds. A constant
+#: *variable*, established by `lispenv`; the resolution of the internal-time
+#: clocks below is expressed through it rather than by two matching literals.
+INTERNAL_TIME_UNITS_PER_SECOND = 1000
+
+
+@_registry.cl_function('GET-INTERNAL-REAL-TIME')
+def get_internal_real_time():
+    """GET-INTERNAL-REAL-TIME (CLHS 25.1.4.5).
+
+    CLHS requires only that this count internal time units "relative to an
+    arbitrary time base", and the tests require it to be *monotonic* over a
+    tight loop. `time.monotonic` guarantees exactly that; `time.time` does
+    not -- it can step backwards when the system clock is adjusted, and on
+    Windows its resolution is coarse enough that an adjustment lands inside a
+    single test run.
+    """
+    return int(time.monotonic() * INTERNAL_TIME_UNITS_PER_SECOND)
+
+
+@_registry.cl_function('GET-INTERNAL-RUN-TIME')
+def get_internal_run_time():
+    """GET-INTERNAL-RUN-TIME (CLHS 25.1.4.5) -- computation time, monotonic."""
+    return int(time.process_time() * INTERNAL_TIME_UNITS_PER_SECOND)
+
+
+@_registry.cl_function('SLEEP')
+def sleep(seconds):
+    """SLEEP (CLHS 25.1.4.6) -- a non-negative *real*, ratios included.
+
+    `time.sleep` takes a Python float, so a Lisp ratio has to be converted
+    rather than passed through: `(sleep 1/100)` raised a Python `TypeError`
+    about interpreting a `Fraction` as an integer, and
+    `(sleep (/ 1000000000000000000000000000000))` still has to be a legal way
+    to say "essentially no time at all". `float()` of a ratio that small
+    underflows to 0.0, which is the correct duration to wait.
+    """
+    from .math_arithmetic import _ensure_real
+    _ensure_real(seconds, 'SLEEP')
+    if seconds < 0:
+        raise lisptype.LispTypeError(
+            f"SLEEP: seconds must be non-negative: {seconds}",
+            expected_type="(REAL 0)", actual_value=seconds)
+    time.sleep(float(seconds))
+    return lisptype.NIL
 
 
 @_registry.cl_special('TIME')
 def time_special(form):
-    """TIME special form stub - actual implementation in evaluator.
-    
-    In Common Lisp, TIME is a macro/special form that:
-    1. Evaluates its argument form
-    2. Prints timing/resource usage information to *TRACE-OUTPUT*
-    3. Returns the value(s) of the form
-    
-    This stub exists so TIME is registered; the evaluator handles the actual execution.
+    """TIME (CLHS 25.1.3) is a *macro*, so its subform must not be evaluated
+    before it is entered. Registered here so the dispatcher knows the symbol
+    names a special operator; the semantics are
+    `evaluation_loops_conditionals.eval_time`.
     """
     raise lisptype.LispNotImplementedError('TIME', 'special form handled by evaluator')
-
-
-def sleep(seconds):
-    """Sleep for given number of seconds."""
-    import time
-    time.sleep(seconds)
-    return None
 
 
 # --- System information ---
@@ -296,7 +587,12 @@ def random_state_p(object):
 __all__ = [
     'get_universal_time',
     'decode_universal_time',
+    'encode_universal_time',
     'get_decoded_time',
+    'get_internal_real_time',
+    'get_internal_run_time',
+    'INTERNAL_TIME_UNITS_PER_SECOND',
+    'UNIX_EPOCH_UNIVERSAL_TIME',
     'sleep',
     'lisp_implementation_type',
     'lisp_implementation_version',
