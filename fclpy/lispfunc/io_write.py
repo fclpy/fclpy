@@ -2,6 +2,7 @@
 
 import re
 from fractions import Fraction
+from decimal import Decimal, ROUND_HALF_EVEN
 
 import fclpy.lisptype as lisptype
 from . import registry as _registry
@@ -1258,6 +1259,227 @@ def _format_integer_directive(val, radix, params, colon_flag, at_flag):
     return body
 
 
+def _param_int_or_none(value):
+    """A numeric FORMAT prefix parameter (`w`, `d`, `k`, ...) that
+    distinguishes "omitted" from "explicitly 0" -- CLHS 22.3.3/22.3.4 give
+    `~F`/`~E` different behaviour for the two (an omitted `d` chooses digits
+    naturally; `d=0` truncates the fraction to nothing)."""
+    if _is_unspecified(value):
+        return None
+    return _lisp_number(value, None)
+
+
+def _format_pad_or_overflow(text, w, overflowchar, padchar):
+    """CLHS 22.3.3/22.3.4's shared tail: right-justify to `w` with
+    `padchar`, or -- if the natural text is longer than `w` -- replace it
+    with `w` copies of `overflowchar`. With no `overflowchar`, a field that
+    does not fit is printed in full and `w` is only ever a minimum."""
+    if w is None:
+        return text
+    if len(text) < w:
+        return padchar * (w - len(text)) + text
+    if len(text) > w and overflowchar is not None:
+        return overflowchar * w
+    return text
+
+
+_shortest_round_trip_digits = _printer.float_shortest_digits
+
+
+def _split_digits(digits, decpt):
+    """Place a decimal point `decpt` digits into `digits` (CLHS's `0.<digits>
+    * 10**decpt` convention), producing `(int_part, frac_part)`. No digit is
+    forced on either side: a whole number gives an empty fraction and a
+    number below 1 gives an integer part of `"0"`. This is what `~E` wants
+    (`1.e+0`, no trailing zero) and what a *quantized* digit string for `~F`
+    wants too, since quantizing already pads to the requested length."""
+    if decpt <= 0:
+        return '0', '0' * (-decpt) + digits
+    if decpt >= len(digits):
+        return digits + '0' * (decpt - len(digits)), ''
+    return digits[:decpt], digits[decpt:]
+
+
+def _split_digits_prin1(digits, decpt):
+    """Same as `_split_digits`, but for `~F` with `d` omitted, which mimics
+    `PRIN1` (CLHS 22.1.3.1.3: a float always shows a digit on each side of
+    the point) rather than `~E`'s trailing-zero-trimming rule -- a whole
+    number gets a forced `.0`, not an empty fraction."""
+    if decpt <= 0:
+        return '0', '0' * (-decpt) + digits
+    if decpt >= len(digits):
+        return digits + '0' * (decpt - len(digits)), '0'
+    return digits[:decpt], digits[decpt:]
+
+
+def _coerce_format_float(val):
+    """`~F`/`~E`/`~G` accept any real (CLHS 22.3.3): a rational is coerced,
+    a float is used as-is."""
+    if isinstance(val, bool) or val is None:
+        raise TypeError('not a real number')
+    return float(val)
+
+
+def _format_fixed_directive(val, params, at_flag):
+    """`~w,d,k,overflowchar,padcharF` -- fixed-format floating point
+    (CLHS 22.3.3).
+
+    `k` is an exact decimal scale factor (the value is multiplied by
+    `10**k` before printing), applied as a shift of the decimal digit
+    string's implied point rather than as float multiplication, so it
+    never adds rounding error beyond what `d` itself requests. With `d`
+    omitted and no `w`, the natural, `PRIN1`-equivalent digit string is used
+    (matching `format.f.1`-`.3`, which check exactly that equivalence).
+    With `d` omitted but `w` given, CLHS 22.3.3.1 still requires a specific
+    `d`: as many of the natural digits as fit in `w` (never more), so
+    `~2f` of `1.1` -- one natural fraction digit, but no room for even that
+    once the sign, `1` and `.` claim the rest of a 2-column field -- rounds
+    to 0 fraction digits and prints `1.0`, the forced single zero digit
+    being CLHS's own workaround for "arg is printed as a float" (`1.` reads
+    back as the integer 1, not a float) -- see `format.f.45`-`.47`, which
+    exist to pin exactly this down. With `d` given explicitly, the value is
+    rounded to exactly `d` fraction digits from its *exact* value
+    (`Decimal(float)`), not from the shortest round-trip string, so
+    rounding beyond the shortest repr's precision is still correct. A lone
+    leading `0` in the integer part is dropped when `w` is given, the
+    natural text would otherwise overflow it, and a fraction digit still
+    remains to keep the result recognizable as a float (`format.f.46b`'s
+    `~0,0f` of `0.01` keeps the zero -- `0.` with the zero dropped would be
+    just `.`, not a float at all) -- which is why `~3,2F` of `0.5` prints
+    `.50`, not `0.50`.
+    """
+    w = _param_int_or_none(params[0] if len(params) > 0 else None)
+    d = _param_int_or_none(params[1] if len(params) > 1 else None)
+    k = _param_int_or_none(params[2] if len(params) > 2 else None) or 0
+    overflowchar = _format_char_param(params[3] if len(params) > 3 else None, None)
+    padchar = _format_char_param(params[4] if len(params) > 4 else None, ' ')
+
+    num = _coerce_format_float(val)
+    negative = num < 0 or (num == 0.0 and str(num)[0] == '-')
+    mag = abs(num)
+    sign = '-' if negative else ('+' if at_flag else '')
+
+    if mag == 0.0:
+        int_part, frac_part = ('0', '0') if d is None else ('0', '0' * d)
+    elif d is None and w is None:
+        digits, decpt = _shortest_round_trip_digits(mag)
+        int_part, frac_part = _split_digits_prin1(digits, decpt + k)
+    else:
+        d_was_omitted = d is None
+        if d_was_omitted:
+            digits, decpt = _shortest_round_trip_digits(mag)
+            natural_int, natural_frac = _split_digits_prin1(digits, decpt + k)
+            avail = w - len(sign) - len(natural_int) - 1
+            d = min(len(natural_frac), max(avail, 0))
+        scaled = Decimal(mag) * (Decimal(10) ** k) if k else Decimal(mag)
+        quantum = Decimal(1).scaleb(-d)
+        rounded = scaled.quantize(quantum, rounding=ROUND_HALF_EVEN)
+        _, digs, exp = rounded.as_tuple()
+        digits = ''.join(map(str, digs)) or '0'
+        decpt = len(digits) + exp
+        int_part, frac_part = _split_digits(digits, decpt)
+        if d_was_omitted and not frac_part:
+            frac_part = '0'  # CLHS: still recognizable as a float (format.f.45-47)
+
+    body = int_part + '.' + frac_part
+    if w is not None and int_part == '0' and frac_part and len(sign) + len(body) > w:
+        body = body[1:]
+    return _format_pad_or_overflow(sign + body, w, overflowchar, padchar)
+
+
+def _format_exponential_directive(val, params, at_flag):
+    """`~w,d,e,k,overflowchar,padchar,exponentcharE` -- exponential-format
+    floating point (CLHS 22.3.4).
+
+    The scale factor `k` (default 1) does not just shift the exponent: it
+    picks how many of a *fixed* `d+1`-digit budget fall before the decimal
+    point (`max(k, 1)` of them; the rest, `d+1-max(k,1)`, are the fraction)
+    -- so `~,2,,3e` of `0.05` prints `500.e-4` (all 3 budget digits used as
+    integer digits, none left for the fraction) while `~,2,,-1e` of the same
+    magnitude prints `0.05e+2`. This is the CLHS rule that makes
+    `format.e.16`-`.19` fan out the same way; deriving `k`'s effect as a
+    plain float multiplication instead reproduces none of them. With `d`
+    omitted, CLHS's own trimming rule applies instead (no trailing fraction
+    zero unless the value is exactly the number 0, and `w` -- if it makes
+    the natural text too short -- extends the fraction with zeros rather
+    than padding with spaces, since padding happens only after that).
+    """
+    w = _param_int_or_none(params[0] if len(params) > 0 else None)
+    d = _param_int_or_none(params[1] if len(params) > 1 else None)
+    e_digits = _param_int_or_none(params[2] if len(params) > 2 else None)
+    k = _param_int_or_none(params[3] if len(params) > 3 else None)
+    if k is None:
+        k = 1
+    overflowchar = _format_char_param(params[4] if len(params) > 4 else None, None)
+    padchar = _format_char_param(params[5] if len(params) > 5 else None, ' ')
+    exponentchar = _format_char_param(params[6] if len(params) > 6 else None, 'e')
+
+    num = _coerce_format_float(val)
+    negative = num < 0 or (num == 0.0 and str(num)[0] == '-')
+    mag = abs(num)
+
+    if mag == 0.0:
+        int_part, frac_part, printed_exponent = '0', '0', 0
+    else:
+        digits0, decpt0 = _shortest_round_trip_digits(mag)
+        scientific_exponent = decpt0 - 1
+        printed_exponent = scientific_exponent - (k - 1)
+        if d is None:
+            int_part, frac_part = _split_digits(digits0, k)
+        else:
+            frac_digits = max(d + 1 - max(k, 1), 0)
+            while True:
+                mantissa = Decimal(mag).scaleb(-printed_exponent)
+                quantum = Decimal(1).scaleb(-frac_digits)
+                rounded = mantissa.quantize(quantum, rounding=ROUND_HALF_EVEN)
+                _, digs, exp = rounded.as_tuple()
+                digits = ''.join(map(str, digs)) or '0'
+                decpt = len(digits) + exp
+                int_part, frac_part = _split_digits(digits, decpt)
+                if digits != '0' and decpt > max(k, 0):
+                    # Rounding carried (e.g. 9.996 -> 10.0, or -- with k<=0,
+                    # where the integer part must stay a literal "0" -- a
+                    # mantissa like 0.99996 carrying to 1.0): the mantissa
+                    # spilled past its digit budget, so shift one digit into
+                    # the exponent and re-round at the new position.
+                    printed_exponent += 1
+                    continue
+                break
+
+    exp_sign = '-' if printed_exponent < 0 else '+'
+    exp_digits = str(abs(printed_exponent))
+    if e_digits is not None and len(exp_digits) < e_digits:
+        exp_digits = '0' * (e_digits - len(exp_digits)) + exp_digits
+    exponent_text = exponentchar + exp_sign + exp_digits
+
+    sign = '-' if negative else ('+' if at_flag else '')
+
+    if d is None and w is not None:
+        natural_len = len(sign) + len(int_part) + 1 + len(frac_part) + len(exponent_text)
+        if natural_len < w:
+            frac_part = frac_part + '0' * (w - natural_len)
+
+    body = sign + int_part + '.' + frac_part + exponent_text
+    return _format_pad_or_overflow(body, w, overflowchar, padchar)
+
+
+def _format_general_directive(val, params, colon_flag, at_flag):
+    """`~w,d,e,k,overflowchar,padchar,exponentcharG` -- general floating
+    point (CLHS 22.3.5): fixed-format when the magnitude's natural
+    (shortest round-trip) scientific exponent falls in `[0, 7)` -- CLHS's
+    example range for a value that would print reasonably in `~F` -- and
+    exponential otherwise, each with the same `w`/`d`/`k`/... parameters
+    `~F`/`~E` already implement. `w`'s exact exponent-field bookkeeping
+    (CLHS's `ee`) is not implemented -- this covers `~G`'s choice of
+    notation, not its column-exact width contract; no ansi-test file
+    currently exercises `~G`."""
+    num = _coerce_format_float(val)
+    mag = abs(num)
+    if mag == 0.0 or 0 <= _shortest_round_trip_digits(mag)[1] - 1 < 7:
+        return _format_fixed_directive(val, params, at_flag)
+    return _format_exponential_directive(val, params, at_flag)
+
+
 _ENGLISH_ONES = [
     "zero", "one", "two", "three", "four", "five", "six", "seven", "eight",
     "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen",
@@ -1667,7 +1889,17 @@ def _format_directive(control_string, cursor, pos, emitted=None):
     at_flag = False
     params = []
     
-    # Skip optional numeric/char parameters and commas
+    # Skip optional numeric/char parameters and commas. `slot_has_value`
+    # tracks whether the *current* parameter slot (since the last comma, or
+    # since the start) has already had a value appended for it -- a comma is
+    # an empty slot only when it isn't. This is not the same as peeking at
+    # the raw previous character: a `'x` character parameter can itself
+    # consume a comma as its literal value (`'~c` with `overflowchar` bound
+    # to `#\,`, which `format.f.42` exercises), and the old check --
+    # `control_string[pos-2] == ','` -- read that consumed comma as if it
+    # were an empty-slot marker for the *next* slot, inserting a spurious
+    # `None` and shifting every parameter after it by one.
+    slot_has_value = False
     while pos < len(control_string):
         c = control_string[pos]
         if c.isdigit() or c == '-' or c == '+':
@@ -1678,6 +1910,7 @@ def _format_directive(control_string, cursor, pos, emitted=None):
             while pos < len(control_string) and control_string[pos].isdigit():
                 pos += 1
             params.append(int(control_string[num_start:pos]))
+            slot_has_value = True
         elif c == "'":
             # Character parameter 'X
             if pos + 1 < len(control_string):
@@ -1685,19 +1918,22 @@ def _format_directive(control_string, cursor, pos, emitted=None):
                 pos += 2
             else:
                 pos += 1
+            slot_has_value = True
         elif c == 'V' or c == 'v':
             # Use next argument as parameter
             params.append(cursor.next())
             pos += 1
+            slot_has_value = True
         elif c == '#':
             # Number of remaining arguments
             params.append(cursor.remaining_count())
             pos += 1
+            slot_has_value = True
         elif c == ',':
             pos += 1
-            # Empty parameter slot
-            if not params or control_string[pos-2] == ',':
+            if not slot_has_value:
                 params.append(None)
+            slot_has_value = False
         elif c == ':':
             colon_flag = True
             pos += 1
@@ -1800,48 +2036,30 @@ def _format_directive(control_string, cursor, pos, emitted=None):
         return (result, pos)
     
     elif directive == 'F':
-        # ~F - Fixed-format floating point
+        # ~F - Fixed-format floating point (CLHS 22.3.3)
         val = get_arg()
         try:
-            num = float(val) if val is not None else 0.0
-            # params: width, digits, scale, overflow-char, pad-char
-            width = params[0] if params else None
-            digits = params[1] if len(params) > 1 else None
-            if digits is not None:
-                result = f'{num:.{digits}f}'
-            else:
-                result = str(num)
-            if at_flag and num >= 0:
-                result = '+' + result
-            if width and len(result) < width:
-                result = ' ' * (width - len(result)) + result
+            result = _format_fixed_directive(val, params, at_flag)
         except (TypeError, ValueError):
-            result = str(val)
+            result = _format_A_fallback(val)
         return (result, pos)
-    
+
     elif directive == 'E':
-        # ~E - Exponential floating point
+        # ~E - Exponential floating point (CLHS 22.3.4)
         val = get_arg()
         try:
-            num = float(val) if val is not None else 0.0
-            digits = params[1] if len(params) > 1 and params[1] else 6
-            result = f'{num:.{digits}e}'.upper()
-            if at_flag and num >= 0:
-                result = '+' + result
+            result = _format_exponential_directive(val, params, at_flag)
         except (TypeError, ValueError):
-            result = str(val)
+            result = _format_A_fallback(val)
         return (result, pos)
-    
+
     elif directive == 'G':
-        # ~G - General floating point (choose F or E)
+        # ~G - General floating point (choose F or E, CLHS 22.3.5)
         val = get_arg()
         try:
-            num = float(val) if val is not None else 0.0
-            result = f'{num:g}'
-            if at_flag and num >= 0:
-                result = '+' + result
+            result = _format_general_directive(val, params, colon_flag, at_flag)
         except (TypeError, ValueError):
-            result = str(val)
+            result = _format_A_fallback(val)
         return (result, pos)
     
     elif directive == '%':

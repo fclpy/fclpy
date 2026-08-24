@@ -52,6 +52,8 @@ Deliberately out of scope, and why
   indistinguishable from ``#*01``.
 """
 
+import math
+import re
 from fractions import Fraction
 
 import fclpy.lisptype as lisptype
@@ -362,13 +364,53 @@ def _write_ratio(value, ctx):
     return _radix_prefix(ctx.base) + body
 
 
+def float_shortest_digits(mag):
+    """The shortest decimal digit string that reads back as the float `mag`
+    (> 0), as `(digits, decpt)` where `mag == 0.<digits> * 10**decpt` --
+    e.g. `123.456` is `('123456', 3)` and `0.001` is `('1', -2)`.
+
+    Built from `repr(mag)`, which Python already renders as the shortest
+    round-tripping decimal; this just re-derives the digit string and
+    decimal-point position independently of whether Python chose plain or
+    exponential notation, so a caller can place the point wherever *it*
+    wants (this printer's own exponential threshold below, and `FORMAT`'s
+    `~E`/`~F`, which slice this same digit string at a `k`- or `w`-chosen
+    position rather than Python's).
+    """
+    s = repr(mag)
+    if 'e' in s or 'E' in s:
+        mantissa, exp_s = re.split('[eE]', s)
+        exp = int(exp_s)
+    else:
+        mantissa, exp = s, 0
+    if '.' in mantissa:
+        int_part, frac_part = mantissa.split('.')
+    else:
+        int_part, frac_part = mantissa, ''
+    digits = int_part + frac_part
+    decpt = len(int_part) + exp
+    stripped = digits.lstrip('0')
+    decpt -= (len(digits) - len(stripped))
+    digits = stripped.rstrip('0')
+    if digits == '':
+        digits = '0'
+        decpt = 1
+    return digits, decpt
+
+
 def _write_float(value, ctx):
     """Print a float in the ANSI exponential/positional syntax.
 
-    Python renders some floats in ways the Lisp reader would not accept back:
-    ``1e+20`` (the ``+`` and the missing ``.0``) and ``inf``/``nan``. A float is
-    always printed in base ten -- ``*PRINT-BASE*`` applies only to rationals
-    (CLHS 22.1.3.1.1).
+    A float is always printed in base ten -- ``*PRINT-BASE*`` applies only
+    to rationals (CLHS 22.1.3.1.1). Notation is chosen from the value's
+    magnitude rather than by asking Python's ``repr`` to pick: ``repr``
+    switches to exponential notation outside roughly ``[1e-5, 1e17)``,
+    but CLHS's own worked examples (and the ansi-test suite, e.g.
+    ``format.e.1``/``.2``/``.26``, which compare ``FORMAT``'s ``~E``
+    against ``PRIN1`` for values chosen specifically to fall outside it)
+    assume the conventional ``[1e-3, 1e7)`` -- so a magnitude like ``1e-4``
+    must already print as ``1.e-4``, a boundary Python's own ``repr``
+    would not cross for another order of magnitude.
 
     An infinity or a NaN has no standard printed syntax, so it is
     implementation-defined output -- but only when ``*PRINT-READABLY*`` is
@@ -381,15 +423,27 @@ def _write_float(value, ctx):
     if value in (float('inf'), float('-inf')):
         sign = 'NEGATIVE' if value < 0 else 'POSITIVE'
         return _write_unreadable_checked(value, f'{sign}-INFINITY', ctx)
-    text = repr(float(value))
-    if 'e' in text:
-        mantissa, exponent = text.split('e')
-        if '.' not in mantissa:
-            mantissa += '.0'
-        return f'{mantissa}e{int(exponent)}'
-    if '.' not in text:
-        text += '.0'
-    return text
+    if value == 0.0:
+        return '-0.0' if math.copysign(1.0, value) < 0 else '0.0'
+    sign = '-' if value < 0 else ''
+    mag = abs(value)
+    digits, decpt = float_shortest_digits(mag)
+    exponent = decpt - 1
+    if -3 <= exponent < 7:
+        if decpt <= 0:
+            int_part, frac_part = '0', '0' * (-decpt) + digits
+        elif decpt >= len(digits):
+            int_part, frac_part = digits + '0' * (decpt - len(digits)), '0'
+        else:
+            int_part, frac_part = digits[:decpt], digits[decpt:]
+        return f'{sign}{int_part}.{frac_part}'
+    # CLHS 22.1.3.1.3's exponent-marker float syntax is `{digit}+
+    # [decimal-point {digit}*] exponent` -- unlike the no-exponent form,
+    # digits after the point are optional, so a single-digit mantissa
+    # (e.g. `1e+300`) only needs the point added (`1.e+300`), not a
+    # manufactured `.0`.
+    mantissa = f'{digits[0]}.{digits[1:]}'
+    return f'{sign}{mantissa}e{exponent}'
 
 
 def _write_complex(value, ctx):

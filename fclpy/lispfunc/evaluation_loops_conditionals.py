@@ -2142,9 +2142,18 @@ def eval_loop(form, env):
                 step_form = driver.get('step')
                 if step_form is None:
                     step_form = 1
-                start = eval(start_form, loop_env) if not isinstance(start_form, int) else start_form
-                end = eval(end_form, loop_env)
-                step = eval(step_form, loop_env) if not isinstance(step_form, int) else step_form
+                # CLHS 5.1.2: FROM/TO/BY are single-value contexts, so a bound
+                # like `(floor ...)` -- which returns quotient *and*
+                # remainder -- must be reduced to its primary value here, the
+                # same way `_primary_value` already does for a CASE keyform.
+                # Left as `eval(...)` directly, `end` became the
+                # `MultipleValues` wrapper itself, which `_driver_has_value`'s
+                # `cur <= end` cannot compare against an int at all.
+                start = (start_form if isinstance(start_form, int)
+                         else _primary_value(eval(start_form, loop_env)))
+                end = _primary_value(eval(end_form, loop_env))
+                step = (step_form if isinstance(step_form, int)
+                        else _primary_value(eval(step_form, loop_env)))
                 if step == 0:
                     raise lisptype.LispNotImplementedError('LOOP BY step cannot be 0')
                 driver['_cur'] = start
@@ -2162,15 +2171,17 @@ def eval_loop(form, env):
                 step_form = driver.get('step')
                 if step_form is None:
                     step_form = 1
-                start = eval(start_form, loop_env) if not isinstance(start_form, int) else start_form
-                step = eval(step_form, loop_env) if not isinstance(step_form, int) else step_form
+                start = (start_form if isinstance(start_form, int)
+                         else _primary_value(eval(start_form, loop_env)))
+                step = (step_form if isinstance(step_form, int)
+                        else _primary_value(eval(step_form, loop_env)))
                 if step == 0:
                     raise lisptype.LispNotImplementedError('LOOP BY step cannot be 0')
                 driver['_cur'] = start
                 driver['_step'] = step
                 return True
             if kind == 'repeat':
-                count = eval(driver['count'], loop_env)
+                count = _primary_value(eval(driver['count'], loop_env))
                 if not isinstance(count, (int, float)) or isinstance(count, bool):
                     raise lisptype.LispNotImplementedError(
                         f'LOOP REPEAT requires a number, got {count!r}')
@@ -2299,7 +2310,7 @@ def eval_loop(form, env):
                     # No THEN form means the init form supplies every value.
                     step_form = driver.get('step')
                     value_form = driver.get('start') if step_form is None else step_form
-                _bind_varspec(frame, var, eval(value_form, loop_env))
+                _bind_varspec(frame, var, _primary_value(eval(value_form, loop_env)))
                 return
             if kind == 'repeat':
                 return
