@@ -144,11 +144,19 @@ def write_text(text, stream=None):
         # Record the column for FRESH-LINE. Only a non-empty write moves it.
         try:
             setattr(target, _AT_LINE_START, text.endswith('\n'))
+            nl = text.rfind('\n')
+            col = len(text) - nl - 1 if nl != -1 else getattr(target, _COLUMN_ATTR, 0) + len(text)
+            setattr(target, _COLUMN_ATTR, col)
         except AttributeError:
             # A stream that refuses attributes (e.g. a raw file object with
             # __slots__) simply has no recorded column; `_at_line_start` then
             # reports "at a line start", so FRESH-LINE emits nothing rather
-            # than a spurious newline.
+            # than a spurious newline. `PPRINT-LOGICAL-BLOCK`'s own in-memory
+            # buffer (`_PPBuffer`) deliberately falls in here too -- it holds
+            # unresolved sentinel tags, not real characters, so a numeric
+            # column computed from its raw length would be meaningless; its
+            # column is instead read from its *resolved* text on demand
+            # (`_pp_outer_column`).
             pass
 
 
@@ -379,6 +387,12 @@ def fresh_line(stream=None):
 #: string streams whose buffer can be re-read.
 _AT_LINE_START = '_fclpy_at_line_start'
 
+#: Attribute `write_text` stamps alongside `_AT_LINE_START`: the 0-based
+#: column its last write left the stream at. `PPRINT-LOGICAL-BLOCK` needs a
+#: real starting column to resolve indentation against (CLHS 22.2.1), and
+#: unlike `_at_line_start` a boolean cannot answer "how far into the line".
+_COLUMN_ATTR = '_fclpy_column'
+
 
 def _at_line_start(target):
     """True when `target`'s next character would begin a line.
@@ -518,26 +532,43 @@ def copy_pprint_dispatch(table=None):
         f"COPY-PPRINT-DISPATCH: not a pprint dispatch table: {table!r}")
 
 
-class _PrettyStream:
-    """Wraps a stream, re-emitting a per-line prefix after every newline.
+class _PPBuffer:
+    """In-memory sink for one `PPRINT-LOGICAL-BLOCK` frame's body output.
 
-    CLHS 22.2.1: `:per-line-prefix`, unlike `:prefix`, is not printed once --
-    it begins *every* line the logical block outputs, including ones produced
-    by an ordinary `TERPRI` inside the body (`pprint-logical-block.12`). A
-    thin wrapper bound to the block's stream-symbol for the block's dynamic
-    extent is enough: `write_text` already funnels every output call (WRITE,
-    WRITE-CHAR, TERPRI, ...) through one place, so intercepting `.write` here
-    covers all of them without a second output path.
+    CLHS 22.2.1's fitting decisions need the *whole* section between one
+    conditional newline and the next -- a `:fill` break may depend on text
+    that has not been written yet when the break itself runs, and a
+    `:linear`/`:miser` break depends on whether the *entire* enclosing block
+    fits. Evaluating the body left-to-right, writing straight to the real
+    stream as `PPRINT-NEWLINE`/`PPRINT-INDENT` are called, cannot see that
+    far ahead. So the body writes here instead -- as a list of `('text', s)`
+    / `('break', kind)` / `('indent', relative_to, n)` tokens, plus a
+    `('block', suffix_text, per_line_text, subtokens)` token for each nested
+    `PPRINT-LOGICAL-BLOCK` -- and the whole tree is resolved in one
+    left-to-right pass once the *outermost* block closes (`flush_pprint_frame`
+    / `_pp_render_block`), mirroring the tokenize/measure/render shape
+    FORMAT's `~<...~:>` logical block already uses, but keeping a nested
+    block as a node in the tree rather than pre-flattened text.
+
+    A nested block's own fitting decision needs the column it actually
+    starts at, which depends on whether the *enclosing* block's own earlier
+    breaks fired -- not decidable until the whole enclosing block is
+    resolved. Deferring nested blocks as tree nodes, rather than resolving
+    each one as soon as its body finishes, is what lets the single render
+    pass reach every nested block with a real, already-decided column
+    instead of a best-effort guess made before the enclosing breaks were
+    decided (the gap `pprint-newline.miser.8`/`.9` exposed in an earlier,
+    eager-resolve version of this).
     """
 
-    def __init__(self, target, prefix_text):
-        self._target = target
-        self._prefix_text = prefix_text
+    __slots__ = ('tokens',)
+
+    def __init__(self):
+        self.tokens = []
 
     def write(self, text):
-        if not text:
-            return
-        write_text(text.replace('\n', '\n' + self._prefix_text), self._target)
+        if text:
+            self.tokens.append(('text', text))
 
 
 def _pprint_block_text(value, argument_name):
@@ -639,13 +670,22 @@ class PPrintFrame:
     "remaining is NIL" state means something different in each).
     """
 
-    __slots__ = ('remaining', 'stream', 'count', 'started_as_nil')
+    __slots__ = ('remaining', 'stream', 'count', 'started_as_nil',
+                 'outer_target', 'body_col', 'per_line_text')
 
-    def __init__(self, remaining, stream):
+    def __init__(self, remaining, stream, outer_target=None, body_col=0, per_line_text=None):
         self.remaining = remaining
         self.stream = stream
         self.count = 0
         self.started_as_nil = _null_internal(remaining)
+        # The real stream (or enclosing frame's own `_PPBuffer`) this frame's
+        # resolved text is written to once it closes, the column it starts
+        # at, and its `:per-line-prefix` text (`None` if it has none) --
+        # `flush_pprint_frame`'s inputs. `stream` above is this frame's OWN
+        # `_PPBuffer`, bound to the Lisp stream-symbol for the body's extent.
+        self.outer_target = outer_target
+        self.body_col = body_col
+        self.per_line_text = per_line_text
 
 
 def _current_pprint_frame(operator_name):
@@ -682,19 +722,28 @@ def pprint_logical_block_setup(stream_designator, object, prefix, per_line_prefi
       `#` and skip the body (`pprint-logical-block.9`/`.10`, which apply even
       when `*PRINT-PRETTY*` is NIL: `.13`).
     * `kind='run'` -- push `frame` onto `state.pprint_stack`, evaluate the
-      body, then write `suffix_text` and pop the frame.
+      body against `frame.stream` (a fresh `_PPBuffer`), then
+      `flush_pprint_frame` and pop the frame.
+
+    The prefix (or per-line-prefix) is still written immediately, to
+    `outer_target`, exactly as before -- an abnormal exit from the body (a
+    non-local `RETURN-FROM`/`GO`/`THROW`, or a Python exception) must still
+    have printed it, matching `PPRINT-LOGICAL-BLOCK`'s CLHS-specified
+    behavior of printing the prefix *before* the body runs. Only the body's
+    own output -- and thus every `PPRINT-NEWLINE`/`PPRINT-INDENT` decision --
+    is deferred to `flush_pprint_frame`, since only that needs the margin.
     """
     import fclpy.state as state
 
-    stream = resolve_output_stream(stream_designator)
+    outer_target = resolve_output_stream(stream_designator)
 
     if not _listp_internal(object):
-        return ('atom', stream, None, None)
+        return ('atom', outer_target, None, None)
 
     depth = len(getattr(state, 'pprint_stack', []) or [])
     level = _printer._as_count(_printer.resolve_control('*PRINT-LEVEL*'))
     if level is not None and depth >= level:
-        return ('level-exceeded', stream, None, None)
+        return ('level-exceeded', outer_target, None, None)
 
     # Gated on whether the keyword was syntactically *given*, not on whether
     # its value is NIL: `:prefix nil` is a supplied non-string value and must
@@ -705,15 +754,64 @@ def pprint_logical_block_setup(stream_designator, object, prefix, per_line_prefi
                       if per_line_prefix_given else None)
     suffix_text = _pprint_block_text(suffix, ':SUFFIX') if suffix_given else ''
 
-    if per_line_text is not None:
-        write_text(per_line_text, stream)
-        body_stream = _PrettyStream(stream, per_line_text)
-    else:
-        write_text(prefix_text, stream)
-        body_stream = stream
+    write_text(per_line_text if per_line_text is not None else prefix_text, outer_target)
+    # Only the outermost frame's column is needed now -- a nested frame's
+    # own start column is not decidable until the enclosing block's earlier
+    # breaks are (`flush_pprint_frame`'s `'block'`-token deferral), so it is
+    # resolved later, from the *real* running column reached in that single
+    # left-to-right render pass, not guessed here.
+    body_col = 0 if isinstance(outer_target, _PPBuffer) else _pp_outer_column(outer_target)
 
-    frame = PPrintFrame(object, body_stream)
-    return ('run', body_stream, frame, suffix_text)
+    body_buffer = _PPBuffer()
+    frame = PPrintFrame(object, body_buffer, outer_target=outer_target,
+                         body_col=body_col, per_line_text=per_line_text)
+    return ('run', body_buffer, frame, suffix_text)
+
+
+def _pp_outer_column(target):
+    """The 0-based column `target` is at right now, for a logical block's own
+    `start_column` (CLHS 22.2.1) -- exact for the stream types ansi-test
+    actually uses, best-effort (`write_text`'s own running tally, 0 if never
+    written to) otherwise.
+
+    A `StringOutputStream`/`FillPointerOutputStream`'s buffer is authoritative
+    (`peek_string`, the same source `_at_line_start` already trusts over the
+    write-time bookkeeping, since text can reach it by paths other than
+    `write_text`).
+    """
+    from .streams import StringOutputStream, FillPointerOutputStream
+    if isinstance(target, (StringOutputStream, FillPointerOutputStream)):
+        text = target.peek_string()
+        nl = text.rfind('\n')
+        return len(text) - nl - 1 if nl != -1 else len(text)
+    return getattr(target, _COLUMN_ATTR, 0)
+
+
+def flush_pprint_frame(frame, suffix_text):
+    """Resolve one `PPRINT-LOGICAL-BLOCK` frame's buffered body against the
+    margin (CLHS 22.2.1) -- or, if nested, defer it -- and write the suffix.
+
+    Called once, when the frame's body finishes (normally, or via the
+    `RETURN-FROM NIL` `PPRINT-EXIT-IF-LIST-EXHAUSTED` raises) -- never
+    incrementally, since a conditional newline's firing can depend on text
+    the body has not written yet.
+
+    If `frame.outer_target` is itself another frame's `_PPBuffer` (this
+    block is nested), resolving now would need a start column that is not
+    yet known -- the enclosing block's own breaks, still unresolved, may or
+    may not put this block at column 0. So nothing is rendered here; a
+    `'block'` token carrying this frame's own tokens (plus its suffix and
+    per-line-prefix) is appended to the *enclosing* buffer instead, and
+    resolved together with everything else once an actual stream is
+    reached, by `_pp_render_block` recursing into it with the real column
+    that point in the single left-to-right pass has reached.
+    """
+    if isinstance(frame.outer_target, _PPBuffer):
+        frame.outer_target.tokens.append(('block', suffix_text, frame.per_line_text, frame.stream.tokens))
+        return
+    rendered = _pp_render_top(frame.stream.tokens, frame.body_col,
+                               frame.per_line_text, len(suffix_text))
+    write_text(rendered + suffix_text, frame.outer_target)
 
 
 def _pprint_exit_nil():
@@ -807,10 +905,51 @@ def pprint_pop():
     return value
 
 
+def _current_pprint_frame_or_none():
+    """Like `_current_pprint_frame`, but `None` rather than a PROGRAM-ERROR
+    when there is no enclosing `PPRINT-LOGICAL-BLOCK` -- `PPRINT-INDENT` and
+    `PPRINT-NEWLINE`, unlike `PPRINT-POP`/`PPRINT-EXIT-IF-LIST-EXHAUSTED`, are
+    meaningful only *inside* one but are not specified to error outside one.
+    """
+    import fclpy.state as state
+    stack = getattr(state, 'pprint_stack', None)
+    return stack[-1] if stack else None
+
+
 @_registry.cl_function('PPRINT-INDENT')
 def pprint_indent(relative_to, n, stream=None):
-    """Set pretty print indent (stub)."""
-    return None
+    """Set indentation for the innermost open `PPRINT-LOGICAL-BLOCK` (CLHS 22.2.2).
+
+    `relative_to` must be `:BLOCK` or `:CURRENT` regardless of
+    `*PRINT-PRETTY*` or nesting -- `pprint-indent.error.4`/`-unsafe` require
+    an ERROR for every other value in `*mini-universe*`. Past that check,
+    this has no effect if `*PRINT-PRETTY*` is false *at the moment of this
+    call* -- checked here, not when the enclosing block resolves, because a
+    `LET` can rebind `*PRINT-PRETTY*` around just this one call while the
+    block's own dynamic extent stays pretty (`pprint-indent.17`/`.18`) -- or
+    if there is no enclosing block. Otherwise a sentinel recording
+    `relative_to`/`n` is appended to that block's buffer; the actual column
+    is decided once the whole block's fit against the margin is known
+    (`flush_pprint_frame`), the same engine FORMAT's `~<...~:>` uses for
+    `~I`.
+    """
+    name = relative_to.name.upper() if isinstance(relative_to, lisptype.LispSymbol) else None
+    if name not in ('BLOCK', 'CURRENT'):
+        raise lisptype.LispTypeError(
+            f"PPRINT-INDENT: relative-to must be :BLOCK or :CURRENT, not "
+            f"{_write_object(relative_to, escape=True)}",
+            expected_type='(MEMBER :BLOCK :CURRENT)', actual_value=relative_to)
+    if not _printer._true(_printer.resolve_control('*PRINT-PRETTY*')):
+        return lisptype.NIL
+    frame = _current_pprint_frame_or_none()
+    if frame is None:
+        return lisptype.NIL
+    try:
+        offset = int(round(n))
+    except TypeError:
+        offset = 0
+    frame.stream.tokens.append(('indent', 'block' if name == 'BLOCK' else 'current', offset))
+    return lisptype.NIL
 
 
 @_registry.cl_function('PPRINT-LINEAR')
@@ -824,14 +963,36 @@ def pprint_linear(stream, object, prefix=None, per_line_prefix=None, suffix=None
     return _pprint_unpretty(object, stream)
 
 
+_PP_NEWLINE_KINDS = {'LINEAR': 'linear', 'FILL': 'fill', 'MISER': 'miser', 'MANDATORY': 'mandatory'}
+
+
 @_registry.cl_function('PPRINT-NEWLINE')
 def pprint_newline(kind, stream=None):
-    """A conditional newline (CLHS 22.2.2) -- nothing, with no line breaking.
+    """A conditional (or, for `:MANDATORY`, unconditional) newline inside the
+    innermost open `PPRINT-LOGICAL-BLOCK` (CLHS 22.2.2).
 
-    It used to emit an *unconditional* newline to Python's stdout: wrong stream,
-    and wrong even on the right one, since every `kind` here is conditional and
-    all four conditions are "only if the enclosing block does not fit".
+    It used to emit an *unconditional* newline to Python's stdout regardless
+    of `kind`: wrong stream, and wrong even on the right one, since three of
+    the four kinds are conditional on whether the enclosing block fits.
+    `kind` must be one of the four CLHS keywords regardless of context
+    (`pprint-newline.error.1`/`-unsafe`); past that, a no-op if
+    `*PRINT-PRETTY*` is currently false, or if there is no enclosing block.
+    Otherwise records a break sentinel in that block's buffer -- whether it
+    actually breaks is decided once the whole block's fit against
+    `*PRINT-RIGHT-MARGIN*` is known (`flush_pprint_frame`).
     """
+    name = kind.name.upper() if isinstance(kind, lisptype.LispSymbol) else None
+    if name not in _PP_NEWLINE_KINDS:
+        raise lisptype.LispTypeError(
+            f"PPRINT-NEWLINE: kind must be :LINEAR, :FILL, :MISER or "
+            f":MANDATORY, not {_write_object(kind, escape=True)}",
+            expected_type='(MEMBER :LINEAR :FILL :MISER :MANDATORY)', actual_value=kind)
+    if not _printer._true(_printer.resolve_control('*PRINT-PRETTY*')):
+        return lisptype.NIL
+    frame = _current_pprint_frame_or_none()
+    if frame is None:
+        return lisptype.NIL
+    frame.stream.tokens.append(('break', _PP_NEWLINE_KINDS[name]))
     return lisptype.NIL
 
 
@@ -1769,11 +1930,19 @@ def _pp_render(tokens, start_col, indent_baseline, right_margin, block_fits, mis
                 continue
             parts = text.split('\n')
             for j, part in enumerate(parts):
+                if j > 0:
+                    out.append('\n')
                 out.append(part)
                 col = len(part) if j == len(parts) - 1 else 0
         elif kind == 'indent':
-            relative_to, n = rest
-            indent = (indent_baseline + n) if relative_to == 'block' else (col + n)
+            # No effect while the enclosing section is in miser mode (CLHS
+            # 22.2.2's pprint-indent) -- `pprint-indent.22`'s :current/:block
+            # calls are both ignored once miser mode is active, and every
+            # line instead indents to the block's own start column, which is
+            # exactly `indent`'s value before any indent token is ever seen.
+            if not miser_active:
+                relative_to, n = rest
+                indent = (indent_baseline + n) if relative_to == 'block' else (col + n)
         else:  # break
             bkind = rest[0]
             if bkind == 'mandatory':
@@ -1784,7 +1953,13 @@ def _pp_render(tokens, start_col, indent_baseline, right_margin, block_fits, mis
                 fire = not block_fits
             elif bkind == 'miser':
                 fire = miser_active and not block_fits
-            else:  # fill
+            elif miser_active:
+                # CLHS 22.2.1.1: in miser mode, `:fill` also breaks like
+                # `:linear` (all-or-none on the whole block) rather than at
+                # its own per-chunk lookahead -- see the identical case in
+                # `_pp_render_block`, `PPRINT-LOGICAL-BLOCK`'s own renderer.
+                fire = not block_fits
+            else:  # fill, outside miser mode
                 fire = False if block_fits else (col + lookahead(idx)) > right_margin
             if fire:
                 rstrip_pending()
@@ -1793,8 +1968,182 @@ def _pp_render(tokens, start_col, indent_baseline, right_margin, block_fits, mis
     return ''.join(out)
 
 
+def _pp_block_flat_width(tokens):
+    """Width of a `PPRINT-LOGICAL-BLOCK` token list if every break stayed
+    unbroken -- `None` if that is impossible (a `:mandatory` break anywhere,
+    including inside a nested `'block'` token, forces the *enclosing* block
+    off one line too, since the nested one would still contain a real
+    newline). A nested block's own prefix is not counted here: it was
+    already written as an ordinary preceding `'text'` token in the same list
+    (`pprint_logical_block_setup`), so it is already part of some earlier
+    token's width.
+    """
+    width = 0
+    for tok in tokens:
+        kind = tok[0]
+        if kind == 'text':
+            if '\n' in tok[1]:
+                return None
+            width += len(tok[1])
+        elif kind == 'break':
+            if tok[1] == 'mandatory':
+                return None
+        elif kind == 'block':
+            _, suffix_text, _per_line, subtokens = tok
+            sub_flat = _pp_block_flat_width(subtokens)
+            if sub_flat is None:
+                return None
+            width += sub_flat + len(suffix_text)
+    return width
+
+
+def _pp_render_block(tokens, start_col, indent_baseline, right_margin, miser_width,
+                      block_fits, miser_active):
+    """Render a `PPRINT-LOGICAL-BLOCK` token list (CLHS 22.2.1), recursing into
+    any nested `'block'` token with the column this same left-to-right pass
+    has *actually* reached by the time it gets there -- the enclosing
+    block's own earlier breaks, decided by this same call, are already
+    resolved into real text (or real absence of a break) before a nested
+    block is ever reached, so its own fit-on-one-line and miser-mode
+    determinations are exact, not a guess made before the enclosing block's
+    breaks were known.
+    """
+    col = start_col
+    indent = indent_baseline
+    out = []
+
+    def lookahead(idx):
+        width = 0
+        for tok in tokens[idx + 1:]:
+            kind = tok[0]
+            if kind == 'break':
+                break
+            if kind == 'text':
+                text = tok[1]
+                if '\n' in text:
+                    width += len(text.split('\n', 1)[0])
+                    break
+                width += len(text)
+            elif kind == 'block':
+                sub_flat = _pp_block_flat_width(tok[3])
+                if sub_flat is None:
+                    break
+                width += sub_flat + len(tok[1])
+        return width
+
+    def rstrip_pending():
+        while out:
+            if out[-1] == '':
+                out.pop()
+                continue
+            stripped = out[-1].rstrip(' ')
+            if stripped == out[-1]:
+                return
+            out[-1] = stripped
+            if not stripped:
+                out.pop()
+            return
+
+    for idx, tok in enumerate(tokens):
+        kind = tok[0]
+        if kind == 'text':
+            text = tok[1]
+            if '\n' not in text:
+                out.append(text)
+                col += len(text)
+                continue
+            parts = text.split('\n')
+            for j, part in enumerate(parts):
+                if j > 0:
+                    out.append('\n')
+                out.append(part)
+                col = len(part) if j == len(parts) - 1 else 0
+        elif kind == 'indent':
+            # No effect while the enclosing section is in miser mode (CLHS
+            # 22.2.2's pprint-indent) -- see `_pp_render`'s identical guard.
+            if not miser_active:
+                _, relative_to, n = tok
+                indent = (indent_baseline + n) if relative_to == 'block' else (col + n)
+        elif kind == 'block':
+            _, suffix_text, sub_per_line, subtokens = tok
+            sub_flat = _pp_block_flat_width(subtokens)
+            sub_fits = (right_margin is not None and sub_flat is not None
+                        and col + sub_flat + len(suffix_text) <= right_margin)
+            sub_miser = (right_margin is not None and miser_width is not None
+                         and (right_margin - col) <= miser_width)
+            sub_indent_baseline = 0 if sub_per_line is not None else col
+            rendered_sub = _pp_render_block(subtokens, col, sub_indent_baseline,
+                                             right_margin, miser_width, sub_fits, sub_miser)
+            if sub_per_line is not None:
+                rendered_sub = rendered_sub.replace('\n', '\n' + sub_per_line)
+            combined = rendered_sub + suffix_text
+            out.append(combined)
+            nl = combined.rfind('\n')
+            col = len(combined) - nl - 1 if nl != -1 else col + len(combined)
+        else:  # break
+            bkind = tok[1]
+            if bkind == 'mandatory':
+                fire = True
+            elif right_margin is None:
+                fire = False
+            elif bkind == 'linear':
+                fire = not block_fits
+            elif bkind == 'miser':
+                fire = miser_active and not block_fits
+            elif miser_active:
+                # CLHS 22.2.1.1: in miser mode, `:fill` also breaks like
+                # `:linear` (all-or-none on the whole block) rather than at
+                # its own per-chunk lookahead -- `pprint-newline.fill.5` sets
+                # margin=miser=10 on a block that cannot fit and requires
+                # every element on its own line, not the every-5th-element
+                # wrapping plain `:fill` lookahead would give.
+                fire = not block_fits
+            else:  # fill, outside miser mode
+                fire = False if block_fits else (col + lookahead(idx)) > right_margin
+            if fire:
+                rstrip_pending()
+                col = max(indent, 0)
+                out.append('\n' + ' ' * col)
+    return ''.join(out)
+
+
+def _pp_render_top(tokens, body_col, per_line_text, suffix_len):
+    """Entry point for resolving an *outermost* `PPRINT-LOGICAL-BLOCK`'s
+    whole token tree (CLHS 22.2.1) -- reads the margin/miser-width/pretty
+    controls once, for every block in the tree, then a single
+    `_pp_render_block` pass resolves the outer block and every block nested
+    in it together.
+    """
+    right_margin = _printer._as_count(_printer.resolve_control('*PRINT-RIGHT-MARGIN*'))
+    miser_width = _printer._as_count(_printer.resolve_control('*PRINT-MISER-WIDTH*'))
+    pretty = _printer._true(_printer.resolve_control('*PRINT-PRETTY*'))
+
+    if pretty and right_margin is not None:
+        flat = _pp_block_flat_width(tokens)
+        block_fits = flat is not None and body_col + flat + suffix_len <= right_margin
+        # CLHS 22.2.1.1: miser mode is in effect once the space available for
+        # the *whole* logical block is at or below `*print-miser-width*`, not
+        # only strictly below it -- `pprint-newline.miser.4` sets margin=10,
+        # miser=10 on a block starting at column 0 (10-0 == 10) and requires
+        # miser mode active; `.11`/`.12`'s 19-vs-18 pair pins the same
+        # boundary from the other side.
+        miser_active = miser_width is not None and (right_margin - body_col) <= miser_width
+        rm = right_margin
+    else:
+        block_fits = True
+        miser_active = False
+        rm = None
+
+    indent_baseline = 0 if per_line_text is not None else body_col
+    rendered = _pp_render_block(tokens, body_col, indent_baseline, rm, miser_width,
+                                 block_fits, miser_active)
+    if per_line_text is not None:
+        rendered = rendered.replace('\n', '\n' + per_line_text)
+    return rendered
+
+
 def _resolve_pretty_body(body_text, start_column, prefix_text, suffix_text,
-                          per_line, auto_fill):
+                          per_line, auto_fill, allow_miser=True):
     """Render one logical block's body (CLHS 22.2/22.3.5.2) and wrap it.
 
     `auto_fill` is `~:@>`'s own effect: every run of literal control-string
@@ -1805,6 +2154,18 @@ def _resolve_pretty_body(body_text, start_column, prefix_text, suffix_text,
     blanks: the space characters bracketed by `_format_process_cursor`'s
     literal-run branch, never ones inside an argument's own printed text
     (`format.logical-block.26`'s `~A` of the string `"1 2 3"` must not wrap).
+
+    `allow_miser=False` is `_format_process_with_tail`'s own case: a bare
+    `~_`/`~I` with no enclosing `~<...~:>` is still resolved, against an
+    *implicit* block spanning the whole control string (CLHS restricts
+    these directives from appearing inside a plain `~<...~>` justification,
+    not from needing a real logical block at all) -- but that implicit
+    block has no real CLHS-specified start column of its own, so CLHS
+    22.2.1.1's miser-mode determination, which is a property of an actual
+    logical block, cannot apply to it: `format.@_.10` sets margin=miser=4 on
+    exactly such a bare directive and requires it to stay flat, which real
+    miser mode (correctly active for a real block at this same boundary --
+    `pprint-newline.miser.4`) would not.
     """
     if auto_fill:
         body_text = _PP_LIT_SPACE_RUN_RE.sub(
@@ -1821,7 +2182,14 @@ def _resolve_pretty_body(body_text, start_column, prefix_text, suffix_text,
     if pretty and right_margin is not None:
         flat = _pp_flat_width(tokens)
         block_fits = flat is not None and body_col + flat + len(suffix_text) <= right_margin
-        miser_active = miser_width is not None and (right_margin - body_col) < miser_width
+        # CLHS 22.2.1.1: miser mode is in effect once the space available for
+        # the *whole* logical block is at or below `*print-miser-width*`, not
+        # only strictly below it -- `pprint-newline.miser.4` sets margin=10,
+        # miser=10 on a block starting at column 0 (10-0 == 10) and requires
+        # miser mode active; `.11`/`.12`'s 19-vs-18 pair pins the same
+        # boundary from the other side.
+        miser_active = (allow_miser and miser_width is not None
+                         and (right_margin - body_col) <= miser_width)
     else:
         # No margin (or *print-pretty* nil) to break against: only a
         # `:mandatory` break -- or a nested block that already broke -- is
@@ -2753,7 +3121,7 @@ def _format_process_with_tail(control_string, args):
     # literal-space brackets (`_format_process_cursor`'s own bookkeeping)
     # stripped back out.
     if _PP_ANY_BREAK_OR_INDENT_RE.search(result):
-        result = _resolve_pretty_body(result, 0, '', '', False, False)
+        result = _resolve_pretty_body(result, 0, '', '', False, False, allow_miser=False)
     else:
         result = _pp_strip_lit_space(result)
     return result, cursor.idx

@@ -1041,7 +1041,7 @@ def eval_pprint_logical_block(form, env):
         except ReturnFromException as e:
             if not _null_internal(e.tag):
                 raise
-        _io_write.write_text(suffix_text, frame.stream)
+        _io_write.flush_pprint_frame(frame, suffix_text)
         return lisptype.NIL
     finally:
         _state.pprint_stack.pop()
