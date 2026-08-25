@@ -17,9 +17,6 @@ def symbol_name(*args):
     symbol = args[0]
     if hasattr(symbol, 'name'):
         raw = symbol.name
-        # If it's a keyword, return lower-case name as a Lisp string
-        if isinstance(symbol, lisptype.lispKeyword):
-            return lisptype.LispString(str(raw).lower())
         # If name is pipe-escaped like |ABC|, strip the pipes and return inner content
         if isinstance(raw, str) and raw.startswith('|') and raw.endswith('|'):
             return lisptype.LispString(raw[1:-1])

@@ -904,16 +904,20 @@ def _write_array(value, ctx, depth):
 def _write_structure(value, ctx, depth):
     """Print a structure instance as ``#S(NAME :SLOT value ...)`` (CLHS 22.1.3.10).
 
-    DEFSTRUCT creates a fresh Python class per structure, so ``isinstance``
-    cannot recognise one; the marker attribute is what the evaluator already
-    tests for.
+    DEFSTRUCT builds an ordinary `classes.LispInstance` whose class has
+    ``metaclass_name == 'STRUCTURE-CLASS'`` -- the same object model
+    DEFCLASS uses -- so a structure is told apart from a standard-object
+    instance (which prints unreadably, the branch below this one) by its
+    class's metaclass, not by a separate representation. Slot order comes
+    from `LispClass.get_all_slots`, which preserves declaration order across
+    `:include` inheritance the way the constructor already relies on.
     """
     if _level_exceeded(ctx, depth):
         return '#'
-    parts = [_apply_print_case(str(value._struct_type), ctx)]
-    for slot, slot_value in value._slots.items():
-        parts.append(':' + _apply_print_case(str(slot), ctx))
-        parts.append(_write(slot_value, ctx, depth + 1))
+    parts = [_apply_print_case(value.lisp_class.name.name, ctx)]
+    for slot_name in value.lisp_class.get_all_slots():
+        parts.append(':' + _apply_print_case(slot_name, ctx))
+        parts.append(_write(value.slot_values.get(slot_name), ctx, depth + 1))
     return '#S(' + ' '.join(parts) + ')'
 
 
@@ -1008,7 +1012,8 @@ def _write(value, ctx, depth):
     if isinstance(value, lispCons):
         return _in_progress(value, ctx, _write_cons, depth)
 
-    if hasattr(value, '_struct_type') and hasattr(value, '_slots'):
+    from fclpy.classes import LispInstance as _LispInstance
+    if isinstance(value, _LispInstance) and value.lisp_class.metaclass_name == 'STRUCTURE-CLASS':
         return _in_progress(value, ctx, _write_structure, depth)
 
     from fclpy.lispfunc.arrays import LispArray, BIT_TYPE
