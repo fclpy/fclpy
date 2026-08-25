@@ -1110,7 +1110,7 @@ def _keyword_param_parts(param_spec):
     return lisptype.intern_keyword(head.name), head, default_form, supplied_p
 
 
-def _bind_keyword_parameters(parsed, trailing, func_env, eval_fn, frame):
+def _bind_keyword_parameters(parsed, trailing, func_env, eval_fn, frame, default_fallback=None):
     """Bind a user lambda list's `&key` parameters from the keyword region
     (CLHS 3.4.1.4, 3.5.1.5).
 
@@ -1202,15 +1202,19 @@ def _bind_keyword_parameters(parsed, trailing, func_env, eval_fn, frame):
             if supplied_p is not None:
                 frame.bind(supplied_p, lisptype.T)
         else:
-            if default_form is not None:
-                frame.bind(variable, eval_fn(default_form, func_env))
+            effective_default = default_form
+            if effective_default is None and default_fallback is not None:
+                effective_default = default_fallback(variable)
+            if effective_default is not None:
+                frame.bind(variable, eval_fn(effective_default, func_env))
             else:
                 frame.bind(variable, lisptype.NIL)
             if supplied_p is not None:
                 frame.bind(supplied_p, lisptype.NIL)
 
 
-def _bind_ordinary_lambda_list_tail(parsed, call_args, arg_index, func_env, eval_fn, frame):
+def _bind_ordinary_lambda_list_tail(parsed, call_args, arg_index, func_env, eval_fn, frame,
+                                     default_fallback=None):
     """Bind &optional/&rest/&key/&aux parameters (CLHS 3.4.1) into `func_env`
     from `call_args`, starting at `arg_index` -- i.e. after any required
     parameters already bound positionally by the caller. Shared by DEFUN's
@@ -1229,6 +1233,13 @@ def _bind_ordinary_lambda_list_tail(parsed, call_args, arg_index, func_env, eval
     parameter the function body declares SPECIAL must bind dynamically
     (CLHS 3.4.1, 11.1.2.1.2) and be undone on exit however the function
     exits. `add_variable` can express neither.
+
+    `default_fallback`, when given, is consulted for an &optional/&key
+    parameter that has *no* default-value form of its own, in place of the
+    ordinary "no form means NIL" rule -- CLHS 3.4.6's BOA constructor rule:
+    an omitted default-value form for a parameter that names a DEFSTRUCT slot
+    takes that slot's own default initform instead of NIL. Every other caller
+    passes nothing and gets the ordinary behavior unchanged.
     """
     optional_params = parsed['optional']
     rest_param = parsed['rest']
@@ -1254,9 +1265,13 @@ def _bind_ordinary_lambda_list_tail(parsed, call_args, arg_index, func_env, eval
                 frame.bind(supplied_p, lisptype.T)
             arg_index += 1
         else:
-            # Use default value if provided, otherwise NIL
-            if default_form is not None:
-                default_value = eval_fn(default_form, func_env)
+            # Use default value if provided, else the fallback (BOA
+            # constructors only), else NIL.
+            effective_default = default_form
+            if effective_default is None and default_fallback is not None:
+                effective_default = default_fallback(param)
+            if effective_default is not None:
+                default_value = eval_fn(effective_default, func_env)
                 frame.bind(param, default_value)
             else:
                 frame.bind(param, lisptype.NIL)
@@ -1313,7 +1328,8 @@ def _bind_ordinary_lambda_list_tail(parsed, call_args, arg_index, func_env, eval
     # accept anything. Testing the parameter *list* made a bare `&key`
     # indistinguishable from no `&key` at all.
     if keyword_params or parsed.get('mentions_key') or parsed.get('allow_other_keys'):
-        _bind_keyword_parameters(parsed, trailing, func_env, eval_fn, frame)
+        _bind_keyword_parameters(parsed, trailing, func_env, eval_fn, frame,
+                                  default_fallback=default_fallback)
 
     # Bind &aux parameters
     for param_spec in aux_params:
@@ -2486,12 +2502,12 @@ def eval_defstruct(form, env):
     'structure-class)`, `(typep obj 'structure-object)`, disjointness with
     every other built-in type via SUBTYPEP, and a working `copy-structure`.
 
-    BOA constructors (`:constructor name (boa-lambda-list)`) are parsed
-    only far enough to recover the constructor's *name*; the lambda list
-    itself is not bound, so a BOA constructor still behaves as a keyword
-    constructor (pre-existing behavior, not a regression). Structures with
-    only keyword constructors are unaffected. See plan.md for BOA
-    constructors as the next mechanism.
+    BOA constructors (`:constructor name (boa-lambda-list)`) bind their
+    lambda list the ordinary way (`make_boa_constructor`, below): a
+    lambda-list variable whose name matches a slot initializes that slot,
+    everything else (supplied-p variables, `&aux` locals used only for
+    their side effect) is bound and discarded. Structures with only keyword
+    constructors are unaffected.
     """
     import fclpy.classes as classes
     from .evaluation_core import eval as _eval
@@ -2689,27 +2705,103 @@ def eval_defstruct(form, env):
     def _default_slot_values():
         return {name_str: _eval_initform(slot_def) for name_str, slot_def in ordered_slots}
 
-    def make_keyword_constructor():
+    def _default_constructor_lambda_list():
+        """The implicit ``(&key slot...)`` lambda list CLHS 3.4.6 gives a
+        keyword constructor -- one `&key` parameter per slot, each defaulting
+        to that slot's own initform. Building this and handing it to
+        `make_boa_constructor` below is what makes a keyword constructor go
+        through the *same* CLHS 3.4.1.4/3.5.1.5 argument checking as a BOA
+        constructor's `&key` parameters -- leftmost-wins on a repeated
+        keyword, PROGRAM-ERROR on an odd argument count, a non-symbol key or
+        an undeclared keyword. The hand-rolled loop this replaced matched
+        keys case-insensitively by scanning every slot name and silently
+        ignored all three.
+
+        No `&allow-other-keys` here: that would make the lambda list itself
+        permanently waive CLHS 3.5.1.5's check (STRUCTURE-BOA-TEST-16/3 --
+        `(make-sbt-16 :d 1)` -- must still signal PROGRAM-ERROR). A caller
+        passes `:allow-other-keys t` at the *call site* instead
+        (STRUCTURE-BOA-TEST-16/7,8,11), which `_bind_keyword_parameters`
+        already honors regardless of what the lambda list declares.
+        """
+        tail = lisptype.NIL
+        for name_str, _slot_def in reversed(ordered_slots):
+            tail = lisptype.lispCons(lisptype.LispSymbol(name_str), tail)
+        return lisptype.lispCons(lisptype.LispSymbol('&KEY'), tail)
+
+    def make_boa_constructor(boa_ll, ctor_name):
+        """A `:constructor` whose second element is a BOA lambda list (CLHS
+        3.4.6): an ordinary lambda list, bound the ordinary way, whose
+        variables initialize the *same-named* slot rather than being
+        collected as keyword arguments. Goes through the same
+        `parse_lambda_list` / `_bind_ordinary_lambda_list_tail` /
+        `BindingFrame` machinery as LAMBDA/DEFUN, so &optional/&rest/&key/
+        &aux, supplied-p variables and arity checking all behave exactly as
+        they do for an ordinary function -- rather than a second, partial
+        parser for the same lambda-list grammar. The one BOA-specific rule,
+        `default_fallback`, is a hook that mechanism now exposes: an
+        &optional/&key parameter with no default-value form of its own
+        defaults to the matching slot's own initform, not NIL (structures-03
+        test 05: `(&optional a b c)` naming slots defaulted `3 2 1`).
+        """
+        from .evaluation_core import parse_lambda_list, eval as eval_fn
+        from .binding import BindingFrame
+
+        parsed = parse_lambda_list(boa_ll)
+        required_params = parsed['required']
+        param_vars = _lambda_list_variables(parsed)
+        param_names = {var.name for var in param_vars}
+        slot_initforms = {name_str: slot_def.initform for name_str, slot_def in ordered_slots}
+
+        def default_fallback(var):
+            if isinstance(var, lisptype.LispSymbol):
+                return slot_initforms.get(var.name)
+            return None
+
         def constructor(*call_args):
-            slot_values = _default_slot_values()
-            i = 0
-            while i < len(call_args):
-                key = call_args[i]
-                if isinstance(key, lisptype.lispKeyword) and i + 1 < len(call_args):
-                    key_name = key.name.upper()
-                    for name_str, _slot_def in ordered_slots:
-                        if name_str.upper() == key_name:
-                            slot_values[name_str] = call_args[i + 1]
+            call_args = tuple(
+                lisptype.NIL
+                if (isinstance(a, lisptype.LispSymbol) and a.name.upper() == 'NIL')
+                else a
+                for a in call_args)
+            _check_ordinary_arity(parsed, call_args, ctor_name)
+
+            func_env = lisptype.Environment(global_env)
+            frame = BindingFrame(func_env, body=lisptype.NIL, bound_vars=param_vars)
+            try:
+                for index, param in enumerate(required_params):
+                    frame.bind(param, call_args[index])
+                _bind_ordinary_lambda_list_tail(
+                    parsed, call_args, len(required_params), func_env, eval_fn, frame,
+                    default_fallback=default_fallback)
+
+                # A slot the lambda list never mentions gets its own initform
+                # here; a slot it does mention was already initialized by the
+                # binder above (from the argument or `default_fallback`), and
+                # must not be evaluated a second time here -- an initform can
+                # have a side effect (structures-02's S-2-F6 slot default is
+                # `(incf *s-2-f6-counter*)`), and evaluating it once to seed
+                # this dict and again through the binder counted every
+                # construction twice.
+                slot_values = {name_str: _eval_initform(slot_def)
+                               for name_str, slot_def in ordered_slots
+                               if name_str not in param_names}
+                for slot_name_str, _slot_def in ordered_slots:
+                    for var in param_vars:
+                        if var.name == slot_name_str:
+                            slot_values[slot_name_str] = func_env.find_variable(var)
                             break
-                    i += 2
-                else:
-                    i += 1
-            return classes.LispInstance(lisp_class=struct_class, slot_values=slot_values)
+                return classes.LispInstance(lisp_class=struct_class, slot_values=slot_values)
+            finally:
+                frame.unwind()
+
+        constructor.__lisp_lambda_list__ = boa_ll
         return constructor
 
-    for ctor_name, _boa_ll in constructors:
+    for ctor_name, boa_ll in constructors:
         ctor_sym = current_pkg.intern_symbol(ctor_name)
-        global_env.add_function(ctor_sym, make_keyword_constructor())
+        effective_ll = boa_ll if boa_ll is not None else _default_constructor_lambda_list()
+        global_env.add_function(ctor_sym, make_boa_constructor(effective_ll, ctor_name))
 
     if predicate_name:
         def is_structure(obj):

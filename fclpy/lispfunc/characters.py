@@ -445,6 +445,12 @@ def string_fn(designator):
         return lisptype.LispString(designator)
     elif isinstance(designator, lisptype.Character):
         return lisptype.LispString(designator.char)
+    elif isinstance(designator, lisptype.LispSymbol):
+        # A symbol denotes its *name* (CLHS 16.2), not its printed
+        # representation -- `str()` on a keyword includes the leading colon
+        # for PRINC/PRIN1's benefit, so `(string :a)` fell through to the
+        # catchall below and answered ":A" instead of "A".
+        return lisptype.LispString(designator.name)
     elif isinstance(designator, (list, tuple)):
         return lisptype.LispString(''.join(str(x) for x in designator))
     else:
