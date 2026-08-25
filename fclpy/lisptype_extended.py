@@ -518,15 +518,21 @@ class Package(lispT):
                         # Return the inherited symbol (don't create a new one)
                         return sym
         
-        # Symbol not found anywhere - BUT check for T
-        # T should ALWAYS return the canonical symbol
-        # NOTE: We do NOT do this for NIL, because NIL needs a symbol representation
-        # for use in classes, defstruct, etc. The canonical NIL (lispNull) is for
-        # the empty list, not for the symbol.
-        if name == 'T':
-            return T  # Return canonical T
-        
-        # Symbol not found anywhere - create new one in this package
+        # Symbol not found anywhere - create new one in this package.
+        #
+        # This used to special-case name == 'T' to unconditionally return
+        # the canonical COMMON-LISP:T object here, regardless of `self` --
+        # so `(intern "T" "KEYWORD")` answered plain T instead of :T
+        # (KEYWORD-P NIL), and any package not using COMMON-LISP got the
+        # wrong symbol identity for "T" instead of one of its own. The
+        # bootstrap already registers the canonical T as
+        # COMMON_LISP_PACKAGE.symbols['T'], and every package that :uses
+        # COMMON-LISP reaches it through the inherited-symbol loop above, so
+        # the special case was redundant for the normal case and wrong for
+        # every package that does not use COMMON-LISP (KEYWORD, or a
+        # `(defpackage ... (:use))` with none) -- structures/structures-02
+        # .lsp's STRUCT-TEST-65 interns a slot literally named T into
+        # KEYWORD and needs the real :T back.
         if self.name.upper() == "KEYWORD":
             symbol = lispKeyword(name, package=self)  # special self-evaluating symbol
         else:

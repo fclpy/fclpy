@@ -1378,7 +1378,7 @@ Milestones now describe *mechanisms*, and map onto the clusters above.
 | **M6** | Multiple values, sequences | partial | C3, C5, X2, X3 |
 | **M7** | Non-local control flow | partial — name-based block/tag matching, no identity objects | — |
 | **M8** | Conditions and restarts | **signaling core done**; restart half + `DEFINE-CONDITION` + raise-site migration remain | C9, X1 |
-| **M9** | Types, `SUBTYPEP`, CLOS, structures | not started — two CLOS implementations; `SUBTYPEP` is a string-pair table | C4, C6, C8, C13, C14 |
+| **M9** | Types, `SUBTYPEP`, CLOS, structures | not started overall — two CLOS implementations; `SUBTYPEP` is a string-pair table. **`DEFSTRUCT`'s BOA/keyword constructors done 2026-08-25** (item 3, above); its `:TYPE list`/`:TYPE vector` representation is not, and is now the only thing left in `structures` | C4, C6, C8, C13, C14 |
 | **M10** | Reader, printer, `FORMAT`, streams, pathnames, loader | not started — **now the largest single body of failures, and gates ASDF** | C2, C7, C11, C12 |
 
 ### Recommended order
@@ -1413,6 +1413,54 @@ Milestones now describe *mechanisms*, and map onto the clusters above.
    The 12.2% was the *static checklist attribution*, which cannot see the
    `STRUCT-TEST-nn` tests generated at load time; the targeted run is the
    authority for a file (§3's property 1).
+   **BOA constructors done 2026-08-25.** The gap the docstring itself named —
+   `:constructor name (boa-lambda-list)` recovered only the name, so a BOA
+   constructor still behaved as a keyword constructor — was the whole
+   reason `structures` was the worst *rate* in the suite at 32.2%
+   ([§1](#1-status)). `make_boa_constructor` now binds the lambda list
+   through the same `parse_lambda_list`/`_bind_ordinary_lambda_list_tail`/
+   `BindingFrame` machinery LAMBDA/DEFUN/FLET/LABELS share, with one new hook
+   (`default_fallback`) for CLHS 3.4.6's own rule: an `&optional`/`&key`
+   parameter with no default-value form of its own defaults to the matching
+   slot's initform, not NIL. The default keyword constructor is now the same
+   mechanism called with a synthesized `(&key slot...)` lambda list, which
+   deleted the second, hand-rolled keyword-matching loop that never checked
+   arity, rejected an odd keyword count, or told a repeated keyword's
+   leftmost occurrence from its rightmost.
+   Four smaller defects surfaced by the same test files, each with its own
+   fix rather than a structures-only patch: `STRING` on a keyword answered
+   its *printed* form (`":A"`) instead of its name, via `str(x)`;
+   `DEFSTRUCT`'s own `_sym_name` had the same bug for a `Character` option
+   value (`(:conc-name #\X)`) and had no case at all for a bare `:conc-name`
+   atom (CLHS: no value supplied suppresses the prefix, same as
+   `(:conc-name nil)`, which the list form `(:conc-name)` already got right);
+   `Package.intern` special-cased the string `"T"` to always return
+   `COMMON-LISP:T` regardless of which package was being interned into, so
+   `(intern "T" "KEYWORD")` answered plain `T` (`KEYWORDP` NIL) instead of
+   `:T` — wrong for any package that does not `:use COMMON-LISP`, KEYWORD
+   included; and the new constructor evaluated a slot's default-value form
+   in an environment rooted at the struct's *global* environment rather than
+   the lexical environment DEFSTRUCT was itself written in, so a slot
+   default closing over an enclosing `LET`/`FLET` (structures-02's
+   `STRUCT-TEST-62`, a slot defaulting to `#'%f` for a local `%f`) could not
+   see it. `structures` **1312 → 1340 of 1394** on `run_ansi.py structures`
+   (targeted; not yet in a full run), checklist-tracked rate 33.0% → 88.7%,
+   0 regressions (`pytest`, `duplicates.py --baseline`,
+   `ansi_checklist.py --baseline` all clean net of three pre-existing,
+   unrelated flaky files — `numbers/boole.lsp`, `cons/nintersection.lsp`,
+   `streams/write-sequence.lsp` — confirmed via `git stash` to already
+   regress against baseline before this session's changes, driven by
+   `(random ...)` in their own test generation).
+   **What is left in `structures` is a single, separate feature, not more of
+   this mechanism: CLHS 3.4.6's `:TYPE list`/`:TYPE vector`/`:NAMED` option**,
+   which builds a structure as a plain list or vector instead of a
+   `classes.LispInstance` — already named in `evaluation_special_forms.py`'s
+   own comment ("not modeled — left unhandled, matching prior behavior") and
+   now the entirety of `structures/structures-02.lsp`'s remaining 13
+   failures (`STRUCT-TEST-37` through `STRUCT-TEST-70`, `DEFSTRUCT.ERROR.3/4`).
+   It needs a second struct representation and constructors/accessors that
+   branch on it, which `eval_defstruct` currently has no hook for at all —
+   worth its own item rather than folding into a future BOA-shaped fix.
 4. **C13 first, not C2 — the string/character representation.** *(New, and it
    reorders everything below it.)* `EQUAL`, `EQUALP`, `TYPEP` and `CHARACTERP`
    all type-tested `isinstance(x, str)`, which is false for the `LispString`

@@ -2527,8 +2527,17 @@ def eval_defstruct(form, env):
     rest_forms = cdr(args)
 
     def _sym_name(x):
+        """A DEFSTRUCT option value's name, under CLHS 16.2's *string
+        designator* rule (a string, or a symbol/character whose name/one-
+        character string is used) -- not `str(x)`, which is a keyword's or a
+        character's *printed representation* (`:FOO`, `#\\X`) rather than its
+        name. `(:conc-name #\\X)` (STRUCT-TEST-13) needs the prefix "X", not
+        "#\\X".
+        """
         if isinstance(x, (lisptype.LispSymbol, lisptype.lispKeyword)):
             return x.name
+        if isinstance(x, lisptype.Character):
+            return x.char
         return str(x)
 
     def _is_nil_value(v):
@@ -2620,6 +2629,16 @@ def eval_defstruct(form, env):
                     copier_name = _DEFAULT
                 elif bare == 'PREDICATE':
                     predicate_name = _DEFAULT
+                elif bare == 'CONC-NAME':
+                    # A bare `:conc-name` atom is the same option as `(:conc-
+                    # name)` -- no value supplied -- and CLHS 3.4.6 says *no*
+                    # value (as opposed to omitting the option entirely)
+                    # suppresses the prefix, matching `(:conc-name nil)`; it
+                    # does not affirm the default the way bare `:copier`/
+                    # `:predicate` affirm theirs. STRUCT-TEST-07/34 name their
+                    # accessors with no prefix at all (`A07`, not
+                    # `STRUCT-TEST-07-A07`) for exactly this option shape.
+                    conc_name_explicit = ''
             options = cdr(options)
     else:
         struct_name = name_and_options
@@ -2766,7 +2785,15 @@ def eval_defstruct(form, env):
                 for a in call_args)
             _check_ordinary_arity(parsed, call_args, ctor_name)
 
-            func_env = lisptype.Environment(global_env)
+            # Rooted at `env` -- the lexical environment DEFSTRUCT itself
+            # was evaluated in -- not `global_env`: a slot's default-value
+            # form (BOA-supplied or the struct's own initform, reached here
+            # through `default_fallback`) can close over a binding from that
+            # scope, the way DEFCLASS's slot initforms already do (structures
+            # -02's STRUCTURE-62 defines a slot whose default is `#'%f`, an
+            # FLET-local function visible only through DEFSTRUCT's own
+            # lexical environment).
+            func_env = lisptype.Environment(env)
             frame = BindingFrame(func_env, body=lisptype.NIL, bound_vars=param_vars)
             try:
                 for index, param in enumerate(required_params):
