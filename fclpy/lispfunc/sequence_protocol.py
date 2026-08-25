@@ -234,15 +234,31 @@ def seq_length(sequence, what='sequence function'):
         expected_type="SEQUENCE", actual_value=sequence)
 
 
+def _bounding_index_designator(value, what):
+    """A CLHS bounding-index-designator: an `(INTEGER 0)`, checked rather
+    than coerced. `int(value)` accepted any float (`(integer 0)` and 2.0 are
+    not the same type, but `int(2.0)` silently truncates to 2) and a bare
+    `bool` (an `int` subclass in Python), so a non-conforming `:start`/`:end`
+    -- `streams/write-sequence.lsp`'s ERROR.7/.10/.15/.16 test exactly this
+    -- was silently accepted instead of signalling TYPE-ERROR."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise lisptype.LispTypeError(
+            f"{what}: {value!r} is not a valid bounding index",
+            expected_type="(INTEGER 0)", actual_value=value)
+    return value
+
+
 def bounding_indices(length, start=0, end=None, what='sequence function'):
     """Normalize a CLHS `:start`/`:end` pair against a sequence of `length`.
 
     `:end` defaults to the length and accepts NIL as "the end" (CLHS 17.1);
-    both arrive as Lisp values, so NIL/None must be distinguished from 0 here
-    rather than in each of the twenty callers.
+    `:start`'s designator type is `(INTEGER 0)` with no NIL case, so an
+    explicit `:start nil` is a TYPE-ERROR rather than a second spelling of
+    "omitted" -- omission itself never reaches here as NIL, since every
+    caller's own Python signature defaults `start` to the integer 0.
     """
-    start = 0 if start is None or start is lisptype.NIL else int(start)
-    end = length if end is None or end is lisptype.NIL else int(end)
+    start = 0 if start is None else _bounding_index_designator(start, what)
+    end = length if end is None or end is lisptype.NIL else _bounding_index_designator(end, what)
     if start < 0 or end > length or start > end:
         raise lisptype.LispTypeError(
             f"{what}: bad bounding indices {start}:{end} for length {length}",

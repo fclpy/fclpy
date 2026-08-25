@@ -553,7 +553,7 @@ def close_stream(stream, abort=False):
 
 
 @_registry.cl_function('WRITE-SEQUENCE')
-def write_sequence_stream(sequence, stream=None, start=0, end=None):
+def write_sequence_stream(sequence, stream, *, start=0, end=None):
     """WRITE-SEQUENCE: write elements of `sequence` to `stream` (CLHS 21.2).
 
     Routed through `write_text` so a NIL/T/omitted `stream` resolves to
@@ -564,15 +564,32 @@ def write_sequence_stream(sequence, stream=None, start=0, end=None):
     entirely (`(write-sequence "wxyz" s)` raised a bare Python `TypeError`,
     standing rule 2), and hand-rolling a second string/vector split here
     would drift from what every other sequence operator already does.
+
+    A *binary* stream (CLHS 21.1: `:element-type` some subtype of INTEGER)
+    writes integers, not characters, so this used to route every element
+    through `_char_text` regardless -- `(write-sequence #*00111010 os)` on a
+    `(unsigned-byte 8)` output stream raised "cannot store 0 in a string"
+    (a bit's Python `int` has no character rendering), taking the whole test
+    out via a Python exception rather than writing a byte. `stream.binary`
+    (set by OPEN from the declared element-type) now picks the same
+    per-element encoding WRITE-BYTE itself uses, so a sequence written this
+    way round-trips through READ-BYTE exactly as one written element-by-element
+    would.
     """
     from .sequence_protocol import seq_elements, bounding_indices, _char_text
+    from .io_write import resolve_output_stream, write_text, write_byte
 
     elements = seq_elements(sequence, 'WRITE-SEQUENCE')
     start, end = bounding_indices(len(elements), start, end, 'WRITE-SEQUENCE')
-    text = ''.join(_char_text(item) for item in elements[start:end])
 
-    from .io_write import write_text
-    write_text(text, stream)
+    target = resolve_output_stream(stream)
+    if isinstance(target, Stream) and target.binary:
+        for item in elements[start:end]:
+            write_byte(item, target)
+        return sequence
+
+    text = ''.join(_char_text(item) for item in elements[start:end])
+    write_text(text, target)
     return sequence
 
 

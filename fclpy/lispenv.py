@@ -395,6 +395,24 @@ def setup_standard_environment():
         ('LAMBDA-LIST-KEYWORDS', _lambda_list_keywords),
         # Time (CLHS 25.1.4.1)
         ('INTERNAL-TIME-UNITS-PER-SECOND', INTERNAL_TIME_UNITS_PER_SECOND),
+        # BOOLE's sixteen op codes (CLHS 12.1.4/BOOLE): constant variables,
+        # not functions -- `numbers/boole.lsp` builds `*boole-vals*` by
+        # evaluating each name as a *variable*
+        # (`(list boole-1 boole-2 boole-and ...)`), which is exactly the
+        # "registered as a function" defect this table exists to prevent (see
+        # the docstring above): `core.py` had a same-named zero-argument
+        # *function* for each of these, so referencing the bare symbol fell
+        # through to `evaluation_core.eval`'s function-cell fallback and
+        # returned a raw Python function object as the value -- and two of
+        # them (`boole_1`/`boole_and`) both happened to return the Python
+        # int `1`, so even calling through would have collapsed two distinct
+        # operations onto one code. The values themselves are
+        # implementation-defined (CLHS places no requirement beyond pairwise
+        # distinctness); these match the common SBCL/CMUCL assignment.
+        ('BOOLE-CLR', 0), ('BOOLE-SET', 1), ('BOOLE-1', 2), ('BOOLE-2', 3),
+        ('BOOLE-C1', 4), ('BOOLE-C2', 5), ('BOOLE-AND', 6), ('BOOLE-IOR', 7),
+        ('BOOLE-XOR', 8), ('BOOLE-EQV', 9), ('BOOLE-NAND', 10), ('BOOLE-NOR', 11),
+        ('BOOLE-ANDC1', 12), ('BOOLE-ANDC2', 13), ('BOOLE-ORC1', 14), ('BOOLE-ORC2', 15),
     ]
     for _precision, _limits in (('SHORT', _SINGLE_LIMITS),
                                 ('SINGLE', _SINGLE_LIMITS),

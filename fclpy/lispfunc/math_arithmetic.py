@@ -883,17 +883,53 @@ def most_negative_fixnum():
     return MOST_NEGATIVE_FIXNUM
 
 
+_BOOLE_OPS = {
+    2: lambda x, y: x,               # BOOLE-1
+    3: lambda x, y: y,               # BOOLE-2
+    6: lambda x, y: x & y,           # BOOLE-AND
+    7: lambda x, y: x | y,           # BOOLE-IOR
+    8: lambda x, y: x ^ y,           # BOOLE-XOR
+    4: lambda x, y: ~x,              # BOOLE-C1
+    5: lambda x, y: ~y,              # BOOLE-C2
+    0: lambda x, y: 0,               # BOOLE-CLR
+    1: lambda x, y: -1,              # BOOLE-SET
+    9: lambda x, y: ~(x ^ y),        # BOOLE-EQV
+    10: lambda x, y: ~(x & y),       # BOOLE-NAND
+    11: lambda x, y: ~(x | y),       # BOOLE-NOR
+    12: lambda x, y: (~x) & y,       # BOOLE-ANDC1
+    13: lambda x, y: x & (~y),       # BOOLE-ANDC2
+    14: lambda x, y: (~x) | y,       # BOOLE-ORC1
+    15: lambda x, y: x | (~y),       # BOOLE-ORC2
+}
+
+
 @_registry.cl_function('BOOLE')
 def boole(op, integer1, integer2):
-    """Boolean operation on integers."""
-    if op == 1:  # BOOLE-AND
-        return integer1 & integer2
-    elif op == 2:  # BOOLE-IOR
-        return integer1 | integer2
-    elif op == 6:  # BOOLE-XOR
-        return integer1 ^ integer2
-    else:
-        return 0  # Simplified
+    """Bitwise boolean operation selected by `op` (CLHS 12.1.4).
+
+    `op` must be one of the sixteen `BOOLE-*` constant variables
+    (`lispenv.STANDARD_CONSTANTS`) -- an out-of-range value is a TYPE-ERROR
+    (`boole.error.5`), as is a non-INTEGER `integer1`/`integer2`
+    (`boole.error.6`/`.7`). This previously hardcoded three op values (1, 2,
+    6 -- none of which are the real BOOLE-AND/BOOLE-IOR/BOOLE-XOR codes 6, 7,
+    8) and silently returned 0 for the other thirteen, which is not merely
+    incomplete: BOOLE-AND and BOOLE-1 both evaluated (as *variables*, via
+    `core.py`'s wrong function-based "constants") to the Python int 1, so
+    even a caller that funcalled them could not tell the two operations
+    apart.
+    """
+    op = _ensure_integer_range(op, 'BOOLE', _BOOLE_OPS)
+    x = _ensure_integer(integer1, 'BOOLE')
+    y = _ensure_integer(integer2, 'BOOLE')
+    return _BOOLE_OPS[op](x, y)
+
+
+def _ensure_integer_range(op, func_name, table):
+    if isinstance(op, bool) or not isinstance(op, int) or op not in table:
+        raise lisptype.LispTypeError(
+            f"{func_name}: {op!r} is not a valid BOOLE op code",
+            expected_type="(INTEGER 0 15)", actual_value=op)
+    return op
 
 
 @_registry.cl_function('ROTATE')

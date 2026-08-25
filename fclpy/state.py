@@ -63,6 +63,17 @@ catch_tags = []
 # forget to restore on a non-local exit.
 pprint_stack = []
 
+# DEFSTRUCT `:TYPE` layouts (CLHS 19.4.7), keyed by upper-cased structure
+# name. A `(:type list)`/`(:type vector)` structure has no class or instance
+# -- it *is* a plain list/vector -- so `:INCLUDE` on one has nothing to walk
+# but this flat record: {'representation': 'list'|'vector',
+# 'element_type_form': <raw type form or None>, 'layout': [entries...]},
+# where each layout entry is {'kind': 'pad'}, {'kind': 'name', 'value': sym}
+# or {'kind': 'slot', 'name': str, 'slot_def': classes.SlotDefinition}, in
+# flat storage order. Populated and read only by
+# evaluation_special_forms.eval_defstruct.
+typed_struct_layouts = {}
+
 def current_package_value():
     """The current package: the value of `*PACKAGE*` (CLHS 11.1.2.1).
 

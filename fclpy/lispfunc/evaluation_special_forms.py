@@ -1049,6 +1049,28 @@ def eval_pprint_logical_block(form, env):
         bf.unwind()
 
 
+def _canonicalize_nil_symbol(value):
+    """Canonicalize a non-keyword symbol spelled NIL to the singleton, so a
+    parameter bound from it compares EQ to NIL (CLAUDE.md: "NIL has three
+    Python spellings").
+
+    A KEYWORD named NIL (`:NIL`) is not one of those spellings -- CLHS makes
+    it a distinct, ordinary (and truthy) symbol, and `(eq :nil nil)` is NIL --
+    so it must never be coerced here. The four call sites that inlined this
+    check each wrote `isinstance(a, lisptype.LispSymbol)`, which is also true
+    of `lispKeyword` (KEYWORD is a subtype of SYMBOL), so a `:NIL` argument
+    was silently rewritten to the unbindable NIL constant before any
+    keyword-argument matching saw it: `(make-struct-test-66 :nil 5)` (a
+    structure with a slot literally named NIL) turned `:NIL` into NIL at the
+    front door and then failed keyword-argument binding on "NIL is not a
+    valid keyword argument name".
+    """
+    if (isinstance(value, lisptype.LispSymbol) and not isinstance(value, lisptype.lispKeyword)
+            and value.name.upper() == 'NIL'):
+        return lisptype.NIL
+    return value
+
+
 def keyword_argument_key(symbol):
     """The identity on which a `&key` parameter and an actual argument match.
 
@@ -1495,13 +1517,7 @@ def make_ordinary_function(lambda_list, body, env, block_name=None, name=None):
         display_name = 'anonymous function'
 
     def call(*call_args):
-        # NIL has three Python spellings; canonicalise on the way in so a
-        # parameter bound from an argument compares EQ to NIL.
-        call_args = tuple(
-            lisptype.NIL
-            if (isinstance(a, lisptype.LispSymbol) and a.name.upper() == 'NIL')
-            else a
-            for a in call_args)
+        call_args = tuple(_canonicalize_nil_symbol(a) for a in call_args)
 
         _check_ordinary_arity(parsed, call_args, display_name)
 
@@ -1670,15 +1686,8 @@ def _create_macro_function(macro_name, lambda_list, body, env,
             expansion_env = call_args[-1]
             call_args = tuple(call_args[:-1])
 
-        # Normalize NIL symbol arguments to the canonical NIL object
-        new_args = []
-        for a in call_args:
-            if isinstance(a, lisptype.LispSymbol) and a.name.upper() == 'NIL':
-                new_args.append(lisptype.NIL)
-            else:
-                new_args.append(a)
-        call_args = tuple(new_args)
-        
+        call_args = tuple(_canonicalize_nil_symbol(a) for a in call_args)
+
         arg_idx = 0
 
         # Handle &WHOLE parameter
@@ -2483,6 +2492,274 @@ def eval_defconstant(form, env):
     return name
 
 
+def _defstruct_type_representation(type_option_form):
+    """Resolve a DEFSTRUCT `:TYPE` option's value to CLHS 19.4.7's two
+    representations: ``('list', None)`` or ``('vector', element-type-form)``,
+    the latter defaulting to `T` for a bare `VECTOR` (no element-type form of
+    its own to upgrade)."""
+    def _head_name(x):
+        if isinstance(x, (lisptype.LispSymbol, lisptype.lispKeyword)):
+            return x.name.upper()
+        return None
+
+    if _consp_internal(type_option_form):
+        head_name = _head_name(car(type_option_form))
+        if head_name == 'VECTOR':
+            rest = cdr(type_option_form)
+            elt_form = car(rest) if _consp_internal(rest) else lisptype.T
+            return 'vector', elt_form
+        raise lisptype.LispNotImplementedError(
+            f"DEFSTRUCT :TYPE {head_name}: not supported")
+
+    head_name = _head_name(type_option_form)
+    if head_name == 'LIST':
+        return 'list', None
+    if head_name == 'VECTOR':
+        return 'vector', lisptype.T
+    raise lisptype.LispNotImplementedError(
+        f"DEFSTRUCT :TYPE {type_option_form}: not supported")
+
+
+def _signal_defstruct_simple_error(message):
+    """Signal a real SIMPLE-ERROR for an invalid `:TYPE` DEFSTRUCT option
+    combination (CLHS 19.4.7's DEFSTRUCT.ERROR.3/.4), through the same
+    build/signal path ERROR itself uses -- not a bare Python exception, which
+    would match no HANDLER-CASE clause and surface as the value of the form."""
+    from .evaluation_conditions import build_condition, signal_error_object
+    condition = build_condition(message, [], lisptype.SimpleError)
+    signal_error_object(condition)
+
+
+def _eval_typed_defstruct(struct_name, struct_class_name, type_option_form, named_option,
+                          initial_offset, include_parent_name, include_overrides, slot_specs,
+                          conc_name, predicate_name, predicate_was_explicit, copier_name,
+                          constructors, current_pkg, global_env, env, parse_slot_spec,
+                          eval_initform):
+    """DEFSTRUCT's `(:type list)`/`(:type vector)` representation (CLHS
+    19.4.7): the structure *is* a plain list or vector, flat, with no class
+    and no `LispInstance` -- so this is a different construction entirely
+    from the CLOS-backed path in `eval_defstruct`, not a variant of it.
+    `:INCLUDE` therefore composes flat layouts (`state.typed_struct_layouts`)
+    rather than class hierarchies: a slot's *position* is what a subtype
+    inherits, not a slot descriptor in an object model that doesn't exist
+    here.
+    """
+    import fclpy.classes as classes
+
+    representation, element_type_form = _defstruct_type_representation(type_option_form)
+
+    if named_option and representation == 'vector':
+        elt_name = (element_type_form.name.upper()
+                   if isinstance(element_type_form, (lisptype.LispSymbol, lisptype.lispKeyword))
+                   else None)
+        if elt_name != 'T':
+            _signal_defstruct_simple_error(
+                f"DEFSTRUCT {struct_class_name}: a :NAMED (VECTOR {element_type_form}) "
+                "structure has nowhere to hold its own type name, which is a SYMBOL")
+
+    if not named_option:
+        # CLHS 19.4.7: an unnamed :TYPE structure carries no type marker, so
+        # nothing distinguishes an instance of it from any other list/vector
+        # of the same shape -- an explicitly requested predicate name is
+        # therefore an error (DEFSTRUCT.ERROR.3), and an omitted one is simply
+        # absent rather than defaulting to NAME-P.
+        if predicate_was_explicit and predicate_name is not None:
+            _signal_defstruct_simple_error(
+                f"DEFSTRUCT {struct_class_name}: :PREDICATE requires :NAMED "
+                "when :TYPE is specified")
+        predicate_name = None
+
+    parent_layout = []
+    if include_parent_name is not None:
+        parent_entry = state.typed_struct_layouts.get(include_parent_name.upper())
+        if parent_entry is None:
+            raise lisptype.LispError(
+                f"DEFSTRUCT: :INCLUDE parent {include_parent_name} is not a "
+                ":TYPE structure")
+        parent_layout = [dict(entry) for entry in parent_entry['layout']]
+        if include_overrides:
+            by_name = {entry['name']: entry for entry in parent_layout if entry['kind'] == 'slot'}
+            for override_spec in include_overrides:
+                name_str, default_form, type_spec, read_only = parse_slot_spec(override_spec)
+                if name_str not in by_name:
+                    raise lisptype.LispError(
+                        f"DEFSTRUCT :INCLUDE: {name_str} does not name a slot of "
+                        f"{include_parent_name}")
+                by_name[name_str]['slot_def'] = classes.SlotDefinition(
+                    name=lisptype.LispSymbol(name_str), initform=default_form,
+                    type_spec=type_spec, read_only=read_only, definition_env=env)
+
+    own_prefix = [{'kind': 'pad'} for _ in range(initial_offset)]
+    if named_option:
+        own_prefix.append({'kind': 'name', 'value': struct_name})
+
+    own_slots = []
+    cur = slot_specs
+    while _consp_internal(cur):
+        name_str, default_form, type_spec, read_only = parse_slot_spec(car(cur))
+        own_slots.append({'kind': 'slot', 'name': name_str,
+                          'slot_def': classes.SlotDefinition(
+                              name=lisptype.LispSymbol(name_str), initform=default_form,
+                              type_spec=type_spec, read_only=read_only, definition_env=env)})
+        cur = cdr(cur)
+
+    full_layout = parent_layout + own_prefix + own_slots
+    total_length = len(full_layout)
+
+    state.typed_struct_layouts[struct_class_name.upper()] = {
+        'representation': representation,
+        'element_type_form': element_type_form,
+        'layout': full_layout,
+    }
+
+    ordered_slots = [(entry['name'], entry['slot_def']) for entry in full_layout
+                     if entry['kind'] == 'slot']
+
+    def build_container(slot_values):
+        values = []
+        for entry in full_layout:
+            if entry['kind'] == 'pad':
+                values.append(lisptype.NIL)
+            elif entry['kind'] == 'name':
+                values.append(entry['value'])
+            else:
+                values.append(slot_values.get(entry['name'], lisptype.NIL))
+        if representation == 'list':
+            from .sequence_protocol import make_lisp_list
+            return make_lisp_list(values)
+        return _arrays.make_array((total_length,), element_type=element_type_form,
+                                  initial_contents=values)
+
+    def default_constructor_lambda_list():
+        tail = lisptype.NIL
+        for name_str, _slot_def in reversed(ordered_slots):
+            tail = lisptype.lispCons(lisptype.LispSymbol(name_str), tail)
+        return lisptype.lispCons(lisptype.LispSymbol('&KEY'), tail)
+
+    def make_typed_constructor(boa_ll, ctor_name):
+        from .evaluation_core import parse_lambda_list, eval as eval_fn
+
+        parsed = parse_lambda_list(boa_ll)
+        required_params = parsed['required']
+        param_vars = _lambda_list_variables(parsed)
+        param_names = {var.name for var in param_vars}
+        slot_initforms = {name_str: slot_def.initform for name_str, slot_def in ordered_slots}
+
+        def default_fallback(var):
+            if isinstance(var, lisptype.LispSymbol):
+                return slot_initforms.get(var.name)
+            return None
+
+        def constructor(*call_args):
+            call_args = tuple(_canonicalize_nil_symbol(a) for a in call_args)
+            _check_ordinary_arity(parsed, call_args, ctor_name)
+
+            func_env = lisptype.Environment(env)
+            frame = BindingFrame(func_env, body=lisptype.NIL, bound_vars=param_vars)
+            try:
+                for index, param in enumerate(required_params):
+                    frame.bind(param, call_args[index])
+                _bind_ordinary_lambda_list_tail(
+                    parsed, call_args, len(required_params), func_env, eval_fn, frame,
+                    default_fallback=default_fallback)
+
+                slot_values = {name_str: eval_initform(slot_def)
+                               for name_str, slot_def in ordered_slots
+                               if name_str not in param_names}
+                for slot_name_str, _slot_def in ordered_slots:
+                    for var in param_vars:
+                        if var.name == slot_name_str:
+                            slot_values[slot_name_str] = func_env.find_variable(var)
+                            break
+                return build_container(slot_values)
+            finally:
+                frame.unwind()
+
+        constructor.__lisp_lambda_list__ = boa_ll
+        return constructor
+
+    for ctor_name, boa_ll in constructors:
+        if boa_ll is not None:
+            raise lisptype.LispNotImplementedError(
+                "DEFSTRUCT: a BOA :CONSTRUCTOR lambda list is not supported "
+                "together with :TYPE")
+        ctor_sym = current_pkg.intern_symbol(ctor_name)
+        global_env.add_function(
+            ctor_sym, make_typed_constructor(default_constructor_lambda_list(), ctor_name))
+
+    if predicate_name:
+        name_position = next(i for i, entry in enumerate(full_layout)
+                             if entry['kind'] == 'name' and entry['value'] is struct_name)
+
+        def is_typed_structure(obj):
+            try:
+                if representation == 'list':
+                    from .sequence_protocol import list_elements
+                    elements = list_elements(obj, 'structure predicate', dotted='allow')
+                    if name_position >= len(elements):
+                        return lisptype.NIL
+                    value = elements[name_position]
+                else:
+                    if (not _arrays.is_vector(obj)
+                            or name_position >= _arrays.array_total_size_of(obj)):
+                        return lisptype.NIL
+                    value = _arrays.row_major_get(obj, name_position)
+                return lisptype.T if value is struct_name else lisptype.NIL
+            except lisptype.LispError:
+                return lisptype.NIL
+
+        predicate_sym = current_pkg.intern_symbol(predicate_name)
+        global_env.add_function(predicate_sym, is_typed_structure)
+
+    if copier_name:
+        def copy_typed_structure(struct):
+            if representation == 'list':
+                from .sequence_protocol import list_elements, make_lisp_list
+                return make_lisp_list(list_elements(struct, copier_name, dotted='error'))
+            values = [_arrays.row_major_get(struct, i) for i in range(total_length)]
+            return _arrays.make_array((total_length,), element_type=element_type_form,
+                                      initial_contents=values)
+
+        copier_sym = current_pkg.intern_symbol(copier_name)
+        global_env.add_function(copier_sym, copy_typed_structure)
+
+    for index, entry in enumerate(full_layout):
+        if entry['kind'] != 'slot':
+            continue
+        slot_name_str = entry['name']
+        slot_def = entry['slot_def']
+        accessor_name = conc_name + slot_name_str
+
+        def make_typed_getter(i, an):
+            def getter(instance):
+                if representation == 'list':
+                    from .sequence_protocol import list_elements
+                    return list_elements(instance, an, dotted='error')[i]
+                return _arrays.row_major_get(instance, i)
+            return getter
+
+        accessor_sym = current_pkg.intern_symbol(accessor_name)
+        global_env.add_function(accessor_sym, make_typed_getter(index, accessor_name))
+
+        if not slot_def.read_only:
+            def make_typed_setter(i):
+                def setter(instance, value):
+                    if representation == 'list':
+                        cell = instance
+                        for _ in range(i):
+                            cell = cell.cdr
+                        cell.car = value
+                        return value
+                    _arrays.row_major_set(instance, i, value)
+                    return value
+                return setter
+
+            setter_sym = current_pkg.intern_symbol('SET-' + accessor_name)
+            global_env.add_function(setter_sym, make_typed_setter(index))
+
+    return struct_name
+
+
 def eval_defstruct(form, env):
     """Evaluate DEFSTRUCT special form (CLHS 3.4.6, 7.2).
 
@@ -2565,6 +2842,9 @@ def eval_defstruct(form, env):
     predicate_name = _DEFAULT
     include_parent_name = None
     include_overrides = []         # raw override slot-spec forms
+    type_option_form = None        # raw (unevaluated) :TYPE value, or None
+    named_option = False           # :NAMED given (bare or as a value-less clause)
+    initial_offset = 0              # :INITIAL-OFFSET value
 
     if isinstance(name_and_options, (lisptype.LispSymbol, lisptype.lispKeyword)):
         struct_name = name_and_options
@@ -2617,9 +2897,12 @@ def eval_defstruct(form, env):
                     while _consp_internal(ov):
                         include_overrides.append(car(ov))
                         ov = cdr(ov)
-                # :TYPE, :NAMED and :INITIAL-OFFSET (the list/vector
-                # structure representations) are not modeled -- left
-                # unhandled, matching prior behavior.
+                elif opt_name_str == 'TYPE':
+                    type_option_form = opt_value
+                elif opt_name_str == 'NAMED':
+                    named_option = True
+                elif opt_name_str == 'INITIAL-OFFSET':
+                    initial_offset = int(opt_value)
             elif isinstance(opt, (lisptype.LispSymbol, lisptype.lispKeyword)):
                 bare = _sym_name(opt).upper()
                 if bare == 'CONSTRUCTOR':
@@ -2629,6 +2912,8 @@ def eval_defstruct(form, env):
                     copier_name = _DEFAULT
                 elif bare == 'PREDICATE':
                     predicate_name = _DEFAULT
+                elif bare == 'NAMED':
+                    named_option = True
                 elif bare == 'CONC-NAME':
                     # A bare `:conc-name` atom is the same option as `(:conc-
                     # name)` -- no value supplied -- and CLHS 3.4.6 says *no*
@@ -2653,6 +2938,7 @@ def eval_defstruct(form, env):
                          for nm, boa in constructors]
     copier_name = ('COPY-' + struct_class_name if copier_name is _DEFAULT
                    else None if copier_name is _SUPPRESSED else copier_name)
+    predicate_was_explicit = predicate_name is not _DEFAULT
     predicate_name = (struct_class_name + '-P' if predicate_name is _DEFAULT
                       else None if predicate_name is _SUPPRESSED else predicate_name)
 
@@ -2677,6 +2963,18 @@ def eval_defstruct(form, env):
                 read_only = not _is_nil_value(val)
             tail = cdr(cdr(tail))
         return slot_name_str, default_form, type_spec, read_only
+
+    if type_option_form is not None:
+        return _eval_typed_defstruct(
+            struct_name=struct_name, struct_class_name=struct_class_name,
+            type_option_form=type_option_form, named_option=named_option,
+            initial_offset=initial_offset, include_parent_name=include_parent_name,
+            include_overrides=include_overrides, slot_specs=slot_specs,
+            conc_name=conc_name, predicate_name=predicate_name,
+            predicate_was_explicit=predicate_was_explicit, copier_name=copier_name,
+            constructors=constructors, current_pkg=current_pkg,
+            global_env=global_env, env=env, parse_slot_spec=_parse_slot_spec,
+            eval_initform=_eval_initform)
 
     # Resolve superclass: the :INCLUDE parent's class, or STRUCTURE-OBJECT.
     if include_parent_name is not None:
@@ -2778,11 +3076,7 @@ def eval_defstruct(form, env):
             return None
 
         def constructor(*call_args):
-            call_args = tuple(
-                lisptype.NIL
-                if (isinstance(a, lisptype.LispSymbol) and a.name.upper() == 'NIL')
-                else a
-                for a in call_args)
+            call_args = tuple(_canonicalize_nil_symbol(a) for a in call_args)
             _check_ordinary_arity(parsed, call_args, ctor_name)
 
             # Rooted at `env` -- the lexical environment DEFSTRUCT itself

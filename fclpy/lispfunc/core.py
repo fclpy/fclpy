@@ -704,85 +704,17 @@ def pi_constant():
     return math.pi
 
 
-def boole_1():
-    """Boole constant 1."""
-    return 1
-
-
-def boole_2():
-    """Boole constant 2."""
-    return 2
-
-
-def boole_and():
-    """Boole and."""
-    return 1
-
-
-def boole_andc1():
-    """Boole andc1."""
-    return 2
-
-
-def boole_andc2():
-    """Boole andc2."""
-    return 3
-
-
-def boole_c1():
-    """Boole c1."""
-    return 4
-
-
-def boole_c2():
-    """Boole c2."""
-    return 5
-
-
-def boole_clr():
-    """Boole clear."""
-    return 0
-
-
-def boole_eqv():
-    """Boole equivalence."""
-    return 6
-
-
-def boole_ior():
-    """Boole inclusive or."""
-    return 7
-
-
-def boole_nand():
-    """Boole nand."""
-    return 8
-
-
-def boole_nor():
-    """Boole nor."""
-    return 9
-
-
-def boole_orc1():
-    """Boole orc1."""
-    return 10
-
-
-def boole_orc2():
-    """Boole orc2."""
-    return 11
-
-
-def boole_set():
-    """Boole set."""
-    return 15
-
-
-def boole_xor():
-    """Boole exclusive or."""
-    return 12
-
+# The sixteen BOOLE-* op codes (CLHS 12.1.4) are *constant variables*, not
+# functions -- see `lispenv.STANDARD_CONSTANTS`, their one home. This module
+# used to carry a same-named zero-argument function for each (`boole_and`,
+# `boole_1`, ...), which `registry.register_module` auto-registered as an
+# fbound *function*; since none of the sixteen was ever bound as a variable,
+# referencing the bare symbol (`numbers/boole.lsp` builds `*boole-vals*` by
+# evaluating each name) fell through `evaluation_core.eval`'s
+# unbound-variable-but-fbound fallback and returned the raw Python function
+# object as the symbol's value -- and `boole_1`/`boole_and` both happened to
+# return the Python int 1, so even a caller that (wrongly) funcalled them
+# would have collapsed two distinct BOOLE operations onto one code.
 
 # The universal-time model (CLHS 25.1.4) lives in `utilities_system.py`, which
 # is its one home. This module used to carry a second copy of

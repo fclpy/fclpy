@@ -1378,8 +1378,9 @@ Milestones now describe *mechanisms*, and map onto the clusters above.
 | **M6** | Multiple values, sequences | partial | C3, C5, X2, X3 |
 | **M7** | Non-local control flow | partial — name-based block/tag matching, no identity objects | — |
 | **M8** | Conditions and restarts | **signaling core done**; restart half + `DEFINE-CONDITION` + raise-site migration remain | C9, X1 |
-| **M9** | Types, `SUBTYPEP`, CLOS, structures | not started overall — two CLOS implementations; `SUBTYPEP` is a string-pair table. **`DEFSTRUCT`'s BOA/keyword constructors done 2026-08-25** (item 3, above); its `:TYPE list`/`:TYPE vector` representation is not, and is now the only thing left in `structures` | C4, C6, C8, C13, C14 |
+| **M9** | Types, `SUBTYPEP`, CLOS, structures | not started overall — two CLOS implementations; `SUBTYPEP` is a string-pair table. **`DEFSTRUCT` done 2026-08-25**: BOA/keyword constructors (item 3, above) and `:TYPE list`/`:TYPE vector` (`structures`: 52 failing → 0, `state.typed_struct_layouts` is the flat-layout model a `:TYPE` DEFSTRUCT and its `:INCLUDE` children share, since there is no class/instance to hang a slot descriptor on) | C4, C6, C8, C13, C14 |
 | **M10** | Reader, printer, `FORMAT`, streams, pathnames, loader | not started — **now the largest single body of failures, and gates ASDF** | C2, C7, C11, C12 |
+| **M11** | Exact `COMPLEX` | not started — **fclpy's COMPLEX is Python's native `complex` (a float pair)**, so an integer/rational real or imaginary part loses exactness (`numbers/oneminus.lsp`'s `1-.9`: `(1- (complex most-positive-fixnum 3))` should stay exact and instead rounds through a double). RATIO closed the equivalent gap by using `Fraction` instead of float division; COMPLEX has had no equivalent pass. Touches every `isinstance(x, complex)` site in `math_arithmetic.py` (COMPLEXP, REALPART/IMAGPART, `/`, ...) plus the printer and reader, so it is its own milestone, not a one-file patch | — |
 
 ### Recommended order
 
@@ -1894,6 +1895,42 @@ have been worth making if nobody were counting.
 
 ### Preventing regression
 
+> **Policy, 2026-08-25: a discovered regression gets fixed, not filed.**
+> Confirming a regression predates your own diff (`git stash` A/B, `git show
+> HEAD:docs/ansi_checklist.md`) is a **diagnostic step**, not a conclusion —
+> it tells you the regression isn't attributable to what you just did, not
+> that fixing it is someone else's job. The 2026-08-24 entry below is the
+> anti-pattern this replaces: three files were confirmed pre-existing,
+> "recorded here rather than cleared," and then sat unfixed through at least
+> two more sessions' worth of commits, because "confirmed not mine" was
+> quietly read as "done." A regression is a real defect sitting in the tree
+> either way, and it is usually cheap: `numbers/boole.lsp` and
+> `streams/write-sequence.lsp` (both flagged 2026-08-24, both still broken
+> 2026-08-25) turned out to be a one-line constant-vs-function registration
+> bug and a missing binary-stream branch respectively — each a smaller fix
+> than the DEFSTRUCT `:TYPE` work that was the actual assignment that day.
+> **The default action on finding a regression is: reproduce the smallest
+> failing case, find the mechanism, fix it, verify, fold into the same
+> commit** — exactly the loop CLAUDE.md already describes for anything on
+> the checklist, because a regression *is* a checklist entry, just one this
+> tree used to pass. Only when the real fix is its own separate mechanism —
+> not a quick patch, and touching a wide, unrelated blast radius — does it
+> get deferred, and then it must be named as a **specific, scoped
+> milestone** (what the defect is, why it's out of scope for the current
+> diff, what the real fix requires) rather than left as a vague "pre-existing,
+> not mine" note. `numbers/oneminus.lsp`'s `1-.9` (below) is the worked
+> example of that second case: it is not a quick patch, and saying so
+> precisely is the honest version of deferring it.
+>
+> **Why regressions are worth chasing rather than routing around: they are
+> usually a real defect that a *different* piece of non-compliant code had
+> been silently hiding.** `write-sequence.lsp` didn't newly break WRITE-BYTE
+> or binary streams — WRITE-SEQUENCE simply never had a binary-stream branch,
+> and nothing forced the question until something else (unrelated,
+> same-day work) started exercising that path. The "regression" is the
+> first honest signal that a real gap exists; attributing it away and
+> moving on throws that signal out.
+
 - **The checklist baseline is the regression gate.**
   `docs/ansi_checklist_baseline.json` is a committed `{file: failed_count}`
   snapshot; regenerating with `--baseline` marks any file that got worse as
@@ -1945,11 +1982,72 @@ have been worth making if nobody were counting.
   (`git stash`, re-run, diff by test *name*), because the baseline stores
   counts and not names. With it, attribution is a diff.
 
-#### Gate status at 2026-08-24 (hash-table work)
+#### Gate status at 2026-08-24 (hash-table work) — resolved 2026-08-25
 
-`scripts/gate.py` fails on **4 files**, and none of them is attributable to
-the hash-table change. Recorded here rather than cleared, per
-[Ways to fake compliance](#ways-to-fake-compliance).
+> **This section is history, not a live status.** It sat for a day-plus as
+> "recorded here rather than cleared" — the anti-pattern the new policy note
+> above now forbids. Two of the four are fixed; the third turned out to be a
+> real, separately-scoped architectural gap and is named as such rather than
+> deferred vaguely.
+
+`scripts/gate.py` failed on **4 files** as of 2026-08-24, and none of them was
+attributable to the hash-table change. What each one actually was:
+
+- **`numbers/boole.lsp` — fixed 2026-08-25.** BOOLE-1/-2/-AND/.../-ORC2 (the
+  sixteen CLHS 12.1.4 op codes) are constant *variables*, but `core.py` had a
+  same-named zero-argument *function* for each, auto-registered by
+  `registry.register_module`. Since none of the sixteen was ever bound as a
+  variable, referencing the bare symbol (`numbers/boole.lsp` builds
+  `*boole-vals*` by evaluating each name, `(list boole-1 boole-2 boole-and
+  ...)`) fell through `evaluation_core.eval`'s unbound-variable-but-fbound
+  fallback and returned the raw Python function object as the value — and
+  `BOOLE-1`/`BOOLE-AND` both happened to return the Python int `1`, so even a
+  caller that funcalled them would have collapsed two distinct operations
+  onto one code. Fixed by adding the sixteen to `lispenv.STANDARD_CONSTANTS`
+  (the one real-constant table, alongside PI/MOST-POSITIVE-FIXNUM/...),
+  deleting the sixteen wrong functions from `core.py`, and rewriting `BOOLE`
+  itself (`math_arithmetic.py`) — it previously hardcoded three op values
+  (1, 2, 6, none of which are the real codes) and returned 0 for the other
+  thirteen. `numbers/boole.lsp`: 10 failing → 0.
+- **`streams/write-sequence.lsp` — fixed 2026-08-25.** WRITE-SEQUENCE
+  (`streams.py`) unconditionally rendered every element through
+  `_char_text` and wrote it as text, so `(write-sequence #*00111010 os)` on a
+  binary (`(unsigned-byte 8)`) output stream raised "cannot store 0 in a
+  string" — a Python exception as a Lisp value, standing rule 2 — instead of
+  writing a byte. Fixed by checking `stream.binary` (the same flag WRITE-BYTE
+  already reads from OPEN's declared `:element-type`) and routing element-by-
+  element through WRITE-BYTE's own encoding when true. Two more defects
+  surfaced by the same file once the crash stopped hiding them: `:start`/
+  `:end` were plain optional-positional Python parameters rather than
+  keyword-only, so CLHS 3.4.1.4's unrecognized-keyword/`:allow-other-keys`
+  checking never applied to them (`STRING.9`-`.11`, `ERROR.11`-`.12`); and
+  the shared `sequence_protocol.bounding_indices` — every CLHS sequence
+  function's one bounding-index accessor — coerced `:start`/`:end` with
+  `int(x)`, which silently truncates a float instead of signalling TYPE-ERROR
+  (`ERROR.7`, `.10`, `.15`, `.16`). Both are now real CLHS-shaped checks,
+  which reaches every one of the ~20 other callers of `bounding_indices`, not
+  just WRITE-SEQUENCE. `streams/write-sequence.lsp`: 16 failing → 0.
+- **`numbers/oneminus.lsp` (`1-.9`) — named, not fixed: a real architectural
+  gap, not a quick patch.** `(1- (complex most-positive-fixnum 3))` answers
+  `9.223372036854776e+18+3j` instead of the exact
+  `9223372036854774806+3j`, because **fclpy's COMPLEX is Python's native
+  `complex`**, which is a pair of IEEE doubles — there is no way to hold an
+  exact-integer real/imaginary pair in it at all, the same representational
+  gap RATIO closed by using `Fraction` instead of float division. The test
+  is `repeat 1000` over `random-fixnum`, so whether a given run's draw
+  exceeds a double's 53-bit mantissa (and therefore whether the test passes
+  or fails) is chance, not code — which is why this shows up as an
+  intermittent "regression" rather than a clean break. **This is not a
+  same-diff fix**: `complex` (Python's builtin) is tested with `isinstance`
+  in at least 10 sites in `math_arithmetic.py` alone (COMPLEXP, REALPART/
+  IMAGPART, the printer, `/`'s complex branch, ...), so an exact
+  representation means a new Lisp-level complex type and updating every one
+  of those sites together, in the same shape SUBTYPEP's type lattice or the
+  pathname component-record rewrite were each their own milestone. Filed as
+  a new milestone rather than attempted piecemeal here; see
+  [§4](#4-milestones--re-scoped) for where a numeric-tower item belongs.
+- **`types-and-classes/standard-generic-function.lsp` (baseline 1 → 2) is not
+  new breakage** — see the direct-measurement analysis below, still current.
 
 - **Three were already failing the gate at HEAD** — `numbers/boole.lsp` (+2),
   `numbers/oneminus.lsp` (+1), `streams/write-sequence.lsp` (+1). All three
