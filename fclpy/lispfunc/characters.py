@@ -541,70 +541,116 @@ def make_string(size, initial_element=None, element_type=None):
     return lisptype.LispString(fill_char * size)
 
 
-@_registry.cl_function('STRING-CAPITALIZE')
-def string_capitalize(string, start=0, end=None):
-    """Capitalize string."""
-    if end is None:
-        end = len(string)
-    
-    result = list(string)
-    capitalize_next = True
-    
-    for i in range(start, min(end, len(string))):
-        if result[i].isalpha():
-            if capitalize_next:
-                result[i] = result[i].upper()
-                capitalize_next = False
-            else:
-                result[i] = result[i].lower()
+def _capitalize_range(read, write, start, end):
+    """CLHS 16.4 STRING-CAPITALIZE over `[start, end)` via `read(i)`/`write(i, ch)`.
+
+    A "word" is a maximal run of alphanumeric characters -- not just
+    alphabetic ones, which is what the previous ladder tested. Only the
+    word's *first* character is a candidate for uppercasing (and only if it
+    is itself alphabetic; a leading digit still consumes the word's one
+    capitalization slot, so `"1a"` stays `"1a"` and `"a1a"` becomes `"A1a"`,
+    never `"A1A"`), every other alphabetic character in the word is
+    lowercased, and a non-alphanumeric character is left untouched and
+    starts a new word.
+    """
+    at_word_start = True
+    for i in range(start, end):
+        ch = read(i)
+        if ch.isalnum():
+            if at_word_start:
+                if ch.isalpha():
+                    write(i, ch.upper())
+                at_word_start = False
+            elif ch.isalpha():
+                write(i, ch.lower())
         else:
-            capitalize_next = True
-    
-    return ''.join(result)
+            at_word_start = True
+
+
+def _apply_case(read, write, start, end, transform):
+    for i in range(start, end):
+        write(i, transform(read(i)))
+
+
+def _mutable_string_bounds(string, start, end, what):
+    """Bounding indices for a destructive NSTRING-* argument.
+
+    `len(string)` honors a fill pointer on every representation here
+    (`LispString`, `LispArray`, plain `str`) -- see CLAUDE.md on
+    `LispString`'s content stopping at its fill pointer.
+    """
+    from . import sequence_protocol as _seq
+    return _seq.bounding_indices(len(string), start, end, what)
+
+
+def _array_char_reader(string):
+    def read(i):
+        ch = _arrays.row_major_get(string, i)
+        return ch.char if isinstance(ch, lisptype.Character) else ch
+    return read
+
+
+def _array_char_writer(string):
+    def write(i, text):
+        _arrays.row_major_set(string, i, lisptype.Character(text))
+    return write
+
+
+@_registry.cl_function('STRING-CAPITALIZE')
+def string_capitalize(string, *, start=0, end=None):
+    """CLHS 16.4: a fresh string, `string`'s designated text with each word capitalized."""
+    from . import sequence_protocol as _seq
+    text = _string_designator(string)
+    start, end = _seq.bounding_indices(len(text), start, end, 'STRING-CAPITALIZE')
+    result = list(text)
+    _capitalize_range(lambda i: result[i], lambda i, c: result.__setitem__(i, c), start, end)
+    return lisptype.LispString(''.join(result))
 
 
 @_registry.cl_function('STRING-DOWNCASE')
-def string_downcase(string, start=0, end=None):
-    """Convert string to lowercase."""
-    if end is None:
-        end = len(string)
-    
-    result = list(string)
-    for i in range(start, min(end, len(string))):
-        result[i] = result[i].lower()
-    
-    return ''.join(result)
+def string_downcase(string, *, start=0, end=None):
+    """CLHS 16.4: a fresh string, `string`'s designated text lowercased."""
+    from . import sequence_protocol as _seq
+    text = _string_designator(string)
+    start, end = _seq.bounding_indices(len(text), start, end, 'STRING-DOWNCASE')
+    result = list(text)
+    _apply_case(lambda i: result[i], lambda i, c: result.__setitem__(i, c), start, end, str.lower)
+    return lisptype.LispString(''.join(result))
 
 
 @_registry.cl_function('STRING-UPCASE')
-def string_upcase(string, start=0, end=None):
-    """Convert string to uppercase."""
-    if end is None:
-        end = len(string)
-    
-    result = list(string)
-    for i in range(start, min(end, len(string))):
-        result[i] = result[i].upper()
-    
-    return ''.join(result)
+def string_upcase(string, *, start=0, end=None):
+    """CLHS 16.4: a fresh string, `string`'s designated text uppercased."""
+    from . import sequence_protocol as _seq
+    text = _string_designator(string)
+    start, end = _seq.bounding_indices(len(text), start, end, 'STRING-UPCASE')
+    result = list(text)
+    _apply_case(lambda i: result[i], lambda i, c: result.__setitem__(i, c), start, end, str.upper)
+    return lisptype.LispString(''.join(result))
 
 
 @_registry.cl_function('NSTRING-CAPITALIZE')
-def nstring_capitalize(string, start=0, end=None):
-    """Destructively capitalize string."""
-    return string_capitalize(string, start, end)
+def nstring_capitalize(string, *, start=0, end=None):
+    """CLHS 16.4: destructively capitalize `string` in place, returning it."""
+    start, end = _mutable_string_bounds(string, start, end, 'NSTRING-CAPITALIZE')
+    _capitalize_range(_array_char_reader(string), _array_char_writer(string), start, end)
+    return string
 
 
 @_registry.cl_function('NSTRING-DOWNCASE')
-def nstring_downcase(string, start=0, end=None):
-    """Destructively convert to lowercase."""
-    return string_downcase(string, start, end)
+def nstring_downcase(string, *, start=0, end=None):
+    """CLHS 16.4: destructively lowercase `string` in place, returning it."""
+    start, end = _mutable_string_bounds(string, start, end, 'NSTRING-DOWNCASE')
+    _apply_case(_array_char_reader(string), _array_char_writer(string), start, end, str.lower)
+    return string
 
 
 @_registry.cl_function('NSTRING-UPCASE')
-def nstring_upcase(string, start=0, end=None):
-    """Destructively convert to uppercase."""
-    return string_upcase(string, start, end)
+def nstring_upcase(string, *, start=0, end=None):
+    """CLHS 16.4: destructively uppercase `string` in place, returning it."""
+    start, end = _mutable_string_bounds(string, start, end, 'NSTRING-UPCASE')
+    _apply_case(_array_char_reader(string), _array_char_writer(string), start, end, str.upper)
+    return string
 
 
 def _string_designator(x):
@@ -778,39 +824,51 @@ def string_not_equal(string1, string2, *, start1=0, end1=None, start2=0, end2=No
     return index if relation != 'eq' else lisptype.NIL
 
 
+def _char_bag(character_bag, what):
+    """CLHS 16.4 `character-bag`: a sequence of characters, resolved to a
+    Python `set` of one-character strings via `sequence_protocol.seq_elements`
+    -- the one element-access path for a CLHS 17 sequence, so a bag spelled
+    as a string, a list, a general vector or a specialized character array
+    are all accepted the same way the trim functions' own tests exercise."""
+    from . import sequence_protocol as _seq
+    chars = set()
+    for e in _seq.seq_elements(character_bag, what):
+        if isinstance(e, lisptype.Character):
+            chars.add(e.char)
+        elif isinstance(e, str) and len(e) == 1:
+            chars.add(e)
+        else:
+            raise lisptype.LispTypeError(
+                f"{what}: {e!r} is not a character", expected_type="CHARACTER",
+                actual_value=e)
+    return chars
+
+
 @_registry.cl_function('STRING-LEFT-TRIM')
 def string_left_trim(character_bag, string):
-    """Trim characters from left of string."""
-    if isinstance(character_bag, str):
-        char_set = set(character_bag)
-    else:
-        char_set = set(character_bag)
-    
-    for i, char in enumerate(string):
-        if char not in char_set:
-            return string[i:]
-    
-    return ""
+    """CLHS 16.4: a fresh string with leading `character_bag` members removed."""
+    text = _string_designator(string)
+    chars = _char_bag(character_bag, 'STRING-LEFT-TRIM')
+    i = 0
+    while i < len(text) and text[i] in chars:
+        i += 1
+    return lisptype.LispString(text[i:])
 
 
 @_registry.cl_function('STRING-RIGHT-TRIM')
 def string_right_trim(character_bag, string):
-    """Trim characters from right of string."""
-    if isinstance(character_bag, str):
-        char_set = set(character_bag)
-    else:
-        char_set = set(character_bag)
-    
-    for i in range(len(string) - 1, -1, -1):
-        if string[i] not in char_set:
-            return string[:i+1]
-    
-    return ""
+    """CLHS 16.4: a fresh string with trailing `character_bag` members removed."""
+    text = _string_designator(string)
+    chars = _char_bag(character_bag, 'STRING-RIGHT-TRIM')
+    j = len(text)
+    while j > 0 and text[j - 1] in chars:
+        j -= 1
+    return lisptype.LispString(text[:j])
 
 
 @_registry.cl_function('STRING-TRIM')
 def string_trim(character_bag, string):
-    """Trim characters from both ends of string."""
+    """CLHS 16.4: a fresh string with leading and trailing `character_bag` members removed."""
     return string_left_trim(character_bag, string_right_trim(character_bag, string))
 
 
