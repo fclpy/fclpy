@@ -280,8 +280,12 @@ class _PackageIterator:
                         if id(sym) not in seen:
                             seen.add(id(sym))
                             symbols.append((sym, kind, pkg))
-                else:  # INTERNAL: the package's own (present) symbols
+                else:  # INTERNAL: present but NOT exported (CLHS 11.2)
+                    exported = getattr(pkg, 'external_symbols', ()) or ()
                     for sym in package_symbols(pkg, 'present-symbols'):
+                        name = sym.name if hasattr(sym, 'name') else str(sym)
+                        if name in exported:
+                            continue
                         if id(sym) not in seen:
                             seen.add(id(sym))
                             symbols.append((sym, kind, pkg))

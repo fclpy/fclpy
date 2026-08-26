@@ -166,7 +166,7 @@ gpt5review.txt
 
 ansi_results/
 
-_probe_wpi.py
+_probe*.py
 probe_err.txt
 probe_out.txt
-wpi_run.txt
+wpi_*.txt
