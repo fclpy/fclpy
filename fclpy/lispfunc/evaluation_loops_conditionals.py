@@ -1459,60 +1459,158 @@ def eval_loop(form, env):
     # records whether a main clause had already been seen when it was parsed.
     termination_tests = []  # list of ('while'/'until', test_form, after_body)
 
-    # A WHEN/UNLESS guards *the clause that follows it*, not every clause in the
-    # loop (CLHS 6.1.3.1). So the conditions accumulate as `pending_conditionals`
-    # and are handed to -- and cleared by -- the next clause that consumes them.
-    #
-    # These used to be two flat shared lists, `conditionals` and `body_forms`,
-    # tested together as `if _conditionals_pass(conditionals): for f in
-    # body_forms: ...`. That made `when A do X when B do Y` mean
-    # `(and A B) -> X, Y`: every condition guarded every form. When the
-    # conditions are mutually exclusive the body then becomes *unreachable*, and
-    # in a driverless loop -- whose only exit is a RETURN in its body -- that is
-    # an infinite loop. ansi-aux's `is-noncontiguous-sublist-of` is exactly that
-    # shape and spun 1.7 million iterations:
+    # A WHEN/UNLESS/IF guards *the selectable-clause that follows it* (CLHS
+    # 6.1.3): one selectable-clause, which may itself be another conditional
+    # (nesting), optionally followed by more AND-joined selectable-clauses at
+    # that same level, optionally followed by an ELSE branch (binding to the
+    # innermost still-open conditional -- the usual dangling-else rule) and
+    # an optional END. `_parse_selectable_clause`/`_parse_and_chain` are a
+    # small recursive-descent pair implementing exactly that grammar;
+    # `active_conditionals` is the list of `(kind, test)` guards -- outermost
+    # first -- accumulated on the way down, and every leaf clause (DO,
+    # RETURN, an accumulation) is stamped with a copy of it. Two clauses
+    # guarded by unrelated tests must stay independent:
     #
     #     (loop when (null list2)            do (return-from ... nil)
     #           when (eql x (pop list2))     do (return))
     #
-    # Each entry: {'conditionals': [...], 'forms': [...]} -- the same shape the
-    # accumulation clauses below already use, so there is one convention for
-    # "a clause carries its own guards" rather than two.
-    pending_conditionals = []  # list of ('when'/'unless', test_form)
+    # ansi-aux's `is-noncontiguous-sublist-of` is exactly this shape, and
+    # recursion gives it for free -- each WHEN's guard list is built fresh
+    # from `active_conditionals` (empty at top level) and discarded once that
+    # WHEN's own then/else/end is fully parsed, rather than leaking into
+    # whatever clause happens to come next.
+    #
+    # Each leaf entry: {'conditionals': [...], 'forms'/'form': ...} -- the
+    # same shape body clauses and accumulation clauses always used, so there
+    # is one convention for "a clause carries its own guards".
     body_clauses = []
-
-    # `AND` joins a clause to the previous one *under the same conditional*
-    # (CLHS 6.1.3): in
-    #
-    #     when (evenp x) collect x into foo and count t into bar
-    #
-    # the `when` guards both accumulations. So an AND-joined clause re-uses the
-    # conditions the clause before it consumed instead of taking a fresh (by then
-    # empty) set. `AND` previously had no handler at all outside `with`, so it
-    # fell through LOOP's silent-drop path -- which is precisely why the old
-    # shared-bucket code got these three tests right by accident, and why making
-    # the buckets per-clause broke them until AND became real.
-    clause_join = {'active': False, 'last': []}
-
-    def take_pending_conditionals():
-        """Hand the pending WHEN/UNLESS conditions to the clause consuming them."""
-        if clause_join['active']:
-            clause_join['active'] = False
-            return list(clause_join['last'])
-        taken = list(pending_conditionals)
-        del pending_conditionals[:]
-        clause_join['last'] = taken
-        return taken
-
-    def add_body_clause(forms):
-        body_clauses.append({'conditionals': take_pending_conditionals(),
-                             'forms': list(forms)})
 
     # Accumulation clauses, in order. CLHS 6.1.3 permits several in one loop
     # (`collect i into foo always (< i 20)`); a single slot silently kept only
     # the last one parsed and discarded the rest.
     # Each entry: {'type', 'form', 'into', 'conditionals'}.
     accumulations = []
+
+    def _substitute_it(form, it_form):
+        """CLHS 6.1.3: in the *one* selectable-clause immediately governed by
+        a WHEN/IF/UNLESS test (not an AND-joined sibling, not anything past
+        an END), the token IT stands for the test's form -- literally, by
+        substitution at parse time, which is why `(loop for it on '(a b c d)
+        when (car it) collect it)` collects `(car it)` re-evaluated each
+        iteration (A B C D) rather than the successive sublists: the FOR
+        clause's own IT was never shadowed, the substituted copy of the test
+        form just happens to read the same free variable the test did.
+        `it_form is None` (every clause but that one) leaves `form` alone, so
+        a literal IT elsewhere is ordinary variable reference, unchanged."""
+        if it_form is None:
+            return form
+        if isinstance(form, lisptype.LispSymbol) and form.name == 'IT':
+            return it_form
+        if _consp_internal(form):
+            return cons(_substitute_it(car(form), it_form),
+                       _substitute_it(cdr(form), it_form))
+        return form
+
+    def _parse_do_clause(active_conditionals, it_form=None):
+        """DO/DOING: forms up to the next clause keyword, AND or ELSE/END --
+        the latter two so a DO inside a conditional's then/else set doesn't
+        swallow the token that closes or continues it."""
+        nonlocal i
+        i += 1
+        do_forms = []
+        while (i < len(forms) and sym_name(forms[i]) not in LOOP_CLAUSE_KEYWORDS
+               and sym_name(forms[i]) not in ('AND', 'ELSE', 'END')):
+            do_forms.append(_substitute_it(forms[i], it_form))
+            i += 1
+        body_clauses.append({'conditionals': list(active_conditionals),
+                             'forms': do_forms})
+
+    def _parse_return_clause(active_conditionals, it_form=None):
+        """CLHS 6.1.5.3: `return expr` **is** `do (return expr)` -- see the
+        block comment this replaced, still accurate, just relocated: it is
+        parsed as a body clause containing a RETURN-FROM of the loop's own
+        block so its guards apply, several survive in one loop, and it exits
+        through the implicit NIL block rather than overriding an
+        accumulation's value."""
+        nonlocal i
+        block_name = (loop_block_name if loop_block_name is not None
+                      else lisptype.NIL)
+        return_args = ([_substitute_it(forms[i+1], it_form)]
+                       if i + 1 < len(forms) else [])
+        body_clauses.append({'conditionals': list(active_conditionals),
+                             'forms': [cons(lisptype.LispSymbol('RETURN-FROM'),
+                                            _list_from([block_name] + return_args))]})
+        i += 2 if return_args else 1
+
+    def _parse_accumulation_clause(active_conditionals, it_form=None):
+        """One branch for all the accumulation clauses -- see the module-level
+        note by ACCUMULATION_CLAUSES; they differ only in the accumulator
+        `execute_iteration_body` dispatches to."""
+        nonlocal i
+        name = sym_name(forms[i])
+        clause = {
+            'type': ACCUMULATION_CLAUSES[name],
+            'form': _substitute_it(forms[i+1], it_form),
+            'into': None,
+            'conditionals': list(active_conditionals),
+        }
+        i += 2
+        # CLHS 6.1.3: "into var" accumulates into a loop-local variable
+        # instead of into the loop's value.
+        if i < len(forms) and sym_name(forms[i]) == 'INTO':
+            clause['into'] = forms[i+1]
+            i += 2
+        # `maximize x fixnum` / `sum x into total of-type integer`: only the
+        # numeric accumulations take a trailing type-spec (CLHS 6.1.3.2), so
+        # only they may consume one -- `collect x` followed by `t` would
+        # otherwise lose the T.
+        if clause['type'] in NUMERIC_ACCUMULATIONS:
+            i, _acc_type_spec = _loop_type_spec(forms, i)
+        accumulations.append(clause)
+
+    def _parse_selectable_clause(active_conditionals, it_form=None):
+        """Parse exactly one selectable-clause (CLHS 6.1.3): a conditional
+        (which recurses, consuming its own then/else/end before returning)
+        or one of DO/DOING, RETURN, an accumulation. `it_form`, when given,
+        is the governing test to substitute for a literal IT -- passed only
+        to the single clause immediately following a WHEN/IF/UNLESS test."""
+        nonlocal i
+        name = sym_name(forms[i])
+        if name in ('WHEN', 'IF', 'UNLESS'):
+            cond_kind = 'unless' if name == 'UNLESS' else 'when'
+            test = forms[i+1]
+            i += 2
+            _parse_and_chain(active_conditionals + [(cond_kind, test)], it_form=test)
+            # ELSE binds to the *innermost* still-open conditional -- the
+            # ordinary dangling-else rule -- which is exactly the one whose
+            # then-chain this call just finished parsing.
+            if i < len(forms) and sym_name(forms[i]) == 'ELSE':
+                i += 1
+                negated_kind = 'when' if cond_kind == 'unless' else 'unless'
+                _parse_and_chain(active_conditionals + [(negated_kind, test)], it_form=test)
+            if i < len(forms) and sym_name(forms[i]) == 'END':
+                i += 1
+        elif name in ('DO', 'DOING'):
+            _parse_do_clause(active_conditionals, it_form)
+        elif name == 'RETURN':
+            _parse_return_clause(active_conditionals, it_form)
+        elif name in ACCUMULATION_CLAUSES:
+            _parse_accumulation_clause(active_conditionals, it_form)
+
+    def _parse_and_chain(active_conditionals, it_form=None):
+        """One selectable-clause, plus every further one AND joins to it at
+        the same level (CLHS: `if-then-set ::= selectable-clause {AND
+        selectable-clause}*`, and identically for else-forms). `it_form`
+        applies only to the first clause -- an AND-joined sibling is not the
+        clause the test immediately governs (loop.14.29 pins this down: with
+        an outer `(let ((it 'z)) ...)`, `when x collect it and collect it`
+        collects the test's value the first time and the LET's Z the
+        second)."""
+        nonlocal i
+        _parse_selectable_clause(active_conditionals, it_form)
+        while i < len(forms) and sym_name(forms[i]) == 'AND':
+            i += 1
+            _parse_selectable_clause(active_conditionals)
 
     # WITH's local variables (CLHS 6.1.1.4), as a list of *groups*. Successive
     # WITH clauses initialize sequentially -- each one sees the previous -- but
@@ -1771,32 +1869,14 @@ def eval_loop(form, env):
             })
             i += 2
 
-        elif name in ('WHEN', 'IF'):
-            pending_conditionals.append(('when', forms[i+1]))
-            i += 2
-
-        elif name == 'UNLESS':
-            pending_conditionals.append(('unless', forms[i+1]))
-            i += 2
-
-        elif name == 'AND':
-            # A bare AND in clause position joins the next clause to the previous
-            # one; `with a = 1 and b = 2` and parallel `for` clauses consume their
-            # own ANDs in their own branches before reaching here.
-            clause_join['active'] = True
-            i += 1
-
-        elif name in ('DO', 'DOING'):
-            # Collect body forms until the next clause keyword. The DO clause
-            # *consumes* the pending conditionals -- which the comment here used
-            # to claim while the code left them in a shared list for every later
-            # clause to be guarded by as well.
-            i += 1
-            do_forms = []
-            while i < len(forms) and sym_name(forms[i]) not in LOOP_CLAUSE_KEYWORDS:
-                do_forms.append(forms[i])
-                i += 1
-            add_body_clause(do_forms)
+        elif (name in ('WHEN', 'IF', 'UNLESS', 'DO', 'DOING', 'RETURN')
+              or name in ACCUMULATION_CLAUSES):
+            # A selectable-clause at the top level (CLHS 6.1.3): a
+            # conditional (which recursively consumes its own then/else/end),
+            # DO/DOING, RETURN, or an accumulation -- plus every further
+            # clause AND joins to it at this same level, e.g. `collect x into
+            # a and sum x into b` with no governing WHEN at all.
+            _parse_and_chain([])
 
         elif name == 'INITIALLY':
             # CLHS 6.1.7.1: the prologue. Its forms run once, after the
@@ -1808,83 +1888,6 @@ def eval_loop(form, env):
             while i < len(forms) and sym_name(forms[i]) not in LOOP_CLAUSE_KEYWORDS:
                 initially_forms.append(forms[i])
                 i += 1
-
-        elif name in ACCUMULATION_CLAUSES:
-            # One branch for all the accumulation clauses. They differ only in
-            # the accumulator they feed, which execute_iteration_body already
-            # dispatches on, so a parse branch per keyword only meant one more
-            # place for INTO to be forgotten.
-            clause = {
-                'type': ACCUMULATION_CLAUSES[name],
-                'form': forms[i+1],
-                'into': None,
-                # This clause consumes the pending conditionals, the same way a
-                # DO clause does. The test it replaced -- `[] if body_forms else
-                # list(conditionals)` -- was reaching for that rule with the only
-                # signal available while the buckets were shared: "did some DO
-                # anywhere in this loop already take them?"
-                'conditionals': take_pending_conditionals(),
-            }
-            i += 2
-            # CLHS 6.1.3: "into var" accumulates into a loop-local variable
-            # instead of into the loop's value. Previously the INTO token and
-            # its variable simply fell through to the unrecognized-keyword
-            # branch and were dropped, so the accumulation silently became the
-            # loop's value and the named variable was never bound at all.
-            if i < len(forms) and sym_name(forms[i]) == 'INTO':
-                clause['into'] = forms[i+1]
-                i += 2
-            # `maximize x fixnum` / `sum x into total of-type integer`: only the
-            # numeric accumulations take a trailing type-spec (CLHS 6.1.3.2), so
-            # only they may consume one -- `collect x` followed by `t` would
-            # otherwise lose the T.
-            if clause['type'] in NUMERIC_ACCUMULATIONS:
-                i, _acc_type_spec = _loop_type_spec(forms, i)
-            accumulations.append(clause)
-
-        elif name == 'RETURN':
-            # CLHS 6.1.5.3: `return expr` **is** `do (return expr)`, so it is
-            # parsed as an ordinary body clause containing a RETURN form. That
-            # is not a shortcut -- it is what gives the clause every property
-            # the standard assigns it, for free and without a second copy of
-            # any of them:
-            #
-            # - its WHEN/UNLESS guards apply, because `add_body_clause` takes
-            #   the pending conditionals. As its own mechanism it ignored them
-            #   completely, so `when (= x 2) return (* x 10)` returned on the
-            #   *first* iteration and answered 10;
-            # - several RETURN clauses in one loop all survive, where a single
-            #   `return_form` slot kept only the last one parsed;
-            # - it leaves through the loop's implicit NIL block, so the
-            #   epilogue does not run and an accumulation clause cannot
-            #   override the value.
-            # The block it returns from is the *loop's own* block, which a
-            # NAMED clause renames -- so this is `RETURN-FROM <loop-block>`,
-            # not `RETURN`. The two are not the same thing, and `loop13.lsp`
-            # pins the difference down with a pair of tests::
-            #
-            #   (loop named foo return 'a)                        => A
-            #   (block nil (loop named foo do (return :good)) :bad) => :GOOD
-            #
-            # The first shows the `return` *clause* returning from FOO; the
-            # second shows a `(return ...)` written inside a `do` clause
-            # meaning `(return-from nil ...)` and escaping the named loop
-            # entirely. Emitting `RETURN` here made the clause behave like the
-            # second: in a NAMED loop the NIL-tagged transfer sailed past
-            # `_run_with_nil_block` (which is watching for FOO) and was caught
-            # by whatever enclosing NIL block happened to be running -- for
-            # ansi-test that is RT's own `do-entries` DOLIST, so `loop.13.9`
-            # silently *ended the test run*, losing every test after it.
-            #
-            # CLHS 6.1.1.4 requires NAMED to be the loop's first clause, so
-            # `loop_block_name` is already known here.
-            block_name = (loop_block_name if loop_block_name is not None
-                          else lisptype.NIL)
-            return_args = [forms[i+1]] if i + 1 < len(forms) else []
-            add_body_clause([cons(lisptype.LispSymbol('RETURN-FROM'),
-                                  _list_from([block_name] + return_args))])
-            i += 2 if return_args else 1
-
 
         elif name == 'FINALLY':
             i += 1
@@ -1913,7 +1916,7 @@ def eval_loop(form, env):
             # still dropped here, as it always has been -- see plan.md's
             # Discovered issues, this is the one remaining silent path in LOOP.
             if not iteration_drivers and not termination_tests:
-                add_body_clause([token])
+                body_clauses.append({'conditionals': [], 'forms': [token]})
             i += 1
     
     # Execute the loop

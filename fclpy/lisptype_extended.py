@@ -130,17 +130,17 @@ class Environment(lispT):
     
     def bind_function(self, symbol, func):
         """Bind a symbol to a function definition.
-        
+
         Args:
             symbol: LispSymbol to bind
             func: Function to bind
-            
+
         Returns:
             The bound function
         """
         if not isinstance(symbol, LispSymbol):
             raise TypeError(f"bind_function: {symbol} is not a symbol")
-        
+
         self.function_bindings = FunctionBinding(symbol, func, self.function_bindings)
         # Keep legacy name-based function lookup fast.
         try:

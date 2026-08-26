@@ -8,6 +8,7 @@ classes and methods at load time without triggering assertions.
 
 import fclpy.lisptype as lisptype
 from fclpy.lispfunc import registry as _registry
+from .core import _consp_internal
 
 import fclpy.classes as classes
 
@@ -427,6 +428,14 @@ def _default_documentation(x, doc_type=None):
     # via make_ordinary_function; generic functions have a .documentation.
     if isinstance(x, classes.GenericFunction):
         return x.documentation if x.documentation else lisptype.NIL
+    # CLHS 25.1.3: `x` may be a *function name* -- a symbol or a `(SETF
+    # symbol)` list -- as well as a function object.
+    if _consp_internal(x):
+        from .utilities_functions import _function_spec_to_key
+        key = _function_spec_to_key(x)
+        if key is not None:
+            return _symbol_doc(key, 'DOCUMENTATION')
+        return lisptype.NIL
     if callable(x):
         doc = getattr(x, '__doc__', None)
         if doc:
@@ -494,6 +503,17 @@ def _default_set_documentation(doc, x, doc_type=None):
     if isinstance(x, classes.GenericFunction):
         x.documentation = doc
         return doc
+    # CLHS 25.1.3: `x` may be a *function name* -- a symbol or a `(SETF
+    # symbol)` list -- as well as a function object. documentation.list.*
+    # passes the list form; store under the same synthetic "(SETF F)"
+    # key DEFUN uses for such names.
+    if _consp_internal(x):
+        from .utilities_functions import _function_spec_to_key
+        key = _function_spec_to_key(x)
+        if key is not None:
+            return _set_symbol_doc(key, 'DOCUMENTATION', doc)
+        raise lisptype.LispError(
+            f"(SETF DOCUMENTATION): {x!r} does not name a function")
     if callable(x):
         x.__doc__ = doc
         return doc
@@ -534,6 +554,7 @@ _PROTOCOL_DEFAULTS = [
     # DOCUMENTATION and its SETF writer (CLHS 25.1.3) -- see the block comment
     # above `_default_documentation`.
     ('DOCUMENTATION', [None, None], _default_documentation),
+    ('(SETF DOCUMENTATION)', [None, None, None], _default_set_documentation),
 ]
 
 
@@ -560,11 +581,14 @@ def set_documentation(doc, x, doc_type=None):
     writer is reached through CLHS 5.1.2.9's generic SETF fallback --
     `(setf (documentation x y) doc)` expands to
     `(funcall #'(setf documentation) doc x y)` -- so this registration is
-    what makes the place writable at all. It delegates to the same default
-    the GF would dispatch to; a user DEFMETHOD on `(setf documentation)`
-    replaces the environment binding and wins from then on.
+    what makes the place writable at all. It dispatches through the same
+    generic function the reader's counterpart uses (its name is the synthetic
+    `(SETF DOCUMENTATION)` symbol), so a user DEFMETHOD on
+    `(setf documentation)` overrides by ordinary dispatch rather than by
+    environment-binding replacement.
     """
-    return _default_set_documentation(doc, x, doc_type)
+    return classes.call_generic_function(_protocol_gf('(SETF DOCUMENTATION)'),
+                                          [doc, x, doc_type])
 def _make_installer(specializers, fn):
     return lambda gf: classes.add_method(gf, specializers, fn)
 

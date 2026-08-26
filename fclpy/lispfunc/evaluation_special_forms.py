@@ -2124,15 +2124,16 @@ def eval_macro_function(form, env):
         raise ConditionException(cond, recoverable=False)
     
     symbol_form = car(args)
-    
-    # The symbol form might be quoted, so we need to evaluate it to get the symbol
-    # Or it might already be a symbol
-    if isinstance(symbol_form, lisptype.LispSymbol):
-        symbol = symbol_form
-    else:
-        # Try evaluating it
-        symbol = eval(symbol_form, env)
-    
+
+    # MACRO-FUNCTION is an ordinary function (CLHS 8.1), not a special
+    # operator -- its argument is evaluated like any function call's. A bare
+    # symbol in the form position is a *variable reference* and must be
+    # evaluated to the symbol it holds, not treated as that symbol literally;
+    # treating it literally is what made `(let ((s 'foo)) (macro-function s))`
+    # look up the symbol S instead of FOO while `(macro-function 'foo)`
+    # happened to work only because `(QUOTE FOO)` isn't itself a LispSymbol.
+    symbol = eval(symbol_form, env)
+
     if not isinstance(symbol, lisptype.LispSymbol):
         return lisptype.NIL
 
@@ -2337,45 +2338,53 @@ def eval_declaim(form, env):
 def eval_proclaim(form, env):
     """Evaluate PROCLAIM special form.
 
-    PROCLAIM takes declaration specifiers which may need evaluation
-    (for example a backquoted form with unquote). Evaluate each spec
-    in the current environment and apply it globally (similar to
-    DECLAIM but evaluating the spec forms first).
+    Unlike DECLAIM (a macro over an implicit body of several decl-specs),
+    PROCLAIM's lambda list is `(decl-spec)` -- CLHS 3.8: exactly one
+    argument, evaluated (so a backquoted form works), naming exactly one
+    declaration. The loop this replaced treated PROCLAIM like DECLAIM,
+    consuming every argument as its own spec, so a second argument was
+    silently accepted instead of signalling PROGRAM-ERROR
+    (`environment/proclaim.lsp`'s `proclaim.error.2`:
+    `(proclaim '(optimize) nil)`).
     """
     from .evaluation_core import eval as lisp_eval
+    from .sequence_protocol import list_elements
 
     args = cdr(form)
 
-    # PROCLAIM must have at least one specifier
-    if args is None or args is lisptype.NIL:
-        raise lisptype.LispProgramError("PROCLAIM requires at least one declaration specifier")
+    if not _consp_internal(args) or _consp_internal(cdr(args)):
+        raise lisptype.LispProgramError("PROCLAIM requires exactly one declaration specifier")
+
+    spec_expr = car(args)
+    # Evaluate the spec expression so backquote/unquote is handled.
+    spec = lisp_eval(spec_expr, env)
 
     # Get the global/root environment to store effects
     global_env = env
     while global_env.parent is not None:
         global_env = global_env.parent
 
-    while _consp_internal(args):
-        spec_expr = car(args)
-        # Evaluate the spec expression so backquote/unquote is handled
-        spec = lisp_eval(spec_expr, env)
-
-        if _consp_internal(spec):
-            spec_type = car(spec)
-            if isinstance(spec_type, lisptype.LispSymbol):
-                spec_name = spec_type.name.upper()
-                if spec_name == 'OPTIMIZE':
-                    _store_optimization_declaration(global_env, spec)
-                elif spec_name == 'SPECIAL':
-                    _store_special_declaration(global_env, spec)
-                else:
-                    if not hasattr(global_env, '_global_declarations'):
-                        global_env._global_declarations = {}
-                    if spec_name not in global_env._global_declarations:
-                        global_env._global_declarations[spec_name] = []
-                    global_env._global_declarations[spec_name].append(spec)
-
-        args = cdr(args)
+    if _consp_internal(spec):
+        # A decl-spec is a proper list (CLHS 3.8's `declaration ::= (decl-
+        # identifier decl-data*)`); every one of `proclaim.error.3` through
+        # `.11` is a *dotted* spec -- `(optimize . foo)`, `(type integer .
+        # foo)`, `(ftype (function (t) t) . foo)` -- which this rejects the
+        # same way any other CLHS 14.2 list-argument operator does, through
+        # the one shared dotted-list check rather than a second copy of it.
+        elements = list_elements(spec, what='PROCLAIM declaration specifier', dotted='error')
+        spec_type = elements[0] if elements else None
+        if isinstance(spec_type, lisptype.LispSymbol):
+            spec_name = spec_type.name.upper()
+            if spec_name == 'OPTIMIZE':
+                _store_optimization_declaration(global_env, spec)
+            elif spec_name == 'SPECIAL':
+                _store_special_declaration(global_env, spec)
+            else:
+                if not hasattr(global_env, '_global_declarations'):
+                    global_env._global_declarations = {}
+                if spec_name not in global_env._global_declarations:
+                    global_env._global_declarations[spec_name] = []
+                global_env._global_declarations[spec_name].append(spec)
 
     return lisptype.NIL
 
