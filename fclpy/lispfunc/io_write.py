@@ -1255,23 +1255,24 @@ def _pad_params(params):
     """Read the `mincol,colinc,minpad,padchar` prefix parameters shared by
     `~A`, `~S` and `~<...~>`, applying each one's CLHS default."""
     def _param(i, default):
-        if len(params) > i and params[i] is not None:
+        # `_is_unspecified`, not `is not None`: a `~V` parameter whose argument
+        # is Lisp NIL means "this slot was not supplied" (CLHS 22.3), and NIL
+        # reaches Python as `lisptype.NIL` rather than as `None`. Reading it as
+        # a value made `(format nil "~,,1,v<~A~;~A~>" nil "ABC" "DEF")` pad
+        # with the first character of "NIL" -- `"ABCNDEF"` where the padding
+        # character must default to space.
+        if len(params) > i and not _is_unspecified(params[i]):
             return params[i]
         return default
-
-    padchar = _param(3, ' ')
-    # A `'x` prefix parameter is parsed as a bare Python character, but a
-    # `~V` parameter supplies whatever argument was passed -- which for a
-    # pad character is a Lisp CHARACTER object, not a str.
-    if isinstance(padchar, lisptype.Character):
-        padchar = padchar.char
-    padchar = str(padchar)[:1] or ' '
 
     return (
         _lisp_number(_param(0, 0)),
         _lisp_number(_param(1, 1)) or 1,
         _lisp_number(_param(2, 0)),
-        padchar,
+        # `_format_char_param` is the one reader of a character-valued prefix
+        # parameter, shared with `~D`/`~R`'s padchar and commachar; this used
+        # to be a third copy of the same `Character`-or-`str` unwrapping.
+        _format_char_param(_param(3, ' '), ' '),
     )
 
 
@@ -1318,24 +1319,40 @@ def _justify(texts, params, colon_flag, at_flag):
     mincol, colinc, minpad, padchar = _pad_params(params)
 
     # Where padding may go: one point per `~;` separator, plus a leading one
-    # for `:` and a trailing one for `@`. A lone segment with neither
-    # modifier still gets its single implicit point, on the left -- which is
-    # what makes `~10<abc~>` right-justify.
-    gaps = len(texts) - 1
-    if colon_flag:
-        gaps += 1
-    if at_flag:
-        gaps += 1
-    if gaps == 0:
-        gaps = 1
+    # for `:` and a trailing one for `@`.
+    specified_gaps = (len(texts) - 1) + (1 if colon_flag else 0) + (1 if at_flag else 0)
+
+    # With no specified point at all, one is *assumed* at the left, which is
+    # what makes `~10<abc~>` right-justify. It is an assumed point and not a
+    # specified one, and the difference is `minpad`: minpad is "the minimum
+    # number of padding characters at each padding location", and there is no
+    # location here for it to be the minimum of. Collapsing the two (this
+    # counted the assumed point as a gap) made `~39,,6<~A~>` on 36 characters
+    # emit six spaces where it must emit three, and `~5,,1<~A~>` on sixteen
+    # emit one where it must emit none.
+    gaps = specified_gaps or 1
 
     content_width = sum(len(t) for t in texts)
-    total_pad = minpad * gaps
-    while content_width + total_pad < mincol:
-        total_pad += colinc
 
+    # CLHS 22.3.6.2 constrains the *total width*, not just the padding: it is
+    # `mincol + k*colinc` for the smallest non-negative k that still fits the
+    # content plus each specified point's minpad. Growing the padding only
+    # while short of `mincol` misses the `colinc` rounding whenever mincol is
+    # already satisfied -- `~,6<~A~>` on two characters must produce six
+    # columns, not two, because zero plus one step of six is the smallest
+    # admissible width.
+    required = content_width + minpad * specified_gaps
+    width = mincol
+    while width < required:
+        width += colinc
+    total_pad = width - content_width
+
+    # "As evenly as possible", with a remainder that will not divide going to
+    # the *rightmost* gaps: `~15,,,'*<AA~4T~;BBBB~;CCCC~>` is
+    # `AA  *BBBB**CCCC` -- three pad characters over two gaps as 1 then 2, not
+    # 2 then 1 (`format.justify.34`/`.36` pin this from both parameter forms).
     base, extra = divmod(total_pad, gaps)
-    widths = [base + (1 if i < extra else 0) for i in range(gaps)]
+    widths = [base + (1 if i >= gaps - extra else 0) for i in range(gaps)]
 
     out = []
     gap_index = 0
@@ -1357,6 +1374,198 @@ def _justify(texts, params, colon_flag, at_flag):
                 out.insert(len(out) - 1, padchar * widths[gap_index])
             gap_index += 1
     return ''.join(out)
+
+
+def _scan_directive(control_string, pos):
+    """Skip one directive's *syntax*, starting at its `~`. No interpretation.
+
+    Returns `(params, colon, at, directive, next_pos)`. `params` holds the
+    literal prefix parameters -- an int, a one-character string, or None for an
+    empty slot and for the `V`/`#` forms, whose values need an argument cursor
+    this function deliberately does not have. `directive` is upper-cased, or
+    None at end of string.
+
+    This is the one place a directive's syntax is walked without also being
+    executed, which two callers need: the `~<...~>` segment scan, and CLHS
+    22.3.6.2's conflict check. The segment scan used to advance over the
+    character set `'0123456789,:#@'` and stop at anything outside it, so a
+    `'c` character parameter ended the parameter run at the quote and the
+    quoted character itself was then read as the directive -- and it recorded
+    no parameters at all, which is why a `~n,m:;` separator's own line-width
+    parameter had nowhere to come from.
+    """
+    n = len(control_string)
+    i = pos + 1
+    params = []
+    colon = at = False
+    slot_has_value = False
+    while i < n:
+        c = control_string[i]
+        if c.isdigit() or (c in '+-' and i + 1 < n and control_string[i + 1].isdigit()):
+            start = i
+            if c in '+-':
+                i += 1
+            while i < n and control_string[i].isdigit():
+                i += 1
+            params.append(int(control_string[start:i]))
+            slot_has_value = True
+        elif c == "'":
+            params.append(control_string[i + 1] if i + 1 < n else None)
+            i += 2
+            slot_has_value = True
+        elif c in 'Vv#':
+            params.append(None)
+            i += 1
+            slot_has_value = True
+        elif c == ',':
+            i += 1
+            if not slot_has_value:
+                params.append(None)
+            slot_has_value = False
+        elif c == ':':
+            colon = True
+            i += 1
+        elif c == '@':
+            at = True
+            i += 1
+        else:
+            break
+    if i >= n:
+        return params, colon, at, None, n
+    return params, colon, at, control_string[i].upper(), i + 1
+
+
+def _current_column(emitted):
+    """The column the next character emitted would land in.
+
+    `emitted` is the chunks this control string has produced so far, so this
+    is a control-string-local column, the same best-effort one `~&` and
+    `~<...~:>` already use (plan.md's recorded FRESH-LINE gap). It is
+    nevertheless the *real* answer for the directives that need it here:
+    `~T` and a `~:;`-terminated justification both measure from the start of
+    the current line, and FORMAT emitted that line itself.
+    """
+    text = ''.join(emitted) if emitted else ''
+    return _pp_visible_width(text.rsplit('\n', 1)[-1])
+
+
+def _tab_padding(column, params, colon_flag, at_flag):
+    """The spaces `~T` emits from `column` (CLHS 22.3.6.1).
+
+    `~colnum,colincT` moves to `colnum`, or -- already at or past it -- to the
+    first `colnum + k*colinc` beyond the current column, with `colinc` 0
+    meaning "then do not move". `~colrel,colinc@T` emits `colrel` spaces and
+    then as few more as it takes to reach a multiple of `colinc`.
+
+    Both used to be `' ' * colnum`, under the comment "we don't track column,
+    so just emit spaces" -- a different directive entirely: `AA~4T` is *move
+    to column 4*, two spaces, and answered four. The column was in fact
+    available all along (`emitted`), which is what `_current_column` reads.
+    """
+    def param(index, default):
+        if len(params) > index and not _is_unspecified(params[index]):
+            value = params[index]
+            if isinstance(value, bool):
+                return default
+            if isinstance(value, int):
+                return value
+        return default
+
+    if at_flag:
+        colrel = param(0, 1)
+        colinc = param(1, 1)
+        pad = max(colrel, 0)
+        target = column + pad
+        if colinc > 0 and target % colinc:
+            pad += colinc - (target % colinc)
+        return ' ' * pad
+
+    colnum = param(0, 1)
+    colinc = param(1, 1)
+    if column < colnum:
+        return ' ' * (colnum - column)
+    if colinc <= 0:
+        return ''
+    steps = (column - colnum) // colinc + 1
+    return ' ' * (colnum + steps * colinc - column)
+
+
+#: The directives that mean something only to the pretty printer, and so may
+#: not keep company with a `~<...~>` justification (CLHS 22.3.6.2). `~:T` is
+#: the fourth -- it is `PPRINT-TAB :section`, a different directive from the
+#: plain `~T` handled above, and is recognized by the colon flag.
+_PRETTY_ONLY_DIRECTIVES = ('W', '_', 'I')
+
+
+def _check_justification_conflicts(control_string):
+    """CLHS 22.3.6.2's two restrictions on `~<...~>`, in one scan.
+
+    A plain justification is not a pretty-printing construct -- it lays its
+    own segments out and has no logical block, no indentation and no
+    conditional newlines -- so `~W`, `~_`, `~I` and `~:T` may not appear
+    *inside* one. And when the justification uses the `~:;` line-overflow
+    form, whose whole decision is about where the line ends, they may not
+    appear anywhere in the same control string, nor may a `~<...~:>` logical
+    block.
+
+    The two rules are the same restriction seen from two distances, which is
+    why they share a scan; ansi-test asks them in matching triples
+    (`format.justify.error.w.1` is inside, `.2` and `.3` are before and after,
+    and `~_`, `~I` and `~:T` each repeat all three).
+
+    Whether a `~<` opened a justification or a logical block is known only at
+    its `~>` -- the colon flag lives on the *closer* -- so offending
+    directives are recorded against the innermost open `~<` and judged when it
+    closes.
+    """
+    blocks = []       # one record per `~<` seen, in order
+    open_stack = []   # indices into `blocks` for the `~<`s still open
+    all_offenders = []
+    colon_semi_justification = None
+    logical_block = False
+
+    pos = 0
+    n = len(control_string)
+    while pos < n:
+        if control_string[pos] != '~':
+            pos += 1
+            continue
+        _params, colon, _at, directive, pos = _scan_directive(control_string, pos)
+        if directive is None:
+            break
+        if directive == '<':
+            blocks.append({'offenders': [], 'colon_semi': False})
+            open_stack.append(len(blocks) - 1)
+        elif directive == '>':
+            if open_stack:
+                block = blocks[open_stack.pop()]
+                if colon:
+                    logical_block = True
+                elif block['offenders']:
+                    raise lisptype.LispProgramError(
+                        f"FORMAT: {block['offenders'][0]} cannot appear inside "
+                        "~<...~> (justification) -- CLHS 22.3.6.2")
+                elif block['colon_semi']:
+                    colon_semi_justification = True
+        elif directive == ';':
+            if open_stack and colon:
+                blocks[open_stack[-1]]['colon_semi'] = True
+        elif directive in _PRETTY_ONLY_DIRECTIVES or (directive == 'T' and colon):
+            name = '~' + (':' if colon else '') + directive
+            all_offenders.append(name)
+            if open_stack:
+                blocks[open_stack[-1]]['offenders'].append(name)
+
+    if colon_semi_justification:
+        if all_offenders:
+            raise lisptype.LispProgramError(
+                f"FORMAT: {all_offenders[0]} cannot appear in a control string "
+                "that also contains a ~<...~:;...~> justification -- CLHS 22.3.6.2")
+        if logical_block:
+            raise lisptype.LispProgramError(
+                "FORMAT: ~<...~:> (logical block) cannot appear in a control "
+                "string that also contains a ~<...~:;...~> justification -- "
+                "CLHS 22.3.6.2")
 
 
 def _capitalize_words(s):
@@ -2579,11 +2788,15 @@ def _format_directive(control_string, cursor, pos, emitted=None):
         return ('\f' * _format_repeat_count(params), pos)
 
     elif directive == 'T':
-        # ~T - Tabulation
-        colnum = params[0] if params else 1
-        colinc = params[1] if len(params) > 1 else 1
-        # We don't track column, so just emit spaces
-        return (' ' * (colnum if colnum else 1), pos)
+        # ~T - Tabulation (CLHS 22.3.6.1). `_tab_padding` owns the arithmetic;
+        # the column comes from what this control string has emitted so far.
+        # `~:T`/`~:@T` are PPRINT-TAB's :section forms, which measure from the
+        # start of the enclosing logical block rather than the line; with no
+        # block established that is the same column, so they share this path
+        # (and inside a `~<...~>` they are rejected outright -- see
+        # `_check_justification_conflicts`).
+        return (_tab_padding(_current_column(emitted), params,
+                             colon_flag, at_flag), pos)
 
     elif directive == '*':
         # ~* - Go to argument
@@ -2656,6 +2869,7 @@ def _format_directive(control_string, cursor, pos, emitted=None):
         end_pos = pos
         segments = []
         sep_flags = []
+        sep_params = []
         nested_logical_closers = []
         segment_start = pos
         closer_colon = False
@@ -2663,33 +2877,33 @@ def _format_directive(control_string, cursor, pos, emitted=None):
 
         while end_pos < len(control_string) and nesting > 0:
             if control_string[end_pos] == '~' and end_pos + 1 < len(control_string):
-                j = end_pos + 1
-                while j < len(control_string) and control_string[j] in '0123456789,:#@':
-                    j += 1
-                if j < len(control_string):
-                    next_char = control_string[j].upper()
-                    seg_colon = ':' in control_string[end_pos + 1:j]
-                    seg_at = '@' in control_string[end_pos + 1:j]
-
+                # `_scan_directive` rather than a local character-class skip:
+                # it is the one place a directive's syntax is walked, and it
+                # also yields the separator's own prefix parameters, which
+                # `~n,m:;`'s line-width rule below needs.
+                seg_params, seg_colon, seg_at, next_char, after = \
+                    _scan_directive(control_string, end_pos)
+                if next_char is not None:
                     if next_char == '<':
                         nesting += 1
-                        end_pos = j + 1
+                        end_pos = after
                     elif next_char == '>':
                         nesting -= 1
                         if nesting == 0:
                             segments.append(control_string[segment_start:end_pos])
                             closer_colon, closer_at = seg_colon, seg_at
-                            end_pos = j + 1
+                            end_pos = after
                             break
                         nested_logical_closers.append(seg_colon)
-                        end_pos = j + 1
+                        end_pos = after
                     elif next_char == ';' and nesting == 1:
                         segments.append(control_string[segment_start:end_pos])
                         sep_flags.append((seg_colon, seg_at))
-                        segment_start = j + 1
-                        end_pos = j + 1
+                        sep_params.append(seg_params)
+                        segment_start = after
+                        end_pos = after
                     else:
-                        end_pos = j + 1
+                        end_pos = after
                 else:
                     end_pos += 1
             else:
@@ -2706,29 +2920,60 @@ def _format_directive(control_string, cursor, pos, emitted=None):
                     "FORMAT: ~<...~:> (logical block) cannot be nested "
                     "inside ~<...~> (justification)")
 
-            # A first segment terminated by `~:;` is not content -- it is
-            # the prefix emitted only when the block has to be broken across
-            # lines. There is no line-width model for plain justification,
-            # so the block is always one line and the prefix is omitted.
-            if len(segments) > 1 and sep_flags and sep_flags[0][0]:
-                segments = segments[1:]
-
-            # Every segment is output, with padding distributed among the
-            # gaps so the whole reaches mincol. All segments share the outer
-            # cursor: arguments consumed inside the block must not be
-            # re-offered to directives that follow the ~>. Literal-space
-            # brackets are stripped here (not left for the top level): this
-            # branch never resolves against a margin, so `_justify`'s own
-            # width/padding math must see the real character count.
+            # Every segment is processed -- including a `~:;`-terminated first
+            # one, which CLHS 22.3.6.2 is explicit about: "the first clause is
+            # always processed, and so any arguments it refers to will be used;
+            # the decision is whether to use the resulting segment of text".
+            # All segments share the outer cursor, so arguments consumed inside
+            # the block are not re-offered to directives after the `~>`.
+            # Literal-space brackets are stripped here rather than left for the
+            # top level: this branch resolves against no margin, so `_justify`'s
+            # width arithmetic must see the real character count.
             texts = []
+            escaped = False
             for seg in segments:
                 try:
                     texts.append(_pp_strip_lit_space(_format_process_cursor(seg, cursor)))
-                except _FormatEscape as esc:
-                    texts.append(_pp_strip_lit_space(esc.partial))
+                except _FormatEscape:
+                    # CLHS 22.3.6.2: a `~^` inside a segment terminates the
+                    # whole justification, and the segment it appears in is
+                    # *discarded* along with every later one -- only segments
+                    # completed before it are laid out. Keeping the partial
+                    # text made `~<XXXXXX~^~>` answer "XXXXXX" where it must
+                    # answer "", and `~6<abc~;def~^~>` answer "abcdef" where
+                    # it must justify "abc" alone into six columns.
+                    escaped = True
                     break
 
-            return (_justify(texts, params, colon_flag, at_flag), end_pos)
+            # A first segment terminated by `~:;` is not content: it is the
+            # text emitted *only* when the padded result will not fit on the
+            # current line. `~n,m:;` gives n = columns that must still be
+            # spare and m = a line width overriding `*PRINT-RIGHT-MARGIN*`.
+            # This used to be unconditionally discarded, with the note "there
+            # is no line-width model for plain justification" -- but the
+            # column is knowable from what FORMAT has already emitted, which
+            # is what `_current_column` answers, and the width is a parameter
+            # of the directive itself.
+            overflow_prefix = None
+            if (not escaped and len(segments) > 1
+                    and sep_flags and sep_flags[0][0] and texts):
+                overflow_prefix = texts[0]
+                texts = texts[1:]
+                first_params = sep_params[0] if sep_params else []
+                spare = first_params[0] if first_params and isinstance(
+                    first_params[0], int) else 0
+                if len(first_params) > 1 and isinstance(first_params[1], int):
+                    line_width = first_params[1]
+                else:
+                    line_width = _printer._as_count(
+                        _printer.resolve_control('*PRINT-RIGHT-MARGIN*'))
+
+            padded = _justify(texts, params, colon_flag, at_flag)
+            if overflow_prefix is not None and line_width is not None:
+                column = _current_column(emitted)
+                if column + len(padded) + spare > line_width:
+                    return (overflow_prefix + padded, end_pos)
+            return (padded, end_pos)
 
         # Logical block (CLHS 22.3.5.2). The body is split by top-level ~;
         # into at most three sections: prefix ; body ; suffix. Two sections
@@ -3225,6 +3470,12 @@ def _format_process(control_string, args):
 def _format_process_with_tail(control_string, args):
     """Like _format_process but also return the number of arguments consumed
     (i.e. the index of the first remaining argument)."""
+    # CLHS 22.3.6.2's restrictions are properties of the *control string*, not
+    # of any one directive, so they are checked once here -- the one place a
+    # whole control string is entered -- rather than at each directive, which
+    # cannot see whether a `~<...~:;...~>` appears elsewhere in the string.
+    _check_justification_conflicts(control_string)
+
     cursor = _FormatCursor(args)
     try:
         result = _format_process_cursor(control_string, cursor)
