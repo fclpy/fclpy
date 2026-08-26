@@ -9,6 +9,253 @@ Each entry is a *mechanism* landed, not a test count. Several also record a
 diagnosis that turned out to be **wrong**, and how; that is the part worth
 keeping, and the reason this is an archive rather than a deletion.
 
+- **2026-08-27 (b)** — **A full run surfaced 6 file-level regressions
+  `gate.py` had not seen; both root causes were one wrapper object treated
+  as the form it wraps, at three call sites; fixing them found a fourth,
+  genuinely missing piece of CLHS 3.8.** `numbers/incf.lsp`,
+  `numbers/decf.lsp`, `data-and-control-flow/macrolet.lsp`,
+  `data-and-control-flow/places.lsp`, `data-and-control-flow/rotatef.lsp`,
+  `conditions/restart-case.lsp` all regressed **+1 REGRESSION** (`rotatef`
+  +2, `restart-case` +7) against `docs/ansi_checklist_baseline.json` once
+  the 2026-08-27 (a) entry's work went through a full run — `gate.py`'s targeted
+  checks along the way never touched these files, so nothing caught it
+  until `COMPLETENESS: OK` on 21881 tests gave a real baseline diff to read.
+
+  **Diagnosis, not guesswork: `git worktree` + selective file reverts
+  bisected the regression to one line before touching any of the actual
+  fix.** `conditions/restart-case.lsp`'s `RESTART-CASE.26`
+  (`(handler-bind ((error (lambda (c2) (invoke-restart (find-restart 'foo
+  c2))))) (handler-bind ((simple-condition (lambda (c) (error "Blah"))))
+  (restart-case (restart-case (signal "Boo!") (foo () 'bad)) (foo ()
+  'good))))`) answers GOOD at the pre-regression commit (checked out in a
+  worktree) and BAD at HEAD. Reverting one file at a time inside the
+  regressing commit isolated it to `misc_packages.py`: `MACROEXPAND`/
+  `MACROEXPAND-1` were correctly made two-valued per CLHS 3.8 (wrapped in
+  `MultipleValues`) as part of the 2026-08-27 (a) entry's work, but
+  `evaluation_conditions._restart_case_signal_target` — the function that
+  detects whether a `RESTART-CASE`'s protected form, after macro expansion,
+  is literally a `SIGNAL`/`ERROR`/`CERROR`/`WARN` call, so its restarts can
+  be associated with *that* condition specifically (CLHS 9.1; this is what
+  makes the inner `RESTART-CASE`'s `FOO` invisible to `find-restart` once a
+  *different* condition is being handled, and is why GOOD, not BAD, is
+  correct) — calls that same `MACROEXPAND` and compares `new is expanded`
+  to detect "no more expansion". A `MultipleValues` wrapper is never
+  identical to the plain form it wraps, so the check now failed on the very
+  first pass, `expanded` became the wrapper object itself, the next
+  `consp` check failed on it, and the whole function silently returned
+  `None` — disabling restart/condition association for every `RESTART-CASE`
+  whose protected form needed macro expansion to see through to its
+  `SIGNAL`/`ERROR`/`CERROR`/`WARN` call. Fixed by reducing with
+  `lisptype.primary_value()` before the identity check.
+
+  **The same pattern, found by grepping for every other direct caller of a
+  macro's expander function, was in two more places** — both silently
+  broken the same way, by the same one-line cause: `misc_packages.
+  _direct_macroexpand_1` (the function `GET-SETF-EXPANSION` calls to see
+  whether a place is a macro call, and therefore the one every `SETF`
+  place, `INCF`/`DECF`/`PUSH`/`ROTATEF`/... eventually goes through) and
+  `evaluation_special_forms.eval_macroexpand_1` (the `MACROEXPAND-1`
+  special form FUNCALL/APPLY do *not* reach, `misc_packages.macroexpand_1`
+  does — recorded as a duplicate elsewhere) both handed a macro's raw
+  return value onward as "the expansion" without reducing it. Concretely:
+  `(incf (expand-in-current-env (%m x)))` — `EXPAND-IN-CURRENT-ENV` is
+  ansi-test's own aux macro, `(defmacro expand-in-current-env (form
+  &environment env) (macroexpand form env))` — failed
+  `GET-SETF-EXPANSION: not a valid place`, because
+  `_direct_macroexpand_1` handed the `MultipleValues` wrapper itself
+  onward as the expanded place, which is neither a symbol nor a cons.
+  All three sites now reduce with `primary_value()`, the same rule
+  `evaluation_core.eval`'s own macro dispatch already applied at the one
+  site that *was* already correct — this is the fourth "there are two of
+  these" instance the checklist's own dispatch call already fixed once,
+  just not at its siblings.
+
+  **Fixing those three surfaced a fourth, real, previously-masked gap:
+  `MACROEXPAND`/`MACROEXPAND-1` never expanded a bare symbol naming a
+  symbol-macro — only a cons-shaped macro call — which is the *other* half
+  of CLHS 3.8.** `MACROLET.14` (`(symbol-macrolet ((a b)) (macrolet ((foo
+  (x &environment env) (let ((y (macroexpand-1 x env))) (if (eq y 'a) 1
+  2)))) (foo a)))`, expects 2 — Y must not be EQ to A, because A expands to
+  B) was **passing at the pre-regression baseline for the wrong reason**:
+  the old `eval_macroexpand_1` quote-sniffed its argument (the defect the
+  entry above's own fix for `eval_macroexpand_1` correctly removed) and so
+  never evaluated `X` at all, comparing the *parameter name symbol* `X`
+  against `'A` — never EQ regardless, an accidental pass masking a real,
+  separate missing feature. Fixing the quote-sniffing bug correctly
+  therefore exposed the always-broken symbol-macro case as a **new**
+  regression against a baseline that had never measured it honestly. Not
+  reverted — per prompt.txt, "if a test passes for the wrong reason, it is
+  not progress" — instead implemented: both `_direct_macroexpand_1` and
+  `eval_macroexpand_1` now consult `env.get_symbol_macro` for a bare-symbol
+  form before falling through to the cons-call case.
+
+  **Measured**: all six regressed files back to 0 vs. baseline (`incf`/
+  `decf`/`places`/`rotatef` exactly at baseline; `macrolet` and
+  `restart-case` *below* baseline — 45/53 and 36/37 respectively, since the
+  symbol-macro fix and the restart-association fix each closed one more
+  test than was ever passing). `gate.py` clean (`pytest`, `duplicates`,
+  `ansi-checklist --baseline`, 0 files worse). A directory sweep of
+  `data-and-control-flow`, `conditions`, `objects` and `eval-and-compile`
+  (the places a SETF-place / macroexpansion / restart-association change
+  could plausibly reach) found 4 more newly-passing, 0 newly-failing. A
+  second full run was launched to get an honest final scoreboard, since
+  `gate.py`/targeted runs are an index, never a substitute, for a change
+  reaching this many call sites (CLAUDE.md, dev-loop step 8's "wide blast
+  radius" case).
+
+- **2026-08-27 (a)** — **Two sessions of missing-system work, not test-passing
+  patches: DOCUMENTATION as a real generic function, LOOP's selectable-clause
+  grammar, forward-referenced classes, and CLHS 2.3.1's numeric-token syntax.**
+  Ends with a full-suite run in flight to re-baseline the scoreboard, which the
+  numbers below do not yet reflect — they are targeted-run measurements,
+  verified individually but not yet folded through a full run.
+
+  **Missing systems built, not stubs removed:**
+  - **`fclpy/numtoken.py` — CLHS 2.3.1, one shared numeric-token parser.**
+    The reader's step 10 and the `#B`/`#O`/`#X`/`#nR` dispatch readers each had
+    a different partial answer to "is this token a number", and agreed on
+    nothing but plain decimal integers: **ratios did not exist** —
+    `(read-from-string "1/2")` returned the *symbol* `1/2`, so
+    `printer/print-ratios.lsp` failed on the first ratio it generated; radix
+    number reading stopped at the first non-digit character and discarded the
+    rest, so `#x951115BA/AC02A5F7` (output the printer itself produces)
+    answered only the numerator; `123.` — a *decimal integer* per CLHS
+    2.3.1 — read as the float 123.0; and step 8's escape tracking was
+    discarded before step 10 saw it, so `|123|` read as the integer 123
+    instead of a symbol (CLHS 2.3.1.1). One parser now serves both entry
+    points, radix applied to integers/ratios and never to floats.
+  - **The reader control variables (CLHS Fig. 23-1) were genuinely unbound.**
+    `*READ-BASE*`, `*READ-EVAL*`, `*READ-SUPPRESS*`, `*READ-DEFAULT-FLOAT-FORMAT*`
+    were proclaimed special but never given a value, so `(boundp '*read-base*)`
+    was NIL and referencing `*read-eval*` signalled UNBOUND-VARIABLE.
+    `*READ-BASE*` was additionally a `cl_function` registered under a
+    variable's name (the C7 defect this document already tracked elsewhere) —
+    a reference falling through variable lookup resolved to a Python function
+    object, and nothing consulted the module global it returned. Now one
+    table, `lispreader.READER_VARIABLES`, bound at bootstrap exactly like the
+    printer control variables already were, with `resolve_read_base()` as the
+    one reader.
+  - **`*PRINT-READABLY*` did not override the other print controls (CLHS
+    22.1.3).** Printing readably must proceed as if `*print-escape*`/
+    `*print-array*`/`*print-gensym*` were true and `*print-length*`/
+    `*print-level*`/`*print-lines*` were false — those six are the only way
+    the printer can produce output that will not read back, so leaving them
+    to whatever a caller set made the readability promise unsatisfiable:
+    with `*print-level*` 0 the printer answered `"#"` for every object. This
+    is what `randomly-check-readability` (`*print-readably*` T, every other
+    control variable randomized) exercises across all of `printer/`, and it
+    is why `print.ratios.random` and most of `print.backquote.random` failed
+    even once ratios themselves could be read and printed.
+  - **`~<...~>` justification (CLHS 22.3.6.2) was a partial implementation
+    passing 22 of 59 `format-justify.lsp` tests, not a stub.** Fixed to spec:
+    `~^` now discards its own segment and every later one, rather than
+    keeping the partial text (`~<XXXXXX~^~>` must answer `""`, not
+    `"XXXXXX"`); `~T` now computes a real column from what the control
+    string has already emitted instead of the placeholder "we don't track
+    column, so just emit spaces" (`~4T` after two characters must emit two
+    spaces, not four); a `~n,m:;`-terminated first segment is the
+    line-overflow prefix and is now conditionally emitted against the
+    current column and `*PRINT-RIGHT-MARGIN*`, rather than unconditionally
+    discarded; total width now honours `colinc` rounding even when `mincol`
+    is already satisfied, and `minpad` no longer applies to a lone segment's
+    *assumed* padding point (only to a specified one); and CLHS's
+    restriction on `~W`/`~_`/`~I`/`~:T` appearing near a justification is now
+    checked once per control string (`_check_justification_conflicts`).
+    `format-justify.lsp`: 0/59 → **59/59**. New shared parameter-syntax
+    scanner `_scan_directive` replaces the character-class skip that used to
+    end a directive's parameter run at a `'x` character parameter's own
+    literal comma.
+  - **CLHS 4.3.7 forward-referenced classes** (from the earlier of the two
+    sessions). `eval_defclass` appended an unresolved superclass as a bare
+    *symbol* into a list whose every other element is a `LispClass`, so
+    `(typep instance-of-c1 'c2)` was permanently NIL. `classes.
+    ensure_forward_referenced_class` now creates a real, registered
+    placeholder class; `define_forward_referenced_class` fills in *that same
+    object* when the class is later defined (identity matters —
+    `objects/defclass-forward-reference.lsp` checks `(typep i1 class2)`
+    against DEFCLASS's own return value) and invalidates the CPL memo
+    registry-wide, since every cached CPL computed while the placeholder was
+    empty is now wrong. `ALLOCATE-INSTANCE` refuses a class with an
+    unfinalized superclass (CLHS 4.3.6). `objects/defclass-forward-
+    reference.lsp` 0/4 → **4/4**; `objects/` directory +15 newly passing
+    across 11 files beyond the one targeted, 0 newly failing.
+  - **LOOP's selectable-clause grammar (CLHS 6.1.3)** replaced a flat
+    pending/take-pending accumulator with recursive descent
+    (`_parse_selectable_clause`/`_parse_and_chain`), so nested `WHEN`/`UNLESS`/
+    `IF`, dangling `ELSE`, `AND`-chains and the `IT` pseudo-variable compose
+    the way the grammar requires instead of each clause silently discarding
+    what came before it. `iteration/loop14.lsp` 17/49 → **49/49**.
+  - **DOCUMENTATION / `(SETF DOCUMENTATION)` as CLHS 25.1.3 standard generic
+    functions**, installed through the same `_PROTOCOL_DEFAULTS` mechanism
+    SLOT-UNBOUND/DESCRIBE-OBJECT already use, replacing a `cl_function` that
+    read a symbol's plist and answered NIL for every non-symbol (a function
+    object, a class, a package, a method). `environment/documentation.lsp`
+    30/58 → 56/58.
+  - **`MAKE-INSTANCES-OBSOLETE`** plus the lazy-update hook CLHS 4.3.6/7.3
+    require: an instance whose class generation has moved on is brought
+    current on next slot access via `UPDATE-INSTANCE-FOR-REDEFINED-CLASS`,
+    not eagerly. `objects/make-instances-obsolete.lsp` 0/4 → **4/4**.
+  - **`MAKE-LOAD-FORM-SAVING-SLOTS`** (CLHS 3.2.4.4): a creation form
+    (`ALLOCATE-INSTANCE` + `FIND-CLASS`) and an initialization form (`PROGN`
+    of `SETF SLOT-VALUE`, bound slots only). `objects/make-load-form-saving-
+    slots.lsp` 3/15 → 14/15.
+  - **`PROCLAIM`** rewritten to take exactly one declaration specifier,
+    validated through the shared list walker rather than accepting anything.
+    `eval-and-compile/proclaim.lsp` 4/14 → **14/14**.
+  - **A real character *syntax-type* model (CLHS 2.1.4/2.1.4.2)**, replacing
+    seven hardcoded predicates (`whitespace_char`, `single_escape_character`,
+    a `multiple_escape_character` that tested `c == '"'` — the wrong
+    character, multiple escape is `|` — and four more) that the reader had
+    instead of consulting the readtable. `SET-SYNTAX-FROM-CHAR` now copies a
+    syntax type, macro function and dispatch sub-table for real, and
+    constituent *traits* (CLHS 2.1.4.2 — invalid vs. alphabetic) are
+    correctly **not** copied by it. `reader/set-syntax-from-char.lsp`
+    0/75 → 67/75 (still 5 short as of this checklist).
+  - **`PRINT-UNREADABLE-OBJECT`** (CLHS 22.4.1) as a macro expanding to the
+    `LET`/prefix/body/suffix CLHS specifies, not evaluating its body before
+    establishing the stream binding. `printer/print-unreadable-object.lsp`
+    0/7 → **7/7**.
+  - **The four float epsilons became constant variables** (CLHS 12.1.4,
+    "defined by the arithmetic, not the range"), computed with
+    `math.nextafter` rather than a `2.0**-53` literal that failed the very
+    test defining it (`1.0 + 2**-53 == 1.0` under round-half-to-even) — and
+    de-registered as functions, since ANSI makes them constants.
+    `numbers/epsilons.lsp` 3/13 → **13/13**.
+  - **`MACROEXPAND`/`MACROEXPAND-1`** now evaluate their argument (were
+    quote-sniffing it) and return the CLHS-specified *two* values via
+    `MultipleValues`, rather than silently discarding the expanded-p flag.
+
+  **Fixed, not built — defects in things that already existed:**
+  - **15 reader sites raised a bare Python `ValueError`**, matching no
+    `handler-case` clause and surfacing as the *value* of the form
+    (`#<ERROR Python error in function call: ValueError: Unknown # dispatch
+    character: #<>`). All now go through one `_reader_error`
+    (`readtable._reader_error` / `lispreader.ReaderErrorSignal`). This was
+    also hiding a printer bug: `randomly-check-readability` handles
+    `reader-error` specifically and reports what the printer wrote, so eight
+    `print.backquote.random` tests showed an unexplained Python crash instead
+    of "the printer emitted an unreadable `#<...>` construct".
+  - **A missing `from .core import _consp_internal` import in
+    `lispfunc/misc_clos.py`** (inherited at the start of the earlier
+    session) crashed every `DOCUMENTATION` call with a raw `NameError`
+    surfacing as the Lisp value — the exact standing-rule-2 violation
+    prompt.txt names.
+  - **`MACRO-FUNCTION` quote-sniffed its argument** instead of evaluating it,
+    so `(let ((s 'foo)) (macro-function s))` answered NIL.
+
+  **Measured** (targeted runs, individually verified; directory sweeps 0
+  newly-failing unless noted): `printer/print-ratios.lsp` 0/1 → 1/1;
+  `printer/print-backquote.lsp` 4/14 → 13/14 (the survivor is symbol
+  print-escaping under a randomized `readtable-case`, `print-symbols.lsp`
+  territory, not backquote); `objects/` directory 736/861 → 751/861 (+15,
+  0 newly failing, 11 files beyond the one targeted); `printer/` directory
+  partially swept before the earlier session's fixes (2036/2428 → 2058/2428,
+  fixed 22, 4 reported regressed — `gate.py`'s per-file baseline check ran
+  clean after, so none is currently below its recorded baseline) and not
+  re-swept after the justify/ratio/backquote work, which the pending full run
+  will cover instead. `gate.py` clean at every checkpoint (`pytest`,
+  `duplicates.py --baseline`, `ansi_checklist.py --baseline`).
+
 - **2026-08-24** — **One hash table, and it honours its test.** `hash-tables/`
   **70 failing of 158 → 0 (55.7% → 100%)**. `pytest` 2004 passed, 3 xfailed.
   Nine duplicate registrations resolved (the register goes 22 → 13).

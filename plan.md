@@ -26,6 +26,55 @@ history is preserved in condensed form in [Changelog](docs/changelog.md).
 
 ## 1. Status
 
+> ### 🔄 A second full run is in flight (started 2026-08-27), to re-baseline
+> ### against everything below
+>
+> **The first full run after the 2026-08-27 (a) work completed cleanly**
+> (`COMPLETENESS: OK`, 21881 total, 20553 passed (93.9%), 1328 failed,
+> ~127 minutes) **and immediately found 6 real regressions `gate.py`'s
+> per-file baseline check had never seen**, because none of the targeted
+> runs along the way happened to touch the affected files:
+> `numbers/incf.lsp`, `numbers/decf.lsp`, `data-and-control-flow/macrolet.lsp`,
+> `data-and-control-flow/places.lsp`, `data-and-control-flow/rotatef.lsp`,
+> `conditions/restart-case.lsp`. Bisected with `git worktree` + selective
+> file reverts (not guessed) to one line, `new is expanded` comparing a
+> place/expansion form against the `MultipleValues` wrapper CLHS 3.8's
+> `MACROEXPAND` now correctly returns — three separate call sites had this,
+> and fixing them surfaced a fourth, real, previously-masked gap
+> (`MACROEXPAND`/`MACROEXPAND-1` never expanded a symbol-macro, only a
+> cons-shaped macro call — `MACROLET.14` had been passing at the old
+> baseline for the wrong reason, the exact case prompt.txt names: "if a test
+> passes for the wrong reason, it is not progress"). Full account, including
+> exactly why `RESTART-CASE`'s condition-association depends on it, in
+> `docs/changelog.md`'s **2026-08-27 (b)** entry. All six files are now at or
+> below their baseline count; `gate.py` and a sweep of
+> `data-and-control-flow`/`conditions`/`objects`/`eval-and-compile` are
+> clean. This second full run is what makes that honest rather than assumed
+> — a SETF-place / macroexpansion / restart-association fix reaches too much
+> of the suite for a targeted sweep to stand in for it (CLAUDE.md, dev-loop
+> step 8's "wide blast radius" case).
+>
+> The 2026-08-24 numbers below are stale independent of any of this — two
+> sessions of missing-system work landed since (numeric-token syntax/ratios,
+> `*READ-BASE*` and the other reader control variables, `*PRINT-READABLY*`'s
+> override of the other print controls, `~<...~>` justification rewritten to
+> spec, forward-referenced classes, LOOP's selectable-clause grammar,
+> DOCUMENTATION as a real generic function, and more — see
+> `docs/changelog.md`'s **2026-08-27 (a)** entry for the full list with
+> before/after counts). This run's bootstrap probe
+> (`(listp (directory "*.lsp"))` → T) was checked first since reader and
+> printer paths on the bootstrap list were touched.
+>
+> An earlier attempt at the *first* of these two full runs (started
+> 2026-08-26/27) was lost to a VSCode crash mid-run, not to a test failure —
+> the working tree was already clean and every change already committed when
+> that run started, so nothing was lost, only the run itself had to be
+> relaunched.
+>
+> **This section will be regenerated from the second run's output once it
+> completes** — update the table below, the `COMPLETENESS:` block, and the
+> per-directory scoreboard together, from the same run, rather than piecemeal.
+
 **Latest full run: 2026-08-24. Over 90% passing, and the suite is complete
 again — it was not, on the committed tree, for the two commits before this.**
 
@@ -847,32 +896,38 @@ larger than 29. Every entry that used to lead this table — `make-package.lsp`,
 pipenv run python -c "import re;[print(m.group(2).rjust(3),m.group(1)) for l in open('docs/ansi_checklist.md',encoding='utf-8') for m in [re.match(r'^- \[ \] .(\S+). — \*\*(\d+)\*\* failing of \2$',l)] if m]"
 ```
 
+> **This table is dated 2026-08-22 and several rows below are stale — see the
+> per-row notes.** It has not been regenerated wholesale since (that needs a
+> full run's checklist, which is currently in flight — see §1); the notes
+> record what individual targeted runs since then have confirmed.
+
 | tests | file | mechanism absent |
 |---|---|---|
-| 29 | `hash-tables/make-hash-table.lsp` | **not** `:test` as a designator, which is what this table said for three revisions. Probed 2026-08-22: `(hash-table-p (make-hash-table))` is **NIL** while `(typep ht 'hash-table)` is T, and every one of the 29 tests opens with `(notnot (hash-table-p ht))`. `(hash-table-test ht)` also answers the Python string `'EQL'` rather than the symbol (standing rule 2). Both point at the second, dead hash-table implementation `lispfunc/hashtables.py` that registers the same operators (standing rule 3, already recorded below) |
+| ~~29~~ | ~~`hash-tables/make-hash-table.lsp`~~ | **Fixed 2026-08-24 — `hash-tables/` is 100%.** Was **not** `:test` as a designator, which is what this table said for three revisions; the actual cause was the second, dead hash-table implementation winning import order (standing rule 3) with no key-equivalence model at all. See `docs/changelog.md`'s 2026-08-24 entry |
 | 15 | `packages/with-package-iterator.lsp` | package iterator absent |
 | 13 | `hash-tables/with-hash-table-iterator.lsp` | hash iterator absent |
-| 12 | `reader/set-syntax-from-char.lsp` | no character *syntax type* model (C12) |
-| 11 | `printer/format/format-justify.lsp` | `~<~>` justification (C2) |
+| 5 (was 12) | `reader/set-syntax-from-char.lsp` | **Mostly fixed 2026-08-26/27** — a real character *syntax type* model now exists (C12) and `SET-SYNTAX-FROM-CHAR` acts on it; 0/75 → 67/75. No longer 100%-failing; the 5 remaining are unprobed |
+| ~~11~~ | ~~`printer/format/format-justify.lsp`~~ | **Fixed 2026-08-27 — 59/59.** `~<...~>` justification (C2) rewritten to spec: `~^` segment-discard, `~T` real column tracking, `~n,m:;` line-overflow prefix, `colinc` rounding. See `docs/changelog.md` |
 | 8 | `environment/time.lsp` | `TIME` absent |
-| 6 | `printer/format/format-tilde.lsp` | `~~` (C2) |
+| ~~6~~ | ~~`printer/format/format-tilde.lsp`~~ | **Fixed — 10/10** (earlier of the two 2026-08-27-logged sessions) |
 | 5 | `printer/print-integers.lsp` | printer radix/base |
-| 5 | `printer/format/format-percent.lsp` | `~%` (C2) |
-| 4 | `printer/format/format-paren.lsp` | `~(~)` case conversion (C2) |
+| ~~5~~ | ~~`printer/format/format-percent.lsp`~~ | **Fixed — 11/11** |
+| 6 (was 4, file grew) | `printer/format/format-paren.lsp` | **Partially fixed** — 12/50 → 44/50; `~(~)` case conversion (C2) mostly works, 6 remain |
 | 4 | `printer/format/format-p.lsp` | `~P` (C2) |
-| 4 | `objects/make-instances-obsolete.lsp` | `MAKE-INSTANCES-OBSOLETE` absent |
-| 4 | `objects/defclass-forward-reference.lsp` | forward-referenced classes |
+| ~~4~~ | ~~`objects/make-instances-obsolete.lsp`~~ | **Fixed — 4/4.** `MAKE-INSTANCES-OBSOLETE` plus the lazy `UPDATE-INSTANCE-FOR-REDEFINED-CLASS` hook |
+| ~~4~~ | ~~`objects/defclass-forward-reference.lsp`~~ | **Fixed 2026-08-27 — 4/4.** CLHS 4.3.7 forward-referenced classes; see `docs/changelog.md` |
 | 3 | `streams/stream-error-stream.lsp` | `STREAM-ERROR-STREAM` absent |
-| 3 | `printer/print-unreadable-object.lsp` | `PRINT-UNREADABLE-OBJECT` |
+| ~~3~~ | ~~`printer/print-unreadable-object.lsp`~~ | **Fixed — 7/7.** `PRINT-UNREADABLE-OBJECT` as a real macro (CLHS 22.4.1) |
 | 2 | `objects/unbound-slot.lsp` | `UNBOUND-SLOT` condition |
-| 1 each | `printer/print-structure.lsp`, `print-ratios.lsp`, `print-random-state.lsp`, `pathnames/pathnames.lsp` | |
+| 1 each | `printer/print-structure.lsp`, ~~`print-ratios.lsp`~~, `print-random-state.lsp`, `pathnames/pathnames.lsp` | `print-ratios.lsp` **fixed 2026-08-27 — 1/1** (CLHS 2.3.1 numeric-token syntax, `fclpy/numtoken.py`); the other three unprobed |
 
-**Three of the top five are one absent iterator or model each**, which is what
-"cheapest wins" means at this stage: `make-hash-table.lsp` (29),
+**Three of the top five were one absent iterator or model each**, which is what
+"cheapest wins" means at this stage: `make-hash-table.lsp` (29, now fixed),
 `with-package-iterator.lsp` (15) and `with-hash-table-iterator.lsp` (13) are
-57 tests behind three named mechanisms. The five `printer/format/*` entries
-(30 tests) are C2's remaining directives and are the one place a *cluster*
-argument still holds — they share one engine.
+57 tests behind three named mechanisms, two still open. The `printer/format/*`
+entries were C2's remaining directives and the one place a *cluster* argument
+still held; most of that cluster is now closed (`format-justify`,
+`format-tilde`, `format-percent` all fixed; `format-paren` mostly).
 
 <details>
 <summary>The same table at 2026-08-16, for comparison (49 files, 493 tests)</summary>
@@ -1730,13 +1785,14 @@ Anything knowingly non-ANSI, with the milestone that removes it. Empty means
 | Pretty printer absent: `*PRINT-PRETTY*`, `PPRINT-*`, `~<~:>` logical blocks | the printer prints only the non-pretty style | C2 / M10 |
 | `*PRINT-CIRCLE*` unimplemented; the printer instead cuts off at depth 256 | needs a labelling pass over the object graph | M10 |
 | `~&` sees only the column within its own control string, so a `~&` opening a control string cannot tell the stream is mid-line; `FRESH-LINE` is correct | FORMAT builds its whole output as a string before writing, and the column is not threaded through the eleven nested `_format_process_cursor` call sites | C2 |
+| **`~T`/`~<...~:;...~>`'s "current column" is likewise control-string-local, not stream-wide** (2026-08-27, `_current_column`) — `~T` now tabs correctly *within* one FORMAT call (`format-justify.lsp` 0/59 → 59/59), but a preceding `WRITE-STRING` to the same stream is invisible to it, the same gap the row above already names for `~&` | same root cause as the row above; one fix (threading the stream's real column through FORMAT) closes both | C2 |
 | `SUBTYPEP` string-pair table | no type lattice | M9 |
 | **No class precedence list.** `classes._specificity_key` orders applicable methods by *ancestor count*, and the live `_init_builtin_classes` gives every built-in class `T` as its only superclass — so `INTEGER`, `RATIONAL` and `NUMBER` are equally specific and ties are broken by *definition order* (a stable sort). Much of `objects/` therefore passes because ansi-test happens to define its methods most-specific-first | CLHS 7.6.6.1 wants the argument's class precedence list position, which needs a real C3 linearization *and* a real built-in class hierarchy; both are the same mechanism as C14's type lattice, so doing it here would be a second one | M9 / §4 item 17a |
 | `classes.py` defines `_init_builtin_classes` twice; the second wins and the first is dead | standing rule 3, unresolved — the two disagree about the class hierarchy, which is exactly why it matters | M9 / §4 item 17a |
-| The reader does not parse **ratios**: `3/5` reads as a symbol, so it evaluates as an unbound variable | found 2026-08-16 while probing `*mini-universe*`, whose ratio entry is therefore not a ratio | M10 / C12 |
+| ~~The reader does not parse **ratios**: `3/5` reads as a symbol, so it evaluates as an unbound variable~~ | **Fixed 2026-08-27.** `fclpy/numtoken.py` is now the one place CLHS 2.3.1's numeric-token grammar is decided, shared by the reader's step 10 and the `#B`/`#O`/`#X`/`#nR` dispatch readers; `(read-from-string "3/5")` reads the ratio | M10 / C12 |
 | `WITH-STANDARD-IO-SYNTAX` binds `*PRINT-PPRINT-DISPATCH*` to a dispatch table that dispatches nothing | the *object* now has one home (`io_write.standard_pprint_dispatch`) and the binding is correct, but `SET-PPRINT-DISPATCH`/`PPRINT-DISPATCH` are stubs, so `WITH-STANDARD-IO-SYNTAX.23` cannot pass. It is the pretty printer's absence, not the macro's | C2 / M10 |
-| `SET-SYNTAX-FROM-CHAR` returns T without doing anything, and there is no character *syntax type* model for it to act on | `Readtable` records macro characters and a case and nothing else; building syntax types is the bulk of what `reader/` still owes | M10 / C12 |
-| The reader upcases every symbol token regardless of `readtable-case`, though the readtable records it and the printer honours it (CLHS 23.1.2) | `Readtable._read_symbol` predates the readtable being a real object | M10 / C12 |
+| `SET-SYNTAX-FROM-CHAR` acts on a real character *syntax type* model as of 2026-08-26 (was a stub returning T); `reader/set-syntax-from-char.lsp` is 67/75, not 0/75 | 5 of the 75 remain unprobed | M10 / C12 |
+| ~~The reader upcases every symbol token regardless of `readtable-case`, though the readtable records it and the printer honours it (CLHS 23.1.2)~~ | **Stale — already fixed before this row was last checked.** `lispreader._convert_case` applies `readtable-case` per character, escaped characters exempt; verified 2026-08-27: `:downcase`/`:preserve` both read correctly. Left the table without a dated fix entry, which is itself worth noting — a row here needs re-verifying against current behavior before being trusted, not just against the diagnosis that first added it | M10 / C12 |
 | `MAKE-LIST`/`MAKE-SEQUENCE` refuse a size above `CONSTRUCTIBLE_LIMIT` (2**30) with a plain error rather than a `STORAGE-CONDITION` | CLHS 4.4 permits refusing, but the condition *type* should be `STORAGE-CONDITION` once the class lattice exists | M8 / M9 |
 | `EQUAL` descends a *general* vector element-wise | CLHS 5.3 descends only conses, strings, bit vectors and pathnames, so `(equal #(1 2) #(1 2))` must be NIL. Conses, strings and bit vectors are now right; the general-vector branch predates them and turning it off changes the answer for a heavily-used predicate, which should be its own measured change | M6 |
 | A *displaced* character vector is a `LispArray`, not a `LispString`, so the STRING-specific operators do not accept it | `LispString` stores its characters directly, and threading displacement through it means a second indirection in every string access; every other character array (fill-pointered and adjustable included) is a `LispString` | M9 |

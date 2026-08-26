@@ -1055,7 +1055,19 @@ def _restart_case_signal_target(protected_form, env):
             expanded = expansion
             continue
         if _consp_internal(expanded):
-            new = _macroexpand(expanded, env)
+            # `_macroexpand` is `misc_packages.macroexpand`, the *Lisp-facing*
+            # function -- CLHS 3.8 makes it two-valued, so it now returns a
+            # `MultipleValues` wrapper even when nothing expanded, never the
+            # bare `expanded` object back. Comparing `new is expanded`
+            # directly against that wrapper is always false, so this loop
+            # used to treat "nothing left to expand" as "expanded once more",
+            # replace `expanded` with the wrapper itself, fail the `consp`
+            # check next iteration, and return None -- silently disabling the
+            # whole restart/condition-association feature this function
+            # exists for (CLHS 9.1; `restart-case.26`-`.31`). `primary_value`
+            # unwraps back to the same object `macroexpand` wrapped, so the
+            # identity check still terminates on the first unchanged pass.
+            new = lisptype.primary_value(_macroexpand(expanded, env))
             if new is expanded:
                 break
             expanded = new

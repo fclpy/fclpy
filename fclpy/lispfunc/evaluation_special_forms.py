@@ -2150,11 +2150,21 @@ def eval_macroexpand_1(form, env):
     def _unexpanded(value):
         return lisptype.MultipleValues(value, lisptype.NIL)
 
+    # CLHS 3.8: a symbol that names a symbol-macro also expands. This was
+    # the missing half -- `(symbol-macrolet ((a b)) (macrolet ((foo (x
+    # &environment env) (eq (macroexpand-1 x env) 'a))) (foo a)))` must
+    # answer NIL (A macroexpands to B, so they are not EQ); with only the
+    # cons-call case handled, a bare symbol was always "reported
+    # unexpanded" and returned as-is, so it stayed EQ to itself
+    # (`macrolet.14`).
+    if isinstance(form_to_expand, lisptype.LispSymbol):
+        expansion = expand_env.get_symbol_macro(form_to_expand)
+        if expansion is not None:
+            return lisptype.MultipleValues(expansion, lisptype.T)
+        return _unexpanded(form_to_expand)
+
     # Only cons cells can be macro calls
     if not _consp_internal(form_to_expand):
-        # ... except a symbol, which may be a symbol macro. That is not
-        # handled here yet (SYMBOL-MACROLET has its own path in the
-        # evaluator); a non-cons is reported unexpanded.
         return _unexpanded(form_to_expand)
 
     operator = car(form_to_expand)
@@ -2200,7 +2210,16 @@ def eval_macroexpand_1(form, env):
     # here, which reported a broken macro as "this was not a macro call" --
     # silently swallowing the failure and handing back an unexpanded form that
     # the caller then treated as final.
-    return lisptype.MultipleValues(macro_func(*call_args), lisptype.T)
+    #
+    # The expander's own result is reduced to its primary value before being
+    # wrapped as MACROEXPAND-1's expansion -- an expansion is one form, the
+    # same rule `eval`'s own macro dispatch applies. Without it, a macro whose
+    # body ends in a multiple-valued call (e.g. this project's own aux macro
+    # `EXPAND-IN-CURRENT-ENV`, `(macroexpand form env)`) left the raw
+    # MultipleValues object nested inside the outer wrapper instead of the
+    # form it carries.
+    return lisptype.MultipleValues(
+        lisptype.primary_value(macro_func(*call_args)), lisptype.T)
 
 
 def eval_macro_function(form, env):

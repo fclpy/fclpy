@@ -612,6 +612,17 @@ def _direct_macroexpand_1(form, environment):
     from .evaluation_core import _consp_internal
     from .core import car as _car, cdr as _cdr
 
+    # CLHS 3.8: a *symbol* that names a symbol-macro also expands, not only
+    # a cons-shaped macro call. `(symbol-macrolet ((a b)) (macroexpand 'a))`
+    # must answer B; this was missing entirely, so `MACROLET.13`/`.14`
+    # (which probe exactly this from inside a MACROLET body) passed the
+    # ordinary-macro half of CLHS 3.8 and silently skipped the symbol-macro
+    # half.
+    if isinstance(form, lisptype.LispSymbol) and environment is not None:
+        expansion = environment.get_symbol_macro(form)
+        if expansion is not None:
+            return expansion, True
+
     # Only cons cells can be macro call forms
     if not _consp_internal(form):
         return form, False
@@ -652,7 +663,18 @@ def _direct_macroexpand_1(form, environment):
         if expects_env:
             call_args.append(environment)
 
-        expanded = macro_func(*call_args)
+        # A macro's expansion is one form -- the same single-value rule
+        # `evaluation_core.eval`'s own macro dispatch already applies
+        # (see its comment). This one call site was missed: an expander
+        # whose body ends in a multiple-valued call (this module's own
+        # `macroexpand`, as of CLHS 3.8's two-value fix, is exactly such a
+        # call -- `EXPAND-IN-CURRENT-ENV` in ansi-test's aux file is
+        # `(defmacro expand-in-current-env (form &environment env)
+        # (macroexpand form env))`) left the raw `MultipleValues` wrapper as
+        # "the expansion", which is not a cons/symbol and made
+        # `GET-SETF-EXPANSION` -- the caller for every place-macro lookup --
+        # answer "not a valid place" for it (`incf.22`/`decf.22`).
+        expanded = lisptype.primary_value(macro_func(*call_args))
         return expanded, True
     except Exception:
         logger.error(f"[_direct_macroexpand_1] error expanding {operator}", exc_info=True)
