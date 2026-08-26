@@ -242,7 +242,7 @@ __all__ = [
     'multiple_values_limit',
     'char_code_limit',
     # do_symbols, do_external_symbols, do_all_symbols are now special forms
-    'with_package_iterator',
+    # with_package_iterator is now a macro in evaluation_special_forms.py
     'declaim',
     'declare',
     'defclass',

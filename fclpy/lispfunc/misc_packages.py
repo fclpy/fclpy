@@ -183,16 +183,8 @@ def package_symbols(package, kind):
     """
     pkg = coerce_to_package(package)
 
-    def externals_of(p):
-        result = []
-        for item in list(getattr(p, 'external_symbols', ()) or ()):
-            sym = item if isinstance(item, lisptype.LispSymbol) else p.symbols.get(item)
-            if sym is not None:
-                result.append(sym)
-        return result
-
     if kind == 'external-symbols':
-        return externals_of(pkg)
+        return _externals_of(pkg)
 
     present = list(pkg.symbols.values())
     if kind == 'present-symbols':
@@ -208,11 +200,135 @@ def package_symbols(package, kind):
         used_pkg = lisptype.find_package(used) if isinstance(used, str) else used
         if used_pkg is None:
             continue
-        for sym in externals_of(used_pkg):
+        for sym in _externals_of(used_pkg):
             if id(sym) not in seen:
                 seen.add(id(sym))
                 accessible.append(sym)
     return accessible
+
+
+def _externals_of(p):
+    """The symbol objects `p` exports (shared by the two enumerators)."""
+    result = []
+    for item in list(getattr(p, 'external_symbols', ()) or ()):
+        sym = item if isinstance(item, lisptype.LispSymbol) else p.symbols.get(item)
+        if sym is not None:
+            result.append(sym)
+    return result
+
+
+def inherited_symbols(package):
+    """The symbols `package` inherits from the packages it uses.
+
+    Each is reported with its *home* package, which is what
+    WITH-PACKAGE-ITERATOR's third value must be for an :INHERITED symbol --
+    and what `with-package-iterator.12`-`.14` check via FIND-SYMBOL on that
+    home. Duplicated by identity: a symbol external in two used packages is
+    visited once.
+    """
+    pkg = coerce_to_package(package)
+    seen = set()
+    result = []
+    for used in list(getattr(pkg, 'use_list', ()) or ()):
+        used_pkg = lisptype.find_package(used) if isinstance(used, str) else used
+        if used_pkg is None:
+            continue
+        for sym in _externals_of(used_pkg):
+            if id(sym) not in seen:
+                seen.add(id(sym))
+                result.append((sym, used_pkg))
+    return result
+
+
+# ---------------------------------------------------------------------------
+# WITH-PACKAGE-ITERATOR (CLHS 11.2)
+# ---------------------------------------------------------------------------
+
+class _PackageIterator:
+    """The state behind one WITH-PACKAGE-ITERATOR expansion.
+
+    The symbol list is a *snapshot* taken when the iterator is made: CLHS
+    11.2 leaves the effect of package mutation during iteration unspecified,
+    and a snapshot is what MAPHASH's and WITH-HASH-TABLE-ITERATOR's
+    traversals already are for the same reason.
+    """
+
+    __slots__ = ('_symbols', '_index')
+
+    def __init__(self, packages, symbol_types):
+        seen = set()
+        symbols = []
+        for pkg in packages:
+            for kind in symbol_types:
+                if kind == 'INHERITED':
+                    for sym, _home in inherited_symbols(pkg):
+                        if id(sym) not in seen:
+                            seen.add(id(sym))
+                            # The third value is the package *in which* the
+                            # symbol was found (CLHS 11.2 "the package from
+                            # which the symbol was obtained"), and the aux
+                            # harness pins that reading: it checks
+                            # `(find-symbol name pkg)` against the reported
+                            # access type, which only agrees when an
+                            # :INHERITED symbol is reported against the
+                            # package being searched -- there FIND-SYMBOL
+                            # answers :INHERITED; against the home it
+                            # answers :EXTERNAL.
+                            symbols.append((sym, kind, pkg))
+                elif kind == 'EXTERNAL':
+                    for sym in _externals_of(pkg):
+                        if id(sym) not in seen:
+                            seen.add(id(sym))
+                            symbols.append((sym, kind, pkg))
+                else:  # INTERNAL: the package's own (present) symbols
+                    for sym in package_symbols(pkg, 'present-symbols'):
+                        if id(sym) not in seen:
+                            seen.add(id(sym))
+                            symbols.append((sym, kind, pkg))
+        self._symbols = symbols
+        self._index = 0
+
+    def next(self):
+        if self._index >= len(self._symbols):
+            return lisptype.MultipleValues(lisptype.NIL)
+        sym, access, pkg = self._symbols[self._index]
+        self._index += 1
+        return lisptype.MultipleValues(
+            lisptype.T, sym, lisptype.intern_keyword(access), pkg)
+
+
+@_registry.cl_function('%MAKE-PACKAGE-ITERATOR')
+def make_package_iterator(packages, symbol_types):
+    """The iterator WITH-PACKAGE-ITERATOR binds.
+
+    ``%``-prefixed because it is the macro's runtime rather than an ANSI
+    operator. `packages` is a Lisp list of package designators; each is
+    resolved through `coerce_to_package` (CLHS 11.1.1.1), so an unknown name
+    is a PACKAGE-ERROR rather than a silently empty iteration.
+    """
+    resolved = [coerce_to_package(p) for p in _as_list(packages)]
+    kinds = []
+    current = symbol_types
+    while isinstance(current, lisptype.lispCons):
+        item = current.car
+        if isinstance(item, (lisptype.lispKeyword, lisptype.LispSymbol)):
+            kinds.append(str(item.name).upper())
+        else:
+            raise lisptype.LispTypeError(
+                f"WITH-PACKAGE-ITERATOR: {item!r} is not a symbol type",
+                expected_type='SYMBOL', actual_value=item)
+        current = current.cdr
+    return _PackageIterator(resolved, kinds)
+
+
+@_registry.cl_function('%PACKAGE-ITERATOR-NEXT')
+def package_iterator_next(iterator):
+    """One step of the iterator: ``(values more-p symbol access-type package)``."""
+    if not isinstance(iterator, _PackageIterator):
+        raise lisptype.LispTypeError(
+            f"WITH-PACKAGE-ITERATOR: {iterator!r} is not an iterator",
+            expected_type='PACKAGE-ITERATOR', actual_value=iterator)
+    return iterator.next()
 
 
 # --- Package operations (advanced) ---

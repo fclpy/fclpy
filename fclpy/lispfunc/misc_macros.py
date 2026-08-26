@@ -1095,10 +1095,12 @@ def do_all_symbols_special(form):
     raise lisptype.LispNotImplementedError('DO-ALL-SYMBOLS', 'special form handled by evaluator')
 
 
-@_registry.cl_function('WITH-PACKAGE-ITERATOR')
-def with_package_iterator(spec, packages, *body):
-    """With package iterator macro."""
-    return lisptype.NIL
+# WITH-PACKAGE-ITERATOR (CLHS 11.2) is a macro whose expander lives in
+# `evaluation_special_forms.py` beside WITH-HASH-TABLE-ITERATOR's, with its
+# runtime (`%MAKE-PACKAGE-ITERATOR`/`%PACKAGE-ITERATOR-NEXT`) in
+# `misc_packages.py`. The `cl_function` that stood here returned NIL and
+# evaluated its binding spec as a call -- a different operator wearing the
+# name. Standing rule 3: one implementation.
 
 
 # --- Declaration and definition macros ---
@@ -1701,7 +1703,7 @@ __all__ = [
     'multiple_values_limit',
     'char_code_limit',
     # do_symbols, do_external_symbols, do_all_symbols are now special forms
-    'with_package_iterator',
+    # with_package_iterator is now a macro in evaluation_special_forms.py
     'declaim',
     'declare',
     # NOTE: defclass, defgeneric, defpackage, defstruct are NOT exported here

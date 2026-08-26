@@ -583,6 +583,94 @@ def with_hash_table_iterator_macro(spec, *body):
     ])
 
 
+@_registry.cl_macro('WITH-PACKAGE-ITERATOR',
+                    documentation='WITH-PACKAGE-ITERATOR macro expander (CLHS 11.2)')
+def with_package_iterator_macro(spec, *body):
+    """Macro expander for WITH-PACKAGE-ITERATOR (CLHS 11.2).
+
+    Transforms:
+      (WITH-PACKAGE-ITERATOR (name package-list &rest symbol-types) body...)
+    into:
+      (LET ((#:state (%MAKE-PACKAGE-ITERATOR
+                       (LIST pkg-form...) '(:INTERNAL ...))))
+        (MACROLET ((name () '(%PACKAGE-ITERATOR-NEXT #:state)))
+          (LOCALLY body...)))
+
+    The shape is the specification, and it is the same shape
+    WITH-HASH-TABLE-ITERATOR already established (CLHS 18.2's twin):
+
+    **`name` becomes a local *macro*, not a function** -- CLHS defines it as
+    one, and the hash-table twin's `.9` checks it directly.
+
+    **The package forms are evaluated in the `LET`'s init position**, outside
+    the body, so a body-level `(declare (special x))` cannot reach back into
+    them (`with-package-iterator.22` measures exactly that).
+
+    **The body is wrapped in `LOCALLY`** so leading DECLAREs are declarations
+    rather than calls, an empty body is NIL, and the body's values pass
+    through unmolested.
+
+    The symbol-types are *unevaluated* keyword symbols naming the access
+    kinds to visit; each is validated at expansion time against the set CLHS
+    names, so a misspelled kind is an error rather than a silently empty
+    iteration (standing rule 4).
+    """
+    from .utilities_symbols import gensym as _gensym_fn
+
+    var, rest = _binding_parts(spec)
+    if not rest:
+        raise lisptype.LispProgramError(
+            "WITH-PACKAGE-ITERATOR: missing package-list form")
+    package_forms = rest[0]
+    symbol_types = []
+    for st in rest[1:]:
+        if isinstance(st, lisptype.lispKeyword):
+            name = str(st.name).upper()
+        elif isinstance(st, lisptype.LispSymbol):
+            name = str(st.name).upper()
+        else:
+            raise lisptype.LispProgramError(
+                f"WITH-PACKAGE-ITERATOR: symbol-type {st!r} is not a symbol")
+        if name not in ('INTERNAL', 'EXTERNAL', 'INHERITED'):
+            raise lisptype.LispProgramError(
+                f"WITH-PACKAGE-ITERATOR: unrecognized symbol type :{name}")
+        symbol_types.append(name)
+
+    state = _gensym_fn()
+    quoted_packages = _cons_from(
+        [lisptype.LispSymbol('QUOTE'), package_forms])
+    types_list = lisptype.NIL
+    for t in reversed(symbol_types):
+        types_list = lisptype.lispCons(lisptype.intern_keyword(t), types_list)
+    quoted_types = _cons_from([lisptype.LispSymbol('QUOTE'), types_list])
+
+    make_iterator = _cons_from([
+        lisptype.LispSymbol('%MAKE-PACKAGE-ITERATOR'),
+        package_forms,
+        quoted_types,
+    ])
+    binding = _cons_from([state, make_iterator])
+
+    next_call = _cons_from(
+        [lisptype.LispSymbol('%PACKAGE-ITERATOR-NEXT'), state])
+    macro_binding = _cons_from([
+        var,
+        lisptype.NIL,
+        _cons_from([lisptype.LispSymbol('QUOTE'), next_call]),
+    ])
+    macrolet = _cons_from([
+        lisptype.LispSymbol('MACROLET'),
+        _cons_from([macro_binding]),
+        _cons_from([lisptype.LispSymbol('LOCALLY')] + list(body)),
+    ])
+
+    return _cons_from([
+        lisptype.LispSymbol('LET'),
+        _cons_from([binding]),
+        macrolet,
+    ])
+
+
 @_registry.cl_macro('WITH-INPUT-FROM-STRING',
                     documentation='WITH-INPUT-FROM-STRING macro expander')
 def with_input_from_string_macro(spec, *body):

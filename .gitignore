@@ -165,3 +165,8 @@ gpt5review.txt
 *.err
 
 ansi_results/
+
+_probe_wpi.py
+probe_err.txt
+probe_out.txt
+wpi_run.txt
