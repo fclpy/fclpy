@@ -451,6 +451,10 @@ class Package(lispT):
         self.symbols = {}  # Map from symbol name to LispSymbol
         self.external_symbols = set()  # Set of exported symbol names
         self.shadowing_symbols = set()  # Set of shadowing symbol names (CLHS 11.1.2.3)
+        # CLHS 25.1.3: `(documentation package t)` / `(setf (documentation
+        # package t) doc)`. DEFPACKAGE's :documentation option and the SETF
+        # place both live here.
+        self.documentation = None
     
     @property
     def use_list(self):

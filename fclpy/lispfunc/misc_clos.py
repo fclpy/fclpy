@@ -316,6 +316,204 @@ def _describe_object_default():
     return _describe
 
 
+# --- DOCUMENTATION / (SETF DOCUMENTATION) (CLHS 25.1.3) ---
+#
+# Both are standard *generic functions*, so a user DEFMETHOD on either name
+# overrides these defaults by ordinary dispatch (ansi-test's
+# environment/documentation.lsp defines exactly such methods). The plain
+# `cl_function` this replaced read only a symbol's plist and answered NIL
+# for every function object, class, package and method -- 57 of that file's
+# 58 tests failed on it.
+#
+# The doc-type designator (CLHS 25.1.3's `doc-type`) is normalized through
+# one helper: T (the default), or a symbol naming FUNCTION,
+# COMPILER-MACRO, SETF, VARIABLE, TYPE, STRUCTURE or METHOD-COMBINATION.
+
+_DOC_TYPE_DEFAULT = 'FUNCTION'
+
+
+def _doc_type_name(doc_type):
+    """Normalize a DOCUMENTATION doc-type designator to its upper-case name,
+    or None when no doc-type was supplied (CLHS: `(documentation x)` is not a
+    legal call -- doc-type is required -- but the old stub tolerated omission,
+    defaulting to FUNCTION; keep that tolerance)."""
+    if doc_type is None or doc_type is lisptype.NIL:
+        return _DOC_TYPE_DEFAULT
+    if doc_type is lisptype.T:
+        return 'T'
+    if isinstance(doc_type, lisptype.LispSymbol):
+        return doc_type.name.upper()
+    return str(doc_type).upper()
+
+
+def _symbol_doc(symbol, kind):
+    """Read one documentation string off a symbol's property list.
+
+    DEFUN/DEFMACRO store under 'DOCUMENTATION'; DEFVAR/DEFPARAMETER/
+    DEFCONSTANT store both 'DOCUMENTATION' and 'VARIABLE-DOCUMENTATION'.
+    Reading by *kind* key keeps a function docstring from answering for
+    `(documentation sym 'variable)` once both kinds exist on one symbol.
+    """
+    plist = getattr(symbol, 'plist', None)
+    if isinstance(plist, dict):
+        doc = plist.get(kind)
+        if doc:
+            return doc
+    return lisptype.NIL
+
+
+def _set_symbol_doc(symbol, kind, doc):
+    """Write one documentation string onto a symbol's property list."""
+    if not hasattr(symbol, 'plist') or not isinstance(symbol.plist, dict):
+        symbol.plist = {}
+    symbol.plist[kind] = doc
+    return doc
+
+
+def _default_documentation(x, doc_type=None):
+    """DOCUMENTATION's default method (CLHS 25.1.3).
+
+    Dispatches on what `x` actually is -- a function object, class, package,
+    method, generic function, method combination, or a symbol naming one of
+    those -- rather than only ever consulting a symbol plist.
+    """
+    import fclpy.classes as classes
+
+    kind = _doc_type_name(doc_type)
+
+    # A symbol names the thing whose documentation is wanted (CLHS: "x -- an
+    # object ... or a symbol denoting one"). The plist keys follow the
+    # defining forms' existing convention.
+    if isinstance(x, lisptype.LispSymbol):
+        if kind == 'VARIABLE':
+            return _symbol_doc(x, 'VARIABLE-DOCUMENTATION')
+        if kind == 'TYPE':
+            # A type symbol may name a class (DEFCLASS/DEFSTRUCT), a DEFTYPE,
+            # or neither; the class's own doc answers first.
+            cls = classes.find_class(x.name)
+            if cls is not None and getattr(cls, 'documentation', None):
+                return cls.documentation
+            # Then a DEFTYPE's stored docstring.
+            import fclpy.state as _state
+            _genv = _state.current_environment
+            if _genv is not None:
+                while _genv.parent is not None:
+                    _genv = _genv.parent
+                entry = getattr(_genv, 'user_types', {}).get(x.name)
+                if entry and entry.get('documentation'):
+                    return entry['documentation']
+            return _symbol_doc(x, 'TYPE-DOCUMENTATION')
+        if kind == 'STRUCTURE':
+            cls = classes.find_class(x.name)
+            if cls is not None and getattr(cls, 'documentation', None):
+                return cls.documentation
+            return _symbol_doc(x, 'STRUCTURE-DOCUMENTATION')
+        if kind == 'SETF':
+            return _symbol_doc(x, 'SETF-DOCUMENTATION')
+        if kind == 'METHOD-COMBINATION':
+            comb = classes.find_method_combination_type(x)
+            if comb is not None and getattr(comb, 'documentation', None):
+                return comb.documentation
+            return _symbol_doc(x, 'METHOD-COMBINATION-DOCUMENTATION')
+        # FUNCTION (and T): the symbol's function documentation. A generic
+        # function named by the symbol carries its own doc too.
+        gf = classes._generic_registry.find_generic(
+            classes.generic_function_key(x))
+        if gf is not None and getattr(gf, 'documentation', None):
+            return gf.documentation
+        return _symbol_doc(x, 'DOCUMENTATION')
+
+    # Function objects: ordinary functions carry their docstring as __doc__
+    # via make_ordinary_function; generic functions have a .documentation.
+    if isinstance(x, classes.GenericFunction):
+        return x.documentation if x.documentation else lisptype.NIL
+    if callable(x):
+        doc = getattr(x, '__doc__', None)
+        if doc:
+            return doc
+        return lisptype.NIL
+
+    # Classes (standard-class / structure-class): doc-type T or TYPE.
+    if isinstance(x, classes.LispClass):
+        return x.documentation if x.documentation else lisptype.NIL
+
+    # Methods.
+    if isinstance(x, classes.Method):
+        return x.documentation if x.documentation else lisptype.NIL
+
+    # Method combinations.
+    if isinstance(x, classes.MethodCombinationType):
+        return x.documentation if x.documentation else lisptype.NIL
+
+    # Packages.
+    if isinstance(x, lisptype.Package):
+        return x.documentation if x.documentation else lisptype.NIL
+
+    return lisptype.NIL
+
+
+def _default_set_documentation(doc, x, doc_type=None):
+    """(SETF DOCUMENTATION)'s default method (CLHS 25.1.3): store `doc` where
+    `_default_documentation` will find it again, and return `doc` (the SETF
+    form's value is the new documentation string)."""
+    import fclpy.classes as classes
+
+    kind = _doc_type_name(doc_type)
+
+    if isinstance(x, lisptype.LispSymbol):
+        if kind == 'VARIABLE':
+            return _set_symbol_doc(x, 'VARIABLE-DOCUMENTATION', doc)
+        if kind == 'TYPE':
+            cls = classes.find_class(x.name)
+            if cls is not None:
+                cls.documentation = doc
+                return doc
+            return _set_symbol_doc(x, 'TYPE-DOCUMENTATION', doc)
+        if kind == 'STRUCTURE':
+            cls = classes.find_class(x.name)
+            if cls is not None:
+                cls.documentation = doc
+                return doc
+            return _set_symbol_doc(x, 'STRUCTURE-DOCUMENTATION', doc)
+        if kind == 'SETF':
+            return _set_symbol_doc(x, 'SETF-DOCUMENTATION', doc)
+        if kind == 'METHOD-COMBINATION':
+            comb = classes.find_method_combination_type(x)
+            if comb is not None:
+                comb.documentation = doc
+                return doc
+            return _set_symbol_doc(x, 'METHOD-COMBINATION-DOCUMENTATION', doc)
+        # FUNCTION / T
+        gf = classes._generic_registry.find_generic(
+            classes.generic_function_key(x))
+        if gf is not None:
+            gf.documentation = doc
+            return doc
+        return _set_symbol_doc(x, 'DOCUMENTATION', doc)
+
+    if isinstance(x, classes.GenericFunction):
+        x.documentation = doc
+        return doc
+    if callable(x):
+        x.__doc__ = doc
+        return doc
+    if isinstance(x, classes.LispClass):
+        x.documentation = doc
+        return doc
+    if isinstance(x, classes.Method):
+        x.documentation = doc
+        return doc
+    if isinstance(x, classes.MethodCombinationType):
+        x.documentation = doc
+        return doc
+    if isinstance(x, lisptype.Package):
+        x.documentation = doc
+        return doc
+
+    raise lisptype.LispError(
+        f"(SETF DOCUMENTATION): cannot set documentation on {x!r}")
+
+
 _PROTOCOL_DEFAULTS = [
     ('MAKE-INSTANCE', [None], _default_make_instance),
     ('ALLOCATE-INSTANCE', [None], _default_allocate_instance),
@@ -333,7 +531,40 @@ _PROTOCOL_DEFAULTS = [
     # describe your own objects, and a plain `cl_function` registration is
     # something no DEFMETHOD can reach.
     ('DESCRIBE-OBJECT', [None, None], _describe_object_default()),
+    # DOCUMENTATION and its SETF writer (CLHS 25.1.3) -- see the block comment
+    # above `_default_documentation`.
+    ('DOCUMENTATION', [None, None], _default_documentation),
 ]
+
+
+@_registry.cl_function('DOCUMENTATION')
+def documentation(x, doc_type=None):
+    """DOCUMENTATION (CLHS 25.1.3) is itself a standard generic function --
+    the same shape as SLOT-UNBOUND/CHANGE-CLASS above: ansi-test's
+    environment/documentation.lsp defines DEFMETHODs directly on it, which
+    replaces its *entire* environment binding with the bare GenericFunction
+    object the moment the first one is evaluated. This thin wrapper only
+    matters for a direct call before any such method exists; every Lisp-level
+    call after that point reaches `_default_documentation` (or a more
+    specific user method) through ordinary dispatch.
+    """
+    return classes.call_generic_function(_protocol_gf('DOCUMENTATION'),
+                                          [x, doc_type])
+
+
+@_registry.cl_function('(SETF DOCUMENTATION)')
+def set_documentation(doc, x, doc_type=None):
+    """(SETF DOCUMENTATION) (CLHS 25.1.3).
+
+    The *reader* is a generic function with a default method above; the
+    writer is reached through CLHS 5.1.2.9's generic SETF fallback --
+    `(setf (documentation x y) doc)` expands to
+    `(funcall #'(setf documentation) doc x y)` -- so this registration is
+    what makes the place writable at all. It delegates to the same default
+    the GF would dispatch to; a user DEFMETHOD on `(setf documentation)`
+    replaces the environment binding and wins from then on.
+    """
+    return _default_set_documentation(doc, x, doc_type)
 def _make_installer(specializers, fn):
     return lambda gf: classes.add_method(gf, specializers, fn)
 
@@ -986,4 +1217,6 @@ __all__ = [
     'generic_function_lambda_list',
     'generic_function_methods',
     'generic_function_name',
+    # Documentation (CLHS 25.1.3)
+    'documentation',
 ]

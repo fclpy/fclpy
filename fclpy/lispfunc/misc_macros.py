@@ -1564,22 +1564,14 @@ def make_load_form_saving_slots(object, slot_names=None):
 
 
 
-# --- Documentation ---
-@_registry.cl_function('DOCUMENTATION')
-def documentation(symbol, doc_type=None):
-    """Get documentation for symbol."""
-    if not isinstance(symbol, lisptype.LispSymbol):
-        return lisptype.NIL
-    if doc_type is None or (isinstance(doc_type, lisptype.LispSymbol) and doc_type.name == 'FUNCTION'):
-        if hasattr(symbol, 'plist') and isinstance(symbol.plist, dict):
-            doc = symbol.plist.get('DOCUMENTATION')
-            if doc:
-                return doc
-    elif isinstance(doc_type, lisptype.LispSymbol):
-        doc_type_name = doc_type.name.upper()
-        if doc_type_name in ('VARIABLE', 'TYPE', 'STRUCTURE', 'SETF'):
-            pass
-    return lisptype.NIL
+# DOCUMENTATION and (SETF DOCUMENTATION) are standard *generic functions*
+# (CLHS 25.1.3), not plain functions -- their default methods live in
+# `lispfunc/misc_clos.py`'s `_PROTOCOL_DEFAULTS`, so a user DEFMETHOD on
+# either name overrides by ordinary dispatch (ansi-test's
+# environment/documentation.lsp defines exactly such methods). The
+# `cl_function` that used to sit here read only a symbol's plist and answered
+# NIL for every function object, class, package and method, which is what
+# failed 57 of that file's 58 tests.
 
 
 def get_optimization_policy(env=None):
@@ -1727,7 +1719,7 @@ __all__ = [
     'require',
     'make_load_form',
     'make_load_form_saving_slots',
-    'documentation',
+    # documentation moved to misc_clos.py (a generic function, not a plain one)
     'get_optimization_policy',
     'is_variable_special',
 ]

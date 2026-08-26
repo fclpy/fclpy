@@ -1710,7 +1710,11 @@ def eval_defun(form, env):
         if not hasattr(func_name, 'plist'):
             func_name.plist = {}
         func_name.plist['DOCUMENTATION'] = docstring
-    
+        # Also on the callable itself, so `(documentation (symbol-function
+        # sym) t)` -- the *function object*, not the symbol -- can read it
+        # (CLHS 25.1.3; documentation.function.t.2).
+        user_function.__doc__ = str(docstring)
+
     return func_name
 def _create_macro_function(macro_name, lambda_list, body, env,
                            unsupplied_default=None):
@@ -1976,7 +1980,11 @@ def _create_macro_function(macro_name, lambda_list, body, env,
         if not hasattr(macro_name, 'plist'):
             macro_name.plist = {}
         macro_name.plist['DOCUMENTATION'] = docstring
-    
+        # Also on the callable itself, so `(documentation (macro-function sym)
+        # t)` -- the *function object*, not the symbol -- can read it
+        # (CLHS 25.1.3; documentation.function.t.4).
+        macro_callable.__doc__ = str(docstring)
+
     return macro_callable
 
 
@@ -2460,17 +2468,20 @@ def eval_defvar(form, env):
         value_form = car(rest_args)
         global_env.add_variable(name, lisp_eval(value_form, env))
 
-    # Handle documentation string if present (third argument)
-    if has_value_form:
-        doc_args = cdr(rest_args)
-        if _consp_internal(doc_args):
-            docstring = car(doc_args)
-            if isinstance(docstring, str):
-                # Store documentation on symbol's property list
-                if not hasattr(name, 'plist'):
-                    name.plist = {}
-                name.plist['DOCUMENTATION'] = docstring
-                name.plist['VARIABLE-DOCUMENTATION'] = docstring
+    # Handle documentation string if present (third argument). CLHS's DEFVAR
+    # grammar is `(defvar name [value [doc]])` -- the doc can follow a value
+    # form or, in the `(defvar name)` shape, be the *first* thing after the
+    # name. The old `has_value_form` gate dropped the latter entirely
+    # (documentation.symbol.variable.1 uses exactly that shape).
+    doc_args = cdr(rest_args) if has_value_form else rest_args
+    if _consp_internal(doc_args):
+        docstring = car(doc_args)
+        if isinstance(docstring, (str, lisptype.LispString)):
+            # Store documentation on symbol's property list
+            if not hasattr(name, 'plist'):
+                name.plist = {}
+            name.plist['DOCUMENTATION'] = docstring
+            name.plist['VARIABLE-DOCUMENTATION'] = docstring
 
     return name
 
@@ -2513,7 +2524,7 @@ def eval_defparameter(form, env):
     doc_args = cdr(rest_args)
     if _consp_internal(doc_args):
         docstring = car(doc_args)
-        if isinstance(docstring, str):
+        if isinstance(docstring, (str, lisptype.LispString)):
             # Store documentation on symbol's property list
             if not hasattr(name, 'plist'):
                 name.plist = {}
@@ -2564,7 +2575,7 @@ def eval_defconstant(form, env):
     doc_args = cdr(rest_args)
     if _consp_internal(doc_args):
         docstring = car(doc_args)
-        if isinstance(docstring, str):
+        if isinstance(docstring, (str, lisptype.LispString)):
             # Store documentation on symbol's property list
             if not hasattr(name, 'plist'):
                 name.plist = {}
@@ -2987,6 +2998,12 @@ def eval_defstruct(form, env):
                         ov = cdr(ov)
                 elif opt_name_str == 'TYPE':
                     type_option_form = opt_value
+                elif opt_name_str == 'DOCUMENTATION':
+                    # CLHS 3.4.6 / 25.1.3: `(:documentation string)` is a
+                    # DEFSTRUCT option; `(documentation name 'structure)` and
+                    # `(documentation (find-class name) t)` read it back.
+                    if opt_value is not None:
+                        doc_string = str(opt_value)
                 elif opt_name_str == 'NAMED':
                     named_option = True
                 elif opt_name_str == 'INITIAL-OFFSET':
@@ -4463,6 +4480,10 @@ def eval_define_modify_macro(form, env):
         if not hasattr(name, 'plist'):
             name.plist = {}
         name.plist['DOCUMENTATION'] = doc_string
+        # Also on the callable itself, so `(documentation (macro-function sym)
+        # t)` -- the *function object*, not the symbol -- can read it
+        # (CLHS 25.1.3; documentation.function.t.4).
+        macro_callable.__doc__ = str(doc_string)
 
     global_env = env
     while global_env.parent is not None:
@@ -4817,6 +4838,11 @@ def _make_method_function(required_params, optional_lambda_list, body, captured_
             return _run_with_nil_block(_run_body, block_name)
         finally:
             frame.unwind()
+    # CLHS 7.6.2: a method body may open with a documentation string.
+    # `split_function_body` already extracted it -- attach it to the callable
+    # so `eval_defmethod` can store it on the Method object for
+    # `(documentation method t)` (CLHS 25.1.3) instead of discarding it.
+    method_func.__method_docstring__ = _docstring
     return method_func
 
 
@@ -5116,6 +5142,11 @@ def eval_defmethod(form, env):
         _check_method_congruent(func_name, gf.lambda_list, required_params, optional_lambda_list)
     classes.add_method(gf, specializers, method_fn, qualifiers=qualifiers)
     new_method = next(m for m in gf.methods if m.function is method_fn)
+    # CLHS 7.6.2/25.1.3: the body's documentation string, if any, belongs to
+    # the method object `(documentation method t)` reads.
+    method_doc = getattr(method_fn, '__method_docstring__', None)
+    if method_doc:
+        new_method.documentation = str(method_doc)
 
     global_env = env
     while global_env.parent is not None:

@@ -444,6 +444,11 @@ class Method:
     qualifiers: List[Any] = field(default_factory=list)
     generic_function: Optional['GenericFunction'] = None
     lambda_list: Optional[Any] = None
+    # CLHS 7.6.2 / 25.1.3: a DEFMETHOD body may open with a documentation
+    # string; `(documentation method t)` reads it back. `_make_method_function`
+    # already extracts it via `split_function_body` -- this field is where the
+    # extracted value is stored instead of being discarded.
+    documentation: Optional[str] = None
 
 
 @dataclass(eq=False)

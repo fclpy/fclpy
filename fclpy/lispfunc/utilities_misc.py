@@ -184,10 +184,14 @@ from .misc_macros import (
     require,
     make_load_form,
     make_load_form_saving_slots,
-    documentation,
     get_optimization_policy,
     is_variable_special,
 )
+
+# DOCUMENTATION is a standard generic function (CLHS 25.1.3); its default
+# methods live in misc_clos.py's `_PROTOCOL_DEFAULTS`. Re-exported here so
+# the module's flat namespace keeps answering for it.
+from .misc_clos import _default_documentation as documentation
 
 
 __all__ = [

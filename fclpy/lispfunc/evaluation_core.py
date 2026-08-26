@@ -1966,12 +1966,18 @@ def eval(form, env=None):
                 expander = _create_macro_function(
                     name, lambda_list, body, env, unsupplied_default=wild)
 
+                # CLHS 25.1.3: a DEFTYPE body may open with a documentation
+                # string; `(documentation name 'type)` reads it back.
+                from .evaluation_special_forms import split_function_body as _sfb
+                _type_doc, _type_decls, _type_forms = _sfb(body)
+
                 global_env.user_types[name.name] = {
                     'name': name,
                     'lambda_list': lambda_list,
                     'body': body,
                     'env': env,          # Capture lexical environment
                     'expander': expander,
+                    'documentation': str(_type_doc) if _type_doc else None,
                 }
 
                 # Return the name symbol
@@ -2030,6 +2036,7 @@ def eval(form, env=None):
                 import_from_clauses = []       # [(pkg_name, [names])]
                 size_seen = False
                 doc_seen = False
+                package_doc = None
 
                 cur = opt_forms
                 while _consp_internal(cur):
@@ -2077,6 +2084,12 @@ def eval(form, env=None):
                                 raise lisptype.LispProgramError(
                                     "DEFPACKAGE: :DOCUMENTATION may only be given once")
                             doc_seen = True
+                            # CLHS 19.2.2 / 25.1.3: the documentation string
+                            # is stored on the package object, where
+                            # `(documentation pkg t)` reads it.
+                            raw_doc = _clause_items(cdr(clause))
+                            if raw_doc:
+                                package_doc = _designator_to_string(raw_doc[0])
                         # An unrecognized option keyword is left alone rather
                         # than made an error -- CLHS reserves this space for
                         # implementation extensions and no ANSI test exercises
@@ -2120,6 +2133,10 @@ def eval(form, env=None):
                         _signal_package_error(nn, f"A package named {nn!r} already exists")
 
                 pkg = existing if existing is not None else lisptype.make_package(pkg_name)
+                if package_doc is not None:
+                    # CLHS 25.1.3: DEFPACKAGE's :documentation lands on the
+                    # package object for `(documentation pkg t)` to read.
+                    pkg.documentation = package_doc
                 if nicknames:
                     # Merge rather than overwrite: DEFPACKAGE allows multiple
                     # :NICKNAMES clauses, and each contributes its names.
