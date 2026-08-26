@@ -344,6 +344,51 @@ failures and holding all twelve of the largest failing files. `structures`
 (33.0%) remains the one genuine subsystem gap
 ([C4](#c4-defstruct-generates-no-accessors-and-no-class)).
 
+### Diagnosed, not yet fixed: `environment/documentation.lsp` (57 of 58)
+
+Investigated 2026-08-26 against the 2026-08-26 full run (1730 failing). The
+whole file is one absent mechanism: **DOCUMENTATION is not a generic
+function here, and `(SETF DOCUMENTATION)` does not exist.**
+
+What the code actually has:
+
+- `misc_macros.py` registers `DOCUMENTATION` as a plain `cl_function` that
+  reads `symbol.plist['DOCUMENTATION']` and answers NIL for anything that is
+  not a `LispSymbol`. So `(documentation fn t)` on a *function object*,
+  `(documentation class 'type)`, `(documentation pkg t)` and
+  `(documentation method t)` all answer NIL unconditionally.
+- There is **no `(SETF DOCUMENTATION)` registration anywhere**, so every
+  `(setf (documentation x y) doc)` in the file falls through to CLHS
+  5.1.2.9's generic fallback and calls a nonexistent `#'(setf documentation)`
+  — the SETF *form* appears to succeed only where nothing checks its result.
+- CLHS 25.1.3 makes both DOCUMENTATION and (SETF DOCUMENTATION) **standard
+  generic functions**; ansi-test's last section defines methods on them
+  (`documentation.new-method.1`) and cannot pass without real dispatch.
+
+Where the fix belongs (all verified present):
+
+- The `_PROTOCOL_DEFAULTS` installer list in `lispfunc/misc_clos.py` — the
+  same mechanism SLOT-UNBOUND/DESCRIBE-OBJECT use — is the right home for
+  default methods on both names, so user DEFMETHODs override by ordinary
+  dispatch.
+- Storage already exists per doc-type and needs one reader/writer each:
+  functions/macros → `symbol.plist['DOCUMENTATION']` (DEFUN/DEFMACRO already
+  write it via `split_function_body`); variables → the same plist key
+  (DEFVAR/DEFPARAMETER/DEFCONSTANT write `VARIABLE-DOCUMENTATION` too);
+  classes/structures → `LispClass.documentation` (DEFCLASS/DEFSTRUCT already
+  populate it); methods → `Method` has no documentation field yet (add one;
+  `_make_method_function` already extracts the docstring via
+  `split_function_body` but discards it); packages → `Package` has no
+  documentation field yet; DEFTYPE stores no doc either.
+- The old `cl_function` in `misc_macros.py` must be **deleted**, not kept
+  beside the GF (standing rule 3; `utilities_misc.py` re-exports it).
+- Doc-type normalization needed: `t`, `function`, `compiler-macro`, `setf`,
+  `variable`, `type`, `structure`, `method-combination` — tests exercise
+  each against symbols *and* function/class/package/method objects.
+
+Expected reach: ~57 tests here, plus whatever `describe` gains once it can
+read real documentation. Nothing else was probed beyond this file.
+
 **Tail mode still holds, and has tightened**: 308 files contain failures, the
 median failing file has **3**, the largest is **62 (4.6% of the remainder)**,
 and only **17 files / 82 tests** fail 100% (was 20 files / 132 tests).
