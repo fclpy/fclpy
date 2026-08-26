@@ -12,7 +12,6 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any, Callable
 from fclpy.lisptype import LispSymbol, T, NIL, is_truthy, LispProgramError
 
-
 @dataclass
 class SlotDefinition:
     """Definition of a single slot in a class."""

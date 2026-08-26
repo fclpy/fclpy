@@ -4571,13 +4571,33 @@ def eval_defclass(form, env):
     metaclass = None
     documentation = None
     default_initargs = []
+    # CLHS 7.7: each class option may appear at most once, every option
+    # must be a known keyword, and :default-initargs' initarg names must be
+    # distinct -- violations are a program-error (ansi-test's
+    # defclass-errors.lsp pins all three).
+    _DEFCLASS_CLASS_OPTIONS = {'metaclass', 'documentation', 'default-initargs'}
+    seen_class_options = set()
+    seen_default_initargs = set()
     if _consp_internal(options_rest):
         current = options_rest
         while _consp_internal(current):
             option = car(current)
-            if _consp_internal(option):
-                opt_key = car(option)
-                if isinstance(opt_key, lisptype.lispKeyword):
+            if not _consp_internal(option):
+                raise lisptype.LispProgramError(
+                    f"DEFCLASS: invalid class option: {option}")
+            opt_key = car(option)
+            if not isinstance(opt_key, lisptype.lispKeyword):
+                raise lisptype.LispProgramError(
+                    f"DEFCLASS: class option name must be a keyword, got {opt_key}")
+            opt_name = opt_key.name.lower()
+            if opt_name not in _DEFCLASS_CLASS_OPTIONS:
+                raise lisptype.LispProgramError(
+                    f"DEFCLASS: unrecognized class option :{opt_name.upper()}")
+            if opt_name in seen_class_options:
+                raise lisptype.LispProgramError(
+                    f"DEFCLASS: duplicate class option :{opt_name.upper()}")
+            seen_class_options.add(opt_name)
+            if isinstance(opt_key, lisptype.lispKeyword):
                     opt_name = opt_key.name.lower()
                     opt_vals = cdr(option)
                     if opt_name == 'metaclass' and _consp_internal(opt_vals):
@@ -4594,7 +4614,17 @@ def eval_defclass(form, env):
                             initarg_key = car(dinit_current)
                             dinit_rest = cdr(dinit_current)
                             if not _consp_internal(dinit_rest):
-                                break
+                                raise lisptype.LispProgramError(
+                                    "DEFCLASS: :default-initargs must be an "
+                                    "even-length initarg/form plist")
+                            if not isinstance(initarg_key, lisptype.lispKeyword):
+                                raise lisptype.LispProgramError(
+                                    f"DEFCLASS: :default-initargs name must be a "
+                                    f"keyword, got {initarg_key}")
+                            if initarg_key in seen_default_initargs:
+                                raise lisptype.LispProgramError(
+                                    f"DEFCLASS: duplicate default initarg {initarg_key}")
+                            seen_default_initargs.add(initarg_key)
                             initarg_form = car(dinit_rest)
                             default_initargs.append((initarg_key, initarg_form))
                             dinit_current = cdr(dinit_rest)

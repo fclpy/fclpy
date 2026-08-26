@@ -2,6 +2,7 @@
 
 import fclpy.lisptype as lisptype
 from fclpy import classes
+from fclpy.lisptype import LispProgramError
 from . import registry as _registry
 
 
@@ -66,20 +67,29 @@ def defclass(name, direct_superclasses=None, slots=None, **options):
 
     # Parse slot specifications into SlotDefinition objects
     slot_defs = []
+    seen_slot_names = set()
     for slot_spec in slots:
         if isinstance(slot_spec, lisptype.LispSymbol):
             # Simple slot: just a name
+            if slot_spec in seen_slot_names:
+                raise LispProgramError(
+                    f"DEFCLASS: duplicate slot named {slot_spec}")
+            seen_slot_names.add(slot_spec)
             slot_defs.append(
                 classes.SlotDefinition(name=slot_spec)
             )
         elif isinstance(slot_spec, (list, tuple)):
             # Slot with options: (name :initarg SLOT-NAME :initform default-value ...)
             if not slot_spec:
-                continue
+                raise LispProgramError("DEFCLASS: empty slot specification")
             
             slot_name = slot_spec[0]
             if not isinstance(slot_name, lisptype.LispSymbol):
-                raise TypeError(f"Slot name must be symbol, got {slot_name}")
+                raise LispProgramError(f"Slot name must be symbol, got {slot_name}")
+            if slot_name in seen_slot_names:
+                raise LispProgramError(
+                    f"DEFCLASS: duplicate slot named {slot_name}")
+            seen_slot_names.add(slot_name)
             
             # Parse options
             initform = None
@@ -91,6 +101,13 @@ def defclass(name, direct_superclasses=None, slots=None, **options):
             readers = []
             writers = []
             accessors = []
+            # CLHS 7.5.3: every *other* slot option may appear at most once
+            # per slot; a repeat is a program-error (defclass-errors.lsp).
+            _SINGLE_SLOT_OPTIONS = {'INITFORM', 'ALLOCATION', 'DOCUMENTATION', 'TYPE'}
+            _KNOWN_SLOT_OPTIONS = _SINGLE_SLOT_OPTIONS | {
+                'INITARG', 'READER', 'WRITER', 'ACCESSOR'}
+            seen_single_options = set()
+            slot_type = None
 
             i = 1
             while i < len(slot_spec):
@@ -98,13 +115,30 @@ def defclass(name, direct_superclasses=None, slots=None, **options):
                 if isinstance(key, lisptype.lispKeyword):
                     key_name = key.name.upper()
                     if i + 1 >= len(slot_spec):
-                        raise ValueError(f"Missing value for {key}")
+                        raise LispProgramError(f"Missing value for {key}")
                     value = slot_spec[i + 1]
+
+                    if key_name not in _KNOWN_SLOT_OPTIONS:
+                        raise LispProgramError(
+                            f"DEFCLASS: unrecognized slot option :{key_name} "
+                            f"on slot {slot_name}")
+                    if key_name in _SINGLE_SLOT_OPTIONS:
+                        if key_name in seen_single_options:
+                            raise LispProgramError(
+                                f"DEFCLASS: duplicate slot option :{key_name} "
+                                f"on slot {slot_name}")
+                        seen_single_options.add(key_name)
 
                     if key_name == 'INITARG':
                         initargs.append(value)
                     elif key_name == 'INITFORM':
                         initform = value
+                    elif key_name == 'TYPE':
+                        # CLHS 7.5.3: stored unevaluated; consulted by
+                        # SLOT-VALUE type checking and the reader's
+                        # CHECK-TYPE expansion, not enforced at DEFCLASS
+                        # time.
+                        slot_type = value
                     elif key_name == 'ALLOCATION':
                         if isinstance(value, lisptype.LispSymbol):
                             allocation = value.name.lower()
@@ -120,7 +154,8 @@ def defclass(name, direct_superclasses=None, slots=None, **options):
 
                     i += 2
                 else:
-                    i += 1
+                    raise LispProgramError(
+                        f"DEFCLASS: invalid slot option {key} on slot {slot_name}")
 
             slot_defs.append(
                 classes.SlotDefinition(
@@ -132,6 +167,7 @@ def defclass(name, direct_superclasses=None, slots=None, **options):
                     readers=readers,
                     writers=writers,
                     accessors=accessors,
+                    type_spec=slot_type,
                 )
             )
         else:

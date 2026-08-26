@@ -511,3 +511,65 @@ class TestIntegration:
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
+
+class TestDefclassArgumentValidation:
+    """CLHS 7.7 / 7.5.3: DEFCLASS argument validation. A malformed slot
+    spec, a duplicate slot name or option, an unknown slot/class option,
+    or a duplicate :default-initargs name is a PROGRAM-ERROR
+    (ansi-test objects/defclass-errors.lsp pins all of these)."""
+
+    def setup_method(self):
+        classes._class_registry._classes.clear()
+
+    def _signals_program_error(self, form):
+        from fclpy.lispfunc import eval_string
+        setup_standard_environment()
+        with pytest.raises(lisptype.LispProgramError):
+            eval_string(form)
+
+    def test_duplicate_slot_name(self):
+        self._signals_program_error('(defclass dv1 () (a b c d b e))')
+
+    def test_duplicate_slot_name_symbol_and_list(self):
+        self._signals_program_error('(defclass dv2 nil (foo (foo)))')
+
+    def test_duplicate_initform(self):
+        self._signals_program_error(
+            '(defclass dv3 () ((s1 :initform 0 :initform 2)))')
+
+    def test_duplicate_type(self):
+        self._signals_program_error(
+            '(defclass dv4 () ((s1 :type fixnum :type character)))')
+
+    def test_duplicate_documentation(self):
+        self._signals_program_error(
+            '(defclass dv5 () ((s1 :documentation "foo" :documentation "bar")))')
+
+    def test_duplicate_allocation(self):
+        self._signals_program_error(
+            '(defclass dv6 () ((s1 :allocation :class :allocation :instance)))')
+
+    def test_unknown_slot_option(self):
+        self._signals_program_error(
+            '(defclass dv7 () ((foo #:unknown-slot-option nil)))')
+
+    def test_unknown_class_option(self):
+        self._signals_program_error('(defclass dv8 () () (:unknown-opt nil))')
+
+    def test_non_keyword_class_option(self):
+        self._signals_program_error('(defclass dv9 () (a b c) (#:g1))')
+
+    def test_duplicate_default_initarg(self):
+        self._signals_program_error(
+            '(defclass dv10 () ((s1 :initarg :foo)) '
+            '(:default-initargs :foo 1 :foo 2))')
+
+    def test_valid_defclass_still_works(self):
+        """The validation must not reject conforming code."""
+        from fclpy.lispfunc import eval_string
+        setup_standard_environment()
+        cls = eval_string(
+            "(defclass dv-ok () ((x :initarg :x :initform 0 "
+            ":type integer :reader dv-ok-x)))")
+        assert cls is not None
+        assert eval_string("(dv-ok-x (make-instance 'dv-ok :x 42))") == 42
