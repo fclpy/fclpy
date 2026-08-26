@@ -377,7 +377,7 @@ class TestGenericFunctions:
     
     def test_method_dispatch_fallback_to_t(self):
         """Test method dispatch falls back to T specializer."""
-        gf = lispfunc.ensure_generic_function(lisptype.LispSymbol('DESCRIBE'))
+        gf = lispfunc.ensure_generic_function(lisptype.LispSymbol('MY-DESCRIBE-GF'))
         
         def default_method(x):
             return "Unknown"

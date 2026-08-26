@@ -463,6 +463,13 @@ class GenericFunction:
     documentation: Optional[str] = None
     lambda_list: Optional[Any] = None
     method_combination: Optional['MethodCombination'] = None
+    # CLHS 7.6.6.1: the order required parameters are compared in when
+    # ordering applicable methods -- a permutation of the lambda list's
+    # required parameters, set by DEFGENERIC/ENSURE-GENERIC-FUNCTION's
+    # :argument-precedence-order option. None means left-to-right (the
+    # default). Stored as a list of *positions* into the specializer list,
+    # so `_specificity_key` can permute without re-resolving names per call.
+    argument_precedence_order: Optional[List[int]] = None
 
     def __repr__(self):
         return f"#<STANDARD-GENERIC-FUNCTION {generic_function_key(self.name)}>"
@@ -767,11 +774,17 @@ def _specializer_rank(arg: Any, spec: Any) -> int:
     return 0
 
 
-def _specificity_key(args: List[Any], specializers: List[Any]) -> tuple:
+def _specificity_key(args: List[Any], specializers: List[Any],
+                     apo: Optional[List[int]] = None) -> tuple:
     """A method's specificity key for this particular call, ascending =
     more specific first (CLHS 7.6.6.1): compare specializers position by
     position, most-specific-required-parameter first, exactly as CLHS
-    defines method ordering."""
+    defines method ordering. `apo` is the generic function's
+    :argument-precedence-order permutation -- positions into the
+    specializer list in the order they should be compared; None compares
+    left-to-right."""
+    if apo is not None:
+        return tuple(_specializer_rank(args[i], specializers[i]) for i in apo)
     return tuple(_specializer_rank(arg, spec) for arg, spec in zip(args, specializers))
 
 
@@ -886,7 +899,8 @@ def compute_applicable_methods(gf: GenericFunction, args: List[Any]) -> List[Met
     # methods still tied after a real CPL comparison (e.g. two specializers
     # on a built-in, non-instance type, which falls back to ancestor count)
     # keep definition order rather than an arbitrary one.
-    applicable.sort(key=lambda m: _specificity_key(args, m.specializers))
+    applicable.sort(key=lambda m: _specificity_key(args, m.specializers,
+                                                   gf.argument_precedence_order))
     return applicable
 
 

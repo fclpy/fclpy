@@ -765,10 +765,164 @@ def compute_applicable_methods(generic_function, arguments):
 
 @_registry.cl_function('ENSURE-GENERIC-FUNCTION')
 def ensure_generic_function(function_name, *options):
-    try:
-        return classes.ensure_generic_function(function_name)
-    except Exception as e:
-        raise lisptype.LispError(str(e))
+    """ENSURE-GENERIC-FUNCTION (CLHS 7.7.1): find the generic function
+    named `function-name`, or create one if none exists, applying
+    `options` to it.
+
+    This is the *operator*; `classes.ensure_generic_function` is the one
+    object-level mechanism every caller (DEFGENERIC, DEFMETHOD, DEFCLASS's
+    accessors) shares. The operator's job on top of it is CLHS 7.7.1's own:
+
+    - **function-name** may be a symbol or a `(SETF symbol)` list -- the
+      same function-name designator DEFUN/DEFGENERIC accept.
+    - Every option keyword is applied to the generic function: an option
+      this implementation cannot act on must still be *accepted* (CLHS
+      names :ENVIRONMENT as a no-op argument-passing convention), and an
+      unrecognized one is a PROGRAM-ERROR, not a silent drop.
+    - A name already fbound to an ordinary function, macro or special
+      operator is an error (CLHS 7.7.1: "the functional value of
+      function-name must be a generic function, or be undefined").
+    - Re-running with a lambda list whose required-parameter count differs
+      while methods exist makes those methods incongruent (CLHS 7.6.4) --
+      an error, not a silent method discard.
+    """
+    from .evaluation_core import _consp_internal, car, cdr
+
+    # CLHS 7.7.1: function-name is a symbol or (SETF symbol).
+    def _is_setf_spec(x):
+        return (_consp_internal(x)
+                and isinstance(car(x), lisptype.LispSymbol)
+                and car(x).name.upper() == 'SETF'
+                and _consp_internal(cdr(x))
+                and isinstance(car(cdr(x)), lisptype.LispSymbol))
+
+    if not (isinstance(function_name, lisptype.LispSymbol) or _is_setf_spec(function_name)):
+        raise lisptype.LispProgramError(
+            f"ENSURE-GENERIC-FUNCTION: {function_name} does not name a function")
+
+    # Parse the option plist before touching anything, so a malformed call
+    # signals without having created a half-configured generic function.
+    kwargs = {}
+    i = 0
+    while i < len(options):
+        key = options[i]
+        opt = lisptype._keyword_name(key) if hasattr(lisptype, '_keyword_name') else None
+        if opt is None:
+            if isinstance(key, lisptype.lispKeyword):
+                opt = key.name.upper().lstrip(':')
+            elif isinstance(key, lisptype.LispSymbol):
+                opt = key.name.upper().lstrip(':')
+            else:
+                raise lisptype.LispProgramError(
+                    f"ENSURE-GENERIC-FUNCTION: {key} is not a valid option name")
+        if i + 1 >= len(options):
+            raise lisptype.LispProgramError(
+                f"ENSURE-GENERIC-FUNCTION: option {opt} has no value")
+        kwargs[opt] = options[i + 1]
+        i += 2
+
+    # CLHS 7.7.1: error if the name is fbound to something that is not a
+    # generic function. ENSURE-GENERIC-FUNCTION.1/.2/.3 pin this for CAR,
+    # DEFCLASS and TAGBODY -- the last of which is a *special operator*, so
+    # the special-form registry counts as "fbound to a non-generic" too.
+    # With no environment established (bare library use), FBOUNDP's registry
+    # check alone answers, and the registry entry is consulted directly
+    # rather than through FDEFINITION, which needs an environment.
+    from .utilities_functions import fboundp, _function_spec_to_key
+    from .registry import function_registry, special_registry
+    if lisptype.is_truthy(fboundp(function_name)):
+        key = _function_spec_to_key(function_name)
+        entry = (function_registry.get(key.name) if key is not None else None) \
+            or (special_registry.get(key.name) if key is not None else None)
+        existing = entry.func if entry is not None else None
+        if key is None or entry is not None and not isinstance(existing, classes.GenericFunction):
+            raise lisptype.LispProgramError(
+                f"ENSURE-GENERIC-FUNCTION: {function_name} already names "
+                f"a non-generic function")
+
+    lambda_list = kwargs.get('LAMBDA-LIST')
+    documentation = kwargs.get('DOCUMENTATION')
+
+    # CLHS 7.6.4 congruence: re-declaring a lambda list whose required-
+    # parameter count differs while methods exist would strand them. This
+    # must be checked *before* `classes.ensure_generic_function` runs --
+    # that call updates the stored lambda list (and discards now-incongruent
+    # methods as its own recovery), so comparing afterwards always agrees.
+    if lambda_list is not None:
+        existing = classes._generic_registry.find_generic(
+            classes.generic_function_key(function_name))
+        if (existing is not None and existing.methods
+                and existing.lambda_list is not None
+                and classes._required_param_count(lambda_list)
+                != classes._required_param_count(existing.lambda_list)):
+            raise lisptype.LispProgramError(
+                f"ENSURE-GENERIC-FUNCTION: new lambda list for {function_name} "
+                f"is incongruent with its existing methods")
+
+    gf = classes.ensure_generic_function(
+        function_name,
+        documentation=documentation,
+        lambda_list=lambda_list,
+    )
+
+    # Options this single-class/single-combination implementation has
+    # nothing to select between are accepted and ignored; anything else
+    # unrecognized is a PROGRAM-ERROR rather than a silent drop.
+    _ACCEPTED_NOOP = {'ENVIRONMENT', 'METHOD-CLASS',
+                      'GENERIC-FUNCTION-CLASS', 'DECLARE'}
+    for opt in kwargs:
+        if opt not in ('LAMBDA-LIST', 'DOCUMENTATION',
+                       'ARGUMENT-PRECEDENCE-ORDER') and opt not in _ACCEPTED_NOOP:
+            raise lisptype.LispProgramError(
+                f"ENSURE-GENERIC-FUNCTION: unrecognized option :{opt}")
+
+    # CLHS 7.6.6.1: :argument-precedence-order is a permutation of the
+    # lambda list's required parameters naming the order they are compared
+    # in when ordering applicable methods. Stored as *positions* into the
+    # specializer list, which is what `_specificity_key` consumes.
+    apo = kwargs.get('ARGUMENT-PRECEDENCE-ORDER')
+    if apo is not None:
+        from .evaluation_core import _consp_internal as _ci, car as _car
+        required_names = []
+        cur = lambda_list if lambda_list is not None else gf.lambda_list
+        while _ci(cur):
+            p = _car(cur)
+            if isinstance(p, lisptype.LispSymbol) and p.name.startswith('&'):
+                break
+            required_names.append(p.name.upper())
+            cur = cdr(cur)
+        order_positions = []
+        ok = True
+        cur = apo
+        while _ci(cur):
+            p = _car(cur)
+            name = p.name.upper() if isinstance(p, lisptype.LispSymbol) else None
+            if name not in required_names or order_positions.count(required_names.index(name)) > 0:
+                ok = False
+                break
+            order_positions.append(required_names.index(name))
+            cur = cdr(cur)
+        if not ok or sorted(order_positions) != list(range(len(required_names))):
+            raise lisptype.LispProgramError(
+                f"ENSURE-GENERIC-FUNCTION: :argument-precedence-order is not "
+                f"a permutation of the required parameters")
+        gf.argument_precedence_order = order_positions
+
+    # CLHS 7.7.1: "The generic function is added to the environment" --
+    # ensuring a generic function makes the name fbound, exactly as
+    # DEFGENERIC/DEFMETHOD bind it (through the same function-name key
+    # resolver), so SYMBOL-FUNCTION/FBOUNDP see it afterwards. With no
+    # environment established at all (bare library use, unit tests), the
+    # registry itself is the binding -- the GF is already findable by name.
+    from .utilities_functions import _function_spec_to_key
+    import fclpy.state as _state
+    global_env = _state.current_environment
+    if global_env is not None:
+        while global_env.parent is not None:
+            global_env = global_env.parent
+        global_env.add_function(_function_spec_to_key(function_name), gf)
+
+    return gf
 
 
 @_registry.cl_function('GENERIC-FUNCTION-LAMBDA-LIST')

@@ -4967,8 +4967,18 @@ def eval_defgeneric(form, env):
     func_name = car(args)
     rest = cdr(args)
 
-    if not isinstance(func_name, lisptype.LispSymbol):
-        raise lisptype.LispProgramError("DEFGENERIC: function name must be a symbol")
+    # CLHS 7.7: function-name is a symbol or a (SETF symbol) list -- the
+    # same designator DEFUN and DEFMETHOD accept, and which EGF-FUN-14's
+    # `(defgeneric (setf f) (val x) ...)` exercises. Everything downstream
+    # (the registry key, the environment binding) keys on the resolved
+    # *symbol*, exactly as `function_name_parts` does for DEFUN.
+    from .utilities_functions import _function_spec_to_key as _fsk
+    if isinstance(func_name, lisptype.LispSymbol):
+        pass
+    elif _fsk(func_name) is not None:
+        func_name = _fsk(func_name)
+    else:
+        raise lisptype.LispProgramError("DEFGENERIC: function name must be a symbol or (SETF symbol)")
 
     if not _consp_internal(rest):
         raise lisptype.LispProgramError("DEFGENERIC requires a lambda-list")

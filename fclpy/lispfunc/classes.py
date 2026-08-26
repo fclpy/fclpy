@@ -467,14 +467,13 @@ def class_of(obj):
 
 # Generic function support
 
-@_registry.cl_function('ENSURE-GENERIC-FUNCTION')
-def ensure_generic_function(name, **options):
-    """ENSURE-GENERIC-FUNCTION: Get or create a generic function."""
-    if not isinstance(name, lisptype.LispSymbol):
-        raise TypeError(f"Generic function name must be symbol, got {name}")
-    
-    return classes.ensure_generic_function(name, **options)
-
+# ENSURE-GENERIC-FUNCTION is registered once, in `misc_clos.py`, whose
+# implementation applies CLHS 7.7.1's function-name designator and option
+# handling on top of `classes.ensure_generic_function`. A second
+# registration here used to win on *import order* (`__init__` imports
+# `.utilities` -> `utilities_misc` -> `misc_clos` before it imports
+# `.classes`) and silently replaced the real operator with a symbol-only,
+# no-options stub -- the duplicate-register defect class.
 
 @_registry.cl_function('ADD-METHOD')
 def add_method(gf, specializers, method_func):
