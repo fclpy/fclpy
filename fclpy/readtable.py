@@ -72,6 +72,27 @@ def constituent_trait(char: str) -> str:
     return CONSTITUENT_TRAIT_ALPHABETIC
 
 
+def _reader_error(message: str) -> Exception:
+    """The exception to raise for malformed input -- **one place, one class.**
+
+    Every one of these sites used to raise a bare `ValueError`, and a Python
+    exception is not a condition: it matches no `handler-case` clause, so it
+    surfaced as the *value* of the form
+    (`#<ERROR Python error in function call: ValueError: Unknown # dispatch
+    character: #<>`). That is the defect prompt.txt names outright, and here it
+    also *hid* a printer bug: `randomly-check-readability` handles
+    `reader-error` and reports the offending output, so a `ValueError` instead
+    turned "the printer wrote something unreadable" into an unexplained crash
+    in eight `print.backquote.random` tests.
+
+    `ReaderErrorSignal` is the marker every reader entry point converts into a
+    real READER-ERROR carrying the stream; imported lazily because this module
+    keeps no top-level `lisptype`/`lispreader` import.
+    """
+    from .lispreader import ReaderErrorSignal
+    return ReaderErrorSignal(message)
+
+
 class Readtable:
     """
     Centralized readtable for managing macro characters and reader macros.
@@ -385,7 +406,7 @@ class Readtable:
                         while c and c.isspace():
                             c = stream.read_char()
                         if c != ')':
-                            raise ValueError(f"Expected ) after dotted tail, got {c}")
+                            raise _reader_error(f"Expected ) after dotted tail, got {c}")
                         break
                     else:
                         result.append(item)
@@ -440,7 +461,7 @@ class Readtable:
             # Read nested list
             return self._left_paren_reader(c, stream)
         elif c == ')':
-            raise ValueError("Unexpected closing parenthesis")
+            raise _reader_error("Unexpected closing parenthesis")
         elif c == ';':
             # Skip comment and read next item
             self._skip_comment(stream)
@@ -700,17 +721,8 @@ class Readtable:
                 break
     
     def _right_paren_reader(self, char, stream):
-        """An unmatched close parenthesis is a READER-ERROR (CLHS 2.4.2).
-
-        It used to raise a bare `ValueError`, which is not a condition: it
-        surfaced as `#<ERROR Python error in function call: ValueError...>`, so
-        `(handler-case (read-from-string ")") (reader-error () :good))` never
-        matched. `ReaderErrorSignal` is the marker every reader entry point
-        converts into a real READER-ERROR (imported lazily -- this module
-        avoids a top-level `lisptype`/`lispreader` import, see the note above).
-        """
-        from .lispreader import ReaderErrorSignal
-        raise ReaderErrorSignal(f"unmatched close parenthesis {char!r}")
+        """An unmatched close parenthesis is a READER-ERROR (CLHS 2.4.2)."""
+        raise _reader_error(f"unmatched close parenthesis {char!r}")
 
     def _string_reader(self, char, stream):
         """Read a string literal delimited by `char`.
@@ -876,7 +888,7 @@ class Readtable:
                     # is what made this defect look evaluator-side.
                     radix = int(num)
                     if radix < 2 or radix > 36:
-                        raise ValueError(f"Invalid radix: {radix}")
+                        raise _reader_error(f"Invalid radix: {radix}")
                     return self._read_radix_number(stream, radix)
                 else:
                     if c:
@@ -884,7 +896,7 @@ class Readtable:
                     break
             return None
         else:
-            raise ValueError(f"Unknown # dispatch character: #{sub_char}")
+            raise _reader_error(f"Unknown # dispatch character: #{sub_char}")
     
     def _skip_block_comment(self, stream):
         """Skip a block comment #| ... |# with nesting support."""
@@ -949,7 +961,7 @@ class Readtable:
                 return character.Character('\x00')
             else:
                 # Unknown named char, use as-is if single
-                raise ValueError(f"Unknown character name: {name}")
+                raise _reader_error(f"Unknown character name: {name}")
         else:
             return character.Character(c)
     
@@ -981,11 +993,11 @@ class Readtable:
             # `#n(...)` is a vector of length n; a shorter element list is
             # padded with its last element (CLHS 2.4.8.3).
             if len(result) > size:
-                raise ValueError(
+                raise _reader_error(
                     f"#{size}(...) given {len(result)} elements")
             if len(result) < size:
                 if not result:
-                    raise ValueError(f"#{size}() has no element to replicate")
+                    raise _reader_error(f"#{size}() has no element to replicate")
                 result.extend([result[-1]] * (size - len(result)))
         return result
     
@@ -1093,66 +1105,60 @@ class Readtable:
             c = stream.read_char()
 
         if c != '"':
-            raise ValueError(f"Expected string after #P, got: {c}")
+            raise _reader_error(f"Expected string after #P, got: {c}")
 
         # Read the string
         path_str = self._read_string_literal(stream)
         return pathname_from_namestring(path_str)
     
-    _RADIX_DIGIT_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-
     def _read_radix_number(self, stream, radix):
-        """Read a number in the specified radix (base), CLHS 2.4.8.
+        """Read a **rational** in `radix` -- `#B`/`#O`/`#X`/`#nR`, CLHS 2.4.8.
 
-        Examples:
-            #xFF -> 255 (radix 16)
-            #b1010 -> 10 (radix 2)
-            #o17 -> 15 (radix 8)
-            #3r1021101 -> a base-3 integer (radix 3, via #nR)
+        Rational, not integer: `#x1A/B` is a ratio, and this used to stop at
+        the first character that was not a digit of its radix, so it answered
+        the numerator alone and left `/B` on the stream to be read as the next
+        form. `print.ratios.random` prints under a random `*print-base*` and
+        `*print-radix*`, so `#x951115BA/AC02A5F7` is output the printer itself
+        produces -- the reader answering `2500924858` for it is a round-trip
+        failure of the printer's own writing.
 
-        One digit-set formula for any radix 2-36 rather than three
-        hand-picked sets plus a `0123456789`-only fallback that silently
-        broke every other explicit radix `#nR` can name.
-
-        Args:
-            stream: Input stream
-            radix: The base (2-36)
-
-        Returns:
-            Integer value
+        The token is accumulated up to the next terminating macro character or
+        whitespace (the same boundary CLHS 2.2 step 8 uses) and then handed to
+        `numtoken`, so the radix syntax and the `*READ-BASE*` syntax are one
+        implementation. A digit-by-digit scan cannot be, because the set of
+        characters that belong to the token is not the set of digits.
         """
-        valid_chars = self._RADIX_DIGIT_CHARS[:radix]
+        from . import numtoken as _numtoken
 
-        # Read the number token
+        try:
+            _numtoken.check_radix(radix, 'radix')
+        except _numtoken.NumericTokenError as exc:
+            raise _reader_error(str(exc))
+
         token = ''
-        negative = False
-
-        # Check for sign
-        c = stream.read_char()
-        if c == '-':
-            negative = True
+        while True:
             c = stream.read_char()
-        elif c == '+':
-            c = stream.read_char()
-
-        # Read digits
-        while c and c.upper() in valid_chars:
+            if c is None:
+                break
+            syntax = self.syntax_type(c)
+            if syntax in (SYNTAX_WHITESPACE, SYNTAX_TERMINATING_MACRO):
+                stream.unread_char(c)
+                break
             token += c
-            c = stream.read_char()
-
-        # Put back the last character if it's not EOF
-        if c:
-            stream.unread_char(c)
 
         if not token:
-            raise ValueError(f"No digits found for radix-{radix} number")
+            raise _reader_error(f"No digits found for radix-{radix} number")
 
-        # Parse the number
         try:
-            value = int(token, radix)
-            return -value if negative else value
-        except ValueError:
-            raise ValueError(f"Invalid radix-{radix} number: {token}")
+            value = _numtoken.parse_numeric_token(token, radix=radix)
+        except _numtoken.NumericTokenError as exc:
+            raise _reader_error(str(exc))
+        if value is None or isinstance(value, float):
+            # `#x1.5` is not "a float in base 16" -- CLHS 2.4.8.7 admits only a
+            # rational after a radix prefix, so a token that parses as a float
+            # is an error rather than a value read in some other radix.
+            raise _reader_error(f"{token!r} is not a rational in radix {radix}")
+        return value
 
     def _read_uninterned_symbol(self, stream):
         """Read an uninterned symbol like #:foo.
@@ -1175,7 +1181,7 @@ class Readtable:
         name, raw, consumed = self._read_token(stream)
 
         if not consumed:
-            raise ValueError("Empty symbol name after #:")
+            raise _reader_error("Empty symbol name after #:")
 
         name = name.replace('\x00', ':')
         # Special case: T and NIL should return the canonical symbols
@@ -1209,17 +1215,17 @@ class Readtable:
         
         # Expect opening paren
         if c != '(':
-            raise ValueError(f"Expected ( after #C, got {c!r}")
+            raise _reader_error(f"Expected ( after #C, got {c!r}")
         
         # Read real part
         real_part = self._read_item(stream)
         if real_part is None:
-            raise ValueError("Expected real part in #C(...)")
+            raise _reader_error("Expected real part in #C(...)")
         
         # Read imaginary part
         imag_part = self._read_item(stream)
         if imag_part is None:
-            raise ValueError("Expected imaginary part in #C(...)")
+            raise _reader_error("Expected imaginary part in #C(...)")
         
         # Skip whitespace and find closing paren
         while True:
@@ -1231,7 +1237,7 @@ class Readtable:
             if c == ')':
                 break
             else:
-                raise ValueError(f"Expected ) in #C(...), got {c!r}")
+                raise _reader_error(f"Expected ) in #C(...), got {c!r}")
         
         # Convert Fraction to float for complex construction
         if isinstance(real_part, Fraction):
@@ -1241,9 +1247,9 @@ class Readtable:
         
         # Ensure both parts are numeric
         if not isinstance(real_part, (int, float)):
-            raise ValueError(f"Real part must be a number, got {type(real_part).__name__}")
+            raise _reader_error(f"Real part must be a number, got {type(real_part).__name__}")
         if not isinstance(imag_part, (int, float)):
-            raise ValueError(f"Imaginary part must be a number, got {type(imag_part).__name__}")
+            raise _reader_error(f"Imaginary part must be a number, got {type(imag_part).__name__}")
         
         return complex(real_part, imag_part)
 

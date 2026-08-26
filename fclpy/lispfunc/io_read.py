@@ -7,15 +7,15 @@ from . import registry as _registry
 from .streams import Stream, resolve_input_stream
 
 
-# === Reader Control Variables ===
-# Global read base (default 10)
-_read_base = 10
-
-
-@_registry.cl_function('*READ-BASE*')
-def get_read_base():
-    """Get the value of *READ-BASE*."""
-    return _read_base
+# The reader control variables are *variables*, and they live where every
+# other standard variable does: proclaimed special by
+# `lispenv.STANDARD_SPECIAL_VARIABLES` and given their ANSI initial value from
+# `lispreader.READER_VARIABLES`. What used to be here instead was a
+# `cl_function` named `*READ-BASE*` returning a module global -- plan.md's C7
+# defect, a function registered under a variable's name. Nothing read the
+# global, and the registration meant a reference to `*read-base*` that fell
+# through variable lookup resolved to a *Python function object*. The one
+# reader of the variable is `lispreader.resolve_read_base`.
 
 
 def _supplied_true(value):

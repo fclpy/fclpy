@@ -262,7 +262,31 @@ def setup_standard_environment():
                 initial = print_var_default
             state.current_environment.add_variable(print_var_sym, initial)
 
-    # Reader/loader control variables
+    # The reader control variables (CLHS Figure 23-1), from the one table the
+    # reader itself reads them through. All four were **unbound**: they are
+    # proclaimed special above, but nothing ever gave them a value, so
+    # `(boundp '*read-base*)` was NIL and evaluating `*read-eval*` signalled
+    # UNBOUND-VARIABLE. `*READTABLE*` is not in that table -- its initial value
+    # is an object, and it is bound a few lines below.
+    from fclpy.lispreader import READER_VARIABLES
+    for read_var_name, read_var_default in READER_VARIABLES.items():
+        read_var_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol(read_var_name)
+        fclpy.lisptype.COMMON_LISP_PACKAGE.export_symbol(read_var_sym)
+        if state.current_environment.find_variable(read_var_sym) is None:
+            if read_var_default is True:
+                initial = fclpy.lisptype.T
+            elif read_var_default is False:
+                initial = fclpy.lisptype.NIL
+            elif isinstance(read_var_default, str):
+                # `*READ-DEFAULT-FLOAT-FORMAT*` holds a *type name*, so an
+                # interned COMMON-LISP symbol -- not a keyword.
+                initial = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol(
+                    read_var_default)
+            else:
+                initial = read_var_default
+            state.current_environment.add_variable(read_var_sym, initial)
+
+    # Loader control variables
     # *LOAD-VERBOSE* - whether LOAD should print messages
     load_verbose_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*LOAD-VERBOSE*')
     if state.current_environment.find_variable(load_verbose_sym) is None:

@@ -3,6 +3,54 @@
 import sys
 import re as _re
 import fclpy.lisptype as lisptype
+import fclpy.numtoken as numtoken
+
+
+#: The reader control variables of CLHS Figure 23-1, with their ANSI initial
+#: values -- the one table the bootstrap builds them from, so that a variable
+#: cannot be *proclaimed* special (`lispenv.STANDARD_SPECIAL_VARIABLES`) and
+#: then left with no value, which is how all four of these came to be
+#: **unbound**: `(boundp '*read-base*)` was NIL, and `*read-eval*` signalled
+#: UNBOUND-VARIABLE. `*READTABLE*` is deliberately absent -- its initial value
+#: is an object built during bootstrap, and `readtable.py` owns it.
+#:
+#: A value of `True`/`False` here means the Lisp T/NIL, and a `str` means the
+#: interned COMMON-LISP symbol of that name (`*READ-DEFAULT-FLOAT-FORMAT*`
+#: holds the *type name* SINGLE-FLOAT, not a keyword).
+READER_VARIABLES = {
+    '*READ-BASE*': 10,
+    '*READ-DEFAULT-FLOAT-FORMAT*': 'SINGLE-FLOAT',
+    '*READ-EVAL*': True,
+    '*READ-SUPPRESS*': False,
+}
+
+
+def resolve_read_base():
+    """The current input radix -- the one place `*READ-BASE*` is read.
+
+    Resolution order matches `printer.resolve_control`'s and, through it,
+    `evaluation_core.eval`'s order for a variable reference: a binding in the
+    current environment chain first, then the symbol's value cell, then the
+    ANSI initial value. Falling back to the initial value rather than to the
+    evaluator's next step matters for the same reason it does in the printer:
+    that next step is the *function* registry, and `*READ-BASE*` was registered
+    there as a `cl_function` (plan.md C7), so a reference to it resolved to a
+    Python function object.
+    """
+    import fclpy.state as state
+
+    symbol = lisptype.COMMON_LISP_PACKAGE.intern_symbol('*READ-BASE*')
+    env = getattr(state, 'current_environment', None)
+    if env is not None and env.has_variable(symbol):
+        value = env.find_variable(symbol)
+    else:
+        value = getattr(symbol, 'value', None)
+    if value is None:
+        return READER_VARIABLES['*READ-BASE*']
+    try:
+        return numtoken.check_radix(value, '*READ-BASE*')
+    except numtoken.NumericTokenError as exc:
+        raise lisptype.LispTypeError(str(exc))
 
 
 class ReaderErrorSignal(Exception):
@@ -233,7 +281,7 @@ class LispReader():
                 self._check_constituent_valid(y)
                 chars.append(y)
                 escaped.append(False)
-        return self.read_10(self._convert_case(chars, escaped))
+        return self.read_10(self._convert_case(chars, escaped), any(escaped))
 
     def read_9(self, chars, escaped=None, preserve_whitespace=False):
         """CLHS 2.2 step 9: accumulate inside a multiple-escape (`|...|`).
@@ -268,19 +316,25 @@ class LispReader():
             escaped.append(True)
 
 
-    def read_10(self, token):
-        # Try to parse as integer
-        if _re.match(r"^[+-]?\d+$", token):
-            return int(token)
-        # Try to parse as float (including exponent markers D, E, F, S, L)
-        # Patterns: 1.5, 1.5E10, 1.5D2, 1E10, 1D2, etc.
-        float_pattern = r"^[+-]?(\d+\.?\d*|\d*\.\d+)([DEFSLdefsl][+-]?\d+)?$"
-        if _re.match(float_pattern, token):
-            # Normalize exponent markers (D, F, S, L) to E for Python
-            normalized = token.upper()
-            for marker in 'DFSL':
-                normalized = normalized.replace(marker, 'E')
-            return float(normalized)
+    def read_10(self, token, escaped=False):
+        """CLHS 2.2 step 10: the accumulated token becomes a number or a symbol.
+
+        `escaped` says whether any character of the token was escaped, and it
+        is what step 8 now passes down: a token containing an escape is never a
+        number (CLHS 2.3.1.1), and dropping the flag here is why `|123|` read
+        as the *integer* 123 rather than as a symbol named `123`.
+
+        The three hardcoded regexes that used to be inlined here are gone --
+        `numtoken` is the one place CLHS 2.3.1 is applied, shared with the
+        `#B`/`#O`/`#X`/`#nR` readers, which had their own partial copy.
+        """
+        try:
+            number = numtoken.parse_numeric_token(
+                token, radix=resolve_read_base(), escaped=escaped)
+        except numtoken.NumericTokenError as exc:
+            raise ReaderErrorSignal(str(exc))
+        if number is not None:
+            return number
         # Otherwise it's a symbol.
         #
         # `token` arrives already case-converted per `readtable-case`, with

@@ -265,6 +265,29 @@ class PrintContext:
         self.level = _as_count(value_of('level'))
         self.length = _as_count(value_of('length'))
 
+        # CLHS 22.1.3: when `*PRINT-READABLY*` is true, printing proceeds "as
+        # if `*print-escape*`, `*print-array*`, and `*print-gensym*` were true,
+        # and as if `*print-length*`, `*print-level*`, and `*print-lines*` were
+        # false". This is not a convenience -- those six variables are the only
+        # way the printer can produce output that does not read back, so
+        # honouring them under `:readably t` makes the *promise of readability
+        # itself* unsatisfiable. It is also why `randomly-check-readability`
+        # (which binds `*print-readably*` T and then randomizes all six) was
+        # failing across `printer/`: with `*print-level*` 0 the printer
+        # answered `"#"` for every object, and reading that back is an
+        # end-of-file, not the object.
+        #
+        # The remaining controls are unaffected by design: `*print-base*`,
+        # `*print-radix*`, `*print-case*`, `*print-circle*` and
+        # `*print-pretty*` cannot make output unreadable, and the same test
+        # randomizes them and expects the round trip to hold.
+        if self.readably:
+            self.escape = True
+            self.array = True
+            self.gensym = True
+            self.level = None
+            self.length = None
+
         base = value_of('base')
         if isinstance(base, bool) or not isinstance(base, int) or not 2 <= base <= 36:
             raise lisptype.LispTypeError(
