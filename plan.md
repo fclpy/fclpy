@@ -26,71 +26,66 @@ history is preserved in condensed form in [Changelog](docs/changelog.md).
 
 ## 1. Status
 
-> ### 🔄 A second full run is in flight (started 2026-08-27), to re-baseline
-> ### against everything below
->
-> **The first full run after the 2026-08-27 (a) work completed cleanly**
-> (`COMPLETENESS: OK`, 21881 total, 20553 passed (93.9%), 1328 failed,
-> ~127 minutes) **and immediately found 6 real regressions `gate.py`'s
-> per-file baseline check had never seen**, because none of the targeted
-> runs along the way happened to touch the affected files:
-> `numbers/incf.lsp`, `numbers/decf.lsp`, `data-and-control-flow/macrolet.lsp`,
-> `data-and-control-flow/places.lsp`, `data-and-control-flow/rotatef.lsp`,
-> `conditions/restart-case.lsp`. Bisected with `git worktree` + selective
-> file reverts (not guessed) to one line, `new is expanded` comparing a
-> place/expansion form against the `MultipleValues` wrapper CLHS 3.8's
-> `MACROEXPAND` now correctly returns — three separate call sites had this,
-> and fixing them surfaced a fourth, real, previously-masked gap
-> (`MACROEXPAND`/`MACROEXPAND-1` never expanded a symbol-macro, only a
-> cons-shaped macro call — `MACROLET.14` had been passing at the old
-> baseline for the wrong reason, the exact case prompt.txt names: "if a test
-> passes for the wrong reason, it is not progress"). Full account, including
-> exactly why `RESTART-CASE`'s condition-association depends on it, in
-> `docs/changelog.md`'s **2026-08-27 (b)** entry. All six files are now at or
-> below their baseline count; `gate.py` and a sweep of
-> `data-and-control-flow`/`conditions`/`objects`/`eval-and-compile` are
-> clean. This second full run is what makes that honest rather than assumed
-> — a SETF-place / macroexpansion / restart-association fix reaches too much
-> of the suite for a targeted sweep to stand in for it (CLAUDE.md, dev-loop
-> step 8's "wide blast radius" case).
->
-> The 2026-08-24 numbers below are stale independent of any of this — two
-> sessions of missing-system work landed since (numeric-token syntax/ratios,
-> `*READ-BASE*` and the other reader control variables, `*PRINT-READABLY*`'s
-> override of the other print controls, `~<...~>` justification rewritten to
-> spec, forward-referenced classes, LOOP's selectable-clause grammar,
-> DOCUMENTATION as a real generic function, and more — see
-> `docs/changelog.md`'s **2026-08-27 (a)** entry for the full list with
-> before/after counts). This run's bootstrap probe
-> (`(listp (directory "*.lsp"))` → T) was checked first since reader and
-> printer paths on the bootstrap list were touched.
->
-> An earlier attempt at the *first* of these two full runs (started
-> 2026-08-26/27) was lost to a VSCode crash mid-run, not to a test failure —
-> the working tree was already clean and every change already committed when
-> that run started, so nothing was lost, only the run itself had to be
-> relaunched.
->
-> **This section will be regenerated from the second run's output once it
-> completes** — update the table below, the `COMPLETENESS:` block, and the
-> per-directory scoreboard together, from the same run, rather than piecemeal.
-
-**Latest full run: 2026-08-24. Over 90% passing, and the suite is complete
-again — it was not, on the committed tree, for the two commits before this.**
+**Latest full run: 2026-08-27 (the second of two that day). 94.05% passing,
+1306 failing, and the run that found and then verified a real regression
+before it could reach the baseline.**
 
 ```
-COMPLETENESS: total=21881 passed=19779 failed=2102 accounted=21881 missing=0 extra=0
+COMPLETENESS: total=21881 passed=20575 failed=1306 accounted=21881 missing=0 extra=0
 COMPLETENESS: OK
 ```
 
-| | value | previous full run (2026-08-22) |
-|---|---|---|
-| Registered tests | 21881 | 22132 |
-| Executed (`accounted`) | **21881 (100%)** | 22132 (100%) |
-| Passed | **19779 (90.4%)** | 19703 (89.0%) |
-| Failed | **2102** | 2429 |
-| Never executed | **0** | 0 |
-| Wall time | ~131 minutes | ~125 minutes |
+| | value | previous full run (2026-08-27, first) | previous full run (2026-08-24) |
+|---|---|---|---|
+| Registered tests | 21881 | 21881 | 21881 |
+| Executed (`accounted`) | **21881 (100%)** | 21881 (100%) | 21881 (100%) |
+| Passed | **20575 (94.05%)** | 20553 (93.9%) | 19779 (90.4%) |
+| Failed | **1306** | 1328 | 2102 |
+| Never executed | **0** | 0 | 0 |
+| Wall time | ~102 minutes | ~127 minutes | ~131 minutes |
+
+`docs/ansi_checklist_baseline.json` was refreshed from this run (`ansi_checklist.py --save-baseline`) — the only way that file is allowed to move (§7, "Ways to fake compliance"). `gate.py` is clean against it.
+
+> ### Same day, two full runs — why
+>
+> The first 2026-08-27 run measured the batch of missing-system work
+> described in `docs/changelog.md`'s **2026-08-27 (a)** entry (numeric-token
+> syntax/ratios, the reader control variables, `*PRINT-READABLY*`'s override,
+> `~<...~>` justification rewritten to spec, forward-referenced classes,
+> LOOP's selectable-clause grammar, DOCUMENTATION as a real generic
+> function, and more). Regenerating the checklist from it immediately found
+> **6 file-level regressions `gate.py`'s per-file baseline check had never
+> seen** — no targeted run along the way happened to touch the affected
+> files: `numbers/incf.lsp`, `numbers/decf.lsp`,
+> `data-and-control-flow/macrolet.lsp`, `data-and-control-flow/places.lsp`,
+> `data-and-control-flow/rotatef.lsp`, `conditions/restart-case.lsp`.
+>
+> Bisected with `git worktree` + selective file reverts, not guessed, to one
+> line: `new is expanded`, comparing a place/expansion form against the
+> `MultipleValues` wrapper CLHS 3.8's `MACROEXPAND` now correctly returns.
+> Three separate call sites had exactly this comparison — `GET-SETF-EXPANSION`
+> (so every `SETF` place, `INCF`/`DECF`/`ROTATEF`), `RESTART-CASE`'s
+> CLHS 9.1 condition-association detector, and the `MACROEXPAND-1` special
+> form — and fixing them surfaced a **fourth, genuine, previously-masked
+> gap**: `MACROEXPAND`/`MACROEXPAND-1` never expanded a bare symbol naming a
+> symbol-macro, only a cons-shaped macro call. `MACROLET.14` had been
+> passing at the old baseline for the wrong reason — the exact case
+> prompt.txt names: "if a test passes for the wrong reason, it is not
+> progress" — so it was implemented rather than left alone. Full account in
+> `docs/changelog.md`'s **2026-08-27 (b)** entry.
+>
+> The second full run (this one) is what turned "all six files are back at
+> or below baseline, `gate.py` is clean, a directory sweep found nothing
+> else" into a verified fact rather than an assumption: a SETF-place /
+> macroexpansion / restart-association fix reaches too much of the suite for
+> a targeted sweep to stand in for a full run (CLAUDE.md, dev-loop step 8's
+> "wide blast radius" case). It confirms clean: +22 passing over the first
+> 2026-08-27 run, 0 files worse than the newly-saved baseline.
+>
+> An earlier attempt at the *first* of these two runs (started 2026-08-26/27)
+> was lost to a VSCode crash mid-run, not to a test failure — the working
+> tree was already clean and every change already committed when that run
+> started, so nothing was lost, only the run itself had to be relaunched.
 
 > ### ⚠️ `ae7e4ca` and the two runs that reported nothing
 >
@@ -351,47 +346,51 @@ the subsystems where one absent mechanism fails everything downstream of it.
 
 </details>
 
-### Per-directory scoreboard (2026-08-24 full run, complete)
+### Per-directory scoreboard (2026-08-27 full run, complete)
 
 Ordered by failures. Regenerate from `docs/ansi_checklist.md`, which is
 generated from this run's raw output.
 
 | directory | failed | total | pass rate |
 |---|---|---|---|
-| printer | 201 | 788 | 74.5% |
-| objects | 149 | 824 | 81.9% |
-| numbers | 118 | 1438 | 91.8% |
-| iteration | 110 | 838 | 86.9% |
-| streams | 93 | 547 | 83.0% |
-| strings | 88 | 501 | 82.4% |
-| data-and-control-flow | 83 | 1420 | 94.2% |
-| packages | 78 | 340 | 77.1% |
-| structures | 77 | 115 | 33.0% |
+| objects | 96 | 824 | 88.3% |
+| numbers | 95 | 1438 | 93.4% |
+| printer | 89 | 788 | 88.7% |
+| data-and-control-flow | 77 | 1420 | 94.6% |
+| iteration | 76 | 838 | 90.9% |
 | sequences | 72 | 3158 | 97.7% |
-| reader | 55 | 165 | 66.7% |
-| eval-and-compile | 45 | 318 | 85.8% |
+| packages | 66 | 340 | 80.6% |
+| streams | 64 | 547 | 88.3% |
 | types-and-classes | 40 | 545 | 92.7% |
-| symbols | 29 | 1145 | 97.5% |
-| misc | 25 | 740 | 96.6% |
+| eval-and-compile | 30 | 318 | 90.6% |
+| symbols | 28 | 1145 | 97.6% |
+| misc | 22 | 740 | 97.0% |
 | conditions | 21 | 303 | 93.1% |
-| files | 17 | 87 | 80.5% |
+| files | 18 | 87 | 79.3% |
 | cons | 14 | 1638 | 99.1% |
+| reader | 14 | 165 | 91.5% |
 | arrays | 12 | 1245 | 99.0% |
-| characters | 8 | 259 | 96.9% |
-| environment | 8 | 192 | 95.8% |
+| characters | 7 | 259 | 97.3% |
+| strings | 6 | 501 | 98.8% |
+| environment | 6 | 192 | 96.9% |
 | pathnames | 1 | 215 | 99.5% |
 | auxiliary | 0 | 2 | 100.0% |
 | hash-tables | 0 | 158 | 100.0% |
+| structures | 0 | 115 | 100.0% |
 | system-construction | 0 | 75 | 100.0% |
 
-**`hash-tables` is at 100%, and `environment` went 57.8% -> 95.8%** — the two
-directories the duplicate register named. `system-construction`, `auxiliary`
-and `hash-tables` are complete; `pathnames` is one test from it.
+**`structures` reached 100%, from the 33.0% the previous full run (2026-08-24)
+recorded as "the one genuine subsystem gap".** Not this session's work — the
+"Repaired structures" commits that fixed it predate the 2026-08-27 (a) batch
+but postdate 2026-08-24, and this is the first full run since to measure it.
+`system-construction`, `auxiliary`, `hash-tables` and now `structures` are
+complete; `pathnames` is one test from it.
 
-**`printer` is now the constraint on its own**, at 201 of the 2102 remaining
-failures and holding all twelve of the largest failing files. `structures`
-(33.0%) remains the one genuine subsystem gap
-([C4](#c4-defstruct-generates-no-accessors-and-no-class)).
+**`printer` dropped from 201 (2026-08-24) to 89** — the format engine and
+reader work in `docs/changelog.md`'s 2026-08-27 (a) entry. `objects` (96) and
+`numbers` (95) are now the largest two directories; neither was touched this
+session, so they are the next place to look for a shared mechanism rather
+than individually-diagnosed files.
 
 ### Diagnosed, not yet fixed: `environment/documentation.lsp` (57 of 58)
 
