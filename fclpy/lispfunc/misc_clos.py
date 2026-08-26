@@ -178,6 +178,17 @@ def _default_make_instance(class_obj, *initargs):
 
 
 def _default_allocate_instance(cls, *initargs):
+    # A class cannot be instantiated until it is finalized, and it cannot be
+    # finalized while any superclass at or above it is still only a
+    # forward-referenced name (CLHS 4.3.6/4.3.7). Allocating anyway would hand
+    # back an instance whose slot set and class precedence list are both wrong
+    # -- and silently, since the missing superclass contributes nothing.
+    pending = cls.unfinalized_superclasses() if isinstance(cls, classes.LispClass) else []
+    if pending:
+        names = ", ".join(sorted(c.name.name for c in pending))
+        raise lisptype.LispError(
+            f"ALLOCATE-INSTANCE: class {cls.name.name} is not finalized -- "
+            f"undefined superclass(es): {names}")
     return classes.LispInstance(lisp_class=cls)
 
 
@@ -748,6 +759,64 @@ def _op_sym(name):
     return lisptype.intern_symbol(name, 'COMMON-LISP')
 
 
+def _update_if_obsolete(instance):
+    """Bring `instance` up to date if MAKE-INSTANCES-OBSOLETE has been called
+    on its class since it was last updated (CLHS 7.3).
+
+    The one place that check happens, called from every slot accessor below.
+    CLHS specifies the update as *lazy* -- "the generic function
+    UPDATE-INSTANCE-FOR-REDEFINED-CLASS is invoked ... the next time a slot
+    of that instance is read or written" -- so this is where it belongs rather
+    than in MAKE-INSTANCES-OBSOLETE, which would otherwise have to hold a
+    registry of every live instance.
+
+    The added/discarded/property arguments are all empty because the class
+    definition itself has not changed; the standard still requires the generic
+    function to be *called*, so a user method on it runs.
+    """
+    if not isinstance(instance, classes.LispInstance):
+        return
+    cls = instance.lisp_class
+    if getattr(instance, 'instance_generation', 0) == getattr(cls, 'instance_generation', 0):
+        return
+    # Mark it current *before* dispatching, so a method that itself reads a
+    # slot of the instance does not recurse forever.
+    instance.instance_generation = cls.instance_generation
+    classes.call_generic_function(
+        _protocol_gf('UPDATE-INSTANCE-FOR-REDEFINED-CLASS'),
+        [instance, lisptype.NIL, lisptype.NIL, lisptype.NIL])
+
+
+@_registry.cl_function('MAKE-INSTANCES-OBSOLETE')
+def make_instances_obsolete(class_):
+    """MAKE-INSTANCES-OBSOLETE (CLHS 7.3): mark every existing instance of
+    `class_` obsolete, and return the argument as given.
+
+    Was entirely absent. The obsolescence itself is one integer bump: each
+    instance carries the generation of its class it was last updated for, and
+    `_update_if_obsolete` above does the actual
+    UPDATE-INSTANCE-FOR-REDEFINED-CLASS call lazily at the next slot access,
+    which is what CLHS specifies.
+
+    The argument is a **class designator** -- a class object or a symbol
+    naming one -- and the *argument* is returned, not the resolved class
+    (ansi-test accepts either, but returning what it was handed is what CLHS
+    says). Exactly one argument: `(make-instances-obsolete)` and
+    `(make-instances-obsolete c nil)` are both PROGRAM-ERRORs, which the
+    single required parameter here gives for free.
+    """
+    target = class_
+    if not isinstance(target, classes.LispClass):
+        name = target.name if isinstance(target, lisptype.LispSymbol) else str(target)
+        target = classes.find_class(name)
+        if target is None:
+            raise lisptype.LispTypeError(
+                f"MAKE-INSTANCES-OBSOLETE: {class_!r} does not name a class",
+                expected_type="CLASS", actual_value=class_)
+    target.instance_generation = getattr(target, 'instance_generation', 0) + 1
+    return class_
+
+
 @_registry.cl_function('SLOT-VALUE')
 def slot_value(instance, slot_name):
     """SLOT-VALUE (CLHS 7.5.3, 7.5.5): read a slot's value directly.
@@ -758,6 +827,7 @@ def slot_value(instance, slot_name):
     """
     if not isinstance(instance, classes.LispInstance):
         raise lisptype.LispTypeError(f"SLOT-VALUE: not an instance: {instance}")
+    _update_if_obsolete(instance)
     name = _slot_name_str(slot_name)
     cls = instance.lisp_class
     if name not in cls.get_all_slots():

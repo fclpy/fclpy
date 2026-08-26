@@ -2225,8 +2225,18 @@ def eval(form, env=None):
                     else:
                         expanded = func_binding(*raw_args)
 
-                # Evaluate the expansion in the current environment
-                return eval(expanded, env)
+                # Evaluate the expansion in the current environment.
+                #
+                # A macro's expansion is a single form, so an expander whose
+                # body happens to return several values contributes only its
+                # primary one -- the same rule every other single-value
+                # context applies. This matters as soon as an expander calls
+                # something multiple-valued in tail position:
+                # `(macrolet ((%m2 (&environment env) (macroexpand-1 '(%m) env))) (%m2))`
+                # has MACROEXPAND-1's two values (expansion, expanded-p) as
+                # its body's value, and without this the `MultipleValues`
+                # object itself was handed to `eval` as the form.
+                return eval(lisptype.primary_value(expanded), env)
 
         # Regular function call
         # In Common Lisp, function position uses the FUNCTION namespace, not variable namespace

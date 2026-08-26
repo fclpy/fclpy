@@ -131,7 +131,7 @@ def _read_via_reader(stream, eof_error_p, eof_value, what, preserve_whitespace=F
     target = resolve_input_stream(stream)
     bridge = _reader_bridge(target)
     readtable = _rt.get_current_readtable()
-    reader = _lispreader.LispReader(readtable.get_macro_character, bridge)
+    reader = _lispreader.LispReader(readtable, bridge)
     try:
         result = reader.read_1(preserve_whitespace)
     except EOFError:
@@ -145,6 +145,17 @@ def _read_via_reader(stream, eof_error_p, eof_value, what, preserve_whitespace=F
         # must still signal). Conflating the two here used to make a
         # truncated list silently answer NIL instead of erroring.
         raise lisptype.LispEndOfFileError(target, what)
+    except _lispreader.ReaderErrorSignal as exc:
+        # Malformed input from the token loop -- CLHS 2.1.4.2's invalid
+        # constituent trait. Converted here rather than raised there so the
+        # condition carries the real stream in its STREAM slot (ansi-test
+        # reads it back with `stream-error-stream`), and signalled through
+        # `signal_error_object` rather than `raise`d so handlers run at the
+        # signal point like any other ERROR -- a bare `raise` of a condition
+        # *object* matches no HANDLER-CASE clause at all.
+        from .evaluation_conditions import signal_error_object
+        return signal_error_object(
+            lisptype.ReaderError(stream=target, message=f"{what}: {exc}"))
     if isinstance(target, Stream):
         while bridge.buff:
             target.unread_char(bridge.buff.pop())
@@ -343,7 +354,7 @@ def read_delimited_list(char, stream=None, recursive_p=None):
             target.read_char()
             break
         bridge = _reader_bridge(target)
-        reader = _lispreader.LispReader(readtable.get_macro_character, bridge)
+        reader = _lispreader.LispReader(readtable, bridge)
         forms.append(reader.read_1())
         while bridge.buff:
             target.unread_char(bridge.buff.pop())
@@ -535,9 +546,51 @@ def make_dispatch_macro_character(char, non_terminating_p=None, readtable=_rt._O
 
 
 @_registry.cl_function('SET-SYNTAX-FROM-CHAR')
-def set_syntax_from_char(to_char, from_char, to_readtable=None, from_readtable=None):
-    """Set syntax from another character in a readtable."""
-    # Placeholder implementation
+def set_syntax_from_char(to_char, from_char, to_readtable=_rt._OMITTED,
+                         from_readtable=_rt._OMITTED):
+    """SET-SYNTAX-FROM-CHAR (CLHS 23.2): give `to_char` the syntax type
+    `from_char` has, and return T.
+
+    This was a stub that returned T and did nothing, because there was no
+    character *syntax type* model for it to write to -- `lispreader` decided
+    whitespace/escape/constituent with hardcoded literals. `Readtable.
+    syntax_type`/`set_syntax_type` is now that model and the reader reads it,
+    so this is a real operation.
+
+    Two details CLHS is explicit about:
+
+    * **The constituent traits of `to_char` are not affected.** They belong to
+      the character, not the readtable (`readtable.constituent_trait`), so
+      making `#\\Tab` a constituent exposes Tab's *invalid* trait and reading
+      it signals READER-ERROR, while the same operation on `#\\\\` yields the
+      symbol named "\\". `set-syntax-from-char.lsp` measures exactly that
+      difference.
+    * **A macro character's function is copied too**, so
+      `(set-syntax-from-char c #\\()` makes `c` open a list.
+
+    `from_readtable` defaults to the *standard* readtable, not to the current
+    one -- that is what makes the operation reset a character to standard
+    syntax, and NIL denotes the standard readtable here as everywhere.
+    """
+    target = _rt.coerce_to_readtable(to_readtable, 'SET-SYNTAX-FROM-CHAR')
+    source = _rt.coerce_to_readtable(
+        from_readtable, 'SET-SYNTAX-FROM-CHAR',
+        default=_rt.standard_readtable())
+    to_c = _char_of(to_char, 'SET-SYNTAX-FROM-CHAR')
+    from_c = _char_of(from_char, 'SET-SYNTAX-FROM-CHAR')
+
+    syntax = source.syntax_type(from_c)
+    macro = source.get_macro_character(from_c)
+    function = macro[0] if macro is not None else None
+    target.set_syntax_type(to_c, syntax, function)
+    # A dispatch macro character carries its sub-character table with it;
+    # otherwise `(set-syntax-from-char c #\#)` would make `c` dispatch and
+    # then find no `#\(`/`#\'`/... handlers under it, which is what
+    # `set-syntax-from-char.sharp.1` reads through.
+    sub_table = source._dispatch_macro_characters.get(from_c)
+    if sub_table:
+        for sub, fn in sub_table.items():
+            target.set_dispatch_macro_character(to_c, sub, fn)
     return lisptype.T
 
 

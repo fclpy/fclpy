@@ -160,6 +160,72 @@ def write_text(text, stream=None):
             pass
 
 
+# --- PRINT-UNREADABLE-OBJECT (CLHS 22.4) ---
+#
+# The macro itself is in `evaluation_special_forms.py` with the other `WITH-*`
+# expanders; these are the two runtime halves it expands into. Splitting it
+# that way keeps the *layout* -- what `#<...>` actually contains -- here in the
+# printer, next to `write_text`, rather than encoded in a macroexpansion.
+#
+# CLHS fixes the layout, and `printer/print-unreadable-object.lsp` pins the
+# spacing down exactly:
+#
+#     #<                     no type, no identity, empty body
+#     #<TYPE >               :type t, empty body
+#     #<TYPE body>           :type t  -- the space belongs to the *type*
+#     #<body identity>       :identity t -- the space belongs to the *identity*
+#
+# so a space follows the type when one is printed, and precedes the identity
+# when one is printed; nothing else inserts one.
+
+
+@_registry.cl_function('%PRINT-UNREADABLE-PREFIX')
+def print_unreadable_prefix(object, stream, type_p):
+    """Write `#<`, and the object's type plus a space when `type_p`.
+
+    The `*PRINT-READABLY*` check lives here because it must happen before any
+    output at all: CLHS says PRINT-UNREADABLE-OBJECT signals
+    PRINT-NOT-READABLE if `*print-readably*` is true, and
+    `print-unreadable-object.error.1` asserts the stream is left *empty* when
+    it does.
+    """
+    from .binding import dynamic_value
+    from .evaluation_conditions import signal_error_object
+    readably = dynamic_value(lisptype.py_str_to_sym('*PRINT-READABLY*'))
+    if lisptype.is_truthy(readably):
+        return signal_error_object(lisptype.PrintNotReadable(object=object))
+    write_text('#<', stream)
+    if lisptype.is_truthy(type_p):
+        from .comparison import type_of
+        write_text(f"{_write_object(type_of(object), escape=False)} ", stream)
+    return lisptype.NIL
+
+
+@_registry.cl_function('%PRINT-UNREADABLE-SUFFIX')
+def print_unreadable_suffix(object, stream, identity_p):
+    """Write the identity (preceded by a space) when `identity_p`, then `>`."""
+    if lisptype.is_truthy(identity_p):
+        write_text(f" {id(object):x}", stream)
+    write_text('>', stream)
+    return lisptype.NIL
+
+
+@_registry.cl_function('PRINT-NOT-READABLE-OBJECT')
+def print_not_readable_object(condition):
+    """PRINT-NOT-READABLE-OBJECT (CLHS 22.4): the OBJECT slot of a
+    PRINT-NOT-READABLE condition.
+
+    The condition class carried the slot but this accessor was never
+    registered, so every reference to it was an UNDEFINED-FUNCTION -- including
+    from `documentation.lsp`, which has nothing to do with printing and merely
+    printed a condition while reporting an unrelated failure.
+    """
+    if isinstance(condition, lisptype.Condition):
+        value = condition.get_slot('object')
+        return value if value is not None else lisptype.NIL
+    return getattr(condition, 'object', lisptype.NIL)
+
+
 # Re-export pathname functions from pathnames module for backward compatibility
 # Note: `pathname` (registered as 'PATHNAME', coerces a designator) and
 # `make_pathname_function` (registered as 'MAKE-PATHNAME', builds one from
@@ -1334,6 +1400,26 @@ def _is_unspecified(value):
     return value is None or value is lisptype.NIL
 
 
+def _format_repeat_count(params, default=1):
+    """The repeat count of a `~n%` / `~n&` / `~n~` / `~n|` directive.
+
+    The one place that distinction is made, because it is exactly the one the
+    obvious spelling gets wrong. `params[0] if params and params[0] else 1`
+    treats an explicit **zero** as "no parameter supplied" -- Python says 0 is
+    falsy -- so `(format nil "~0~")` emitted one tilde where CLHS requires
+    none, and likewise for `~0%` and `~0|`. Every failing test in
+    `format-tilde.lsp` was the n=0 case, and the count reaches here as a real 0
+    from `~0~`, from `~V~` given 0, and from `~#~` with no arguments left.
+
+    `_is_unspecified` is the existing resolver for "blank or NIL", so an
+    omitted parameter still defaults; only a *supplied* value is honoured, 0
+    included.
+    """
+    if not params or _is_unspecified(params[0]):
+        return default
+    return params[0]
+
+
 def _format_char_param(value, default):
     """Read a pad/comma character prefix parameter: `'x` literal, `~V`
     (which supplies a CHARACTER object or a one-char string), or unspecified."""
@@ -1823,6 +1909,41 @@ def _pp_indent_sentinel(relative_to, n):
 def _pp_strip_lit_space(text):
     """Remove the literal-space bracketing, leaving the spaces themselves."""
     return text.replace(_PP_LIT_SPACE_OPEN, '').replace(_PP_LIT_SPACE_CLOSE, '')
+
+
+def _pp_case_convert(text, convert):
+    """Apply `convert` to the *printable* parts of `text`, leaving any
+    pretty-printer sentinel spans untouched.
+
+    `~(...~)` case-converts whatever its body produced, and that body may
+    contain unresolved sentinels -- `~<...~:>`'s literal-space brackets, break
+    tags, indent tags. Those spans are ASCII text spelling things like
+    `FCLPY:PPSPACEOPEN`, so converting them along with everything else
+    *renamed the sentinels*: they then matched none of the resolution regexes
+    and survived into the output, which is why `(format nil "~@(this is a
+    TEST.~)")` answered
+    `"Thisfclpy:ppspaceopen fclpy:ppspacecloseis..."` instead of
+    `"This is a test."`.
+
+    `convert` takes the concatenated printable text and returns it converted;
+    it is called **once** on the whole of it, because the case directives are
+    word-sensitive (`~@(` capitalizes the first word of the entire body) and a
+    per-segment call would restart that logic at every sentinel. The converted
+    text is then redistributed over the original segment boundaries, which is
+    safe because every conversion here is length-preserving and per-character.
+    """
+    segments = _PP_ANY_SENTINEL_RE.split(text)
+    if len(segments) == 1:
+        return convert(text)
+    separators = _PP_ANY_SENTINEL_RE.findall(text)
+    converted = convert(''.join(segments))
+    out, at = [], 0
+    for index, segment in enumerate(segments):
+        out.append(converted[at:at + len(segment)])
+        at += len(segment)
+        if index < len(separators):
+            out.append(separators[index])
+    return ''.join(out)
 
 
 def _pp_visible_width(text):
@@ -2431,9 +2552,8 @@ def _format_directive(control_string, cursor, pos, emitted=None):
         return (result, pos)
     
     elif directive == '%':
-        # ~% - Newline
-        count = params[0] if params and params[0] else 1
-        return ('\n' * count, pos)
+        # ~n% - n newlines (CLHS 22.3.1.1). `~0%` emits none.
+        return ('\n' * _format_repeat_count(params), pos)
 
     elif directive == '&':
         # ~n& - a fresh line, then n-1 further newlines (CLHS 22.3.1.3).
@@ -2443,7 +2563,7 @@ def _format_directive(control_string, cursor, pos, emitted=None):
         # what has been emitted so far, so `~&` is a fresh line for the same
         # reason FRESH-LINE is: emit one only if the output does not already
         # end at a line boundary. `~0&` emits nothing at all.
-        count = 1 if not params or params[0] is None else params[0]
+        count = _format_repeat_count(params)
         if count <= 0:
             return ('', pos)
         preceding = ''.join(emitted) if emitted else ''
@@ -2451,14 +2571,12 @@ def _format_directive(control_string, cursor, pos, emitted=None):
         return ('\n' * (count - 1 + int(needs_fresh_line)), pos)
 
     elif directive == '~':
-        # ~~ - Literal tilde
-        count = params[0] if params and params[0] else 1
-        return ('~' * count, pos)
+        # ~n~ - n literal tildes (CLHS 22.3.1.5). `~0~` emits none.
+        return ('~' * _format_repeat_count(params), pos)
 
     elif directive == '|':
-        # ~| - Page separator (form feed)
-        count = params[0] if params and params[0] else 1
-        return ('\f' * count, pos)
+        # ~n| - n page separators (CLHS 22.3.1.4). `~0|` emits none.
+        return ('\f' * _format_repeat_count(params), pos)
 
     elif directive == 'T':
         # ~T - Tabulation
@@ -2725,20 +2843,23 @@ def _format_directive(control_string, cursor, pos, emitted=None):
         # tracks it directly), replacing the old inner.count('~') estimate.
         inner_result = _format_process_cursor(inner, cursor)
 
+        # Every variant converts through `_pp_case_convert`, which keeps its
+        # hands off any unresolved pretty-printer sentinel in the body -- see
+        # that function for what went wrong when they were converted too.
         if colon_flag and at_flag:
             # ~:@( ... ~) - force everything to upper case
-            result = inner_result.upper()
+            convert = str.upper
         elif colon_flag:
             # ~:( ... ~) - capitalize each word
-            result = _capitalize_words(inner_result)
+            convert = _capitalize_words
         elif at_flag:
             # ~@( ... ~) - capitalize just the first word, lower case the rest
-            result = _capitalize_first_word(inner_result)
+            convert = _capitalize_first_word
         else:
             # ~( ... ~) - force everything to lower case
-            result = inner_result.lower()
+            convert = str.lower
 
-        return (result, end_pos)
+        return (_pp_case_convert(inner_result, convert), end_pos)
     
     elif directive == ')':
         # End of case conversion - should not be reached directly

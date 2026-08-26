@@ -661,28 +661,38 @@ def _direct_macroexpand_1(form, environment):
 
 @_registry.cl_function('MACROEXPAND')
 def macroexpand(form, environment=None):
-    """Expand macros fully (multiple passes until stable)."""
-    try:
-        prev = form
-        while True:
-            expanded, did_expand = _direct_macroexpand_1(prev, environment)
-            if not did_expand:
-                return prev
-            prev = expanded
-    except Exception:
-        logger.error(f"[macroexpand] error while expanding, returning original. env_id={id(environment)}\n", exc_info=True)
-        return form
+    """MACROEXPAND (CLHS 3.8): expand until the form is no longer a macro call.
+
+    Returns **two** values -- the expansion and whether *any* expansion
+    happened -- which is the half that was missing. `expanded-p` is true if
+    the loop ran at least once, not whether the final pass expanded, so
+    `(macroexpand '(some-macro))` reports T even though it necessarily stops
+    on a non-macro form.
+    """
+    prev = form
+    ever_expanded = False
+    while True:
+        expanded, did_expand = _direct_macroexpand_1(prev, environment)
+        if not did_expand:
+            return lisptype.MultipleValues(
+                prev, lisptype.T if ever_expanded else lisptype.NIL)
+        ever_expanded = True
+        prev = expanded
 
 
 @_registry.cl_function('MACROEXPAND-1')
 def macroexpand_1(form, environment=None):
-    """Expand macros once."""
-    try:
-        expanded, _did = _direct_macroexpand_1(form, environment)
-        return expanded
-    except Exception:
-        logger.error(f"[macroexpand-1] error while expanding form env_id={id(environment)}\n", exc_info=True)
-        return form
+    """MACROEXPAND-1 (CLHS 3.8): expand one level, as two values.
+
+    Note this is a *second* implementation of MACROEXPAND-1 --
+    `evaluation_special_forms.eval_macroexpand_1` is the one the evaluator's
+    own dispatch reaches for a direct call, and this one is what FUNCALL and
+    APPLY reach (standing rule 3; recorded rather than silently left to
+    diverge again). Both must answer the same two values.
+    """
+    expanded, did = _direct_macroexpand_1(form, environment)
+    return lisptype.MultipleValues(expanded,
+                                   lisptype.T if did else lisptype.NIL)
 
 
 __all__ = [

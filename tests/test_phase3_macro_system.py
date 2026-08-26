@@ -6,7 +6,7 @@ This test module verifies that DEFMACRO, MACROEXPAND, and MACRO-FUNCTION work co
 
 import pytest
 from fclpy.lisptype import (
-    LispSymbol, lispCons, NIL, T
+    LispSymbol, lispCons, NIL, T, primary_value
 )
 from fclpy.lispfunc.evaluation import eval
 from fclpy.lispenv import setup_standard_environment
@@ -103,8 +103,12 @@ class TestMacroexpand:
         
         macroexpand_form = lispCons(macroexpand1_sym, lispCons(quoted_form, NIL))
         
-        result = eval(macroexpand_form, env)
-        
+        # MACROEXPAND-1 answers two values (expansion, expanded-p) per CLHS
+        # 3.8, so the expansion is the *primary* value. These assertions used
+        # to read the result directly, which worked only while the function
+        # was returning one value -- i.e. while it was non-conforming.
+        result = primary_value(eval(macroexpand_form, env))
+
         # Result should be the expanded form: (+ 5 5)
         assert car(result).name == '+'
         assert car(cdr(result)) == 5
@@ -122,8 +126,8 @@ class TestMacroexpand:
         
         macroexpand_form = lispCons(macroexpand1_sym, lispCons(quoted_form, NIL))
         
-        result = eval(macroexpand_form, env)
-        
+        result = primary_value(eval(macroexpand_form, env))
+
         # Should be unchanged
         assert car(result).name == '+'
         assert car(cdr(result)) == 1

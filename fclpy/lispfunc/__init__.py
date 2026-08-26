@@ -186,7 +186,7 @@ def eval_string(code, env=None):
     string_io = io.StringIO(code)
     stream = lispreader.LispStream(string_io)
     readtable = get_current_readtable()
-    reader = lispreader.LispReader(readtable.get_macro_character, stream)
+    reader = lispreader.LispReader(readtable, stream)
     
     result = None
     while True:

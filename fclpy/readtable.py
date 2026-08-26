@@ -12,6 +12,65 @@ _standard_readtable = None
 # The four values `readtable-case` can take (CLHS 23.1.2).
 READTABLE_CASES = ('UPCASE', 'DOWNCASE', 'PRESERVE', 'INVERT')
 
+# --- Character syntax types (CLHS 2.1.4) ---
+#
+# Every character has exactly one *syntax type* in a given readtable, and the
+# reader's algorithm (CLHS 2.2) is written entirely in terms of it. This is
+# the model `SET-SYNTAX-FROM-CHAR` sets and `lispreader.LispReader` reads;
+# before it existed each of those decisions was a hardcoded literal in the
+# reader (`c in [" ","\t",...]` for whitespace, `c == "\\"` for single escape,
+# `c == '"'` for *multiple* escape -- which is not even the right character,
+# multiple escape is `|`), so there was nothing for SET-SYNTAX-FROM-CHAR to
+# act on and it was a stub returning T.
+SYNTAX_CONSTITUENT = 'constituent'
+SYNTAX_WHITESPACE = 'whitespace'
+SYNTAX_TERMINATING_MACRO = 'terminating-macro'
+SYNTAX_NON_TERMINATING_MACRO = 'non-terminating-macro'
+SYNTAX_SINGLE_ESCAPE = 'single-escape'
+SYNTAX_MULTIPLE_ESCAPE = 'multiple-escape'
+
+# CLHS 2.1.4.1's whitespace characters. Backspace and Rubout are *not* here:
+# they are constituents whose constituent trait is invalid (below), which is a
+# different thing and is what `set-syntax-from-char.lsp`'s invalid-trait tests
+# distinguish.
+STANDARD_WHITESPACE = frozenset(' \t\n\r\f\v')
+
+# The standard syntax types of CLHS 2.1.4.1, for every character that is not a
+# plain constituent. Macro characters live in `_macro_characters` (they need a
+# function as well as a type), so this table carries only the two escapes --
+# the standard readtable's macro characters are installed by
+# `_setup_standard_macros` and `syntax_type` derives their type from that one
+# place rather than duplicating the list here.
+STANDARD_SYNTAX_TYPES = {
+    '\\': SYNTAX_SINGLE_ESCAPE,
+    '|': SYNTAX_MULTIPLE_ESCAPE,
+}
+
+# CLHS 2.1.4.2's *constituent traits*. These belong to the character itself,
+# not to the readtable, and `SET-SYNTAX-FROM-CHAR` explicitly does **not**
+# copy them: "the constituent traits of to-char are not affected". That is
+# exactly what the trait tests measure -- `(set-syntax-from-char #\\ #\X)`
+# makes `\` a constituent, and reading it then yields the symbol named "\"
+# because `\`'s own trait is alphabetic; doing the same to Tab yields a
+# READER-ERROR because Tab's trait is invalid.
+CONSTITUENT_TRAIT_INVALID = 'invalid'
+CONSTITUENT_TRAIT_ALPHABETIC = 'alphabetic'
+
+# Backspace, Tab, Newline, Linefeed, Page, Return, Space and Rubout are the
+# characters CLHS 2.1.4.2 gives the *invalid* constituent trait.
+INVALID_CONSTITUENTS = frozenset('\b\t\n\x0b\x0c\r \x7f')
+
+
+def constituent_trait(char: str) -> str:
+    """The constituent trait of `char` (CLHS 2.1.4.2).
+
+    A property of the character, not of any readtable -- see the note above
+    `CONSTITUENT_TRAIT_INVALID`.
+    """
+    if char in INVALID_CONSTITUENTS:
+        return CONSTITUENT_TRAIT_INVALID
+    return CONSTITUENT_TRAIT_ALPHABETIC
+
 
 class Readtable:
     """
@@ -19,10 +78,22 @@ class Readtable:
     This replaces the scattered macro character implementations across multiple modules.
     """
 
+    # Class-level default for the syntax-type overrides, so *every* Readtable
+    # answers `syntax_type` correctly however it was constructed -- `copy()`
+    # builds one through `__new__` and so do white-box tests. Never mutated in
+    # place: `set_syntax_type` installs a per-instance dict first, so this
+    # shared empty mapping stays empty.
+    _syntax_types: Dict[str, str] = {}
+
     def __init__(self):
         self._macro_characters: Dict[str, Tuple[Callable, bool]] = {}
         self._dispatch_macro_characters: Dict[str, Dict[str, Callable]] = {}
         self._case = 'UPCASE'  # :UPCASE, :DOWNCASE, :PRESERVE, :INVERT
+        # Per-character syntax-type *overrides* (CLHS 2.1.4). Only characters
+        # whose type differs from `STANDARD_SYNTAX_TYPES`/the macro table are
+        # recorded, so `syntax_type` stays the one resolver and there is no
+        # second copy of the standard table to drift from it.
+        self._syntax_types: Dict[str, str] = {}
         # True only for the one object `standard_readtable()` returns.
         self._standard = False
 
@@ -44,20 +115,33 @@ class Readtable:
                 "(CLHS 23.1.1); copy it with (copy-readtable nil) first")
 
     def _setup_standard_macros(self):
-        """Set up the standard Common Lisp macro characters."""
-        # Standard terminating macro characters
+        """Set up the standard Common Lisp macro characters.
+
+        The second argument is `non_terminating_p`, and CLHS 2.1.4.1 fixes it
+        exactly: `"`, `'`, `(`, `)`, `,`, `;` and `` ` `` are **terminating**
+        macro characters and `#` is the only **non-terminating** one. Every
+        entry here except `(` used to say the opposite, which nothing noticed
+        because the flag had only one reader asking -- and that reader
+        (`lispreader`) decided token termination from a hardcoded literal list
+        instead. Now that `syntax_type` derives the syntax type from this
+        table, the flag is load-bearing: a non-terminating macro character is
+        *accumulated into a token* by CLHS 2.2 step 8, so `;` marked
+        non-terminating made `(read-from-string "0;2")` answer the symbol
+        `|0;2|` rather than 0.
+        """
+        # Standard terminating macro characters (CLHS 2.1.4.1)
         self.set_macro_character('(', self._left_paren_reader, False)
-        self.set_macro_character(')', self._right_paren_reader, True)
-        self.set_macro_character('"', self._string_reader, True)
-        self.set_macro_character("'", self._quote_reader, True)
-        self.set_macro_character(';', self._semicolon_reader, True)
-        
-        # Standard non-terminating macro characters
-        self.set_macro_character('`', self._backquote_reader, True)
-        self.set_macro_character(',', self._comma_reader, True)
-        
-        # Dispatch macro character
-        self.set_macro_character('#', self._sharp_reader, False)
+        self.set_macro_character(')', self._right_paren_reader, False)
+        self.set_macro_character('"', self._string_reader, False)
+        self.set_macro_character("'", self._quote_reader, False)
+        self.set_macro_character(';', self._semicolon_reader, False)
+        self.set_macro_character('`', self._backquote_reader, False)
+        self.set_macro_character(',', self._comma_reader, False)
+
+        # The one standard non-terminating macro character, and the dispatch
+        # character (CLHS 2.4.8): `#` may appear inside a token, so `a#b` is
+        # one symbol.
+        self.set_macro_character('#', self._sharp_reader, True)
         
     def get_macro_character(self, char: str) -> Optional[Tuple[Callable, bool]]:
         """
@@ -69,7 +153,7 @@ class Readtable:
     def set_macro_character(self, char: str, function: Callable, non_terminating_p: bool = False):
         """
         Set a macro character function.
-        
+
         Args:
             char: The character to set as a macro character
             function: The reader function to call
@@ -77,6 +161,64 @@ class Readtable:
         """
         self._check_mutable('SET-MACRO-CHARACTER')
         self._macro_characters[char] = (function, non_terminating_p)
+        # Becoming a macro character *is* a change of syntax type, so any
+        # explicit non-macro override for this character no longer holds --
+        # leaving it would make `syntax_type` and `get_macro_character`
+        # disagree about the same character.
+        self._syntax_types.pop(char, None)
+
+    def syntax_type(self, char: str) -> str:
+        """The syntax type of `char` in this readtable (CLHS 2.1.4).
+
+        The one resolver, and the reason `SET-SYNTAX-FROM-CHAR` can work at
+        all. Order matters: the macro table wins, because `set_macro_character`
+        is how a character *becomes* a macro character and that table already
+        records whether it terminates; then an explicit override set by
+        `set_syntax_type`; then the standard table; then whitespace; then
+        constituent, which is what the overwhelming majority of characters are.
+        """
+        macro = self._macro_characters.get(char)
+        if macro is not None:
+            return (SYNTAX_NON_TERMINATING_MACRO if macro[1]
+                    else SYNTAX_TERMINATING_MACRO)
+        if char in self._syntax_types:
+            return self._syntax_types[char]
+        standard = STANDARD_SYNTAX_TYPES.get(char)
+        if standard is not None:
+            return standard
+        if char in STANDARD_WHITESPACE:
+            return SYNTAX_WHITESPACE
+        return SYNTAX_CONSTITUENT
+
+    def set_syntax_type(self, char: str, syntax: str, function: Callable = None):
+        """Give `char` the syntax type `syntax` in this readtable.
+
+        `function` is required for the two macro types and ignored otherwise;
+        `SET-SYNTAX-FROM-CHAR` supplies it when the character it copies from is
+        a macro character, because CLHS says the macro function is copied along
+        with the type.
+
+        A character that stops being a macro character must be removed from the
+        macro table, or `syntax_type` above would keep answering "macro" for it
+        -- that is the whole reason both tables are read through one resolver.
+        """
+        self._check_mutable('SET-SYNTAX-FROM-CHAR')
+        if syntax in (SYNTAX_TERMINATING_MACRO, SYNTAX_NON_TERMINATING_MACRO):
+            if function is None:
+                from . import lisptype
+                raise lisptype.LispError(
+                    "SET-SYNTAX-FROM-CHAR: a macro syntax type needs a macro function")
+            self._syntax_types.pop(char, None)
+            self._macro_characters[char] = (
+                function, syntax == SYNTAX_NON_TERMINATING_MACRO)
+            return
+        self._macro_characters.pop(char, None)
+        self._dispatch_macro_characters.pop(char, None)
+        # Install a per-instance dict before writing, so the class-level
+        # default above is never mutated into a table shared by every readtable.
+        if '_syntax_types' not in self.__dict__:
+            self._syntax_types = {}
+        self._syntax_types[char] = syntax
     
     def get_dispatch_macro_character(self, dispatch_char: str, sub_char: str) -> Optional[Callable]:
         """Get a dispatch macro character function."""
@@ -172,6 +314,10 @@ class Readtable:
         new_rt._standard = False
         new_rt._macro_characters, new_rt._dispatch_macro_characters =             self._copied_tables(new_rt)
         new_rt._case = self._case
+        # Syntax-type overrides are part of a readtable's syntax and must be
+        # copied with it, or `(copy-readtable rt)` would silently answer a
+        # table that reads differently from `rt`.
+        new_rt._syntax_types = dict(self._syntax_types)
         return new_rt
 
     def copy_into(self, target: 'Readtable') -> 'Readtable':
@@ -185,6 +331,7 @@ class Readtable:
         target._check_mutable('COPY-READTABLE')
         target._macro_characters, target._dispatch_macro_characters =             self._copied_tables(target)
         target._case = self._case
+        target._syntax_types = dict(self._syntax_types)
         return target
     
     # Simple macro character implementations that don't create circular dependencies
@@ -344,14 +491,17 @@ class Readtable:
                     from . import lisptype
                     return lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol(token)
     
-    def _read_string_literal(self, stream):
-        """Read a string literal (already consumed opening quote)"""
+    def _read_string_literal(self, stream, terminator='"'):
+        """Read a string literal (already consumed the opening delimiter).
+
+        `terminator` is the delimiter to stop at -- see `_string_reader`.
+        """
         result = ""
         while True:
             c = stream.read_char()
             if not c:
                 raise EOFError("EOF in string literal")
-            if c == '"':
+            if c == terminator:
                 break
             if c == '\\':
                 # Handle escape sequences
@@ -550,12 +700,28 @@ class Readtable:
                 break
     
     def _right_paren_reader(self, char, stream):
-        """Handle unmatched right parenthesis."""
-        raise ValueError("Unmatched closing parenthesis")
-    
+        """An unmatched close parenthesis is a READER-ERROR (CLHS 2.4.2).
+
+        It used to raise a bare `ValueError`, which is not a condition: it
+        surfaced as `#<ERROR Python error in function call: ValueError...>`, so
+        `(handler-case (read-from-string ")") (reader-error () :good))` never
+        matched. `ReaderErrorSignal` is the marker every reader entry point
+        converts into a real READER-ERROR (imported lazily -- this module
+        avoids a top-level `lisptype`/`lispreader` import, see the note above).
+        """
+        from .lispreader import ReaderErrorSignal
+        raise ReaderErrorSignal(f"unmatched close parenthesis {char!r}")
+
     def _string_reader(self, char, stream):
-        """Read a string literal."""
-        return self._read_string_literal(stream)
+        """Read a string literal delimited by `char`.
+
+        The delimiter is the character that *started* the string, not a
+        hardcoded `"`. That matters once SET-SYNTAX-FROM-CHAR can copy this
+        function onto another character: `(set-syntax-from-char #\\a #\\")`
+        then makes `a0a` read as the string "0", where a hardcoded `"` would
+        scan to end of input and signal END-OF-FILE instead.
+        """
+        return self._read_string_literal(stream, terminator=char)
     
     def _quote_reader(self, char, stream):
         """Read a quoted expression."""

@@ -1,3 +1,5 @@
+import math as _math
+
 import fclpy.lisptype
 import fclpy.state as state
 from fclpy.cl_symbol_names import CL_SYMBOL_NAMES
@@ -352,8 +354,6 @@ def setup_standard_environment():
         ('MOST-NEGATIVE-{}-FLOAT', -3.4028235e+38),
         ('LEAST-NEGATIVE-{}-FLOAT', -1.4e-45),
         ('LEAST-NEGATIVE-NORMALIZED-{}-FLOAT', -1.17549435e-38),
-        ('{}-FLOAT-EPSILON', 1.1920929e-7),
-        ('{}-FLOAT-NEGATIVE-EPSILON', 5.9604645e-8),
     )
     _DOUBLE_LIMITS = (
         ('MOST-POSITIVE-{}-FLOAT', 1.7976931348623157e+308),
@@ -362,8 +362,34 @@ def setup_standard_environment():
         ('MOST-NEGATIVE-{}-FLOAT', -1.7976931348623157e+308),
         ('LEAST-NEGATIVE-{}-FLOAT', -5e-324),
         ('LEAST-NEGATIVE-NORMALIZED-{}-FLOAT', -2.2250738585072014e-308),
-        ('{}-FLOAT-EPSILON', 2.220446049250313e-16),
-        ('{}-FLOAT-NEGATIVE-EPSILON', 1.1102230246251565e-16),
+    )
+
+    # The epsilons are deliberately **not** in the two tables above, because
+    # they are not range limits: CLHS defines `<format>-float-epsilon` as the
+    # smallest positive float of that format with
+    # `(/= (float 1 e) (+ (float 1 e) e))` -- a property of the *arithmetic*,
+    # not of the representable magnitude. Every float here is a Python float,
+    # i.e. an IEEE double, so all four formats share one arithmetic and
+    # therefore one epsilon; giving SHORT/SINGLE the IEEE *single* epsilon
+    # described a precision this implementation does not have, and
+    # `numbers/epsilons.lsp` measures the contradiction directly -- it binary-
+    # searches for the real epsilon and compares it against the constant.
+    #
+    # Both are *computed* from the definition rather than written as literals,
+    # because the answer is one ULP away from the value one would guess and
+    # the guess is silently wrong. `2**-53` is not the epsilon: `1 + 2**-53`
+    # lands exactly halfway between 1 and its successor, and IEEE
+    # round-half-to-even takes it back down to 1, so `2**-53` fails the very
+    # test that defines epsilon. The answer is the next representable float
+    # above it -- and likewise `2**-54` for the negative epsilon. The double
+    # entry previously held `2**-52`, the conventional "machine epsilon",
+    # which is a different quantity from the one CLHS names, and its negative
+    # counterpart held a near-copy of the *positive* value.
+    _FLOAT_EPSILON = _math.nextafter(2.0 ** -53, 1.0)
+    _FLOAT_NEGATIVE_EPSILON = _math.nextafter(2.0 ** -54, 1.0)
+    _EPSILON_LIMITS = (
+        ('{}-FLOAT-EPSILON', _FLOAT_EPSILON),
+        ('{}-FLOAT-NEGATIVE-EPSILON', _FLOAT_NEGATIVE_EPSILON),
     )
 
     # LAMBDA-LIST-KEYWORDS' value is a list of symbols, and those symbols are
@@ -418,7 +444,9 @@ def setup_standard_environment():
                                 ('SINGLE', _SINGLE_LIMITS),
                                 ('DOUBLE', _DOUBLE_LIMITS),
                                 ('LONG', _DOUBLE_LIMITS)):
-        for _template, _value in _limits:
+        # The epsilons are the same for all four formats -- see the note by
+        # `_EPSILON_LIMITS`: one arithmetic, one epsilon.
+        for _template, _value in tuple(_limits) + _EPSILON_LIMITS:
             STANDARD_CONSTANTS.append((_template.format(_precision), _value))
 
     for _name, _value in STANDARD_CONSTANTS:

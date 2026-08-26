@@ -46,8 +46,6 @@ __all__ = [
     'least_positive_normalized_long_float', 'least_negative_normalized_long_float',
     'least_positive_normalized_short_float', 'least_negative_normalized_short_float',
     'least_positive_normalized_single_float', 'least_negative_normalized_single_float',
-    'short_float_epsilon', 'single_float_epsilon',
-    'double_float_epsilon', 'long_float_epsilon',
-    'short_float_negative_epsilon', 'single_float_negative_epsilon',
-    'double_float_negative_epsilon', 'long_float_negative_epsilon',
+    
+    
 ]

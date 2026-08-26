@@ -99,6 +99,12 @@ class LispClass:
     # class-28 in objects/defclass-01.lsp, whose default form is `(incf y)`),
     # and only for an initarg name the call did not itself supply.
     direct_default_initargs: List[Any] = field(default_factory=list)
+    # CLHS 7.3: bumped by MAKE-INSTANCES-OBSOLETE. An instance whose
+    # `instance_generation` is behind this is obsolete and gets brought up to
+    # date on its next slot access -- see `LispInstance.instance_generation`.
+    # Excluded from __eq__: obsolescence is a state of the class object, not
+    # part of what makes two classes the same class.
+    instance_generation: int = field(default=0, compare=False)
     # Memoized class precedence list (see get_linearized_superclasses). Not
     # part of the class's identity or value -- excluded from __eq__ -- and
     # never stale in practice because redefining a class (DEFCLASS re-run)
@@ -113,6 +119,34 @@ class LispClass:
     # existing LispClass/LispInstance branches only ever answer the
     # latter.
     metaclass_name: str = 'STANDARD-CLASS'
+    # CLHS 4.3.7 / MOP: True while this class exists only because some other
+    # class named it as a superclass before it was defined -- a
+    # *forward-referenced class*. It has no slots and no superclasses yet, and
+    # it is not finalized, so no instance of it or of anything below it can be
+    # made until a DEFCLASS fills it in (`define_forward_referenced_class`).
+    # Excluded from __eq__ for the same reason `instance_generation` is: it is
+    # a lifecycle state, not part of what makes two classes the same class.
+    forward_referenced: bool = field(default=False, compare=False)
+
+    def unfinalized_superclasses(self) -> List['LispClass']:
+        """Every still-undefined forward-referenced class at or above `self`.
+
+        A class whose superclass is merely *named* cannot be finalized (CLHS
+        4.3.6), so this is what MAKE-INSTANCE checks before allocating.
+        Walks `direct_superclasses` directly rather than the CPL, because
+        computing the CPL is itself one of the things that cannot be done
+        while a forward reference is outstanding.
+        """
+        pending, seen, out = [self], set(), []
+        while pending:
+            cls = pending.pop()
+            if id(cls) in seen:
+                continue
+            seen.add(id(cls))
+            if cls.forward_referenced:
+                out.append(cls)
+            pending.extend(cls.direct_superclasses)
+        return out
 
     def get_linearized_superclasses(self) -> List['LispClass']:
         """This class's class precedence list (CLHS 4.3.5), most specific
@@ -184,7 +218,15 @@ class LispInstance:
     """
     lisp_class: LispClass
     slot_values: Dict[str, Any] = field(default_factory=dict)
-    
+    # CLHS 7.3: MAKE-INSTANCES-OBSOLETE does not touch existing instances --
+    # each is brought up to date lazily, the next time a slot of it is
+    # accessed, by UPDATE-INSTANCE-FOR-REDEFINED-CLASS. This records which
+    # generation of its class the instance was last updated for; when it
+    # differs from the class's own `instance_generation` the instance is
+    # obsolete. An eager implementation would have to keep a registry of every
+    # live instance of every class, which is a leak.
+    instance_generation: int = 0
+
     def __repr__(self):
         return f"#<{self.lisp_class.name.name} {id(self)}>"
     
@@ -202,6 +244,16 @@ class ClassRegistry:
         """Register a class in the registry."""
         self._classes[cls.name.name] = cls
         return cls
+
+    def invalidate_cpl_caches(self) -> None:
+        """Drop every memoized class precedence list.
+
+        Called when a forward-referenced class is defined: any CPL computed
+        while it was an empty placeholder was computed from the wrong
+        superclass list. See `define_forward_referenced_class`.
+        """
+        for cls in self._classes.values():
+            cls._cpl_cache = None
 
     def register_class_as(self, name: str, cls: LispClass) -> LispClass:
         """Register `cls` under `name` as an alias, without touching
@@ -248,6 +300,54 @@ _class_registry = ClassRegistry()
 def register_class(cls: LispClass) -> LispClass:
     """Register a class in the global registry."""
     return _class_registry.register_class(cls)
+
+
+def ensure_forward_referenced_class(name: LispSymbol) -> LispClass:
+    """The class named `name`, creating a *forward-referenced* placeholder for
+    it if nothing is defined under that name yet (CLHS 4.3.7).
+
+    This is what makes `(defclass a (b) ())` legal before `b` exists. The
+    placeholder is a real, registered `LispClass`, so the subclass's
+    `direct_superclasses` holds a class object like every other entry --
+    `eval_defclass` used to append the bare *symbol* there instead, leaving a
+    superclass list that was part classes and part symbols. Nothing resolved
+    it later, so `(typep instance-of-a 'b)` was NIL forever and the CPL walk
+    tripped over a symbol where a class was expected.
+
+    Identity is the point: the placeholder object is the one
+    `define_forward_referenced_class` later fills in, so every subclass
+    already pointing at it sees the definition without being re-linked.
+    """
+    existing = _class_registry.find_class(name.name)
+    if existing is not None:
+        return existing
+    placeholder = LispClass(name=name, forward_referenced=True)
+    return _class_registry.register_class(placeholder)
+
+
+def define_forward_referenced_class(placeholder: LispClass, **attributes) -> LispClass:
+    """Turn a forward-referenced placeholder into a real class, in place.
+
+    The MOP describes this as CHANGE-CLASSing the forward-referenced-class
+    into a standard-class; the observable requirement is only that the object
+    keeps its identity, because `(defclass c2 () ())` must return the very
+    object that an earlier `(defclass c1 (c2) ())` linked to -- ansi-test
+    checks `(typep i1 class2)` where `class2` is DEFCLASS's return value.
+    Building a fresh object and re-registering it would leave `c1` pointing at
+    the abandoned placeholder.
+    """
+    for attribute, value in attributes.items():
+        setattr(placeholder, attribute, value)
+    placeholder.forward_referenced = False
+    # Every CPL computed while this class was still a placeholder was computed
+    # from an empty superclass list and is now wrong. The memo's own comment
+    # says it is "never stale in practice because redefining a class builds a
+    # brand new LispClass object" -- filling a forward reference in place is
+    # precisely the case that breaks that assumption, so the caches go. Doing
+    # it registry-wide rather than tracking subclass back-pointers: this runs
+    # once per forward reference resolved, and cannot miss a subclass.
+    _class_registry.invalidate_cpl_caches()
+    return placeholder
 
 
 def register_class_as(name, cls: LispClass) -> LispClass:

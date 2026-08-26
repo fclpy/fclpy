@@ -7,7 +7,6 @@ from fractions import Fraction
 import fclpy.lisptype as lisptype
 from . import registry as _registry
 
-
 def _irrational(real_fn, complex_fn, x):
     """Apply an irrational/transcendental function per CLHS 12.1.5.1.
 
@@ -38,13 +37,11 @@ def _irrational(real_fn, complex_fn, x):
     except ValueError:
         return complex_fn(complex(x))
 
-
 # Exponential and logarithmic functions
 @_registry.cl_function('EXP')
 def exp(x):
     """Exponential function."""
     return _irrational(math.exp, cmath.exp, x)
-
 
 @_registry.cl_function('LOG')
 def log(x, base=None):
@@ -58,18 +55,15 @@ def log(x, base=None):
     except ValueError:
         return cmath.log(complex(x), complex(base))
 
-
 @_registry.cl_function('SQRT')
 def sqrt(x):
     """Square root function."""
     return _irrational(math.sqrt, cmath.sqrt, x)
 
-
 @_registry.cl_function('EXPT')
 def expt(base, power):
     """Raise base to power."""
     return base ** power
-
 
 @_registry.cl_function('ISQRT')
 def isqrt(x):
@@ -78,37 +72,31 @@ def isqrt(x):
         raise ValueError("isqrt requires non-negative input")
     return int(math.sqrt(x))
 
-
 # Trigonometric functions
 @_registry.cl_function('SIN')
 def sin(a):
     """Sine function."""
     return _irrational(math.sin, cmath.sin, a)
 
-
 @_registry.cl_function('COS')
 def cos(a):
     """Cosine function."""
     return _irrational(math.cos, cmath.cos, a)
-
 
 @_registry.cl_function('TAN')
 def tan(a):
     """Tangent function."""
     return _irrational(math.tan, cmath.tan, a)
 
-
 @_registry.cl_function('ASIN')
 def asin(x):
     """Arc sine function."""
     return _irrational(math.asin, cmath.asin, x)
 
-
 @_registry.cl_function('ACOS')
 def acos(x):
     """Arc cosine function."""
     return _irrational(math.acos, cmath.acos, x)
-
 
 @_registry.cl_function('ATAN')
 def atan(y, x=None):
@@ -125,43 +113,36 @@ def atan(y, x=None):
     _ensure_real(x, 'ATAN')
     return math.atan2(y, x)
 
-
 # Hyperbolic functions
 @_registry.cl_function('SINH')
 def sinh(x):
     """Hyperbolic sine function."""
     return _irrational(math.sinh, cmath.sinh, x)
 
-
 @_registry.cl_function('COSH')
 def cosh(x):
     """Hyperbolic cosine function."""
     return _irrational(math.cosh, cmath.cosh, x)
-
 
 @_registry.cl_function('TANH')
 def tanh(x):
     """Hyperbolic tangent function."""
     return _irrational(math.tanh, cmath.tanh, x)
 
-
 @_registry.cl_function('ASINH')
 def asinh(x):
     """Hyperbolic arc sine function."""
     return _irrational(math.asinh, cmath.asinh, x)
-
 
 @_registry.cl_function('ACOSH')
 def acosh(x):
     """Hyperbolic arc cosine function."""
     return _irrational(math.acosh, cmath.acosh, x)
 
-
 @_registry.cl_function('ATANH')
 def atanh(x):
     """Hyperbolic arc tangent function."""
     return _irrational(math.atanh, cmath.atanh, x)
-
 
 # Float decoding and encoding
 @_registry.cl_function('DECODE-FLOAT')
@@ -188,7 +169,6 @@ def decode_float(float_num):
 
     return lisptype.MultipleValues([mantissa, exponent, sign])
 
-
 @_registry.cl_function('INTEGER-DECODE-FLOAT')
 def integer_decode_float(float_num):
     """Integer decode of float."""
@@ -206,18 +186,15 @@ def integer_decode_float(float_num):
     
     return lisptype.MultipleValues([int_mantissa, int_exponent, sign])
 
-
 @_registry.cl_function('SCALE-FLOAT')
 def scale_float(float_num, integer):
     """Scale float by power of radix."""
     return float_num * (2.0 ** integer)
 
-
 @_registry.cl_function('FLOAT')
 def float_fn(number, prototype=None):
     """Convert to float."""
     return float(number)
-
 
 @_registry.cl_function('FLOAT-DIGITS')
 def float_digits(float_num):
@@ -226,7 +203,6 @@ def float_digits(float_num):
         return sys.float_info.mant_dig  # 53 for IEEE 754 double
     return 24  # Default for single precision
 
-
 @_registry.cl_function('FLOAT-PRECISION')
 def float_precision(float_num):
     """Precision of float."""
@@ -234,12 +210,10 @@ def float_precision(float_num):
         return sys.float_info.mant_dig  # Same as float_digits for most cases
     return 24  # Default for single precision
 
-
 @_registry.cl_function('FLOAT-RADIX')
 def float_radix(float_num):
     """Radix of float."""
     return 2
-
 
 @_registry.cl_function('FLOAT-SIGN')
 def float_sign(float1, float2=None):
@@ -249,13 +223,11 @@ def float_sign(float1, float2=None):
         return sign
     return sign * abs(float2)
 
-
 # Mathematical constants
 @_registry.cl_function('PI')
 def pi_fn():
     """Return pi."""
     return math.pi
-
 
 # Floating-point limit constants
 @_registry.cl_function('LEAST-POSITIVE-DOUBLE-FLOAT')
@@ -263,96 +235,80 @@ def least_positive_double_float():
     """Least positive double float."""
     return sys.float_info.min
 
-
 @_registry.cl_function('LEAST-NEGATIVE-DOUBLE-FLOAT')
 def least_negative_double_float():
     """Least negative double float."""
     return -sys.float_info.min
-
 
 @_registry.cl_function('MOST-POSITIVE-DOUBLE-FLOAT')
 def most_positive_double_float():
     """Most positive double float."""
     return sys.float_info.max
 
-
 @_registry.cl_function('MOST-NEGATIVE-DOUBLE-FLOAT')
 def most_negative_double_float():
     """Most negative double float."""
     return -sys.float_info.max
-
 
 @_registry.cl_function('LEAST-POSITIVE-SHORT-FLOAT')
 def least_positive_short_float():
     """Least positive short float."""
     return sys.float_info.min
 
-
 @_registry.cl_function('LEAST-NEGATIVE-SHORT-FLOAT')
 def least_negative_short_float():
     """Least negative short float."""
     return -sys.float_info.min
-
 
 @_registry.cl_function('MOST-POSITIVE-SHORT-FLOAT')
 def most_positive_short_float():
     """Most positive short float."""
     return sys.float_info.max
 
-
 @_registry.cl_function('MOST-NEGATIVE-SHORT-FLOAT')
 def most_negative_short_float():
     """Most negative short float."""
     return -sys.float_info.max
-
 
 @_registry.cl_function('LEAST-POSITIVE-SINGLE-FLOAT')
 def least_positive_single_float():
     """Least positive single float."""
     return sys.float_info.min
 
-
 @_registry.cl_function('LEAST-NEGATIVE-SINGLE-FLOAT')
 def least_negative_single_float():
     """Least negative single float."""
     return -sys.float_info.min
-
 
 @_registry.cl_function('MOST-POSITIVE-SINGLE-FLOAT')
 def most_positive_single_float():
     """Most positive single float."""
     return sys.float_info.max
 
-
 @_registry.cl_function('MOST-NEGATIVE-SINGLE-FLOAT')
 def most_negative_single_float():
     """Most negative single float."""
     return -sys.float_info.max
-
 
 @_registry.cl_function('LEAST-POSITIVE-LONG-FLOAT')
 def least_positive_long_float():
     """Least positive long float."""
     return sys.float_info.min
 
-
 @_registry.cl_function('LEAST-NEGATIVE-LONG-FLOAT')
 def least_negative_long_float():
     """Least negative long float."""
     return -sys.float_info.min
-
 
 @_registry.cl_function('MOST-POSITIVE-LONG-FLOAT')
 def most_positive_long_float():
     """Most positive long float."""
     return sys.float_info.max
 
-
 @_registry.cl_function('MOST-NEGATIVE-LONG-FLOAT')
 def most_negative_long_float():
     """Most negative long float."""
     return -sys.float_info.max
-
 
 # Normalized floating-point limit constants
 @_registry.cl_function('LEAST-POSITIVE-NORMALIZED-DOUBLE-FLOAT')
@@ -360,97 +316,50 @@ def least_positive_normalized_double_float():
     """LEAST-POSITIVE-NORMALIZED-DOUBLE-FLOAT."""
     return sys.float_info.min
 
-
 @_registry.cl_function('LEAST-NEGATIVE-NORMALIZED-DOUBLE-FLOAT')
 def least_negative_normalized_double_float():
     """LEAST-NEGATIVE-NORMALIZED-DOUBLE-FLOAT."""
     return -sys.float_info.min
-
 
 @_registry.cl_function('LEAST-POSITIVE-NORMALIZED-LONG-FLOAT')
 def least_positive_normalized_long_float():
     """LEAST-POSITIVE-NORMALIZED-LONG-FLOAT."""
     return sys.float_info.min
 
-
 @_registry.cl_function('LEAST-NEGATIVE-NORMALIZED-LONG-FLOAT')
 def least_negative_normalized_long_float():
     """LEAST-NEGATIVE-NORMALIZED-LONG-FLOAT."""
     return -sys.float_info.min
-
 
 @_registry.cl_function('LEAST-POSITIVE-NORMALIZED-SHORT-FLOAT')
 def least_positive_normalized_short_float():
     """LEAST-POSITIVE-NORMALIZED-SHORT-FLOAT."""
     return sys.float_info.min
 
-
 @_registry.cl_function('LEAST-NEGATIVE-NORMALIZED-SHORT-FLOAT')
 def least_negative_normalized_short_float():
     """LEAST-NEGATIVE-NORMALIZED-SHORT-FLOAT."""
     return -sys.float_info.min
-
 
 @_registry.cl_function('LEAST-POSITIVE-NORMALIZED-SINGLE-FLOAT')
 def least_positive_normalized_single_float():
     """LEAST-POSITIVE-NORMALIZED-SINGLE-FLOAT."""
     return sys.float_info.min
 
-
 @_registry.cl_function('LEAST-NEGATIVE-NORMALIZED-SINGLE-FLOAT')
 def least_negative_normalized_single_float():
     """LEAST-NEGATIVE-NORMALIZED-SINGLE-FLOAT."""
     return -sys.float_info.min
 
-
-# Floating-point epsilon constants
-@_registry.cl_function('SHORT-FLOAT-EPSILON')
-def short_float_epsilon():
-    """Short float epsilon."""
-    return sys.float_info.epsilon
-
-
-@_registry.cl_function('SINGLE-FLOAT-EPSILON')
-def single_float_epsilon():
-    """Single float epsilon."""
-    return sys.float_info.epsilon
-
-
-@_registry.cl_function('DOUBLE-FLOAT-EPSILON')
-def double_float_epsilon():
-    """Double float epsilon."""
-    return sys.float_info.epsilon
-
-
-@_registry.cl_function('LONG-FLOAT-EPSILON')
-def long_float_epsilon():
-    """Long float epsilon."""
-    return sys.float_info.epsilon
-
-
-@_registry.cl_function('SHORT-FLOAT-NEGATIVE-EPSILON')
-def short_float_negative_epsilon():
-    """Short float negative epsilon."""
-    return sys.float_info.epsilon / 2
-
-
-@_registry.cl_function('SINGLE-FLOAT-NEGATIVE-EPSILON')
-def single_float_negative_epsilon():
-    """Single float negative epsilon."""
-    return sys.float_info.epsilon / 2
-
-
-@_registry.cl_function('DOUBLE-FLOAT-NEGATIVE-EPSILON')
-def double_float_negative_epsilon():
-    """Double float negative epsilon."""
-    return sys.float_info.epsilon / 2
-
-
-@_registry.cl_function('LONG-FLOAT-NEGATIVE-EPSILON')
-def long_float_negative_epsilon():
-    """Long float negative epsilon."""
-    return sys.float_info.epsilon / 2
-
+# The eight float epsilons are **constants**, not functions (CLHS 12.1.4),
+# and their one home is `lispenv.STANDARD_CONSTANTS` -- see the note by
+# `_EPSILON_LIMITS` there for why all four formats share one value. They used
+# to *also* be registered here as `cl_function`s, which is the defect plan.md
+# C7 describes for `*PRINT-BASE*`: registering a function under a variable's
+# name makes the variable evaluate to a Python function object, and which of
+# the two won depended on import order. They also disagreed with the
+# constants -- `sys.float_info.epsilon` is 2**-52, and the negative epsilon is
+# not "epsilon / 2" in general.
 
 __all__ = [
     'exp', 'log', 'sqrt', 'expt', 'isqrt',
@@ -471,8 +380,6 @@ __all__ = [
     'least_positive_normalized_long_float', 'least_negative_normalized_long_float',
     'least_positive_normalized_short_float', 'least_negative_normalized_short_float',
     'least_positive_normalized_single_float', 'least_negative_normalized_single_float',
-    'short_float_epsilon', 'single_float_epsilon',
-    'double_float_epsilon', 'long_float_epsilon',
-    'short_float_negative_epsilon', 'single_float_negative_epsilon',
-    'double_float_negative_epsilon', 'long_float_negative_epsilon',
+    
+    
 ]

@@ -16,12 +16,17 @@ def symbol_name(*args):
         )
     symbol = args[0]
     if hasattr(symbol, 'name'):
-        raw = symbol.name
-        # If name is pipe-escaped like |ABC|, strip the pipes and return inner content
-        if isinstance(raw, str) and raw.startswith('|') and raw.endswith('|'):
-            return lisptype.LispString(raw[1:-1])
-        # Default: return as LispString preserving case
-        return lisptype.LispString(str(raw))
+        # A symbol's name is returned exactly as it is. There used to be a
+        # `raw.startswith('|') and raw.endswith('|')` branch stripping the
+        # bars, which was compensation for a reader that stored `|abc|` as a
+        # name *containing* the bars -- `lispreader` had no multiple-escape
+        # handling, so the escape syntax leaked into the name. With the reader
+        # reading `|abc|` as the name `abc` (CLHS 2.4.5), stripping here is
+        # simply wrong: it renamed every symbol whose name genuinely begins
+        # and ends with a vertical bar, and answered "" for the symbol named
+        # "|" -- which is what `set-syntax-from-char.lsp` reads back after
+        # making `|` a constituent.
+        return lisptype.LispString(str(symbol.name))
     return lisptype.LispString(str(symbol))
 
 

@@ -100,7 +100,7 @@ def load_and_evaluate_file(filename, environment=None, verbose=False, timing=Fal
         
         # Create reader using centralized readtable
         readtable = get_current_readtable()
-        reader = lispreader.LispReader(readtable.get_macro_character, stream)
+        reader = lispreader.LispReader(readtable, stream)
         
         results = []
         expr_count = 0
@@ -285,7 +285,7 @@ class FclpyREPL:
             string_io = io.StringIO(text)
             stream = lispreader.LispStream(string_io)
             readtable = get_current_readtable()
-            reader = lispreader.LispReader(readtable.get_macro_character, stream)
+            reader = lispreader.LispReader(readtable, stream)
             return reader.read_1()
         except Exception as e:
             raise Exception(f"Parse error: {e}")

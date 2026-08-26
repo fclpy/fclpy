@@ -201,17 +201,34 @@ def defclass(name, direct_superclasses=None, slots=None, **options):
     default_initargs_raw = options.get('default_initargs', None) or []
     default_initargs = [(key, form, definition_env) for (key, form) in default_initargs_raw]
 
-    # Create the class directly (don't use classes.defclass since we've already parsed)
-    lisp_class = classes.make_class(
-        name=name,
-        direct_superclasses=parsed_superclasses,
-        direct_slots=slot_defs,
-        documentation=documentation,
-        direct_default_initargs=default_initargs
-    )
+    # If this name is currently a *forward-referenced* class -- some earlier
+    # DEFCLASS named it as a superclass before it existed -- fill that same
+    # object in rather than building a new one. Its identity is load-bearing:
+    # the subclass already holds a reference to it, and DEFCLASS must return
+    # the object `(find-class name)` answers (CLHS 4.3.7; see
+    # `classes.define_forward_referenced_class`).
+    existing = classes.find_class(
+        name.name if isinstance(name, lisptype.LispSymbol) else str(name))
+    if existing is not None and existing.forward_referenced:
+        lisp_class = classes.define_forward_referenced_class(
+            existing,
+            direct_superclasses=parsed_superclasses,
+            direct_slots=slot_defs,
+            documentation=documentation,
+            direct_default_initargs=default_initargs,
+        )
+    else:
+        # Create the class directly (don't use classes.defclass since we've already parsed)
+        lisp_class = classes.make_class(
+            name=name,
+            direct_superclasses=parsed_superclasses,
+            direct_slots=slot_defs,
+            documentation=documentation,
+            direct_default_initargs=default_initargs
+        )
 
-    # Register it and return the created class object
-    lisp_class = classes.register_class(lisp_class)
+        # Register it and return the created class object
+        lisp_class = classes.register_class(lisp_class)
 
     _define_slot_accessors(lisp_class, slot_defs, definition_env)
 

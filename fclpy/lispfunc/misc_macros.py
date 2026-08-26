@@ -1557,9 +1557,79 @@ def make_load_form(object, environment=None):
 
 
 @_registry.cl_function('MAKE-LOAD-FORM-SAVING-SLOTS')
-def make_load_form_saving_slots(object, slot_names=None):
-    """Make load form saving slots."""
-    return object
+def make_load_form_saving_slots(object, *, slot_names=lisptype.OMITTED):
+    """MAKE-LOAD-FORM-SAVING-SLOTS (CLHS 3.2.4.4): the two forms that rebuild
+    `object` -- a *creation form* and an *initialization form*.
+
+    Was a stub returning the object itself, i.e. one value and the wrong one.
+    The contract the suite exercises is a round trip:
+
+        (let* ((forms (multiple-value-list (make-load-form-saving-slots obj))))
+          (let ((new (eval (first forms))))
+            (eval (subst new obj (second forms)))
+            ...))
+
+    which fixes three things about the forms. The creation form must make an
+    instance of the same class with **no slots filled in** -- ALLOCATE-INSTANCE,
+    not MAKE-INSTANCE, because MAKE-INSTANCE would run initforms and
+    `make-load-form-saving-slots.3` checks that slots unbound in the original
+    are still unbound in the copy. The initialization form must mention
+    `object` *itself* so that the caller's SUBST can swap in the new instance
+    -- so the object goes into the form as a literal, not as a quoted copy.
+    And each saved value is wrapped in QUOTE, because the form is EVALuated
+    and a value like a list or a symbol would otherwise be re-evaluated as
+    code.
+
+    `slot-names` defaults to every slot the object has; only *bound* slots are
+    written either way. It is a `&key` argument, spelled keyword-only so
+    `(make-load-form-saving-slots obj :slot-names '(a b))` cannot be mistaken
+    for a second positional (CLAUDE.md's builtin-lambda-list rule).
+    """
+    import fclpy.classes as classes
+    from .core import _null_internal
+    from .sequence_protocol import list_elements
+
+    if not isinstance(object, classes.LispInstance):
+        raise lisptype.LispTypeError(
+            f"MAKE-LOAD-FORM-SAVING-SLOTS: not an object with slots: {object!r}",
+            expected_type="STANDARD-OBJECT", actual_value=object)
+
+    cls = object.lisp_class
+
+    def _list(*items):
+        result = lisptype.NIL
+        for item in reversed(items):
+            result = lisptype.lispCons(item, result)
+        return result
+
+    def _quote(value):
+        return _list(lisptype.LispSymbol('QUOTE'), value)
+
+    # Which slots to save. An omitted or NIL `slot-names` means all of them.
+    if slot_names is lisptype.OMITTED or _null_internal(slot_names):
+        wanted = list(cls.get_all_slots().keys())
+    else:
+        wanted = [name.name if isinstance(name, lisptype.LispSymbol) else str(name)
+                  for name in list_elements(slot_names,
+                                            what='MAKE-LOAD-FORM-SAVING-SLOTS')]
+
+    creation_form = _list(
+        lisptype.LispSymbol('ALLOCATE-INSTANCE'),
+        _list(lisptype.LispSymbol('FIND-CLASS'), _quote(cls.name)))
+
+    setters = []
+    for slot in wanted:
+        if slot not in object.slot_values:
+            # Unbound in the original stays unbound in the copy.
+            continue
+        setters.append(_list(
+            lisptype.LispSymbol('SETF'),
+            _list(lisptype.LispSymbol('SLOT-VALUE'), object,
+                  _quote(lisptype.LispSymbol(slot))),
+            _quote(object.slot_values[slot])))
+    init_form = _list(lisptype.LispSymbol('PROGN'), *setters)
+
+    return lisptype.MultipleValues(creation_form, init_form)
 
 
 

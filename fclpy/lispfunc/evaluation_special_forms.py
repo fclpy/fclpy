@@ -461,6 +461,64 @@ def _strip_keywords(forms):
     return positional
 
 
+@_registry.cl_macro('PRINT-UNREADABLE-OBJECT',
+                    documentation='PRINT-UNREADABLE-OBJECT macro expander (CLHS 22.4)')
+def print_unreadable_object_macro(spec, *body):
+    """Macro expander for PRINT-UNREADABLE-OBJECT (CLHS 22.4).
+
+    Transforms
+
+        (PRINT-UNREADABLE-OBJECT (object stream :type t :identity t) body...)
+
+    into
+
+        (LET ((#:o object) (#:s stream))
+          (%PRINT-UNREADABLE-PREFIX #:o #:s t)
+          body...
+          (%PRINT-UNREADABLE-SUFFIX #:o #:s t)
+          NIL)
+
+    It has to be a macro -- `(x s :type t)` is *syntax*, so a `cl_function`
+    would evaluate it as a call -- and the two runtime halves live in
+    `io_write.py` because the `#<...>` layout is printer behaviour, not
+    macrology. `object` and `stream` are bound once, so a side-effecting
+    stream form is not evaluated twice (the prefix and suffix both need it);
+    the body is spliced *unchanged* and writes to whatever stream variable it
+    already has in scope, which is what CLHS specifies.
+
+    The value is always NIL, and exactly one value -- every test here checks
+    `(multiple-value-list ...)` is `(NIL)`, so a body ending in
+    `(values 1 2 3)` or `(values)` must not leak through.
+    """
+    obj_form, rest = _binding_parts(spec)
+    stream_form = rest[0] if rest else lisptype.NIL
+
+    # `:type` / `:identity`, in either order; anything else is left alone.
+    type_form = lisptype.NIL
+    identity_form = lisptype.NIL
+    tail = rest[1:]
+    for i, item in enumerate(tail):
+        if isinstance(item, lisptype.lispKeyword) and i + 1 < len(tail):
+            if item.name.upper() == 'TYPE':
+                type_form = tail[i + 1]
+            elif item.name.upper() == 'IDENTITY':
+                identity_form = tail[i + 1]
+
+    obj_var = lisptype.LispSymbol('%PUO-OBJECT')
+    stream_var = lisptype.LispSymbol('%PUO-STREAM')
+    bindings = _cons_from([_cons_from([obj_var, obj_form]),
+                           _cons_from([stream_var, stream_form])])
+    prefix = _cons_from([lisptype.LispSymbol('%PRINT-UNREADABLE-PREFIX'),
+                         obj_var, stream_var, type_form])
+    suffix = _cons_from([lisptype.LispSymbol('%PRINT-UNREADABLE-SUFFIX'),
+                         obj_var, stream_var, identity_form])
+    return _cons_from(
+        [lisptype.LispSymbol('LET'), bindings, prefix]
+        + list(body)
+        + [suffix, lisptype.NIL]
+    )
+
+
 @_registry.cl_macro('WITH-OUTPUT-TO-STRING',
                     documentation='WITH-OUTPUT-TO-STRING macro expander')
 def with_output_to_string_macro(spec, *body):
@@ -2052,37 +2110,71 @@ def eval_macroexpand_1(form, env):
         # Signal a PROGRAM-ERROR for wrong argument count per ANSI CL
         raise lisptype.LispProgramError("MACROEXPAND-1 requires 1 argument")
     
-    form_to_expand_raw = car(args)
-    
-    # If the form is (QUOTE x), evaluate it to get x
-    # Otherwise, use the form as-is
-    if _consp_internal(form_to_expand_raw) and isinstance(car(form_to_expand_raw), lisptype.LispSymbol) and car(form_to_expand_raw).name == 'QUOTE':
-        form_to_expand = eval(form_to_expand_raw, env)
-    else:
-        form_to_expand = form_to_expand_raw
-    
+    # MACROEXPAND-1 is an ordinary *function* (CLHS 3.8), so both of its
+    # arguments are evaluated, exactly once, left to right -- which is what
+    # `macroexpand-1.6` measures:
+    #
+    #   (macroexpand-1 (progn (setf a (incf i)) form)
+    #                  (progn (setf b (incf i)) nil))   => i=2, a=1, b=2
+    #
+    # This used to evaluate its first argument only when it was *literally*
+    # `(QUOTE x)` and otherwise take it unevaluated, i.e. behave as a special
+    # operator. The `(quote ...)` case is the one that appears in test source,
+    # so the heuristic looked right while any other argument expression --
+    # a variable, a PROGN, a function call -- was silently treated as the form
+    # to expand rather than evaluated to produce it. Same defect as
+    # MACRO-FUNCTION's, in the neighbouring function.
+    form_to_expand = eval(car(args), env)
+
+    # The optional environment argument. NIL (and an omitted argument) both
+    # mean the null lexical environment; anything else is used as given.
+    expand_env = env
+    env_args = cdr(args)
+    if _consp_internal(env_args):
+        if _consp_internal(cdr(env_args)):
+            # `(macroexpand-1 form env extra)` -- MACROEXPAND-1 takes at most
+            # two arguments (CLHS 3.8), so a third is a PROGRAM-ERROR. As a
+            # special-operator branch this path does no arity checking of its
+            # own, so surplus arguments were simply ignored.
+            raise lisptype.LispProgramError(
+                "MACROEXPAND-1 takes at most 2 arguments")
+        supplied_env = eval(car(env_args), env)
+        if supplied_env is not None and not _null_internal(supplied_env):
+            expand_env = supplied_env
+
+    # MACROEXPAND-1 returns *two* values -- the expansion and whether an
+    # expansion happened (CLHS 3.8). It returned one, so every
+    # `(multiple-value-list (macroexpand-1 x))` was one element short and the
+    # three `check-predicate` tests here failed for every object in the
+    # universe.
+    def _unexpanded(value):
+        return lisptype.MultipleValues(value, lisptype.NIL)
+
     # Only cons cells can be macro calls
     if not _consp_internal(form_to_expand):
-        return form_to_expand
-    
+        # ... except a symbol, which may be a symbol macro. That is not
+        # handled here yet (SYMBOL-MACROLET has its own path in the
+        # evaluator); a non-cons is reported unexpanded.
+        return _unexpanded(form_to_expand)
+
     operator = car(form_to_expand)
     if not isinstance(operator, lisptype.LispSymbol):
-        return form_to_expand
-    
+        return _unexpanded(form_to_expand)
+
     # Try to find the operator function
     try:
-        macro_func = env.find_func(operator)
+        macro_func = expand_env.find_func(operator)
     except Exception:
         macro_func = None
         logger.error(f"[DEBUG] Error looking up macro function for {operator}", exc_info=True)
 
     if not macro_func or not callable(macro_func):
-        return form_to_expand
-    
+        return _unexpanded(form_to_expand)
+
     # Check if it's actually a macro
     if not getattr(macro_func, '__is_macro__', False):
-        return form_to_expand
-    
+        return _unexpanded(form_to_expand)
+
     # Call the macro with unevaluated arguments
     args_list = []
     current = cdr(form_to_expand)
@@ -2090,25 +2182,25 @@ def eval_macroexpand_1(form, env):
         args_list.append(car(current))
         current = cdr(current)
     
-    # If there's a non-nil tail, that's an error, but for now just ignore it
-    try:
-        expects_whole = getattr(macro_func, '__expects_whole__', False)
-        expects_env = getattr(macro_func, '__expects_environment__', False)
+    expects_whole = getattr(macro_func, '__expects_whole__', False)
+    expects_env = getattr(macro_func, '__expects_environment__', False)
 
-        # Build call arguments based on macro function expectations
-        call_args = []
-        if expects_whole:
-            call_args.append(form_to_expand)
-        call_args.extend(args_list)
+    # Build call arguments based on macro function expectations
+    call_args = []
+    if expects_whole:
+        call_args.append(form_to_expand)
+    call_args.extend(args_list)
 
-        # If macro expects expansion-time environment, append it as trailing arg
-        if expects_env:
-            call_args.append(env)
+    # If macro expects expansion-time environment, append it as trailing arg
+    if expects_env:
+        call_args.append(expand_env)
 
-        return macro_func(*call_args)
-    except Exception:
-        # If macro expansion fails, return form unchanged
-        return form_to_expand
+    # An error raised by the expander is the *program's* error and propagates.
+    # There used to be a blanket `except Exception: return form_to_expand`
+    # here, which reported a broken macro as "this was not a macro call" --
+    # silently swallowing the failure and handing back an unexpanded form that
+    # the caller then treated as final.
+    return lisptype.MultipleValues(macro_func(*call_args), lisptype.T)
 
 
 def eval_macro_function(form, env):
@@ -4557,13 +4649,14 @@ def eval_defclass(form, env):
         while _consp_internal(current):
             sc = car(current)
             if isinstance(sc, lisptype.LispSymbol):
-                # Try to look up the class
-                sc_class = fclpy.classes.find_class(sc.name)
-                if sc_class is not None:
-                    superclasses_list.append(sc_class)
-                else:
-                    # If not found as a class, treat as forward reference
-                    superclasses_list.append(sc)
+                # CLHS 4.3.7: a superclass that is not defined yet is legal --
+                # it becomes a *forward-referenced class*, a real registered
+                # class object standing in for the name until some later
+                # DEFCLASS fills it in. This used to append the bare symbol,
+                # so `direct_superclasses` was part class objects and part
+                # symbols and nothing ever resolved the difference.
+                superclasses_list.append(
+                    fclpy.classes.ensure_forward_referenced_class(sc))
             else:
                 superclasses_list.append(sc)
             current = cdr(current)
