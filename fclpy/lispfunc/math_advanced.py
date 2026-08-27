@@ -60,10 +60,79 @@ def sqrt(x):
     """Square root function."""
     return _irrational(math.sqrt, cmath.sqrt, x)
 
+def _check_float_overflow(result, base):
+    """Check if result overflows/underflows for base's float type.
+    
+    CLHS 12.1.4.1: EXPT must signal FLOATING-POINT-OVERFLOW or 
+    FLOATING-UNDERFLOW when the mathematical result is too large or too small
+    for the float type of the base.
+    
+    All CL float subtypes (short, single, double, long) share Python's float,
+    but they have different ranges. Since fclpy doesn't preserve float subtype
+    info at runtime, we check against all ranges.
+    
+    Ranges (approximately):
+    - short/single: max ~3.4028235e+38, min ~1.4e-45
+    - double/long: max ~1.7976931348623157e+308, min ~5e-324
+    """
+    import math
+    from fclpy.lispfunc.evaluation_conditions import signal_condition
+    
+    # Short/single float range
+    short_max = 3.4028235e+38
+    short_min = 1.4e-45
+    
+    # Double/long float range (Python's full range)
+    double_max = sys.float_info.max
+    double_min = sys.float_info.min
+    
+    # Check for overflow (result larger than ANY type's max)
+    if abs(result) > double_max:
+        signal_condition(lisptype.FloatingPointOverflow(
+            f"EXPT: result overflows the range of the float type"))
+        return
+    
+    if abs(result) > short_max:
+        signal_condition(lisptype.FloatingPointOverflow(
+            f"EXPT: result overflows the range of the float type"))
+        return
+    
+    # Check for underflow (result smaller than ANY type's min, but not zero)
+    if result != 0.0:
+        if abs(result) < double_min or abs(result) < short_min:
+            signal_condition(lisptype.FloatingPointUnderflow(
+                f"EXPT: result underflows the range of the float type"))
+            return
+
+
 @_registry.cl_function('EXPT')
 def expt(base, power):
     """Raise base to power."""
-    return base ** power
+    try:
+        result = base ** power
+    except OverflowError:
+        # Python raised overflow before we could get a result
+        # Signal overflow based on base's type
+        _signal_float_overflow(base)
+        return
+    _check_float_overflow(result, base)
+    return result
+
+
+def _signal_float_overflow(base):
+    """Signal FLOATING-POINT-OVERFLOW for EXPT based on base's float type."""
+    from fclpy.lispfunc.evaluation_conditions import signal_condition
+    
+    if isinstance(base, float):
+        if abs(base) > 3.4028235e+38:
+            # This is a double/long float
+            pass  # Python already overflowed for this
+        else:
+            # This is a short/single float - overflowed at ~3.4e+38 range
+            pass
+    
+    signal_condition(lisptype.FloatingPointOverflow(
+        f"EXPT: result overflows the range of the float type"))
 
 @_registry.cl_function('ISQRT')
 def isqrt(x):

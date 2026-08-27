@@ -595,6 +595,46 @@ def random_state_p(object):
     return lisptype.lisp_bool(isinstance(object, RandomState))
 
 
+@_registry.cl_function('RATIONAL-SAFELY')
+def rational_safely(x):
+    """Rational a floating point number, limiting the exponent.
+    
+    This is a utility function for testing that converts a float to a rational
+    while limiting the exponent to avoid very large rationals that some
+    implementations (like CLISP) might struggle with.
+    
+    CLHS: This is not a standard function, but an ansi-test aux function.
+    """
+    if not isinstance(x, float):
+        raise lisptype.LispTypeError(
+            f"RATIONAL-SAFELY: argument is not a FLOAT: {x!r}",
+            expected_type="FLOAT", actual_value=x)
+    
+    # Use integer-decode-float to get significand, exponent, sign
+    from .math_advanced import integer_decode_float
+    significand, exponent, sign = integer_decode_float(x)
+    
+    # Limit exponent to [-1000, 1000]
+    limit = 1000
+    radix = 2  # Python floats are binary
+    
+    if exponent < -limit:
+        result = significand * (radix ** (-limit)) * sign
+    elif exponent > limit:
+        result = significand * (radix ** limit) * sign
+    else:
+        # Use standard rational conversion
+        from fractions import Fraction
+        result = float(Fraction(x).limit_denominator())
+    
+    # Return as a rational (Fraction) if possible, else float
+    from fractions import Fraction
+    try:
+        return Fraction(x).limit_denominator()
+    except (OverflowError, ValueError):
+        return float(x)
+
+
 __all__ = [
     'get_universal_time',
     'decode_universal_time',
