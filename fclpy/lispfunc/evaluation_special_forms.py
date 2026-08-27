@@ -5270,6 +5270,13 @@ def eval_defgeneric(form, env):
             raise lisptype.LispProgramError(
                 f"DEFGENERIC {func_name.name}: unknown option {car(option)}")
 
+    # CLHS 7.7.1: error if the name is fbound to something that is not a
+    # generic function.
+    existing = env.find_func(func_name)
+    if existing is not None and not isinstance(existing, classes.GenericFunction):
+        raise lisptype.LispProgramError(
+            f"DEFGENERIC: {func_name} already names a non-generic function")
+
     gf = classes.ensure_generic_function(func_name, documentation=documentation, lambda_list=lambda_list)
     gf.method_combination = method_combination
 
