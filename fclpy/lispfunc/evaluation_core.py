@@ -670,7 +670,24 @@ def parse_lambda_list(lambda_list):
     }
 
 
-def bind_destructuring_pattern(pattern, value, env):
+def _bind_leaf(symbol, value, env, frame):
+    """Establish one destructuring-pattern leaf's binding.
+
+    Routed through `frame.bind()` when a `BindingFrame` is supplied, so a
+    parameter (or supplied-p variable) the enclosing form's body declares
+    SPECIAL binds dynamically instead of always binding lexically in `env` --
+    the same distinction `make_ordinary_function` already makes for ordinary
+    lambda lists (CLHS 3.3.4/11.1.2.1.2). `frame` is None for every caller
+    that does not care (DESTRUCTURING-BIND et al.), which keeps them at their
+    previous, purely-lexical behaviour.
+    """
+    if frame is not None:
+        frame.bind(symbol, value)
+    else:
+        env.add_variable(symbol, value)
+
+
+def bind_destructuring_pattern(pattern, value, env, frame=None):
     """Bind a Common Lisp *destructuring lambda list* pattern against a value.
 
     CLHS 3.4.4/3.4.5: a destructuring pattern is a symbol (bound directly to
@@ -685,9 +702,11 @@ def bind_destructuring_pattern(pattern, value, env):
     Shared by DEFMACRO/MACROLET's parameter binding and DESTRUCTURING-BIND,
     which destructure the same grammar (CLHS 3.4.4) into two different
     environments -- callers pass whichever `env` the bindings belong in.
+    `frame`, when given, is where every leaf binding actually goes (see
+    `_bind_leaf`); it is optional and defaults to plain lexical binding.
     """
     if isinstance(pattern, lisptype.LispSymbol) and pattern.name.upper() != 'NIL':
-        env.add_variable(pattern, value if value is not None else lisptype.NIL)
+        _bind_leaf(pattern, value if value is not None else lisptype.NIL, env, frame)
         return
     if not _consp_internal(pattern):
         return
@@ -696,7 +715,7 @@ def bind_destructuring_pattern(pattern, value, env):
 
     whole = parsed.get('whole')
     if whole is not None:
-        bind_destructuring_pattern(whole, value, env)
+        bind_destructuring_pattern(whole, value, env, frame)
 
     cur = value
     for p in parsed.get('required', []):
@@ -705,7 +724,7 @@ def bind_destructuring_pattern(pattern, value, env):
             cur = cdr(cur)
         else:
             v = lisptype.NIL
-        bind_destructuring_pattern(p, v, env)
+        bind_destructuring_pattern(p, v, env, frame)
 
     for opt in parsed.get('optional', []):
         if isinstance(opt, lisptype.LispSymbol):
@@ -722,18 +741,18 @@ def bind_destructuring_pattern(pattern, value, env):
         if _consp_internal(cur):
             v = car(cur)
             cur = cdr(cur)
-            bind_destructuring_pattern(name, v, env)
+            bind_destructuring_pattern(name, v, env, frame)
             if supplied_p is not None:
-                env.add_variable(supplied_p, lisptype.T)
+                _bind_leaf(supplied_p, lisptype.T, env, frame)
         else:
             default_value = eval(default_form, env) if default_form is not None else lisptype.NIL
-            bind_destructuring_pattern(name, default_value, env)
+            bind_destructuring_pattern(name, default_value, env, frame)
             if supplied_p is not None:
-                env.add_variable(supplied_p, lisptype.NIL)
+                _bind_leaf(supplied_p, lisptype.NIL, env, frame)
 
     rest_param = parsed.get('rest')
     if rest_param is not None:
-        bind_destructuring_pattern(rest_param, cur, env)
+        bind_destructuring_pattern(rest_param, cur, env, frame)
 
     for kw in parsed.get('keyword', []):
         if _consp_internal(kw):
@@ -765,27 +784,102 @@ def bind_destructuring_pattern(pattern, value, env):
             rest_k = cdr(tmpk)
             v = car(rest_k) if _consp_internal(rest_k) else lisptype.NIL
             if isinstance(k, lisptype.lispKeyword) and k.name.upper() == kw_name:
-                bind_destructuring_pattern(var_pattern, v, env)
+                bind_destructuring_pattern(var_pattern, v, env, frame)
                 if supplied_p is not None:
-                    env.add_variable(supplied_p, lisptype.T)
+                    _bind_leaf(supplied_p, lisptype.T, env, frame)
                 found = True
                 break
             tmpk = cdr(rest_k) if _consp_internal(rest_k) else lisptype.NIL
         if not found:
             default_value = eval(default_form, env) if default_form is not None else lisptype.NIL
-            bind_destructuring_pattern(var_pattern, default_value, env)
+            bind_destructuring_pattern(var_pattern, default_value, env, frame)
             if supplied_p is not None:
-                env.add_variable(supplied_p, lisptype.NIL)
+                _bind_leaf(supplied_p, lisptype.NIL, env, frame)
 
     for aux in parsed.get('aux', []):
         if isinstance(aux, lisptype.LispSymbol):
-            env.add_variable(aux, lisptype.NIL)
+            _bind_leaf(aux, lisptype.NIL, env, frame)
         elif _consp_internal(aux):
             aux_name = car(aux)
             rest_spec = cdr(aux)
             init_form = car(rest_spec) if _consp_internal(rest_spec) else None
             init_value = eval(init_form, env) if init_form is not None else lisptype.NIL
-            bind_destructuring_pattern(aux_name, init_value, env)
+            bind_destructuring_pattern(aux_name, init_value, env, frame)
+
+
+def destructuring_pattern_variables(pattern):
+    """Every variable name a destructuring lambda list pattern binds, without
+    evaluating anything -- the value-independent twin of the walk
+    `bind_destructuring_pattern` performs.
+
+    Needed so a `BindingFrame` can tell a *bound* SPECIAL declaration (naming
+    one of this pattern's own parameters) from a *free* one (CLHS 3.3.4): a
+    symbol that only appears inside a default-form expression is not a
+    parameter of this lambda list and must not be counted as one, which is
+    exactly what `binding._flatten_vars`, used generically elsewhere, cannot
+    tell apart -- it would walk into a default-form's cons structure too.
+    """
+    variables = []
+
+    def add(x):
+        if isinstance(x, lisptype.LispSymbol) and x.name.upper() != 'NIL':
+            variables.append(x)
+
+    def walk(pat):
+        if isinstance(pat, lisptype.LispSymbol):
+            add(pat)
+            return
+        if not _consp_internal(pat):
+            return
+        parsed = parse_lambda_list(pat)
+
+        whole = parsed.get('whole')
+        if whole is not None:
+            walk(whole)
+
+        for p in parsed.get('required', []):
+            walk(p)
+
+        for opt in parsed.get('optional', []):
+            if _consp_internal(opt):
+                walk(car(opt))
+                rest_spec = cdr(opt)
+                rest_spec2 = cdr(rest_spec) if _consp_internal(rest_spec) else None
+                if _consp_internal(rest_spec2):
+                    add(car(rest_spec2))
+            else:
+                walk(opt)
+
+        rest_param = parsed.get('rest')
+        if rest_param is not None:
+            walk(rest_param)
+
+        for kw in parsed.get('keyword', []):
+            if _consp_internal(kw):
+                key_name_spec = car(kw)
+                if _consp_internal(key_name_spec):
+                    tail = cdr(key_name_spec)
+                    var_pattern = car(tail) if _consp_internal(tail) else None
+                    if var_pattern is not None:
+                        walk(var_pattern)
+                else:
+                    walk(key_name_spec)
+                rest_spec = cdr(kw)
+                rest_spec2 = cdr(rest_spec) if _consp_internal(rest_spec) else None
+                if _consp_internal(rest_spec2):
+                    add(car(rest_spec2))
+            else:
+                walk(kw)
+
+        for aux in parsed.get('aux', []):
+            walk(car(aux) if _consp_internal(aux) else aux)
+
+        environment = parsed.get('environment')
+        if environment is not None:
+            walk(environment)
+
+    walk(pattern)
+    return variables
 
 
 @_registry.cl_function('EVAL')
@@ -1731,10 +1825,10 @@ def eval(form, env=None):
                 
                 bindings_form = car(args)
                 body_forms = cdr(args)
-                
+
                 # Create a new child environment for the macrolet scope
                 new_env = lisptype.Environment(parent=env)
-                
+
                 # Process macro bindings: ((name lambda-list . body) ...)
                 if _consp_internal(bindings_form):
                     binding_list = bindings_form
@@ -1746,7 +1840,20 @@ def eval(form, env=None):
                             if _consp_internal(rest):
                                 lambda_list = car(rest)
                                 macro_body = cdr(rest)
-                                
+
+                                # NIL is a symbol wherever CLHS allows a macro
+                                # name (MACROLET.15: `(macrolet ((nil () ...))
+                                # (nil))`), but the reader hands back the
+                                # `lispNull` singleton for a bare NIL token,
+                                # not a `LispSymbol` -- `function_name_parts`
+                                # makes the same substitution for DEFUN/FLET/
+                                # LABELS, and function lookup is by symbol
+                                # *name* (Environment.find_func), so a freshly
+                                # built symbol here is found by anything that
+                                # later looks up the name "NIL".
+                                if macro_name is lisptype.NIL:
+                                    macro_name = lisptype.LispSymbol('NIL')
+
                                 if isinstance(macro_name, lisptype.LispSymbol):
                                     # Create a macro function from the lambda-list and body
                                     # Similar to DEFMACRO but local to this environment
@@ -1754,16 +1861,27 @@ def eval(form, env=None):
                                     macro_func = _create_macro_function(macro_name, lambda_list, macro_body, new_env)
                                     new_env.add_function(macro_name, macro_func)
                         binding_list = cdr(binding_list)
-                
-                # Evaluate body forms in the new environment with local macros active
-                result = lisptype.NIL
-                body = body_forms
-                while _consp_internal(body):
-                    form_in_body = car(body)
-                    result = eval(form_in_body, new_env)
-                    body = cdr(body)
-                
-                return result
+
+                # A declaration at the head of MACROLET's own body is free --
+                # MACROLET binds no variables of its own -- so `(declare
+                # (special x))` here redirects references to `x` inside this
+                # body to the dynamic value cell for the body's extent
+                # (CLHS 3.3.4; MACROLET.47), the same mechanism a binding
+                # form's own free declarations use.
+                from .binding import BindingFrame
+                frame = BindingFrame(new_env, body=body_forms)
+                try:
+                    # Evaluate body forms in the new environment with local macros active
+                    result = lisptype.NIL
+                    body = body_forms
+                    while _consp_internal(body):
+                        form_in_body = car(body)
+                        result = eval(form_in_body, new_env)
+                        body = cdr(body)
+
+                    return result
+                finally:
+                    frame.unwind()
             elif operator.name == 'DEFSETF':
                 # DEFSETF has two forms:
                 # Short form: (DEFSETF access-fn update-fn [documentation])
@@ -2192,10 +2310,20 @@ def eval(form, env=None):
                         _pkg_import(syms, pkg)
 
                 return pkg
-        
+
+        # A function/macro NAME position accepts NIL: it is a symbol there
+        # (CLHS 3.1.2.1.2.2) like any other, even though the reader hands
+        # back the `lispNull` singleton for a bare NIL token rather than a
+        # `LispSymbol` in most other contexts. `find_func` looks up by
+        # symbol *name*, not identity, so a freshly built stand-in is found
+        # by whatever bound it under that name -- the same substitution
+        # `function_name_parts`/MACROLET's own binding already make
+        # (MACROLET.15: `(macrolet ((nil () ...)) (nil))`).
+        lookup_operator = lisptype.LispSymbol('NIL') if operator is lisptype.NIL else operator
+
         # Macro handling: if operator names a macro function, expand first
-        if isinstance(operator, lisptype.LispSymbol):
-            func_binding = env.find_func(operator)
+        if isinstance(lookup_operator, lisptype.LispSymbol):
+            func_binding = env.find_func(lookup_operator)
             func_binding = lisptype.primary_value(func_binding)
             if callable(func_binding) and getattr(func_binding, '__is_macro__', False):
                 # Gather raw args (without evaluating)
@@ -2241,32 +2369,32 @@ def eval(form, env=None):
 
         # Regular function call
         # In Common Lisp, function position uses the FUNCTION namespace, not variable namespace
-        if isinstance(operator, lisptype.LispSymbol):
+        if isinstance(lookup_operator, lisptype.LispSymbol):
             # Look up in function namespace directly
-            func = env.find_func(operator)
+            func = env.find_func(lookup_operator)
             if func is None:
                 # Try registry fallback
                 try:
-                    py_name = _registry.get_function_py_name(operator.name)
+                    py_name = _registry.get_function_py_name(lookup_operator.name)
                     if py_name:
                         # Ensure environment is populated
                         try:
                             lispenv.setup_standard_environment()
                         except Exception:
                             pass
-                        
+
                         # Try environment lookup again
-                        func = env.find_func(operator)
-                        
-                        # If still not found and we're in a child environment, 
+                        func = env.find_func(lookup_operator)
+
+                        # If still not found and we're in a child environment,
                         # check the parent/global environment
                         if func is None:
                             global_env = env
                             while global_env.parent is not None:
                                 global_env = global_env.parent
                             if global_env is not env:
-                                func = global_env.find_func(operator)
-                        
+                                func = global_env.find_func(lookup_operator)
+
                         # If STILL not found, try to get it from lispfunc directly
                         if func is None:
                             fn = getattr(lispfunc, py_name, None)
@@ -2290,24 +2418,24 @@ def eval(form, env=None):
                                     pass
                             if fn:
                                 # Add to both current and global environment
-                                env.add_function(operator, fn)
+                                env.add_function(lookup_operator, fn)
                                 func = fn
                 except Exception:
                     pass
         else:
             # For non-symbol operators (e.g., lambda forms), evaluate to get function
             func = eval(operator, env)
-        
+
         # Multiple values in a single-value context reduce to the primary one.
         func = lisptype.primary_value(func)
-        
+
         # Verify we have a callable function before proceeding
         if func is None or not callable(func):
             # When func is None, it means the symbol has no function binding
-            if isinstance(operator, lisptype.LispSymbol):
+            if isinstance(lookup_operator, lisptype.LispSymbol):
                 # Signal an UNDEFINED-FUNCTION condition so Lisp handlers can match it
                 # Per ANSI spec, cell-error-name should return the actual symbol, not just its name string
-                cond = lisptype.UndefinedFunction(name=operator, message=f"Undefined function {operator.name if hasattr(operator, 'name') else str(operator)} in package {getattr(operator, 'package', None)}")
+                cond = lisptype.UndefinedFunction(name=lookup_operator, message=f"Undefined function {lookup_operator.name if hasattr(lookup_operator, 'name') else str(lookup_operator)} in package {getattr(lookup_operator, 'package', None)}")
                 raise ConditionException(cond, recoverable=False)
             raise lisptype.LispError(f"Not a function: {operator}")
         

@@ -1801,7 +1801,9 @@ def _create_macro_function(macro_name, lambda_list, body, env,
     Returns:
         A callable with __is_macro__ = True
     """
-    from .evaluation_core import eval, parse_lambda_list, bind_destructuring_pattern
+    from .evaluation_core import (eval, parse_lambda_list, bind_destructuring_pattern,
+                                   destructuring_pattern_variables)
+    from .binding import BindingFrame
 
     if unsupplied_default is None:
         unsupplied_default = lisptype.NIL
@@ -1817,17 +1819,36 @@ def _create_macro_function(macro_name, lambda_list, body, env,
 
     # Parse lambda list to handle &optional, &rest, &key, &whole, &environment etc.
     parsed_params = parse_lambda_list(lambda_list)
-    
+
     required_params = parsed_params.get('required', [])
     optional_params = parsed_params.get('optional', [])
     rest_param = parsed_params.get('rest', None)
     keyword_params = parsed_params.get('keyword', [])
     environment_param = parsed_params.get('environment', None)
 
+    # Every variable this lambda list binds -- what BindingFrame needs to
+    # tell a *bound* SPECIAL declaration (naming one of this macro's own
+    # parameters, which changes where that parameter is bound: CLHS 3.3.4)
+    # from a *free* one (which only redirects references in the body).
+    pattern_vars = destructuring_pattern_variables(lambda_list)
+
     # Create the macro callable
     def macro_callable(*call_args):
         # Create a new environment extending the definition environment
         macro_env = lisptype.Environment(parent=env)
+
+        # A macro function's parameters bind through a BindingFrame, exactly
+        # like an ordinary lambda list (make_ordinary_function): a parameter
+        # the body declares SPECIAL must bind the symbol's value cell for the
+        # macroexpansion call's extent, not always lexically in macro_env.
+        # MACROLET.44/.45 are this: a macro parameter shares a name with a
+        # variable the *caller's* environment declares special, and a closure
+        # captured there must see the macro's dynamic binding when invoked
+        # from inside the macro's own body via CALL-NEXT-METHOD-style FUNCALL.
+        # `defer_free_declarations=True` mirrors CLHS 3.3.4: a free
+        # declaration governs the body, not a parameter's own default-form.
+        frame = BindingFrame(macro_env, body=actual_body, bound_vars=pattern_vars,
+                              defer_free_declarations=True)
 
         # Detect optional trailing expansion-time Environment argument.
         # The macroexpander may invoke the macro callable with the
@@ -1849,20 +1870,20 @@ def _create_macro_function(macro_name, lambda_list, body, env,
         if whole_param is not None:
             if len(call_args) > 0:
                 whole_form = call_args[0]
-                bind_destructuring_pattern(whole_param, whole_form, macro_env)
+                bind_destructuring_pattern(whole_param, whole_form, macro_env, frame)
                 arg_idx = 1
             else:
                 # No whole form provided; bind to NIL
-                bind_destructuring_pattern(whole_param, lisptype.NIL, macro_env)
+                bind_destructuring_pattern(whole_param, lisptype.NIL, macro_env, frame)
                 arg_idx = 1
-        
+
         # Bind &ENVIRONMENT to the expansion-time environment if provided
         # The macro callable may be invoked with an extra trailing Environment
         # argument by the macroexpander. If so, prefer that; otherwise fall
         # back to the environment captured at definition time.
         if environment_param is not None:
-            macro_env.add_variable(environment_param, expansion_env)
-        
+            frame.bind(environment_param, expansion_env)
+
         # Bind required parameters. A required parameter spec may be a plain
         # symbol or an arbitrary nested destructuring pattern (CLHS 3.4.4,
         # e.g. `(arg1 (&whole w arg2))` or `(&rest vars)`); either shape is
@@ -1871,13 +1892,13 @@ def _create_macro_function(macro_name, lambda_list, body, env,
         # nested.
         for param in required_params:
             val = call_args[arg_idx] if arg_idx < len(call_args) else lisptype.NIL
-            bind_destructuring_pattern(param, val, macro_env)
+            bind_destructuring_pattern(param, val, macro_env, frame)
             arg_idx += 1
 
         # A destructuring-pattern parameter name (in &OPTIONAL/&KEY position)
         # is bound the same way a required one is.
         def _bind_pattern(pat, val):
-            bind_destructuring_pattern(pat, val, macro_env)
+            bind_destructuring_pattern(pat, val, macro_env, frame)
 
         def _kw_parts(param):
             """Split a &key parameter name into (keyword-name, var-pattern).
@@ -1916,11 +1937,11 @@ def _create_macro_function(macro_name, lambda_list, body, env,
             if arg_idx < len(call_args):
                 val = call_args[arg_idx]
                 if isinstance(opt_name, lisptype.LispSymbol):
-                    macro_env.add_variable(opt_name, val)
+                    frame.bind(opt_name, val)
                 else:
                     _bind_pattern(opt_name, val)
                 if supplied_p is not None:
-                    macro_env.add_variable(supplied_p, lisptype.T)
+                    frame.bind(supplied_p, lisptype.T)
                 arg_idx += 1
             else:
                 if opt_default is not None:
@@ -1929,12 +1950,12 @@ def _create_macro_function(macro_name, lambda_list, body, env,
                     default_value = unsupplied_default
 
                 if isinstance(opt_name, lisptype.LispSymbol):
-                    macro_env.add_variable(opt_name, default_value)
+                    frame.bind(opt_name, default_value)
                 else:
                     _bind_pattern(opt_name, default_value)
 
                 if supplied_p is not None:
-                    macro_env.add_variable(supplied_p, lisptype.NIL)
+                    frame.bind(supplied_p, lisptype.NIL)
 
         # Bind &rest parameter (which may be a plain symbol or a destructuring pattern)
         if rest_param:
@@ -1948,11 +1969,11 @@ def _create_macro_function(macro_name, lambda_list, body, env,
 
             if isinstance(rest_param, lisptype.LispSymbol):
                 # Simple case: &REST var binds var to the list of remaining args
-                macro_env.add_variable(rest_param, rest_list)
+                frame.bind(rest_param, rest_list)
             else:
                 # Destructuring case: &REST (pattern) destructures remaining args
                 # This handles &REST (X Y Z) to bind X, Y, Z to individual elements
-                bind_destructuring_pattern(rest_param, rest_list, macro_env)
+                bind_destructuring_pattern(rest_param, rest_list, macro_env, frame)
         
         # Bind &key parameters (CLHS 3.4.1.1): an init-form is evaluated, in
         # left-to-right lambda-list order, in an environment where every
@@ -2003,7 +2024,7 @@ def _create_macro_function(macro_name, lambda_list, body, env,
             if kw_name in supplied:
                 _bind_pattern(var_pattern, supplied[kw_name])
                 if supplied_p is not None:
-                    macro_env.add_variable(supplied_p, lisptype.T)
+                    frame.bind(supplied_p, lisptype.T)
             else:
                 if default_form is not None:
                     default_value = eval(default_form, macro_env)
@@ -2011,17 +2032,22 @@ def _create_macro_function(macro_name, lambda_list, body, env,
                     default_value = unsupplied_default
                 _bind_pattern(var_pattern, default_value)
                 if supplied_p is not None:
-                    macro_env.add_variable(supplied_p, lisptype.NIL)
+                    frame.bind(supplied_p, lisptype.NIL)
 
-        # If no body, return NIL
-        if not _consp_internal(actual_body):
-            return lisptype.NIL
+        try:
+            frame.install_free_declarations()
 
-        # Evaluate the body inside an implicit BLOCK named for the macro.
-        # This mirrors DEFUN/DEFMACRO semantics where the function/macro
-        # body is implicitly a BLOCK so RETURN-FROM can target the name.
-        block_form = lisptype.lispCons(lisptype.LispSymbol('BLOCK'), lisptype.lispCons(macro_name, actual_body))
-        return eval(block_form, macro_env)
+            # If no body, return NIL
+            if not _consp_internal(actual_body):
+                return lisptype.NIL
+
+            # Evaluate the body inside an implicit BLOCK named for the macro.
+            # This mirrors DEFUN/DEFMACRO semantics where the function/macro
+            # body is implicitly a BLOCK so RETURN-FROM can target the name.
+            block_form = lisptype.lispCons(lisptype.LispSymbol('BLOCK'), lisptype.lispCons(macro_name, actual_body))
+            return eval(block_form, macro_env)
+        finally:
+            frame.unwind()
 
     # Mark as macro
     setattr(macro_callable, '__is_macro__', True)
