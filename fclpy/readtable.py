@@ -60,6 +60,115 @@ CONSTITUENT_TRAIT_ALPHABETIC = 'alphabetic'
 # characters CLHS 2.1.4.2 gives the *invalid* constituent trait.
 INVALID_CONSTITUENTS = frozenset('\b\t\n\x0b\x0c\r \x7f')
 
+# What a token of one unescaped dot (CLHS 2.3.3) reads as. It is not an
+# object: the list reader consumes it as the dotted-pair dot, and every other
+# position -- top level, a vector element, a quoted form's tail -- must turn
+# it into a reader error (`_check_result` in `lispreader.py`, `_read_item`
+# below). It is deliberately not a Lisp object, so it cannot leak as a value;
+# an *escaped* dot reads as the ordinary symbol `|.|` and never becomes this.
+DOT_MARKER = object()
+
+# Whether the token characters that follow were escaped, shared with
+# `lispreader.read_10`'s per-character analysis. It is a module-level function
+# rather than a method on either reader so the readtable's token path and the
+# LispReader token path cannot grow second copies of the CLHS 23.1.2 rule.
+def convert_case_chars(chars, escaped, case='UPCASE'):
+    """Apply `readtable-case` to a token's characters (CLHS 23.1.2).
+
+    An escaped character is used *as is* -- "is not affected by the readtable
+    case" -- so the conversion is per-character, driven by the parallel
+    `escaped` list. `:INVERT` inverts only when every unescaped cased
+    character has the same case; a mixed-case token is left alone.
+    """
+    if case == 'PRESERVE':
+        return ''.join(chars)
+    if case == 'UPCASE':
+        return ''.join(c.upper() if not e else c
+                       for c, e in zip(chars, escaped))
+    if case == 'DOWNCASE':
+        return ''.join(c.lower() if not e else c
+                       for c, e in zip(chars, escaped))
+    unescaped = [c for c, e in zip(chars, escaped) if not e and c.isalpha()]
+    has_upper = any(c.isupper() for c in unescaped)
+    has_lower = any(c.islower() for c in unescaped)
+    if has_upper and has_lower:
+        return ''.join(chars)
+    if has_upper:
+        return ''.join(c.lower() if not e else c
+                       for c, e in zip(chars, escaped))
+    return ''.join(c.upper() if not e else c
+                   for c, e in zip(chars, escaped))
+
+
+def read_suppressed():
+    """Whether `*READ-SUPPRESS*` is true right now (CLHS 23.1.2).
+
+    `lispreader.resolve_read_suppress` is the one resolver -- this is the
+    readtable-side alias every macro-character function asks, so the macro
+    path and the token path cannot disagree about the same dynamic variable.
+    """
+    from .lispreader import resolve_read_suppress
+    return resolve_read_suppress()
+
+
+# --- The per-READ frame stack ---
+#
+# Two pieces of read state must live for the extent of one *form*, not on the
+# readtable object (the current readtable is shared by every read in the
+# process):
+#
+# * the `#n=` label table -- `#1=` inside one READ must not resolve a `#1#`
+#   inside the next (CLHS 2.4.8.5/.6);
+# * whether this READ is `READ-PRESERVING-WHITESPACE` -- CLHS 2.2 step 8
+#   says ordinary READ *consumes* the one whitespace character that
+#   terminates a token and READ-PRESERVING-WHITESPACE must not, and that
+#   applies to tokens read *inside* macro-character forms too, not only to
+#   top-level tokens. The readtable's token path consults the frame for the
+#   answer, the way it consults `*READTABLE*` itself.
+#
+# `read_1` -- the one entry point every Lisp-level read funnels through
+# (READ, READ-FROM-STRING, READ-DELIMITED-LIST, LOAD's per-form loop) --
+# pushes and pops. Direct `_read_item` calls outside any READ default to
+# ordinary READ semantics.
+_read_frames = []
+
+
+def label_frame_push(preserve_whitespace=False):
+    _read_frames.append({'labels': {}, 'preserve_ws': bool(preserve_whitespace)})
+
+
+def label_frame_pop():
+    if _read_frames:
+        _read_frames.pop()
+
+
+def current_label_frame():
+    """The innermost open label table, or None outside any READ."""
+    return _read_frames[-1]['labels'] if _read_frames else None
+
+
+def preserving_whitespace():
+    """Whether the innermost READ is READ-PRESERVING-WHITESPACE."""
+    return bool(_read_frames[-1]['preserve_ws']) if _read_frames else False
+
+
+class _LabelPlaceholder:
+    """What `#n#` yields while its `#n=` is still being read.
+
+    A unique Python object, patched out of the finished structure by identity
+    the moment `#n=` completes (`_patch_label_placeholders`), so `#1=(17
+    . #1#)` comes out an actual cycle and no placeholder survives as part of
+    the value.
+    """
+
+    __slots__ = ('label',)
+
+    def __init__(self, label):
+        self.label = label
+
+    def __repr__(self):
+        return f'#<label-{self.label}-placeholder>'
+
 
 def constituent_trait(char: str) -> str:
     """The constituent trait of `char` (CLHS 2.1.4.2).
@@ -371,8 +480,13 @@ class Readtable:
     # end-of-file)` failed for every compound form truncated mid-read.
     def _left_paren_reader(self, char, stream):
         """Read a list starting with ("""
+        from . import lisptype
         result = []
         dotted_tail = None
+        # `*READ-SUPPRESS*`: the loop still runs (it is what consumes the
+        # elements), but every token it reads answers NIL and no dot marker
+        # can appear, so the built chain is discarded at the end.
+        suppressed = read_suppressed()
 
         while True:
             # Skip whitespace
@@ -387,32 +501,44 @@ class Readtable:
                 # Put the character back and read the next item
                 stream.unread_char(c)
                 item = self._read_item(stream)
-                if item is not None:
-                    # Check if this is the dot notation for a dotted pair
-                    # The dot is a LispSymbol with name '.'
-                    from . import lisptype
-                    if isinstance(item, lisptype.LispSymbol) and item.name == '.':
-                        # Next item becomes the cdr (tail) of the list
-                        # Skip whitespace after the dot
+                if item is DOT_MARKER:
+                    # The dotted-pair dot (CLHS 2.3.3): exactly one element
+                    # must precede it (it cannot come first), exactly one
+                    # object follows it, and only the closing paren after
+                    # that. A two-dot token is rejected by the token
+                    # constructor itself, never reaching this branch.
+                    if not result:
+                        raise _reader_error(
+                            "the dot token may not appear before any element")
+                    if dotted_tail is not None:
+                        raise _reader_error(
+                            "a second dot token after the dotted tail")
+                    # Skip whitespace after the dot
+                    c = stream.read_char()
+                    while c and c.isspace():
                         c = stream.read_char()
-                        while c and c.isspace():
-                            c = stream.read_char()
-                        if c:
-                            stream.unread_char(c)
-                        # Read the tail
-                        dotted_tail = self._read_item(stream)
-                        # After the tail, we expect either whitespace and ) or just )
+                    if not c:
+                        raise _reader_error("EOF after the dot token")
+                    stream.unread_char(c)
+                    # Read the tail
+                    dotted_tail = self._read_subform(stream)
+                    # After the tail, we expect either whitespace and ) or just )
+                    c = stream.read_char()
+                    while c and c.isspace():
                         c = stream.read_char()
-                        while c and c.isspace():
-                            c = stream.read_char()
-                        if c != ')':
-                            raise _reader_error(f"Expected ) after dotted tail, got {c}")
-                        break
-                    else:
-                        result.append(item)
-        
+                    if c != ')':
+                        raise _reader_error(f"Expected ) after dotted tail, got {c}")
+                    break
+                elif item is not None:
+                    if dotted_tail is not None:
+                        raise _reader_error(
+                            "an element may not follow the dotted tail")
+                    result.append(item)
+
+        if suppressed:
+            return lisptype.NIL
+
         # Convert to Lisp cons structure
-        from . import lisptype
         if dotted_tail is not None:
             # Build list with dotted tail
             lisp_list = dotted_tail
@@ -450,7 +576,7 @@ class Readtable:
             return self._read_string_literal(stream)
         elif c == "'":
             # Read quoted expression
-            return self._read_quote(stream)
+            return self._quote_reader(c, stream)
         elif c == '`':
             # Backquote/quasiquote
             return self._backquote_reader(c, stream)
@@ -469,15 +595,38 @@ class Readtable:
         else:
             # Read symbol
             return self._read_symbol(c, stream)
+
+    def _read_subform(self, stream):
+        """`_read_item`, where the result must be an actual object.
+
+        Every construct that reads *one sub-form* -- `'`, `` ` ``, `,#`,
+        `#.`, `#S`, `#C`, `#P`, ... -- goes through here, so the dotted-pair
+        dot token (`readtable.DOT_MARKER`), which is not an object, is a
+        reader error in all of those positions (CLHS 2.3.3). The list reader
+        is the one caller that must *not* use this: it consumes the marker
+        itself.
+        """
+        item = self._read_item(stream)
+        if item is DOT_MARKER:
+            raise _reader_error(
+                "the single dot token is valid only as the dot in a dotted list")
+        return item
     
     def _read_number(self, first_char, stream):
         """Read a numeric token"""
         token = first_char
         while True:
             c = stream.read_char()
-            if not c or c.isspace() or c in '()':
-                if c:
+            if not c:
+                break
+            if c.isspace():
+                # CLHS 2.2 step 8's terminating-whitespace rule -- see
+                # `_read_token`.
+                if preserving_whitespace():
                     stream.unread_char(c)
+                break
+            if c in '()':
+                stream.unread_char(c)
                 break
             token += c
         
@@ -516,7 +665,11 @@ class Readtable:
         """Read a string literal (already consumed the opening delimiter).
 
         `terminator` is the delimiter to stop at -- see `_string_reader`.
+        Under `*READ-SUPPRESS*` the characters are still consumed to the
+        delimiter (consumption is what determines the form's extent) but no
+        string is constructed (CLHS 23.1.2).
         """
+        suppressed = read_suppressed()
         result = ""
         while True:
             c = stream.read_char()
@@ -529,6 +682,8 @@ class Readtable:
                 next_c = stream.read_char()
                 if not next_c:
                     raise EOFError("EOF after escape in string")
+                if suppressed:
+                    continue
                 if next_c == 'n':
                     result += '\n'
                 elif next_c == 't':
@@ -543,82 +698,97 @@ class Readtable:
                     result += next_c
             else:
                 result += c
+        if suppressed:
+            from . import lisptype
+            return lisptype.NIL
         from . import lisptype
         return lisptype.LispString(result)
-    
-    def _read_quote(self, stream):
-        """Read a quoted expression"""
-        expr = self._read_item(stream)
-        from . import lisptype
-        quote_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol("QUOTE")
-        return lisptype.lispCons(quote_sym, lisptype.lispCons(expr, lisptype.NIL))
-    
+
     def _read_token(self, stream, first_char=None):
         """Read a symbol-like token, honoring CLHS 2.4.5's escape characters.
 
-        A character is either a plain constituent -- case-converted per
-        `readtable-case` as it is read -- or escaped via `\\` (single escape)
-        or `|...|` (multiple escape), which CLHS 23.1.2 says is used *as is*:
-        "an escaped character ... is not affected by the readtable case".
-        Every caller here used to skip that distinction and force-upcase the
-        whole token regardless of escaping, which is why `(string= '|abc|
-        (copy-seq "abc"))` was NIL -- `|abc|`'s name became "ABC", identical
-        to plain `ABC`, instead of the case-preserved "abc" CLHS requires.
+        A character is either a plain constituent or escaped via `\\` (single
+        escape) or `|...|` (multiple escape); an escaped character is used
+        *as is*, so case conversion must not touch it (CLHS 23.1.2) and an
+        escaped colon is never a package marker.
 
-        Returns `(name, raw, consumed)`: `raw` is the token with every escape
-        stripped and an escaped colon replaced by the `\x00` placeholder
-        already used below for package-qualifier detection (an escaped
-        colon is never a separator); `name` is `raw` with `.upper()` applied
-        to only the characters that were *not* escaped -- the one thing a
-        caller must use for lookup/interning instead of `raw.upper()`.
-        `consumed` is False only when nothing at all followed -- `raw` empty
-        is not the same thing, because `||` (CLHS 2.4.5) is a *valid*,
-        explicitly-escaped empty name (`universe.lsp`'s `'#:||`), not the
-        absence of one.
+        Returns `(chars, escaped, consumed, saw_escape)`: `chars` are the
+        token's real characters -- case conversion is the *caller's* decision,
+        via `convert_case_chars`, because only it knows whether the name is
+        being interned or compared -- and `escaped` the parallel list saying
+        which were escaped. `saw_escape` is whether any escape *syntax* was
+        used at all, even the empty `||`, which contributes no characters but
+        still makes a token of dots an ordinary symbol (CLHS 2.3.3:
+        `syntax.dot-token.7`, `.||` reads as `|.|`). The `\x00` placeholder an
+        earlier version substituted for an escaped colon could not tell `\:`
+        from a literal NUL character (which `syntax.escaped.2` reads), so the
+        analysis that needs to tell them apart now runs on the flags instead
+        of a substituted string. `consumed` is False only when nothing at all
+        followed -- `chars` empty is not the same thing, because `||` (CLHS
+        2.4.5) is a *valid*, explicitly-escaped empty name (`universe.lsp`'s
+        `'#:||`), not the absence of one.
         """
-        raw_chars = []
-        exact = []
+        chars = []
+        escaped = []
+        saw_escape = False
 
-        def consume(c):
-            if c == '\\':
-                escaped = stream.read_char()
-                if escaped is None:
-                    raise Exception("reader-error: EOF after escape")
-                raw_chars.append('\x00' if escaped == ':' else escaped)
-                exact.append(True)
-            elif c == '|':
-                while True:
-                    p = stream.read_char()
-                    if p is None:
-                        raise Exception("reader-error: EOF in |...|")
-                    if p == '|':
-                        return
-                    if p == '\\':
-                        p = stream.read_char()
-                        if p is None:
-                            raise Exception(
-                                "reader-error: EOF after escape in |...|")
-                    raw_chars.append('\x00' if p == ':' else p)
-                    exact.append(True)
-            else:
-                raw_chars.append(c)
-                exact.append(False)
+        def consume(c, is_escaped):
+            chars.append(c)
+            escaped.append(is_escaped)
 
         consumed = first_char is not None
         if consumed:
-            consume(first_char)
+            saw_escape = self._consume_token_char(stream, first_char, consume)
         while True:
             c = stream.read_char()
-            if not c or c.isspace() or c in '()':
-                if c:
+            if not c:
+                break
+            if c.isspace():
+                # CLHS 2.2 step 8: ordinary READ consumes the one whitespace
+                # character that terminates the token; READ-PRESERVING-
+                # WHITESPACE leaves it for whatever reads the stream next.
+                # The distinction follows the innermost READ, through macro-
+                # character forms as much as at top level.
+                if preserving_whitespace():
                     stream.unread_char(c)
                 break
+            if c in '()':
+                stream.unread_char(c)
+                break
             consumed = True
-            consume(c)
+            if self._consume_token_char(stream, c, consume):
+                saw_escape = True
 
-        raw = ''.join(raw_chars)
-        name = ''.join(c if e else c.upper() for c, e in zip(raw_chars, exact))
-        return name, raw, consumed
+        return chars, escaped, consumed, saw_escape
+
+    def _consume_token_char(self, stream, c, consume):
+        """One token character: plain, single-escaped, or `|...|`-wrapped.
+
+        `consume(char, was_escaped)` is called once per character the token
+        keeps; the return says whether escape *syntax* was seen, which is
+        meaningful even when the escape enclosed nothing (`||`).
+        """
+        if c == '\\':
+            escaped = stream.read_char()
+            if escaped is None:
+                raise EOFError("EOF after single escape in token")
+            consume(escaped, True)
+            return True
+        if c == '|':
+            while True:
+                p = stream.read_char()
+                if p is None:
+                    raise EOFError("EOF inside multiple escape")
+                if p == '|':
+                    return True
+                if p == '\\':
+                    p = stream.read_char()
+                    if p is None:
+                        raise EOFError(
+                            "EOF after single escape inside multiple escape")
+                consume(p, True)
+        consume(c, False)
+        return False
 
     def _read_symbol(self, first_char, stream):
         """Read a symbol token with package awareness.
@@ -629,39 +799,55 @@ class Readtable:
         3. Look for exported symbol in USE'd packages
         4. If not found, intern in current package
         """
-        name, raw, _consumed = self._read_token(stream, first_char)
+        chars, escaped, _consumed, saw_escape = self._read_token(stream, first_char)
         from . import lisptype
         from . import state
 
-        # If symbol starts with a leading (unescaped) colon, it's a keyword.
-        if raw.startswith(':'):
-            return lisptype.intern_keyword(name[1:], exact_case=True)
+        # `*READ-SUPPRESS*` (CLHS 23.1.2): the token was consumed to its
+        # delimiter; intern nothing, analyse nothing.
+        if read_suppressed():
+            return lisptype.NIL
 
-        # Handle package-qualified symbols (PKG:SYM or PKG::SYM)
-        # Only treat as package-qualified if contains a real colon (not escaped placeholder \x00)
-        raw_check = raw.replace('\x00', '')
-        if ':' in raw_check and not raw.startswith(':'):
-            return self._read_package_qualified_symbol(raw)
+        # A token of unescaped dots (CLHS 2.3.3): the list reader consumes
+        # the single dot as the dotted-pair marker; anything else -- another
+        # dot in the token, or the marker outside a list -- is an error. The
+        # top-level check lives in `_read_item`, which every construct reads
+        # its sub-forms through. Any escape *syntax*, even the empty `||`,
+        # makes it an ordinary symbol instead.
+        if chars and all(c == '.' for c in chars) and not saw_escape:
+            if len(chars) == 1:
+                return DOT_MARKER
+            raise _reader_error(
+                "a token consisting only of dots is not a valid object")
+
+        # `readtable-case` applies per character, unescaped ones only; this is
+        # the string every lookup/intern below must use.
+        name = ''.join(convert_case_chars(chars, escaped, self._case))
+
+        # Package-marker analysis on the *unescaped* colons only: an escaped
+        # colon is never a separator (CLHS 2.4.5).
+        colons = [i for i, (c, e) in enumerate(zip(chars, escaped))
+                  if c == ':' and not e]
+        if colons and colons[0] == 0:
+            # A leading unescaped colon makes it a keyword.
+            return lisptype.intern_keyword(name[1:], exact_case=True)
+        if colons:
+            return self._read_package_qualified_symbol(name, colons)
 
         # The current package is the value of `*PACKAGE*`; `state`'s resolver
         # is the one place that decides (see state.current_package_value).
         current_pkg = state.current_package_value()
 
-        # Restore escaped colons; `name` already has the correct per-character
-        # case (readtable-case for plain characters, verbatim for escaped
-        # ones), so this is the string every lookup/intern below must use.
-        name_restored = name.replace('\x00', ':')
-
         # CRITICAL: In Common Lisp, NIL is both the symbol and the empty list; the
         # reader should return the canonical NIL object rather than a
         # fresh symbol. Similarly, T should return the global T symbol.
-        if name_restored == 'NIL':
+        if name == 'NIL':
             return lisptype.NIL
-        if name_restored == 'T':
+        if name == 'T':
             return lisptype.T
 
         # First check if symbol exists in current package
-        sym, status = current_pkg.find_symbol(name_restored)
+        sym, status = current_pkg.find_symbol(name)
         if sym is not None:
             return sym
 
@@ -672,44 +858,35 @@ class Readtable:
                 used_pkg = lisptype.find_package(used_pkg)
             if used_pkg is not None:
                 # Only look for external symbols in USE'd packages
-                if name_restored in getattr(used_pkg, 'external_symbols', set()):
-                    sym = used_pkg.symbols.get(name_restored)
+                if name in getattr(used_pkg, 'external_symbols', set()):
+                    sym = used_pkg.symbols.get(name)
                     if sym is not None:
                         return sym
 
-        # Not found - intern in current package. `name_restored` is already
+        # Not found - intern in current package. `name` is already
         # correctly cased per character, so this must not be re-upcased.
-        return current_pkg.intern_symbol(name_restored, exact_case=True)
-    
-    def _read_package_qualified_symbol(self, token):
+        return current_pkg.intern_symbol(name, exact_case=True)
+
+    def _read_package_qualified_symbol(self, token, colons):
         """Read a package-qualified symbol like PKG:SYM or PKG::SYM.
-        
-        Single colon (PKG:SYM) means external symbol access.
-        Double colon (PKG::SYM) means internal symbol access.
+
+        `token` is the case-converted token string and `colons` the indices
+        of its *unescaped* colons: `::` is internal access, `:` external
+        (CLHS 2.3.5), and an escaped colon is never a separator.
         """
         from . import lisptype
-        
-        if '::' in token:
-            # Internal symbol access
-            parts = token.split('::', 1)
-            pkg_name = parts[0].upper()
-            sym_name = parts[1].upper() if len(parts) > 1 else ''
-            # Restore escaped colons in symbol name
-            sym_name = sym_name.replace('\x00', ':')
-        else:
-            # External symbol access
-            parts = token.split(':', 1)
-            pkg_name = parts[0].upper()
-            sym_name = parts[1].upper() if len(parts) > 1 else ''
-            # Restore escaped colons in symbol name
-            sym_name = sym_name.replace('\x00', ':')
-        
+
+        first = colons[0]
+        internal = len(colons) > 1 and colons[1] == first + 1
+        pkg_name = token[:first]
+        sym_name = token[first + (2 if internal else 1):]
+
         # Find the package
         pkg = lisptype.find_package(pkg_name)
         if pkg is None:
             # Package not found - create it as a fallback
             pkg = lisptype.make_package(pkg_name)
-        
+
         # Intern the symbol in that package
         return pkg.intern_symbol(sym_name)
     
@@ -737,7 +914,12 @@ class Readtable:
     
     def _quote_reader(self, char, stream):
         """Read a quoted expression."""
-        return self._read_quote(stream)
+        from . import lisptype
+        expr = self._read_subform(stream)
+        if expr is None:
+            raise EOFError("EOF after quote")
+        quote_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol("QUOTE")
+        return lisptype.lispCons(quote_sym, lisptype.lispCons(expr, lisptype.NIL))
     
     def _semicolon_reader(self, char, stream):
         """Read a comment - skip to end of line and return next item."""
@@ -753,151 +935,355 @@ class Readtable:
         the symbol QUASIQUOTE. For more complete quasiquote/unquote behavior
         a future enhancement should perform nested processing.
         """
-        expr = self._read_item(stream)
         from . import lisptype
+        # While the backquote's sub-form is being read, a comma is legal
+        # (CLHS 2.4.3); the depth on this readtable instance is what
+        # `_comma_reader` checks. The counter sits on the instance rather
+        # than a module global so that two readtables cannot see each other's
+        # nesting -- and a fresh copy starts at zero.
+        self._backquote_depth = getattr(self, '_backquote_depth', 0) + 1
+        try:
+            expr = self._read_subform(stream)
+            if expr is None:
+                raise EOFError("EOF after backquote")
+        finally:
+            self._backquote_depth -= 1
         qq_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol("QUASIQUOTE")
         return lisptype.lispCons(qq_sym, lisptype.lispCons(expr, lisptype.NIL))
-    
+
     def _comma_reader(self, char, stream):
         """Read a comma expression (unquote / unquote-splicing).
 
         ,x  => (UNQUOTE x)
         ,@x => (UNQUOTE-SPLICING x)
+
+        A comma outside a backquoted form is a reader error (CLHS 2.4.3) --
+        constructing `(UNQUOTE x)` there silently built a form that is not
+        valid syntax at all.
         """
+        from . import lisptype
+        if getattr(self, '_backquote_depth', 0) <= 0:
+            raise _reader_error("comma outside a backquoted form")
         # Check for @ for unquote-splicing
         next_c = stream.read_char()
         if next_c == '@':
-            expr = self._read_item(stream)
-            from . import lisptype
+            expr = self._read_subform(stream)
+            if expr is None:
+                raise EOFError("EOF after comma-splice")
             sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol("UNQUOTE-SPLICING")
             return lisptype.lispCons(sym, lisptype.lispCons(expr, lisptype.NIL))
         else:
             if next_c:
                 stream.unread_char(next_c)
-            expr = self._read_item(stream)
-            from . import lisptype
+            expr = self._read_subform(stream)
+            if expr is None:
+                raise EOFError("EOF after comma")
             sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol("UNQUOTE")
             return lisptype.lispCons(sym, lisptype.lispCons(expr, lisptype.NIL))
     
     def _sharp_reader(self, char, stream):
-        """Handle dispatch macro characters starting with #.
-        
-        This reads the next character and dispatches to the appropriate
-        sub-character handler, or handles built-in # constructs.
+        """Handle dispatch macro characters starting with # (CLHS 2.4.8).
+
+        An optional `n` -- read here as a *decimal* integer, whatever
+        `*READ-BASE*` says (`syntax.sharp-asterisk.10`: with `*read-base*` 3,
+        `#10*` is a ten-bit vector) -- may precede the dispatch character, and
+        every dispatch character accepts one syntactically; only the ones
+        CLHS gives a parameter to use it. A registered dispatch-macro
+        character (SET-DISPATCH-MACRO-CHARACTER) is consulted first and
+        receives `(sub-char, stream, n)`, per CLHS 2.4.8.1's argument order;
+        an unknown dispatch character is a reader error even under
+        `*READ-SUPPRESS*` (the tests that want that: `#<`, `# `, `#)`).
         """
         sub_char = stream.read_char()
         if not sub_char:
             raise EOFError("EOF after #")
-        
-        sub_char_upper = sub_char.upper()
-        
-        # Check for registered dispatch macro character
-        dispatch_table = self._dispatch_macro_characters.get('#', {})
-        if sub_char_upper in dispatch_table:
-            return dispatch_table[sub_char_upper](sub_char, stream)
-        
-        # Handle built-in # constructs
-        if sub_char == '|':
-            # Block comment #| ... |#
-            self._skip_block_comment(stream)
-            # Block comments don't return a value, continue reading
-            return None
-        elif sub_char == "'":
-            # Function shorthand: #'x -> (FUNCTION x)
-            expr = self._read_item(stream)
-            from . import lisptype
-            func_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol("FUNCTION")
-            return lisptype.lispCons(func_sym, lisptype.lispCons(expr, lisptype.NIL))
-        elif sub_char == '\\':
-            # Character literal: #\x
-            return self._read_character_literal(stream)
-        elif sub_char == '(':
-            # Vector literal: #(...)
-            return self._read_vector(stream)
-        elif sub_char == '+':
-            # Feature expression #+feature form
-            return self._read_feature_plus(stream)
-        elif sub_char == '-':
-            # Feature expression #-feature form
-            return self._read_feature_minus(stream)
-        elif sub_char == '.':
-            # Read-time evaluation: #.(form)
-            expr = self._read_item(stream)
-            # Actually evaluate at read time
-            import fclpy.state as state
-            from fclpy.lispfunc.evaluation_core import eval
-            env = state.current_environment
-            if env is not None:
-                return eval(expr, env)
-            else:
-                # Fall back to returning the form if no environment
-                return expr
-        elif sub_char.upper() == 'P':
-            # Pathname literal: #P"path" or #p"path"
-            return self._read_pathname_literal(stream)
-        elif sub_char.upper() == 'X':
-            # Hexadecimal number: #xFF -> 255
-            return self._read_radix_number(stream, 16)
-        elif sub_char.upper() == 'B':
-            # Binary number: #b1010 -> 10
-            return self._read_radix_number(stream, 2)
-        elif sub_char.upper() == 'O':
-            # Octal number: #o17 -> 15
-            return self._read_radix_number(stream, 8)
-        elif sub_char == ':':
-            # Uninterned symbol: #:foo -> symbol not interned in any package
-            return self._read_uninterned_symbol(stream)
-        elif sub_char.upper() == 'C':
-            # Complex number: #C(real imag) or #c(real imag)
-            return self._read_complex_number(stream)
-        elif sub_char == '*':
-            # Bit vector: #*101 -> bit vector with elements 1, 0, 1
-            return self._read_bit_vector(stream)
-        elif sub_char in '0123456789':
-            # Could be array rank, reader label, etc.
-            # For now, read the number and check what follows
-            num = sub_char
+
+        n = None
+        if sub_char.isdigit():
+            digits = [sub_char]
             while True:
                 c = stream.read_char()
                 if c and c.isdigit():
-                    num += c
-                elif c == '=':
-                    # Reader label: #n=expr
-                    expr = self._read_item(stream)
-                    return expr
-                elif c == '#':
-                    # Reader reference: #n#
-                    return None  # Placeholder
-                elif c == 'A' or c == 'a':
-                    # Array: #nA(nested sequences) -- CLHS 2.4.8.12. It used
-                    # to return the nested *list* structure verbatim, so
-                    # `#2a((1 2) (3 4))` read as a list of lists rather than
-                    # as a rank-2 array.
-                    return self._read_array(stream, int(num))
-                elif c == '(':
-                    # `#n(...)`: a vector of exactly n elements.
-                    return self._read_vector(stream, size=int(num))
-                elif c == 'R' or c == 'r':
-                    # Radix literal: #nR -> integer read in base n (CLHS 2.4.8.7),
-                    # e.g. #3r1021101. Previously unhandled: the digit branch
-                    # above only recognized '=', '#' and 'A' as followers, so
-                    # anything else (including 'R') fell through to `break`
-                    # with the accumulated digits discarded and `r1021101...`
-                    # left on the stream to be read as a bare symbol token --
-                    # `Unbound variable: R1021101`, not a reader error, which
-                    # is what made this defect look evaluator-side.
-                    radix = int(num)
-                    if radix < 2 or radix > 36:
-                        raise _reader_error(f"Invalid radix: {radix}")
-                    return self._read_radix_number(stream, radix)
+                    digits.append(c)
                 else:
-                    if c:
-                        stream.unread_char(c)
                     break
-            return None
-        else:
+            n = int(''.join(digits))
+            sub_char = c
+            if not sub_char:
+                raise EOFError("EOF after #<number>")
+
+        sub_char_upper = sub_char.upper()
+
+        # Check for registered dispatch macro character
+        dispatch_table = self._dispatch_macro_characters.get('#', {})
+        if sub_char_upper in dispatch_table:
+            return dispatch_table[sub_char_upper](sub_char, stream, n)
+
+        handler = _SHARP_HANDLERS.get(sub_char) or _SHARP_HANDLERS.get(
+            sub_char_upper)
+        if handler is None:
             raise _reader_error(f"Unknown # dispatch character: #{sub_char}")
-    
+        return handler(self, stream, n)
+
+    # --- `#` dispatch handlers (CLHS 2.4.8) ---
+    #
+    # Each takes `(stream, n)` and is responsible for its own
+    # `*READ-SUPPRESS*` behavior (CLHS 23.1.2): consume the syntactic input
+    # the unsuppressed read would consume, construct nothing, and answer NIL.
+    # Errors that determine *consumption* still signal under suppression
+    # (an unmatched `)` must be hit to know the form ended); errors that
+    # only matter to *construction* -- an unknown character name, an invalid
+    # radix, a label that was never defined -- do not.
+
+    def _consume_suppressed_form(self, stream):
+        """Consume one form under `*READ-SUPPRESS*` and answer NIL."""
+        self._read_subform(stream)
+        from . import lisptype
+        return lisptype.NIL
+
+    def _sharp_function(self, stream, n):
+        """`#'x` -> (FUNCTION x) (CLHS 2.4.8.2)."""
+        from . import lisptype
+        expr = self._read_subform(stream)
+        if expr is None:
+            raise EOFError("EOF after #'")
+        if read_suppressed():
+            return lisptype.NIL
+        func_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol("FUNCTION")
+        return lisptype.lispCons(func_sym, lisptype.lispCons(expr, lisptype.NIL))
+
+    def _sharp_block_comment(self, stream, n):
+        """`#|...|#` -- a block comment, nested (CLHS 2.4.8.19)."""
+        self._skip_block_comment(stream)
+        return None
+
+    def _sharp_character(self, stream, n):
+        """`#\\x` -- a character literal (CLHS 2.4.8.1).
+
+        The first character after `#\\` is taken literally -- even a macro
+        character or whitespace is the character itself (`#\\(` is `(`). Any
+        other character begins a *token*: `#\\ab` is the name "AB", and so is
+        `#\\:x` (`:` is a plain constituent, not a macro character), while a
+        one-character token is that character with its case preserved
+        (`#\\a` is the *lowercase* letter). An escaped name character is used
+        as-is, per CLHS 23.1.2.
+        """
+        from . import lisptype
+        c = stream.read_char()
+        if not c:
+            raise EOFError("EOF in character literal")
+        syntax = self.syntax_type(c)
+        if syntax in (SYNTAX_WHITESPACE, SYNTAX_TERMINATING_MACRO,
+                      SYNTAX_SINGLE_ESCAPE, SYNTAX_MULTIPLE_ESCAPE):
+            # Nothing more can belong to the character: it stands for itself.
+            if read_suppressed():
+                return lisptype.NIL
+            return lisptype.Character(c)
+        # A constituent: the *token* is the character's name (CLHS 2.4.8.2).
+        chars, escaped, _consumed, _saw_escape = self._read_token(stream, c)
+        if read_suppressed():
+            return lisptype.NIL
+        if len(chars) == 1:
+            # One character, case preserved.
+            return lisptype.Character(chars[0])
+        name = ''.join(convert_case_chars(chars, escaped, 'UPCASE'))
+        from .lispfunc import characters as _chars
+        try:
+            return _chars.character(name)
+        except lisptype.LispTypeError:
+            raise _reader_error(f"Unknown character name: {name}")
+
+    def _sharp_vector(self, stream, n):
+        """`#(...)` / `#n(...)` -- a vector literal (CLHS 2.4.8.3)."""
+        return self._read_vector(stream, size=n)
+
+    def _sharp_bit_vector(self, stream, n):
+        """`#*` / `#n*` -- a bit vector (CLHS 2.4.8.4)."""
+        from . import lisptype
+        # The bit token ends at whitespace, a terminating macro character,
+        # or end of file -- the same boundary CLHS 2.2 step 8 uses -- so
+        # `#*012` reads one token "012" and *then* finds the non-bit.
+        token = []
+        while True:
+            c = stream.read_char()
+            if c is None:
+                break
+            syntax = self.syntax_type(c)
+            if syntax in (SYNTAX_WHITESPACE, SYNTAX_TERMINATING_MACRO):
+                stream.unread_char(c)
+                break
+            token.append(c)
+        if read_suppressed():
+            return lisptype.NIL
+        bits = ''.join(token)
+        if any(b not in '01' for b in bits):
+            raise _reader_error(f"#*: {bits!r} is not a sequence of bits")
+        if n is None:
+            values = [int(b) for b in bits]
+        else:
+            if len(bits) > n:
+                raise _reader_error(
+                    f"#{n}* given {len(bits)} bits")
+            if not bits:
+                if n > 0:
+                    raise _reader_error(
+                        f"#{n}* has no bit to fill with")
+                values = []
+            else:
+                values = [int(b) for b in bits]
+                values.extend([values[-1]] * (n - len(values)))
+        from fclpy.lispfunc.arrays import make_bit_vector
+        return make_bit_vector(values)
+
+    def _sharp_pathname(self, stream, n):
+        """`#P...` -- a pathname designator (CLHS 2.4.8.15)."""
+        return self._read_pathname_literal(stream)
+
+    def _sharp_radix_b(self, stream, n):
+        return self._read_radix_literal(stream, 2, n)
+
+    def _sharp_radix_o(self, stream, n):
+        return self._read_radix_literal(stream, 8, n)
+
+    def _sharp_radix_x(self, stream, n):
+        return self._read_radix_literal(stream, 16, n)
+
+    def _sharp_radix_n(self, stream, n):
+        return self._read_radix_literal(stream, n, n)
+
+    def _sharp_uninterned(self, stream, n):
+        """`#:name` -- an uninterned symbol (CLHS 2.4.8.5)."""
+        return self._read_uninterned_symbol(stream)
+
+    def _sharp_struct(self, stream, n):
+        """`#S(name ...)` -- a structure instance (CLHS 2.4.8.14)."""
+        return self._read_structure(stream)
+
+    def _sharp_eval(self, stream, n):
+        """`#.(form)` -- read-time evaluation (CLHS 2.4.8.10)."""
+        from . import lisptype
+        from .lispreader import resolve_read_eval
+        import fclpy.state as state
+        if read_suppressed():
+            # The form is consumed but never evaluated -- not even a THROW
+            # inside it can fire (`read-suppress.sharp-dot.3`).
+            return self._consume_suppressed_form(stream)
+        if not resolve_read_eval():
+            raise _reader_error(
+                "#. may not evaluate: *READ-EVAL* is false (CLHS 2.4.8.10)")
+        expr = self._read_subform(stream)
+        if expr is None:
+            raise EOFError("EOF after #.")
+        env = state.current_environment
+        if env is not None:
+            from fclpy.lispfunc.evaluation_core import eval
+            return eval(expr, env)
+        return expr
+
+    def _sharp_feature_plus(self, stream, n):
+        """`#+feature form` (CLHS 2.4.8.16)."""
+        return self._read_feature(stream, negate=False)
+
+    def _sharp_feature_minus(self, stream, n):
+        """`#-feature form` (CLHS 2.4.8.17)."""
+        return self._read_feature(stream, negate=True)
+
+    def _sharp_array(self, stream, n):
+        """`#nA(...)` -- an array literal (CLHS 2.4.8.12)."""
+        if read_suppressed():
+            return self._consume_suppressed_form(stream)
+        if n is None:
+            raise _reader_error("#A requires a rank")
+        return self._read_array(stream, n)
+
+    def _sharp_complex(self, stream, n):
+        """`#C(r i)` -- a complex number (CLHS 2.4.8.11).
+
+        Suppressed, the construct consumes *one form* -- `#c1` and `#cFOO`
+        are valid suppressed syntax -- rather than demanding a paren the
+        unsuppressed read would insist on.
+        """
+        if read_suppressed():
+            return self._consume_suppressed_form(stream)
+        return self._read_complex_number(stream)
+
+    def _sharp_label(self, stream, n):
+        """`#n=form` -- define a label (CLHS 2.4.8.5/.6 circular syntax)."""
+        return self._read_sharp_equal(stream, n)
+
+    def _sharp_label_ref(self, stream, n):
+        """`#n#` -- reference a label (CLHS 2.4.8.6)."""
+        return self._read_sharp_sharp(stream, n)
+
+    def _read_feature(self, stream, negate):
+        """`#+`/`#-`'s shared body.
+
+        The feature expression is read with `*PACKAGE*` bound to the KEYWORD
+        package (CLHS 2.4.8.1), so `#+x` names the keyword `:X` regardless of
+        the reading package, while a package-qualified name
+        (`#+cl-test::x`) still denotes the symbol it writes. When the
+        feature-expression fails, the following form is *skipped* -- read
+        with `*READ-SUPPRESS*` true, which is exactly the machinery CLHS
+        23.1.2 gives the reader for consuming a form without constructing
+        it -- and the handler answers None so the outer reader carries on
+        with the form after it.
+        """
+        from . import lisptype
+        from . import state
+        from .lispfunc.binding import BindingFrame
+
+        feature = self._read_feature_expression(stream)
+        present = self._check_feature(feature)
+        if negate:
+            present = not present
+        if present:
+            form = self._read_subform(stream)
+            if read_suppressed():
+                return lisptype.NIL
+            return form
+        self._skip_form(stream)
+        return None
+
+    def _read_feature_expression(self, stream):
+        """Read a feature expression with `*PACKAGE*` bound to KEYWORD."""
+        from . import lisptype
+        from . import state
+        from .lispfunc.binding import BindingFrame
+
+        package_sym = lisptype.COMMON_LISP_PACKAGE.intern_symbol('*PACKAGE*')
+        keyword_pkg = getattr(lisptype, 'KEYWORD_PACKAGE', None)
+        if keyword_pkg is None:
+            keyword_pkg = lisptype.find_package('KEYWORD')
+        env = state.current_environment
+        if env is None or keyword_pkg is None:
+            return self._read_subform(stream)
+        frame = BindingFrame(env, bound_vars=(package_sym,))
+        with frame:
+            frame.bind(package_sym, keyword_pkg)
+            return self._read_subform(stream)
+
+    def _skip_form(self, stream):
+        """Consume one form with `*READ-SUPPRESS*` bound true (CLHS 2.4.8.1).
+
+        This is how a failing `#+` feature-expression skips exactly one form
+        -- the suppressed readers consume the form's extent without
+        constructing it, which is the one way to know where it ends.
+        """
+        from . import lisptype
+        from . import state
+        from .lispfunc.binding import BindingFrame
+
+        suppress_sym = lisptype.COMMON_LISP_PACKAGE.intern_symbol(
+            '*READ-SUPPRESS*')
+        env = state.current_environment
+        if env is None:
+            self._read_item(stream)
+            return
+        frame = BindingFrame(env, bound_vars=(suppress_sym,))
+        with frame:
+            frame.bind(suppress_sym, lisptype.T)
+            self._read_item(stream)
+
     def _skip_block_comment(self, stream):
         """Skip a block comment #| ... |# with nesting support."""
         depth = 1
@@ -917,54 +1303,6 @@ class Readtable:
             else:
                 prev_char = c
     
-    def _read_character_literal(self, stream):
-        r"""Read a character literal like #\A or #\Space."""
-        from . import character
-        
-        c = stream.read_char()
-        if not c:
-            raise EOFError("EOF in character literal")
-        
-        # Check for named characters
-        if c.isalpha():
-            # Might be a named character like #\Space or #\Newline
-            name = c
-            while True:
-                next_c = stream.read_char()
-                if next_c and (next_c.isalnum() or next_c == '-'):
-                    name += next_c
-                else:
-                    if next_c:
-                        stream.unread_char(next_c)
-                    break
-            
-            # Check for named characters
-            name_upper = name.upper()
-            if len(name) == 1:
-                # Single character
-                return character.Character(name)
-            elif name_upper == 'SPACE':
-                return character.Character(' ')
-            elif name_upper == 'NEWLINE' or name_upper == 'LINEFEED':
-                return character.Character('\n')
-            elif name_upper == 'TAB':
-                return character.Character('\t')
-            elif name_upper == 'RETURN':
-                return character.Character('\r')
-            elif name_upper == 'PAGE':
-                return character.Character('\f')
-            elif name_upper == 'BACKSPACE':
-                return character.Character('\b')
-            elif name_upper == 'RUBOUT' or name_upper == 'DELETE':
-                return character.Character('\x7f')
-            elif name_upper == 'NULL' or name_upper == 'NUL':
-                return character.Character('\x00')
-            else:
-                # Unknown named char, use as-is if single
-                raise _reader_error(f"Unknown character name: {name}")
-        else:
-            return character.Character(c)
-    
     def _read_vector(self, stream, size=None):
         """Read a vector literal ``#(...)`` or ``#n(...)``.
 
@@ -973,6 +1311,8 @@ class Readtable:
         It used to read as an `AdjustableVector`, which made every literal
         vector claim to be adjustable and to have a fill pointer.
         """
+        from . import lisptype
+        suppressed = read_suppressed()
         result = []
         while True:
             # Skip whitespace
@@ -986,9 +1326,17 @@ class Readtable:
             else:
                 stream.unread_char(c)
                 item = self._read_item(stream)
+                if item is DOT_MARKER:
+                    # A vector has no dotted tail (CLHS 2.3.3 via
+                    # `syntax.dot-error.7`), and the marker must never end up
+                    # stored as an element.
+                    raise _reader_error(
+                        "the dot token may not appear in a vector literal")
                 if item is not None:
                     result.append(item)
-        
+
+        if suppressed:
+            return lisptype.NIL
         if size is not None:
             # `#n(...)` is a vector of length n; a shorter element list is
             # padded with its last element (CLHS 2.4.8.3).
@@ -1002,114 +1350,111 @@ class Readtable:
         return result
     
     def _check_feature(self, feature):
-        """Check if a feature expression is satisfied.
-        
-        Feature can be:
-        - A symbol: check if it's in *FEATURES*
-        - (AND feature1 feature2 ...): all features must be present
-        - (OR feature1 feature2 ...): any feature must be present
-        - (NOT feature): feature must be absent
+        """Check if a feature expression is satisfied (CLHS 24.1.2.1).
+
+        A feature expression is a symbol, or a list whose head names the
+        operator `AND`/`OR`/`NOT` (the operator may be a keyword -- `(:and)`
+        and `(:not :x)` are feature expressions). A feature *symbol* matches
+        by EQ against the elements of `*FEATURES*`: the expression was read
+        with `*PACKAGE*` bound to KEYWORD, so `#+x` denotes `:X` and matches
+        the keyword in the list, while a package-qualified name
+        (`#+cl-test::x`) only matches that exact symbol
+        (`syntax.sharp-plus.8` vs `.9` pins the difference). `(AND)` with no
+        sub-features is satisfied; `(OR)` with none is not.
         """
-        import fclpy.state as state
-        import fclpy.lisptype as lisptype
-        
-        # Get *FEATURES* list
-        features_list = []
-        if state.current_environment:
-            features_sym = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol('*FEATURES*')
-            features = state.current_environment.find_variable(features_sym)
-            if features and features is not lisptype.NIL:
-                # Convert to list of uppercase names
-                current = features
-                while hasattr(current, 'car') and hasattr(current, 'cdr'):
-                    item = current.car
-                    if isinstance(item, lisptype.lispKeyword):
-                        features_list.append(item.name.upper())
-                    elif isinstance(item, lisptype.LispSymbol):
-                        features_list.append(item.name.upper())
-                    current = current.cdr
-                    if current is lisptype.NIL:
-                        break
-        
-        # Handle different feature expression types
-        if isinstance(feature, lisptype.lispKeyword):
-            return feature.name.upper() in features_list
-        elif isinstance(feature, lisptype.LispSymbol):
-            return feature.name.upper() in features_list
-        elif hasattr(feature, 'car') and hasattr(feature, 'cdr'):
-            # It's a cons - check for AND, OR, NOT
+        from . import state
+        from . import lisptype
+
+        def features():
+            from .lispfunc.binding import dynamic_value
+            return dynamic_value(
+                lisptype.COMMON_LISP_PACKAGE.intern_symbol('*FEATURES*'))
+
+        if hasattr(feature, 'name') and not hasattr(feature, 'car'):
+            current = features()
+            while hasattr(current, 'car') and hasattr(current, 'cdr') and \
+                    current is not lisptype.NIL and current is not None:
+                if current.car is feature:
+                    return True
+                current = current.cdr
+            return False
+        if hasattr(feature, 'car') and hasattr(feature, 'cdr'):
             operator = feature.car
-            if isinstance(operator, lisptype.LispSymbol):
-                op_name = operator.name.upper()
+            op_name = getattr(operator, 'name', None)
+            if op_name is not None:
+                op_name = op_name.upper()
                 if op_name == 'AND':
-                    # All sub-features must be present
                     current = feature.cdr
                     while hasattr(current, 'car') and hasattr(current, 'cdr') and current is not lisptype.NIL:
                         if not self._check_feature(current.car):
                             return False
                         current = current.cdr
                     return True
-                elif op_name == 'OR':
-                    # Any sub-feature must be present
+                if op_name == 'OR':
                     current = feature.cdr
                     while hasattr(current, 'car') and hasattr(current, 'cdr') and current is not lisptype.NIL:
                         if self._check_feature(current.car):
                             return True
                         current = current.cdr
                     return False
-                elif op_name == 'NOT':
-                    # Feature must be absent
+                if op_name == 'NOT':
                     sub_feature = feature.cdr
                     if hasattr(sub_feature, 'car'):
                         sub_feature = sub_feature.car
                     return not self._check_feature(sub_feature)
-        
+
         # Unknown feature expression - default to absent
         return False
-    
-    def _read_feature_plus(self, stream):
-        """Read #+feature expr.
-        
-        Includes the expression only if feature is present in *FEATURES*.
-        """
-        feature = self._read_item(stream)
-        expr = self._read_item(stream)
-        
-        if self._check_feature(feature):
-            return expr
-        else:
-            # Feature not present - skip the expression
-            return None
-    
-    def _read_feature_minus(self, stream):
-        """Read #-feature expr.
-        
-        Includes the expression only if feature is NOT present in *FEATURES*.
-        """
-        feature = self._read_item(stream)
-        expr = self._read_item(stream)
-        
-        if not self._check_feature(feature):
-            return expr
-        else:
-            # Feature is present - skip the expression
-            return None
-    
+
     def _read_pathname_literal(self, stream):
-        """Read a pathname literal like #P\"path/to/file\"."""
+        """`#P` -- read a form and coerce it as a string designator to a
+        pathname (CLHS 2.4.8.15).
+
+        The form, not a quotation mark: `#P` followed by any expression
+        evaluating-to-a-string-designator is valid syntax
+        (`syntax.sharp-p.5` writes `#P#.(make-array ... 'base-char)`), so
+        requiring the next *character* to be `"` made every other spelling a
+        reader error.
+        """
         from fclpy.lispfunc.pathnames import pathname_from_namestring
+        from . import lisptype
 
-        # Expect a string next
-        c = stream.read_char()
-        while c and c.isspace():
-            c = stream.read_char()
+        form = self._read_subform(stream)
+        if read_suppressed():
+            return lisptype.NIL
+        if isinstance(form, (str, lisptype.LispString)):
+            return pathname_from_namestring(form)
+        if isinstance(form, lisptype.LispSymbol):
+            return pathname_from_namestring(form.name)
+        if isinstance(form, lisptype.Character):
+            return pathname_from_namestring(form.char)
+        raise _reader_error(
+            f"#P: {type(form).__name__} does not designate a string")
 
-        if c != '"':
-            raise _reader_error(f"Expected string after #P, got: {c}")
+    def _read_radix_literal(self, stream, radix, n):
+        """`#B`/`#O`/`#X`/`#nR` -- a rational in `radix` (CLHS 2.4.8.7).
 
-        # Read the string
-        path_str = self._read_string_literal(stream)
-        return pathname_from_namestring(path_str)
+        `radix` is 2/8/16 for the letter forms and `n` itself for `#nR`;
+        `#r` with no prefix has no radix and is an error. Under
+        `*READ-SUPPRESS*` the token is consumed without any parsing or
+        validation -- `#0b0` must answer NIL, not complain about radix 0.
+        """
+        from . import lisptype
+
+        if read_suppressed():
+            while True:
+                c = stream.read_char()
+                if c is None:
+                    break
+                syntax = self.syntax_type(c)
+                if syntax in (SYNTAX_WHITESPACE, SYNTAX_TERMINATING_MACRO):
+                    stream.unread_char(c)
+                    break
+            return lisptype.NIL
+
+        if radix is None or radix < 2 or radix > 36:
+            raise _reader_error(f"Invalid radix: {radix}")
+        return self._read_radix_number(stream, radix)
     
     def _read_radix_number(self, stream, radix):
         """Read a **rational** in `radix` -- `#B`/`#O`/`#X`/`#nR`, CLHS 2.4.8.
@@ -1161,16 +1506,15 @@ class Readtable:
         return value
 
     def _read_uninterned_symbol(self, stream):
-        """Read an uninterned symbol like #:foo.
-        
-        Uninterned symbols are not part of any package. Each time #:foo is read,
-        a fresh symbol with name "FOO" is created that has no home package.
-        
-        Args:
-            stream: Input stream
-            
-        Returns:
-            A new uninterned LispSymbol
+        """Read an uninterned symbol like #:foo (CLHS 2.4.8.5).
+
+        Uninterned symbols are not part of any package. Each time #:foo is
+        read, a fresh symbol with name "FOO" is created that has no home
+        package -- *every* time, and for *every* name: `#:t` is an uninterned
+        symbol named "T", not the global constant, and `#:. ` names ".". It
+        is an error for the name to contain an unescaped package marker
+        (CLHS 2.4.8.5; `syntax.sharp-colon.error.1`), while `#:|a:b|`'s
+        escaped colon is fine.
         """
         from . import lisptype
 
@@ -1178,33 +1522,33 @@ class Readtable:
         # exactly as `_read_symbol` does -- this used to read raw characters
         # with no escape handling at all, so `#:|abc|` kept its literal pipe
         # characters as part of the name and then upcased them too.
-        name, raw, consumed = self._read_token(stream)
+        chars, escaped, consumed, _saw_escape = self._read_token(stream)
+
+        if read_suppressed():
+            return lisptype.NIL
 
         if not consumed:
             raise _reader_error("Empty symbol name after #:")
 
-        name = name.replace('\x00', ':')
-        # Special case: T and NIL should return the canonical symbols
-        if name == 'T':
-            return lisptype.T
-        elif name == 'NIL':
-            return lisptype.NIL
+        if any(c == ':' and not e for c, e in zip(chars, escaped)):
+            raise _reader_error(
+                "an uninterned symbol's name may not contain a package marker")
+
+        name = ''.join(convert_case_chars(chars, escaped, self._case))
         return lisptype.LispSymbol(name, package=None)
 
     def _read_complex_number(self, stream):
-        """Read a complex number literal #C(real imag).
-        
-        The syntax is #C(real imag) or #c(real imag) where real and imag
-        are real numbers (integers, ratios, or floats).
-        
-        Args:
-            stream: Input stream
-            
-        Returns:
-            A Python complex number
+        """Read a complex number literal #C(real imag) (CLHS 2.4.8.11).
+
+        The syntax is #C(real imag) where real and imag are real numbers.
+        The reader's rule is the COMPLEX function's coalescing rule (CLHS
+        12.1.5.3): a rational real part with a zero imaginary part *is* the
+        real part, so `#C(1 0)` reads as the integer 1 and only
+        `#c(0 1)` builds a complex.
         """
         from fractions import Fraction
-        
+        from . import lisptype
+
         # Skip whitespace
         while True:
             c = stream.read_char()
@@ -1212,21 +1556,21 @@ class Readtable:
                 raise EOFError("EOF after #C")
             if not c.isspace():
                 break
-        
+
         # Expect opening paren
         if c != '(':
             raise _reader_error(f"Expected ( after #C, got {c!r}")
-        
+
         # Read real part
-        real_part = self._read_item(stream)
+        real_part = self._read_subform(stream)
         if real_part is None:
             raise _reader_error("Expected real part in #C(...)")
-        
+
         # Read imaginary part
-        imag_part = self._read_item(stream)
+        imag_part = self._read_subform(stream)
         if imag_part is None:
             raise _reader_error("Expected imaginary part in #C(...)")
-        
+
         # Skip whitespace and find closing paren
         while True:
             c = stream.read_char()
@@ -1238,19 +1582,29 @@ class Readtable:
                 break
             else:
                 raise _reader_error(f"Expected ) in #C(...), got {c!r}")
-        
+
+        if read_suppressed():
+            return lisptype.NIL
+
         # Convert Fraction to float for complex construction
         if isinstance(real_part, Fraction):
             real_part = float(real_part)
         if isinstance(imag_part, Fraction):
             imag_part = float(imag_part)
-        
+
         # Ensure both parts are numeric
         if not isinstance(real_part, (int, float)):
             raise _reader_error(f"Real part must be a number, got {type(real_part).__name__}")
         if not isinstance(imag_part, (int, float)):
             raise _reader_error(f"Imaginary part must be a number, got {type(imag_part).__name__}")
-        
+
+        # CLHS 12.1.5.3: a rational real part with imaginary zero coalesces
+        # to the real part (`syntax.sharp-c.2`: `#C(1 0)` is 1). A float
+        # imaginary zero does not coalesce -- `(complex 1 0.0)` is `#c(1.0
+        # 0.0)` -- so the zero test is on an *integer* imaginary part.
+        if imag_part == 0 and isinstance(imag_part, int) and \
+                isinstance(real_part, int):
+            return real_part
         return complex(real_part, imag_part)
 
     def _read_array(self, stream, rank):
@@ -1263,50 +1617,243 @@ class Readtable:
         contents = self._read_item(stream)
         from fclpy.lispfunc.arrays import make_array
 
+        if read_suppressed():
+            from . import lisptype
+            return lisptype.NIL
         if rank == 0:
             return make_array(None, initial_contents=contents)
         dimensions = _nested_dimensions(contents, rank)
         return make_array(dimensions, initial_contents=contents)
 
-    def _read_bit_vector(self, stream):
-        """Read a bit vector literal #*101.
-        
-        The syntax is #*bits where bits is a sequence of 0 and 1 characters.
-        #*101 creates a bit vector with elements [1, 0, 1].
-        #* creates an empty bit vector.
-        
-        Args:
-            stream: Input stream
-            
-        Returns:
-            A list representing a bit vector (to be enhanced with proper bit-vector type)
-        """
-        bits = []
-        while True:
-            c = stream.read_char()
-            if not c:
-                break
-            if c == '0':
-                bits.append(0)
-            elif c == '1':
-                bits.append(1)
-            elif c.isspace() or c in '()':
-                # End of bit vector
-                if c:
-                    stream.unread_char(c)
-                break
-            else:
-                # Any non-0/1 character ends the bit vector
-                stream.unread_char(c)
-                break
-        
-        # A bit vector is an array whose *element type* is BIT (CLHS 15.1.2.2),
-        # not a general vector that happens to hold zeroes and ones: the
-        # latter is a different type, prints as `#(1 0 1)`, and answers NIL to
-        # BIT-VECTOR-P. Returning a bare list conflated the two.
-        from fclpy.lispfunc.arrays import make_bit_vector
+    def _read_structure(self, stream):
+        """`#S(name slot-name value ...)` -- a structure instance (CLHS 2.4.8.14).
 
-        return make_bit_vector(bits)
+        The operand is read as *data*, then interpreted: `name` must name a
+        defined structure class, each `slot-name` -- a symbol, keyword,
+        string, or character, compared by name -- must name one of its slots
+        (`:allow-other-keys` is consumed and ignored), a slot named twice
+        keeps its *first* value, and an unspecified slot gets its initform.
+        The instance is built through the one class/instance model
+        (`classes.LispInstance`), so `#s` and the DEFSTRUCT constructors
+        produce indistinguishable objects.
+        """
+        from . import lisptype
+
+        form = self._read_subform(stream)
+        if form is None:
+            raise EOFError("EOF after #S")
+        if read_suppressed():
+            return lisptype.NIL
+
+        import fclpy.classes as classes
+        from .lispfunc.misc_clos import _eval_initform
+
+        if not isinstance(form, lisptype.lispCons):
+            raise _reader_error("#S expects a (name slot-name value ...) list")
+        name_obj = form.car
+        name = getattr(name_obj, 'name', None)
+        if not name:
+            raise _reader_error(f"#S: {type(name_obj).__name__} does not name a structure")
+        struct_class = classes.find_class(name)
+        if struct_class is None:
+            raise _reader_error(f"#S: no structure named {name}")
+        if getattr(struct_class, 'metaclass_name', '') != 'STRUCTURE-CLASS':
+            raise _reader_error(f"#S: {name} is not a structure class")
+
+        slots = struct_class.get_all_slots()
+        slot_values = {name_str: _eval_initform(slot_def)
+                       for name_str, slot_def in slots.items()}
+        seen = set()
+
+        # `:allow-other-keys` may appear anywhere among the pairs and (with
+        # a non-NIL value) permits slot names the structure does not define
+        # (`syntax.sharp-s.8`: `:b z :allow-other-keys t :a x :foo bar`),
+        # so its presence is settled before the pairs are processed.
+        allow_other = False
+        scan = form.cdr
+        while scan is not None and scan is not lisptype.NIL and \
+                isinstance(scan, lisptype.lispCons):
+            key = getattr(scan.car, 'name', None)
+            if key and key.upper() == 'ALLOW-OTHER-KEYS':
+                allow_other = True
+                break
+            scan = scan.cdr
+            if not isinstance(scan, lisptype.lispCons):
+                break
+            scan = scan.cdr
+
+        cur = form.cdr
+        while cur is not None and cur is not lisptype.NIL and \
+                isinstance(cur, lisptype.lispCons):
+            key_obj = cur.car
+            cur = cur.cdr
+            if not isinstance(cur, lisptype.lispCons):
+                raise _reader_error("#S: odd number of slot-name/value pairs")
+            value = cur.car
+            cur = cur.cdr
+
+            if isinstance(key_obj, lisptype.Character):
+                key = key_obj.char
+            elif isinstance(key_obj, (lisptype.LispSymbol, lisptype.lispKeyword)):
+                key = key_obj.name
+            elif isinstance(key_obj, (str, lisptype.LispString)):
+                key = str(key_obj)
+            else:
+                raise _reader_error(
+                    f"#S: {type(key_obj).__name__} does not name a slot")
+            if key.upper() == 'ALLOW-OTHER-KEYS':
+                continue
+            if key not in slots:
+                if allow_other:
+                    continue
+                raise _reader_error(f"#S: {key} is not a slot of {name}")
+            if key in seen:
+                continue
+            seen.add(key)
+            slot_values[key] = value
+
+        return classes.LispInstance(lisp_class=struct_class,
+                                    slot_values=slot_values)
+
+    def _read_sharp_equal(self, stream, n):
+        """`#n=form` -- define a label (CLHS 2.4.8.5).
+
+        A placeholder is registered *before* the form is read, so a `#n#`
+        inside the form yields the placeholder; when the form is complete
+        every occurrence of the placeholder in it is patched to the form
+        itself, by identity, which is what makes `#1=(A B . #1#)` an actual
+        cycle and `(#1=(17) #1#)` one shared list.
+        """
+        from . import lisptype
+
+        if read_suppressed():
+            return self._consume_suppressed_form(stream)
+        if n is None:
+            raise _reader_error("#= requires a label number")
+        frame = current_label_frame()
+        if frame is None:
+            raise _reader_error("#= read outside of a read")
+        if n in frame:
+            raise _reader_error(f"label #{n}= is already defined")
+        placeholder = _LabelPlaceholder(n)
+        frame[n] = placeholder
+        form = self._read_subform(stream)
+        if form is None:
+            raise EOFError("EOF after #=")
+        if form is placeholder:
+            raise _reader_error(f"#{n}= may not reference itself")
+        frame[n] = form
+        _patch_label_placeholders(form, {id(placeholder): form})
+        return form
+
+    def _read_sharp_sharp(self, stream, n):
+        """`#n#` -- reference the object an earlier `#n=` read (CLHS 2.4.8.6)."""
+        from . import lisptype
+
+        if read_suppressed():
+            # The label need not exist -- or even have been read: the
+            # reference answers NIL and no error (`##`, `#1#`).
+            return lisptype.NIL
+        if n is None:
+            raise _reader_error("## requires a label number")
+        frame = current_label_frame()
+        if frame is None or n not in frame:
+            raise _reader_error(f"reference to undefined label #{n}#")
+        return frame[n]
+
+
+def _patch_label_placeholders(obj, mapping):
+    """Replace every label placeholder in `obj` with the object its `#n=`
+    read, in place, by identity.
+
+    `mapping` is `{id(placeholder): value}` -- ids, not the placeholders
+    themselves, because Lisp objects define structural `__eq__`s that would
+    let one placeholder "be" another. The walk covers cons cells (car by
+    recursion, the cdr chain by iteration), Python lists (the simple-vector
+    representation), array storage, and instance slot values -- everything a
+    literal can build -- and is cycle-safe, because a circular structure is
+    exactly the thing it exists to produce.
+    """
+    from . import lisptype
+
+    seen = set()
+
+    def walk(value):
+        if isinstance(value, lisptype.lispCons):
+            cur = value
+            while isinstance(cur, lisptype.lispCons):
+                cid = id(cur)
+                if cid in seen:
+                    return
+                seen.add(cid)
+                car = cur.car
+                if id(car) in mapping:
+                    car = mapping[id(car)]
+                    cur.car = car
+                walk(car)
+                nxt = cur.cdr
+                if id(nxt) in mapping:
+                    nxt = mapping[id(nxt)]
+                    cur.cdr = nxt
+                cur = nxt
+            return
+        if isinstance(value, list):
+            vid = id(value)
+            if vid in seen:
+                return
+            seen.add(vid)
+            for i, el in enumerate(value):
+                if id(el) in mapping:
+                    el = mapping[id(el)]
+                    value[i] = el
+                walk(el)
+            return
+        # Array storage (a non-displaced LispArray's `_data`) and instance
+        # slot values are the remaining containers a literal can build.
+        storage = getattr(value, '_data', None)
+        if isinstance(storage, list):
+            walk(storage)
+            return
+        slots = getattr(value, 'slot_values', None)
+        if isinstance(slots, dict):
+            sid = id(value)
+            if sid in seen:
+                return
+            seen.add(sid)
+            for key, el in slots.items():
+                if id(el) in mapping:
+                    el = mapping[id(el)]
+                    slots[key] = el
+                walk(el)
+
+    walk(obj)
+
+
+# The `#` dispatch table (CLHS 2.4.8). Symbol-valued keys are matched
+# case-sensitively, the letter keys case-insensitively (`_sharp_reader` tries
+# the sub-character as given, then upper-cased). Registered user dispatch
+# functions take precedence over all of these.
+_SHARP_HANDLERS = {
+    "'": Readtable._sharp_function,
+    '|': Readtable._sharp_block_comment,
+    '\\': Readtable._sharp_character,
+    '(': Readtable._sharp_vector,
+    '*': Readtable._sharp_bit_vector,
+    ':': Readtable._sharp_uninterned,
+    '.': Readtable._sharp_eval,
+    '+': Readtable._sharp_feature_plus,
+    '-': Readtable._sharp_feature_minus,
+    '=': Readtable._sharp_label,
+    '#': Readtable._sharp_label_ref,
+    'B': Readtable._sharp_radix_b,
+    'O': Readtable._sharp_radix_o,
+    'X': Readtable._sharp_radix_x,
+    'R': Readtable._sharp_radix_n,
+    'C': Readtable._sharp_complex,
+    'A': Readtable._sharp_array,
+    'S': Readtable._sharp_struct,
+    'P': Readtable._sharp_pathname,
+}
 
 
 def _nested_dimensions(contents, rank):

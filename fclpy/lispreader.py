@@ -25,32 +25,60 @@ READER_VARIABLES = {
 }
 
 
-def resolve_read_base():
-    """The current input radix -- the one place `*READ-BASE*` is read.
+def _reader_variable_value(name: str):
+    """The value of one of CLHS Figure 23-1's reader control variables.
 
     Resolution order matches `printer.resolve_control`'s and, through it,
     `evaluation_core.eval`'s order for a variable reference: a binding in the
     current environment chain first, then the symbol's value cell, then the
     ANSI initial value. Falling back to the initial value rather than to the
     evaluator's next step matters for the same reason it does in the printer:
-    that next step is the *function* registry, and `*READ-BASE*` was registered
-    there as a `cl_function` (plan.md C7), so a reference to it resolved to a
-    Python function object.
+    that next step is the *function* registry, and these names were once
+    registered there as `cl_function`s (plan.md C7), so a reference resolved
+    to a Python function object.
     """
     import fclpy.state as state
 
-    symbol = lisptype.COMMON_LISP_PACKAGE.intern_symbol('*READ-BASE*')
+    symbol = lisptype.COMMON_LISP_PACKAGE.intern_symbol(name)
     env = getattr(state, 'current_environment', None)
     if env is not None and env.has_variable(symbol):
-        value = env.find_variable(symbol)
-    else:
-        value = getattr(symbol, 'value', None)
+        return env.find_variable(symbol)
+    return getattr(symbol, 'value', None)
+
+
+def resolve_read_base():
+    """The current input radix -- the one place `*READ-BASE*` is read."""
+    value = _reader_variable_value('*READ-BASE*')
     if value is None:
         return READER_VARIABLES['*READ-BASE*']
     try:
         return numtoken.check_radix(value, '*READ-BASE*')
     except numtoken.NumericTokenError as exc:
         raise lisptype.LispTypeError(str(exc))
+
+
+def _is_nil(value):
+    return value is None or value is lisptype.NIL or (
+        isinstance(value, lisptype.LispSymbol) and value.name == 'NIL')
+
+
+def resolve_read_suppress():
+    """Whether `*READ-SUPPRESS*` is true (CLHS 23.1.2).
+
+    One resolver, like `resolve_read_base`: when it is true every reader macro
+    must consume its syntactic input and return NIL without constructing the
+    object (or without signalling the errors construction would signal, beyond
+    what consumption itself requires). It lives here beside the other reader
+    control variables because the macro-character functions in `readtable.py`
+    and the token constructors in this module must ask the *same* question --
+    two answers is how suppressed reads would still intern symbols.
+    """
+    return not _is_nil(_reader_variable_value('*READ-SUPPRESS*'))
+
+
+def resolve_read_eval():
+    """Whether `*READ-EVAL*` is true (CLHS 23.1.2) -- the `#.` gate."""
+    return not _is_nil(_reader_variable_value('*READ-EVAL*'))
 
 
 class ReaderErrorSignal(Exception):
@@ -149,32 +177,12 @@ class LispReader():
 
         CLHS 23.1.2: an escaped character "is not affected by the readtable
         case", so the conversion is per-character and driven by `escaped`.
-        This whole function is what the reader was missing: it upcased every
-        character with a bare `.upper()`, so `:PRESERVE`/`:DOWNCASE`/`:INVERT`
-        had no effect on reading at all and an escaped `|abc|` came out "ABC".
+        The rule itself lives once, in `readtable.convert_case_chars`, which
+        the readtable's own token path uses too -- two copies of it is how
+        `:PRESERVE` could work in one path and not the other.
         """
         from . import readtable as _rt
-        case = self._readtable_case()
-        if case == 'PRESERVE':
-            return ''.join(chars)
-        if case == 'UPCASE':
-            return ''.join(c.upper() if not e else c
-                           for c, e in zip(chars, escaped))
-        if case == 'DOWNCASE':
-            return ''.join(c.lower() if not e else c
-                           for c, e in zip(chars, escaped))
-        # :INVERT -- if the unescaped cased characters are all the same case,
-        # invert them; a mixed-case token is left alone (CLHS 23.1.2).
-        unescaped = [c for c, e in zip(chars, escaped) if not e and c.isalpha()]
-        has_upper = any(c.isupper() for c in unescaped)
-        has_lower = any(c.islower() for c in unescaped)
-        if has_upper and has_lower:
-            return ''.join(chars)
-        if has_upper:
-            return ''.join(c.lower() if not e else c
-                           for c, e in zip(chars, escaped))
-        return ''.join(c.upper() if not e else c
-                       for c, e in zip(chars, escaped))
+        return _rt.convert_case_chars(chars, escaped, self._readtable_case())
 
     def _check_constituent_valid(self, c):
         """A constituent whose constituent trait is *invalid* is a reader
@@ -191,6 +199,19 @@ class LispReader():
                 f"{c!r} has the invalid constituent trait (CLHS 2.1.4.2)")
 
     def read_1(self, preserve_whitespace=False):
+        from . import readtable as _rt
+        # The `#n=` label table is per *form*, not per readtable or per
+        # session: `#1=` inside one READ must not resolve `#1#` inside the
+        # next. read_1 is the one entry point every Lisp-level read funnels
+        # through (READ, READ-FROM-STRING, READ-DELIMITED-LIST, LOAD's
+        # per-form loop), so the frame lives and dies with this call.
+        _rt.label_frame_push(preserve_whitespace)
+        try:
+            return self._read_1_body(preserve_whitespace)
+        finally:
+            _rt.label_frame_pop()
+
+    def _read_1_body(self, preserve_whitespace=False):
         from . import readtable as _rt
         toss = True
         while(toss):
@@ -212,7 +233,7 @@ class LispReader():
                 if result is None:
                     toss = True
                 else:
-                    return result
+                    return self._check_result(result)
             elif syntax == _rt.SYNTAX_SINGLE_ESCAPE:
                 y = self.stream.read_char()
                 if y is None or self.stream.eof():
@@ -223,22 +244,40 @@ class LispReader():
                     # `_read_via_reader` converts either into the real
                     # condition).
                     raise EOFError("EOF after single escape")
-                return self.read_8(['\x00' if y == ':' else y], [True],
-                                   preserve_whitespace)
+                return self._check_result(
+                    self.read_8([y], [True], preserve_whitespace))
             elif syntax == _rt.SYNTAX_MULTIPLE_ESCAPE:
-                return self.read_9([], [], preserve_whitespace)
+                return self._check_result(
+                    self.read_9([], [], preserve_whitespace))
             else:
                 self._check_constituent_valid(x)
-                return self.read_8([x], [False], preserve_whitespace)
+                return self._check_result(
+                    self.read_8([x], [False], preserve_whitespace))
 
-    def read_8(self, chars, escaped=None, preserve_whitespace=False):
+    def _check_result(self, result):
+        """A lone unescaped dot token is not an object (CLHS 2.3.3).
+
+        The token constructors answer `readtable.DOT_MARKER` for one -- the
+        marker is what the list reader consumes as the dotted-pair dot -- and
+        anywhere *outside* a list it is a reader error, at top level or as an
+        object of any other construct.
+        """
+        from . import readtable as _rt
+        if result is _rt.DOT_MARKER:
+            raise ReaderErrorSignal(
+                "the single dot token is valid only as the dot in a dotted list")
+        return result
+
+    def read_8(self, chars, escaped=None, preserve_whitespace=False, saw_escape=False):
         """CLHS 2.2 step 8: accumulate an unescaped token.
 
         `chars`/`escaped` are parallel lists -- the token's characters and
         whether each was escaped -- because `readtable-case` applies only to
         the unescaped ones and that cannot be recovered from a finished
-        string. A `str` is still accepted for `chars` so an external caller
-        passing a partial token keeps working.
+        string. `saw_escape` says whether any escape *syntax* was used, even
+        an empty `||` that adds no characters but still makes a token of dots
+        an ordinary symbol (CLHS 2.3.3). A `str` is still accepted for
+        `chars` so an external caller passing a partial token keeps working.
         """
         from . import readtable as _rt
         if isinstance(chars, str):
@@ -257,10 +296,12 @@ class LispReader():
                 escaped_char = self.stream.read_char()
                 if escaped_char is None:
                     raise EOFError("EOF after single escape in token")
-                chars.append('\x00' if escaped_char == ':' else escaped_char)
+                chars.append(escaped_char)
                 escaped.append(True)
+                saw_escape = True
             elif syntax == _rt.SYNTAX_MULTIPLE_ESCAPE:
-                return self.read_9(chars, escaped, preserve_whitespace)
+                return self.read_9(chars, escaped, preserve_whitespace,
+                                   saw_escape)
             elif syntax == _rt.SYNTAX_TERMINATING_MACRO:
                 self.stream.unread_char(y)
                 more = False
@@ -281,9 +322,10 @@ class LispReader():
                 self._check_constituent_valid(y)
                 chars.append(y)
                 escaped.append(False)
-        return self.read_10(self._convert_case(chars, escaped), any(escaped))
+        return self.read_10(chars, escaped, saw_escape)
 
-    def read_9(self, chars, escaped=None, preserve_whitespace=False):
+    def read_9(self, chars, escaped=None, preserve_whitespace=False,
+               saw_escape=False):
         """CLHS 2.2 step 9: accumulate inside a multiple-escape (`|...|`).
 
         Every character is taken as-is -- escaped, so `readtable-case` leaves
@@ -293,7 +335,8 @@ class LispReader():
         string, while `|` is the multiple-escape character. Nothing reached
         this function for `"` (the macro table wins first), so `|abc|` fell
         through to the plain-token path and read as a symbol *named* `|ABC|`,
-        pipes and all.
+        pipes and all. Entering the multiple escape sets `saw_escape` even if
+        it encloses nothing (`||`).
         """
         from . import readtable as _rt
         if isinstance(chars, str):
@@ -301,80 +344,111 @@ class LispReader():
             escaped = [False] * len(chars) if escaped is None else escaped
         if escaped is None:
             escaped = [False] * len(chars)
+        saw_escape = True
         while True:
             c = self.stream.read_char()
             if c is None:
                 raise EOFError("EOF inside multiple escape")
             syntax = self._syntax_type(c)
             if syntax == _rt.SYNTAX_MULTIPLE_ESCAPE:
-                return self.read_8(chars, escaped, preserve_whitespace)
+                return self.read_8(chars, escaped, preserve_whitespace,
+                                   saw_escape)
             if syntax == _rt.SYNTAX_SINGLE_ESCAPE:
                 c = self.stream.read_char()
                 if c is None:
                     raise EOFError("EOF after single escape inside multiple escape")
-            chars.append('\x00' if c == ':' else c)
+            chars.append(c)
             escaped.append(True)
 
-
-    def read_10(self, token, escaped=False):
+    def read_10(self, chars, escaped=None, saw_escape=False):
         """CLHS 2.2 step 10: the accumulated token becomes a number or a symbol.
 
-        `escaped` says whether any character of the token was escaped, and it
-        is what step 8 now passes down: a token containing an escape is never a
-        number (CLHS 2.3.1.1), and dropping the flag here is why `|123|` read
-        as the *integer* 123 rather than as a symbol named `123`.
+        `chars` and `escaped` are parallel lists -- the token's characters and
+        whether each was escaped -- because three decisions below are
+        per-character: `readtable-case` applies only to the unescaped ones
+        (applied by `read_8` before this point), an escaped character is never
+        a package marker (CLHS 2.4.5), and a token of unescaped dots is not an
+        object (CLHS 2.3.3). The `\\x00` placeholder this used to substitute
+        for an escaped colon could not tell `\\:` from a *literal NUL
+        character* -- which `syntax.escaped.2` reads -- so the colon analysis
+        now runs on the real characters with the escape flags beside them. A
+        `str` is still accepted for `chars` so an external caller passing a
+        partial token keeps working (then nothing was escaped).
 
         The three hardcoded regexes that used to be inlined here are gone --
         `numtoken` is the one place CLHS 2.3.1 is applied, shared with the
         `#B`/`#O`/`#X`/`#nR` readers, which had their own partial copy.
         """
+        from . import readtable as _rt
+        if isinstance(chars, str):
+            chars = list(chars)
+            escaped = [False] * len(chars) if escaped is None else escaped
+        if escaped is None:
+            escaped = [False] * len(chars)
+
+        # `*READ-SUPPRESS*` (CLHS 23.1.2): consume the token, construct
+        # nothing. Checked before number parsing (a malformed number must not
+        # signal under suppression), before the dot-token rule (suppressed
+        # dots are consumed, not errors), and before interning -- a
+        # suppressed symbol must not enter any package, which is why
+        # `NONEXISTENT-PACKAGE::FOO` must not create a package here.
+        if resolve_read_suppress():
+            return lisptype.NIL
+
+        # A token consisting only of *unescaped* dots: one dot is the
+        # dotted-list marker -- `DOT_MARKER`, consumed by the list reader and
+        # a reader error anywhere else -- and two or more are an error
+        # wherever they appear (CLHS 2.3.3). Any escape syntax, even the
+        # empty `||`, makes it an ordinary symbol instead (`\.` reads as
+        # `|.|`).
+        if chars and all(c == '.' for c in chars) and \
+                not (saw_escape or any(escaped)):
+            if len(chars) == 1:
+                return _rt.DOT_MARKER
+            raise ReaderErrorSignal(
+                "a token consisting only of dots is not a valid object")
+
+        # `readtable-case` applies per character, unescaped ones only; every
+        # string below -- the package/symbol halves of a qualified name, the
+        # number token, the name interned -- is cut from the converted
+        # characters, while the colon analysis runs on the raw ones (case
+        # conversion never moves a colon).
+        converted = self._convert_case(chars, escaped)
+        colons = [i for i, (c, e) in enumerate(zip(chars, escaped))
+                  if c == ':' and not e]
+        if colons and colons[0] == 0:
+            # Keywords start with an unescaped ':' and are interned in the
+            # KEYWORD package (self-evaluating).
+            return lisptype.intern_keyword(''.join(converted[1:]),
+                                           exact_case=True)
+        if colons:
+            return self._read_package_qualified_symbol(converted, colons)
+
+        token = ''.join(converted)
         try:
             number = numtoken.parse_numeric_token(
-                token, radix=resolve_read_base(), escaped=escaped)
+                token, radix=resolve_read_base(), escaped=any(escaped))
         except numtoken.NumericTokenError as exc:
             raise ReaderErrorSignal(str(exc))
         if number is not None:
             return number
-        # Otherwise it's a symbol.
-        #
-        # `token` arrives already case-converted per `readtable-case`, with
-        # escaped characters left verbatim (see `_convert_case`). Nothing below
-        # may re-case it: the `.upper()` calls that used to be here made every
-        # symbol name upper case regardless of the readtable, which is the
-        # other half of why `:PRESERVE` had no observable effect.
-        # Keywords start with ':' and should be interned in KEYWORD package
-        if token.startswith(":"):
-            # strip leading ':' and return an interned keyword (keywords are self-evaluating)
-            name = token[1:]
-            return lisptype.intern_keyword(name.replace('\x00', ':'),
-                                           exact_case=True)
-
-        # Handle package-qualified symbols (PKG:SYM or PKG::SYM)
-        # Only treat as package-qualified if contains a real colon (not escaped placeholder \x00)
-        # Create a temporary version without placeholders to check
-        token_check = token.replace('\x00', '')
-        if ':' in token_check and not token.startswith(':'):
-            return self._read_package_qualified_symbol(token)
 
         # The current package is the value of `*PACKAGE*`; `state`'s resolver
         # is the one place that decides (see state.current_package_value).
         from . import state
         current_pkg = state.current_package_value()
 
-        # Restore escaped colons in the token before interning
-        name = token.replace('\x00', ':')
-
         # Special-case the canonical Lisp booleans/empty-list: NIL and T
         # In Common Lisp, NIL is both the symbol and the empty list; the
         # reader should return the canonical NIL object rather than a
         # fresh symbol. Similarly, T should return the global T symbol.
-        if name == 'NIL':
+        if token == 'NIL':
             return lisptype.NIL
-        if name == 'T':
+        if token == 'T':
             return lisptype.T
 
         # First check if symbol exists in current package
-        sym, status = current_pkg.find_symbol(name)
+        sym, status = current_pkg.find_symbol(token)
         if sym is not None:
             return sym
 
@@ -385,27 +459,26 @@ class LispReader():
                 used_pkg = lisptype.find_package(used_pkg)
             if used_pkg is not None:
                 # Only look for external symbols in USE'd packages
-                if name in getattr(used_pkg, 'external_symbols', set()):
-                    sym = used_pkg.symbols.get(name)
+                if token in getattr(used_pkg, 'external_symbols', set()):
+                    sym = used_pkg.symbols.get(token)
                     if sym is not None:
                         return sym
 
-        # Not found - intern in current package (with restored colons)
-        return current_pkg.intern_symbol(name, exact_case=True)
-    
-    def _read_package_qualified_symbol(self, token):
+        # Not found - intern in current package
+        return current_pkg.intern_symbol(token, exact_case=True)
+
+    def _read_package_qualified_symbol(self, chars, colons):
         """Read a package-qualified symbol like PKG:SYM or PKG::SYM.
 
-        `token` is already case-converted (see `read_10`), so neither half is
-        re-cased here.
+        `chars` is the token's characters (already case-converted per
+        `readtable-case`, see `read_10`) and `colons` the indices of its
+        *unescaped* colons; `::` is internal access, `:` external. Neither
+        half is re-cased here.
         """
-        separator = '::' if '::' in token else ':'
-        parts = token.split(separator, 1)
-        pkg_name = parts[0]
-        sym_name = parts[1] if len(parts) > 1 else ''
-        # Restore escaped colons in both halves
-        pkg_name = pkg_name.replace('\x00', ':')
-        sym_name = sym_name.replace('\x00', ':')
+        first = colons[0]
+        internal = len(colons) > 1 and colons[1] == first + 1
+        pkg_name = ''.join(chars[:first])
+        sym_name = ''.join(chars[first + (2 if internal else 1):])
 
         # Find the package
         pkg = lisptype.find_package(pkg_name)
