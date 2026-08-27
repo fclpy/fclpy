@@ -384,6 +384,18 @@ def cell_error_name(*args):
     return lisptype.NIL
 
 
+@_registry.cl_function('UNBOUND-SLOT-INSTANCE')
+def unbound_slot_instance(condition):
+    """CLHS UNBOUND-SLOT-INSTANCE: the INSTANCE slot of an UNBOUND-SLOT condition.
+
+    Returns the object whose slot was unbound, or NIL if not an UNBOUND-SLOT condition.
+    """
+    if not isinstance(condition, lisptype.UnboundSlot):
+        return lisptype.NIL
+    instance = condition.get_slot('instance')
+    return instance if instance is not None else lisptype.NIL
+
+
 @_registry.cl_function('STREAM-ERROR-STREAM')
 def stream_error_stream(condition):
     """CLHS STREAM-ERROR-STREAM: the STREAM slot of a STREAM-ERROR (and its

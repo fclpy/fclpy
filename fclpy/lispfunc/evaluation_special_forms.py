@@ -246,14 +246,15 @@ def eval_incf(form, env):
             break
         place = expansion
 
-    # Handle simple variable case. CLHS 5.1.3: place's subforms (none, for
-    # a bare variable) are evaluated before delta.
+    # Handle simple variable case. CLHS 5.1.3: evaluate the delta before
+    # reading the current value (place's subforms, none for a bare variable,
+    # are evaluated first, then delta, then the place's value is read).
     if isinstance(place, lisptype.LispSymbol):
+        delta = eval(car(delta_args), env) if _consp_internal(delta_args) else 1
         if env.has_variable(place):
             current_value = env.find_variable(place)
         else:
             current_value = 0
-        delta = eval(car(delta_args), env) if _consp_internal(delta_args) else 1
         new_value = current_value + delta
         env.set_variable(place, new_value)
         return new_value
@@ -304,14 +305,15 @@ def eval_decf(form, env):
             break
         place = expansion
 
-    # Handle simple variable case. CLHS 5.1.3: place's subforms (none, for
-    # a bare variable) are evaluated before delta.
+    # Handle simple variable case. CLHS 5.1.3: evaluate the delta before
+    # reading the current value (place's subforms, none for a bare variable,
+    # are evaluated first, then delta, then the place's value is read).
     if isinstance(place, lisptype.LispSymbol):
+        delta = eval(car(delta_args), env) if _consp_internal(delta_args) else 1
         if env.has_variable(place):
             current_value = env.find_variable(place)
         else:
             current_value = 0
-        delta = eval(car(delta_args), env) if _consp_internal(delta_args) else 1
         new_value = current_value - delta
         env.set_variable(place, new_value)
         return new_value
@@ -320,10 +322,11 @@ def eval_decf(form, env):
     # -- shared with PUSH/PUSHNEW/ROTATEF/SHIFTF/INCF, so a place newly
     # supported there works for DECF too instead of needing its own copy.
     # `_place_accessor` evaluates the place's own subforms as soon as it
-    # is called, before delta below -- `decf.order.1`'s ordering pin.
+    # is called, which by CLHS 5.1.3 must happen before delta -- see INCF
+    # for the complex-place evaluation order that was corrected by decf.order.2.
     getter, setter = _place_accessor(place, env)
-    current_value = getter()
     delta = eval(car(delta_args), env) if _consp_internal(delta_args) else 1
+    current_value = getter()
     try:
         new_value = current_value - delta
     except TypeError:
@@ -1840,14 +1843,17 @@ def _create_macro_function(macro_name, lambda_list, body, env,
 
         arg_idx = 0
 
-        # Handle &WHOLE parameter
+        # Handle &WHOLE parameter - binds the entire macro form (passed as first arg
+        # when __expects_whole__ is true), using destructuring if the pattern is complex
         whole_param = parsed_params.get('whole') if isinstance(parsed_params, dict) else None
         if whole_param is not None:
             if len(call_args) > 0:
-                macro_env.add_variable(whole_param, call_args[0])
+                whole_form = call_args[0]
+                bind_destructuring_pattern(whole_param, whole_form, macro_env)
                 arg_idx = 1
             else:
-                macro_env.add_variable(whole_param, lisptype.NIL)
+                # No whole form provided; bind to NIL
+                bind_destructuring_pattern(whole_param, lisptype.NIL, macro_env)
                 arg_idx = 1
         
         # Bind &ENVIRONMENT to the expansion-time environment if provided
@@ -1930,7 +1936,7 @@ def _create_macro_function(macro_name, lambda_list, body, env,
                 if supplied_p is not None:
                     macro_env.add_variable(supplied_p, lisptype.NIL)
 
-        # Bind &rest parameter
+        # Bind &rest parameter (which may be a plain symbol or a destructuring pattern)
         if rest_param:
             remaining_args = call_args[arg_idx:]
             if remaining_args:
@@ -1939,21 +1945,14 @@ def _create_macro_function(macro_name, lambda_list, body, env,
                     rest_list = cons(arg, rest_list)
             else:
                 rest_list = lisptype.NIL
+
             if isinstance(rest_param, lisptype.LispSymbol):
+                # Simple case: &REST var binds var to the list of remaining args
                 macro_env.add_variable(rest_param, rest_list)
-            elif _consp_internal(rest_param):
-                head = car(rest_param)
-                tail_sym = _extract_tail_symbol_from_rest(rest_param)
-                if _consp_internal(rest_list):
-                    first = car(rest_list)
-                    rest_tail = cdr(rest_list)
-                else:
-                    first = lisptype.NIL
-                    rest_tail = lisptype.NIL
-                if isinstance(head, lisptype.LispSymbol):
-                    macro_env.add_variable(head, first)
-                if tail_sym is not None:
-                    macro_env.add_variable(tail_sym, rest_tail)
+            else:
+                # Destructuring case: &REST (pattern) destructures remaining args
+                # This handles &REST (X Y Z) to bind X, Y, Z to individual elements
+                bind_destructuring_pattern(rest_param, rest_list, macro_env)
         
         # Bind &key parameters (CLHS 3.4.1.1): an init-form is evaluated, in
         # left-to-right lambda-list order, in an environment where every

@@ -9,6 +9,7 @@ classes and methods at load time without triggering assertions.
 import fclpy.lisptype as lisptype
 from fclpy.lispfunc import registry as _registry
 from .core import _consp_internal
+from .evaluation_core import ConditionException
 
 import fclpy.classes as classes
 
@@ -278,7 +279,9 @@ def _default_change_class(instance, new_class, *initargs):
 
 
 def _default_slot_unbound(class_obj, instance, slot_name):
-    raise lisptype.LispError(f"Slot unbound: {slot_name}")
+    # Pass the slot_name symbol (not converted to string) to the condition
+    cond = lisptype.UnboundSlot(name=slot_name, instance=instance)
+    raise ConditionException(cond, recoverable=False)
 
 
 def _default_slot_missing(class_obj, instance, slot_name, operation, *new_value):

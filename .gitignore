@@ -165,6 +165,7 @@ gpt5review.txt
 *.err
 
 ansi_results/
+.claude/
 
 _probe*.py
 probe_err.txt

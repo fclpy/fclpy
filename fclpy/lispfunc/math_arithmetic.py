@@ -157,6 +157,7 @@ def min_fn(*args):
 @_registry.cl_function('SIGNUM')
 def signum(x):
     """Sign of number."""
+    _ensure_number(x, 'SIGNUM')
     if x > 0:
         return 1
     elif x < 0:
@@ -168,30 +169,35 @@ def signum(x):
 @_registry.cl_function('EVENP')
 def evenp(x):
     """Test if number is even."""
+    _ensure_integer(x, 'EVENP')
     return lisptype.lisp_bool(x % 2 == 0)
 
 
 @_registry.cl_function('ODDP')
 def oddp(x):
     """Test if number is odd."""
+    _ensure_integer(x, 'ODDP')
     return lisptype.lisp_bool(x % 2 == 1)
 
 
 @_registry.cl_function('ZEROP')
 def zerop(x):
     """Test if number is zero."""
+    _ensure_number(x, 'ZEROP')
     return lisptype.lisp_bool(x == 0)
 
 
 @_registry.cl_function('PLUSP')
 def plusp(x):
     """Test if number is positive."""
+    _ensure_real(x, 'PLUSP')
     return lisptype.lisp_bool(x > 0)
 
 
 @_registry.cl_function('MINUSP')
 def minusp(x):
     """Test if number is negative."""
+    _ensure_real(x, 'MINUSP')
     return lisptype.lisp_bool(x < 0)
 
 
@@ -263,9 +269,17 @@ def _divide_and_round(x, divisor, rounder, as_float=False):
 
     `rounder` is the exact rounding operation to apply to the quotient;
     `_exact_quotient` keeps that division exact for rationals.
+
+    The F- variants return the quotient as a float but the remainder must
+    remain an integer (or the numeric type of the original inputs).
     """
-    quotient = _rounded_quotient(x, divisor, rounder, as_float)
-    return lisptype.MultipleValues(quotient, x - quotient * divisor)
+    # Compute quotient without float conversion first, for accurate remainder
+    quotient_int = _rounded_quotient(x, divisor, rounder, as_float=False)
+    # Compute remainder using the integer quotient
+    remainder = x - quotient_int * divisor
+    # Now apply float conversion to quotient if requested
+    quotient = float(quotient_int) if as_float else quotient_int
+    return lisptype.MultipleValues(quotient, remainder)
 
 
 @_registry.cl_function('ROUND')

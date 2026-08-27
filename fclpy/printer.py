@@ -277,10 +277,15 @@ class PrintContext:
         # answered `"#"` for every object, and reading that back is an
         # end-of-file, not the object.
         #
-        # The remaining controls are unaffected by design: `*print-base*`,
-        # `*print-radix*`, `*print-case*`, `*print-circle*` and
-        # `*print-pretty*` cannot make output unreadable, and the same test
-        # randomizes them and expects the round trip to hold.
+        # Additionally, when `*PRINT-READABLY*` is true and `*PRINT-BASE*` is not 10,
+        # `*PRINT-RADIX*` must be true. Otherwise, numbers like 5 printed as "101" in
+        # base 2 cannot be read back (they would be read as decimal 101, not binary 5).
+        # This is implicit in the readability contract: output that cannot be read
+        # back violates the contract regardless of whether CLHS explicitly names it.
+        #
+        # The remaining controls are unaffected by design: `*print-case*`,
+        # `*print-circle*` and `*print-pretty*` cannot make output unreadable,
+        # and the same test randomizes them and expects the round trip to hold.
         if self.readably:
             self.escape = True
             self.array = True
@@ -293,6 +298,11 @@ class PrintContext:
             raise lisptype.LispTypeError(
                 f"*PRINT-BASE* must be an integer between 2 and 36, not {base!r}")
         self.base = base
+
+        # If readably is true and base is not 10, force radix to true.
+        # Numbers in non-base-10 without radix markers cannot be read back.
+        if self.readably and self.base != 10:
+            self.radix = True
 
     def with_escape(self, escape):
         """A copy of this context with ``*PRINT-ESCAPE*`` forced.
@@ -857,6 +867,8 @@ def _write_vector(value, ctx, depth):
 
     A Python ``list`` is a *vector* here, not a list; printing it as ``(1 2 3)``
     -- which is what ``str()`` did -- made every vector read back as a cons.
+
+    `*PRINT-LENGTH*` controls the maximum number of elements to print.
     """
     if _level_exceeded(ctx, depth):
         return '#'
@@ -878,14 +890,15 @@ def _write_bit_vector(value, ctx):
     A bit vector printed as ``#(1 0 1 1)`` reads back as a *general* vector,
     which is a different type -- the distinction only became printable once
     the array model recorded an element type.
+
+    `*PRINT-LENGTH*` does not apply to bit-vectors (CLHS 22.1.4.4), so they
+    always print in full regardless of the length limit.
     """
     if not ctx.array:
         return _unreadable(value, 'BIT-VECTOR')
     from fclpy.lispfunc.arrays import array_elements
 
     bits = array_elements(value)
-    if ctx.length is not None and len(bits) > ctx.length:
-        return '#*' + ''.join(str(b) for b in bits[:ctx.length]) + '...'
     return '#*' + ''.join(str(b) for b in bits)
 
 
@@ -934,11 +947,18 @@ def _write_structure(value, ctx, depth):
     class's metaclass, not by a separate representation. Slot order comes
     from `LispClass.get_all_slots`, which preserves declaration order across
     `:include` inheritance the way the constructor already relies on.
+
+    `*PRINT-LENGTH*` controls the number of slots printed; when exceeded, the
+    output is truncated with `...` (CLHS 22.1.4.4).
     """
     if _level_exceeded(ctx, depth):
         return '#'
     parts = [_apply_print_case(value.lisp_class.name.name, ctx)]
-    for slot_name in value.lisp_class.get_all_slots():
+    all_slots = value.lisp_class.get_all_slots()
+    for slot_index, slot_name in enumerate(all_slots):
+        if ctx.length is not None and slot_index >= ctx.length:
+            parts.append('...')
+            break
         parts.append(':' + _apply_print_case(slot_name, ctx))
         parts.append(_write(value.slot_values.get(slot_name), ctx, depth + 1))
     return '#S(' + ' '.join(parts) + ')'

@@ -1,7 +1,7 @@
 """Loops and conditionals: WHEN, COND, AND, OR, PROGN, LET, quasiquote."""
 
 import fclpy.lisptype as lisptype
-from .core import car, cdr, _consp_internal, _null_internal, cons
+from .core import car, cdr, _consp_internal, _null_internal, cons, _check_list
 
 
 def _list_from(elements):
@@ -200,6 +200,32 @@ def _loop_type_default(spec):
     if _consp_internal(spec):
         return cons(_loop_type_default(car(spec)), _loop_type_default(cdr(spec)))
     return _LOOP_ZERO_BY_TYPE.get(_loop_sym_name(spec), lisptype.NIL)
+
+
+def _validate_proper_list(value, context):
+    """Ensure a value is a proper list (CLHS 14.1), not dotted (e.g., (A . B)).
+
+    CLHS 6.1.2.1.3 specifies that FOR x IN requires a proper list.
+    A proper list terminates in NIL; a dotted list has a non-NIL, non-cons tail.
+    Raises TYPE-ERROR if the value is not a list or is a dotted list.
+    """
+    # First check that it's a list at all (cons or NIL)
+    _check_list(value, context)
+
+    # Now walk the list to ensure it's proper (ends in NIL, not dotted)
+    current = value
+    while _consp_internal(current):
+        tail = current.cdr
+        if _null_internal(tail):
+            # Proper termination in NIL
+            return value
+        if not _consp_internal(tail):
+            # Dotted list: tail is neither cons nor NIL
+            raise lisptype.LispTypeError(
+                f"{context}: {value!r} is not a proper list",
+                expected_type="proper LIST", actual_value=value)
+        current = tail
+    return value
 
 
 class LoopWatchdog:
@@ -2122,6 +2148,10 @@ def eval_loop(form, env):
             kind = driver['kind']
             if kind in ('for-in', 'for-on'):
                 driver['_cur'] = eval(driver['list'], loop_env)
+                # CLHS 6.1.2.1.3: FOR x IN requires a proper list (CLHS 14.1).
+                # A proper list terminates in NIL; a dotted list like (A . B) is not.
+                if kind == 'for-in':
+                    _validate_proper_list(driver['_cur'], 'LOOP FOR x IN')
                 # CLHS 6.1.2.1.3: BY names the step function (default CDR);
                 # `driver['step']` is unevaluated (e.g. `#'cddr`) exactly like
                 # every other driver's BY, and was never consulted here --
@@ -2720,29 +2750,26 @@ def eval_do_star(form, env):
 
 def eval_dolist(form, env):
     """Evaluate DOLIST special form.
-    
+
     (DOLIST (var list-form [result-form]) declaration* {tag | statement}*)
     """
     from .evaluation_core import eval
-    
+
     args = cdr(form)
     if not _consp_internal(args):
         return lisptype.NIL
-    
+
     # Parse (var list-form [result-form])
     var_clause = car(args)
     body = cdr(args)
-    
+
     if not _consp_internal(var_clause):
         raise lisptype.LispNotImplementedError("DOLIST requires (var list-form) clause")
-    
+
     var = car(var_clause)
     list_form = car(cdr(var_clause)) if _consp_internal(cdr(var_clause)) else lisptype.NIL
     result_form = car(cdr(cdr(var_clause))) if _consp_internal(cdr(cdr(var_clause))) else lisptype.NIL
-    
-    # Evaluate list
-    lst = eval(list_form, env)
-    
+
     # Create loop environment
     loop_env = lisptype.Environment(env)
     frame = BindingFrame(loop_env, body=body, bound_vars=[var])
@@ -2750,6 +2777,12 @@ def eval_dolist(form, env):
     frame.bind(var, lisptype.NIL)
 
     def _loop():
+        # Evaluate list-form in the outer env (CLHS 6.2.8.2: "in the current lexical
+        # environment") so variable bindings and shadowing are respected. The RETURN
+        # exception will still be caught by _run_with_nil_block, so RETURN in the
+        # list-form exits the DOLIST's implicit block.
+        lst = eval(list_form, env)
+
         # Iterate over list
         current_list = lst
         while _consp_internal(current_list):
@@ -2772,38 +2805,44 @@ def eval_dolist(form, env):
 
 def eval_dotimes(form, env):
     """Evaluate DOTIMES special form.
-    
+
     (DOTIMES (var count-form [result-form]) declaration* {tag | statement}*)
     """
     from .evaluation_core import eval
-    
+
     args = cdr(form)
     if not _consp_internal(args):
         return lisptype.NIL
-    
+
     # Parse (var count-form [result-form])
     var_clause = car(args)
     body = cdr(args)
-    
+
     if not _consp_internal(var_clause):
         raise lisptype.LispNotImplementedError("DOTIMES requires (var count-form) clause")
-    
+
     var = car(var_clause)
     count_form = car(cdr(var_clause)) if _consp_internal(cdr(var_clause)) else 0
     result_form = car(cdr(cdr(var_clause))) if _consp_internal(cdr(cdr(var_clause))) else lisptype.NIL
-    
-    # Evaluate count
-    count = eval(count_form, env)
-    if not isinstance(count, (int, float)):
-        count = 0
-    count = int(count)
-    
+
     # Create loop environment
     loop_env = lisptype.Environment(env)
     frame = BindingFrame(loop_env, body=body, bound_vars=[var])
     _, body = body_specials(body)
 
     def _loop():
+        # Evaluate count-form in the outer env (CLHS 6.2.7.2: "in the current lexical
+        # environment") so variable bindings and shadowing are respected. The RETURN
+        # exception will still be caught by _run_with_nil_block, so RETURN in the
+        # count-form exits the DOTIMES's implicit block.
+        count = eval(count_form, env)
+        if not isinstance(count, (int, float)):
+            count = 0
+        count = int(count)
+        # CLHS 6.2.7: if count is not a non-negative integer, coerce it to >= 0
+        if count < 0:
+            count = 0
+
         # Iterate count times
         for i in range(count):
             frame.bind(var, i)

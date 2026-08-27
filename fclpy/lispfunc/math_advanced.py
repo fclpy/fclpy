@@ -68,8 +68,12 @@ def expt(base, power):
 @_registry.cl_function('ISQRT')
 def isqrt(x):
     """Integer square root."""
+    from .math_arithmetic import _ensure_integer
+    _ensure_integer(x, 'ISQRT')
     if x < 0:
-        raise ValueError("isqrt requires non-negative input")
+        raise lisptype.LispTypeError(
+            f"ISQRT: Argument is not a non-negative INTEGER: {x}",
+            expected_type="(INTEGER 0 *)", actual_value=x)
     return int(math.sqrt(x))
 
 # Trigonometric functions

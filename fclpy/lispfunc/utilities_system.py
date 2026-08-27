@@ -524,25 +524,36 @@ def random(limit, state=None):
     """Generate random number up to limit.
 
     Args:
-        limit: Upper bound (exclusive). Must be positive integer or float.
+        limit: Upper bound (exclusive). Must be positive real number.
         state: Optional random state to use. If None, uses *RANDOM-STATE*.
 
     Returns:
         Random integer in [0, limit) if limit is integer.
         Random float in [0.0, limit) if limit is float.
     """
+    from fractions import Fraction
     rs = state if isinstance(state, RandomState) else current_random_state()
 
+    # Type check - must be a positive real number
+    if not isinstance(limit, (int, float, Fraction)):
+        raise lisptype.LispTypeError(
+            f"RANDOM: Argument is not a REAL: {limit}",
+            expected_type="(REAL (0 *))", actual_value=limit)
+
+    if isinstance(limit, complex):
+        raise lisptype.LispTypeError(
+            f"RANDOM: Argument is not a REAL: {limit}",
+            expected_type="(REAL (0 *))", actual_value=limit)
+
+    if limit <= 0:
+        raise lisptype.LispTypeError(
+            f"RANDOM: Argument must be positive: {limit}",
+            expected_type="(REAL (0 *))", actual_value=limit)
+
     if isinstance(limit, int):
-        if limit <= 0:
-            raise lisptype.LispError("RANDOM: limit must be positive")
         return rs.randrange(limit)
-    elif isinstance(limit, float):
-        if limit <= 0:
-            raise lisptype.LispError("RANDOM: limit must be positive")
+    else:  # float or Fraction
         return rs.random() * limit
-    else:
-        raise lisptype.LispNotImplementedError("RANDOM: invalid limit type")
 
 
 @_registry.cl_function('MAKE-RANDOM-STATE')

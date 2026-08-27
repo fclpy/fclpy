@@ -591,11 +591,12 @@ def parse_lambda_list(lambda_list):
                 current = cdr(current)
                 continue
             elif marker == '&WHOLE':
-                # &WHOLE takes a single following symbol which is bound to the
-                # entire macro form; consume that symbol and record it.
-                next_sym = car(cdr(current)) if _consp_internal(cdr(current)) else None
-                if isinstance(next_sym, lisptype.LispSymbol):
-                    whole = next_sym
+                # &WHOLE takes a single following parameter which can be a symbol
+                # or a destructuring pattern, and is bound to the entire macro form.
+                # Consume that parameter and record it.
+                next_param = car(cdr(current)) if _consp_internal(cdr(current)) else None
+                if isinstance(next_param, lisptype.LispSymbol) or _consp_internal(next_param):
+                    whole = next_param
                 # Advance past &WHOLE and its parameter
                 current = cdr(cdr(current))
                 continue
