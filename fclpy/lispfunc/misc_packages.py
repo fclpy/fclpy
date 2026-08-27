@@ -480,14 +480,82 @@ def list_all_packages():
 
 @_registry.cl_function('UNINTERN')
 def unintern(symbol, package=None):
-    """Remove symbol from package."""
+    """Remove symbol from package (CLHS 11.2).
+
+    If the symbol is present in the package (as either an internal,
+    external, or shadowing symbol), UNINTERN removes it and returns T.
+    If successful, the symbol's home package becomes NIL (unless it's
+    inherited from a used package, in which case the package is unchanged).
+    If the symbol is not found in the package, returns NIL.
+
+    Signals a PACKAGE-ERROR if uninterning the symbol would create a name
+    conflict: if the symbol exists in multiple used packages with external
+    visibility and no other shadowing symbol would resolve the conflict.
+    """
     name = _designator_to_string(symbol)
     pkg = coerce_to_package(package)
     name = name.upper()
     if name in pkg.symbols:
+        # Get the actual symbol object for updating its package
+        sym = pkg.symbols[name]
+
+        # Check for name conflicts (CLHS 11.2: "package consistency")
+        # When uninterning a shadowing symbol that shadows inherited symbols,
+        # check if there are multiple different symbols with the same name
+        # in the inheritance chain. If so, signal an error because removing
+        # the shadowing symbol would create ambiguity.
+        if name in getattr(pkg, 'shadowing_symbols', set()):
+            # Find all external symbols with this name in used packages
+            # Track by symbol identity to detect conflicts
+            # Note: We exclude the symbol we're uninterning (sym)
+            symbols_by_id = {}
+            seen_packages = set()
+            sym_id_to_exclude = id(sym)  # Don't count the symbol being uninterned
+
+            for used_pkg in getattr(pkg, 'use_packages', []):
+                used_pkg_obj = (
+                    lisptype.find_package(used_pkg)
+                    if isinstance(used_pkg, str)
+                    else used_pkg
+                )
+                if used_pkg_obj is None:
+                    continue
+
+                # Skip if we've already processed this package
+                # (in case use_packages has duplicates)
+                pkg_id = id(used_pkg_obj)
+                if pkg_id in seen_packages:
+                    continue
+                seen_packages.add(pkg_id)
+
+                # Check if this used package exports the symbol
+                if name in getattr(used_pkg_obj, 'external_symbols', set()):
+                    found_sym = used_pkg_obj.symbols.get(name)
+                    if found_sym is not None:
+                        found_sym_id = id(found_sym)
+                        # Skip the symbol we're uninterning itself
+                        if found_sym_id == sym_id_to_exclude:
+                            continue
+                        if found_sym_id not in symbols_by_id:
+                            symbols_by_id[found_sym_id] = found_sym
+
+            # If there are multiple different symbols, signal an error
+            # (but only if there's actual conflict - different symbols)
+            if len(symbols_by_id) > 1:
+                from .evaluation_conditions import signal_error_object
+                condition = lisptype.PackageError(
+                    message=f"Uninterning {name} from {pkg.name} would create "
+                    f"a name conflict (multiple symbols with same name in use list)")
+                return signal_error_object(condition)
+
         del pkg.symbols[name]
         pkg.external_symbols.discard(name)
         pkg.shadowing_symbols.discard(name)
+        # Clear the symbol's home package only if its home IS this package
+        # (CLHS 11.1: "the symbol becomes uninterned"). If the symbol is
+        # inherited from a used package, its package attribute stays unchanged.
+        if isinstance(sym, lisptype.LispSymbol) and sym.package is pkg:
+            sym.package = None
         return lisptype.T
     return lisptype.NIL
 

@@ -201,24 +201,37 @@ def defclass(name, direct_superclasses=None, slots=None, **options):
     default_initargs_raw = options.get('default_initargs', None) or []
     default_initargs = [(key, form, definition_env) for (key, form) in default_initargs_raw]
 
-    # If this name is currently a *forward-referenced* class -- some earlier
-    # DEFCLASS named it as a superclass before it existed -- fill that same
-    # object in rather than building a new one. Its identity is load-bearing:
-    # the subclass already holds a reference to it, and DEFCLASS must return
-    # the object `(find-class name)` answers (CLHS 4.3.7; see
-    # `classes.define_forward_referenced_class`).
+    # CLHS requires that when a class is redefined, the identity is preserved --
+    # the same class object is modified rather than a new one created. This applies
+    # both to forward-referenced classes (where a placeholder was created earlier)
+    # and to regular classes being redefined.
     existing = classes.find_class(
         name.name if isinstance(name, lisptype.LispSymbol) else str(name))
-    if existing is not None and existing.forward_referenced:
-        lisp_class = classes.define_forward_referenced_class(
-            existing,
-            direct_superclasses=parsed_superclasses,
-            direct_slots=slot_defs,
-            documentation=documentation,
-            direct_default_initargs=default_initargs,
-        )
+    if existing is not None:
+        if existing.forward_referenced:
+            # Fill in a forward-referenced placeholder class
+            lisp_class = classes.define_forward_referenced_class(
+                existing,
+                direct_superclasses=parsed_superclasses,
+                direct_slots=slot_defs,
+                documentation=documentation,
+                direct_default_initargs=default_initargs,
+            )
+        else:
+            # Redefine an existing class: modify it in place to preserve identity
+            existing.direct_superclasses = parsed_superclasses
+            existing.direct_slots = slot_defs
+            existing.documentation = documentation
+            existing.direct_default_initargs = default_initargs
+            # Clear class slots since the slot definitions changed
+            existing.class_slots.clear()
+            # Invalidate cached CPL since the class changed
+            existing._cpl_cache = None
+            # Increment the instance generation so existing instances know to update
+            existing.instance_generation += 1
+            lisp_class = existing
     else:
-        # Create the class directly (don't use classes.defclass since we've already parsed)
+        # Create a new class
         lisp_class = classes.make_class(
             name=name,
             direct_superclasses=parsed_superclasses,

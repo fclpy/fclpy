@@ -304,6 +304,14 @@ class PrintContext:
         if self.readably and self.base != 10:
             self.radix = True
 
+        # If readably is true and base is 10, force radix to false.
+        # The base-10 radix marker (a trailing decimal point) makes integers
+        # unreadable: they read back as floats, violating the promise of
+        # *PRINT-READABLY*. An integer 1 printed with radix in base 10 becomes
+        # "1.", which reads back as 1.0 (a float), not 1 (an integer).
+        if self.readably and self.base == 10:
+            self.radix = False
+
     def with_escape(self, escape):
         """A copy of this context with ``*PRINT-ESCAPE*`` forced.
 
@@ -508,11 +516,24 @@ CHARACTER_NAMES = {
 
 
 def character_name(char):
-    """The printed name of `char` after ``#\\``."""
+    """The printed name of `char` after ``#\\``.
+
+    CHARACTER_NAMES takes priority over ``isprintable()`` — CLHS assigns
+    Space (among others) a standard name, and Python's ``str.isprintable()``
+    considers the ASCII space printable, so checking printability first
+    printed a bare space after ``#\\`` instead of ``Space``. ``#\\ `` does not
+    read back reliably (the reader sees a character literal immediately
+    followed by whitespace), which is exactly the regression this order
+    prevents.
+    """
     if char in CHARACTER_NAMES:
         return CHARACTER_NAMES[char]
+    # Printable characters with no standard name are printed directly.
     if char.isprintable():
         return char
+    # Fallback for non-printable characters without standard names is
+    # implementation-defined; we use Unicode hex notation. This cannot be read
+    # back, so it violates *PRINT-READABLY*, which is handled in _write_character.
     return f'U+{ord(char):04X}'
 
 
@@ -527,7 +548,12 @@ def _write_character(value, ctx):
     char = value.char if isinstance(value, Character) else str(value)
     if not ctx.escape:
         return char
-    return '#\\' + character_name(char)
+    name = character_name(char)
+    # If we're printing readably and the character has no standard name and
+    # is not printable, the #\U+XXXX syntax is not readable. Signal an error.
+    if ctx.readably and name.startswith('U+'):
+        return _write_unreadable_checked(value, 'CHARACTER', ctx)
+    return '#\\' + name
 
 
 def _write_string(value, ctx):

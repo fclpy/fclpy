@@ -601,8 +601,13 @@ class Package(lispT):
         return (None, None)
     
     def export_symbol(self, name):
-        """Export a symbol from this package.
-        
+        """Export a symbol from this package (CLHS 11.2).
+
+        If a symbol is inherited from a used package, exporting it promotes
+        it to be directly present in this package (same symbol object,
+        unchanged home package). If a symbol is internal to this package,
+        it becomes external.
+
         Args:
             name: Symbol name (string) or LispSymbol
         """
@@ -613,16 +618,31 @@ class Package(lispT):
             name_str = name.name
         else:
             name_str = str(name).upper()
-            # If the symbol exists in this package, prefer that object
+            # If the symbol exists in this package, use it
             symbol_obj = self.symbols.get(name_str)
 
-        # Ensure the package has the symbol object registered
+        # If symbol not found locally, check inherited symbols (CLHS 11.1.2.1.2)
         if symbol_obj is None:
-            # Create a new LispSymbol for this package if needed
+            for used_pkg in getattr(self, 'use_packages', []):
+                # Handle both Package objects and package names
+                if isinstance(used_pkg, str):
+                    used_pkg = find_package(used_pkg)
+                if used_pkg is not None and hasattr(used_pkg, 'external_symbols'):
+                    # Only look at external symbols of used packages
+                    if name_str in used_pkg.external_symbols:
+                        sym = used_pkg.symbols.get(name_str)
+                        if sym is not None:
+                            # Promote the inherited symbol to be directly present
+                            symbol_obj = sym
+                            self.symbols[name_str] = sym
+                            break
+
+        # If still no symbol found, create a new one
+        if symbol_obj is None:
             symbol_obj = LispSymbol(name_str, package=self)
             self.symbols[name_str] = symbol_obj
 
-        # Store the symbol name (strings only) as the exported symbol
+        # Export the symbol (add to external_symbols set)
         self.external_symbols.add(name_str)
     
     def import_symbol(self, symbol):

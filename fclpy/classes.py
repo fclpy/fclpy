@@ -166,25 +166,77 @@ class LispClass:
     
     def get_all_slots(self) -> Dict[str, SlotDefinition]:
         """Get all slots (direct and inherited) as a dict by slot name.
-        
+
         Returns:
             Dictionary mapping slot name -> SlotDefinition
             Later slot definitions (from subclasses) override earlier ones.
+            CLHS 7.5.3: initforms and initargs are inherited.
         """
         slots = {}
-        
+
         # Get slots from superclasses first (reverse order for override)
         for cls in reversed(self.get_linearized_superclasses()):
             if cls is self:
                 continue
             for slot in cls.direct_slots:
                 slots[slot.name.name] = slot
-        
+
         # Add direct slots (these override parent slots)
         for slot in self.direct_slots:
-            slots[slot.name.name] = slot
+            slot_name = slot.name.name
+            modified = False
+            initform = slot.initform
+            initargs = list(slot.initargs)  # Make a copy
+            definition_env = slot.definition_env
+
+            # CLHS 7.5.3: if a subclass redefines a slot from a parent class,
+            # it should inherit the initform and initargs from the parent
+            if slot_name in slots:
+                parent_slot = slots[slot_name]
+
+                # Inherit initform if not provided
+                if slot.initform is None and parent_slot.initform is not None:
+                    initform = parent_slot.initform
+                    definition_env = definition_env or parent_slot.definition_env
+                    modified = True
+
+                # Accumulate initargs (parent's first, then child's)
+                # This way, when both are supplied, the leftmost wins per CLHS 7.1.2
+                if parent_slot.initargs:
+                    initargs = list(parent_slot.initargs) + initargs
+                    modified = True
+
+            # If we accumulated anything, create a modified slot definition
+            if modified or initargs != slot.initargs:
+                slot = SlotDefinition(
+                    name=slot.name,
+                    type_spec=slot.type_spec,
+                    initform=initform,
+                    initargs=initargs,
+                    allocation=slot.allocation,
+                    documentation=slot.documentation,
+                    readers=slot.readers,
+                    writers=slot.writers,
+                    accessors=slot.accessors,
+                    read_only=slot.read_only,
+                    definition_env=definition_env
+                )
+            slots[slot_name] = slot
 
         return slots
+
+    def find_slot_definition_class(self, slot_name: str) -> Optional['LispClass']:
+        """Find which class in the hierarchy originally defined a slot.
+
+        For class-allocated slots, all instances of a class and its subclasses
+        share the slot storage on the class that defined it. This method finds
+        that defining class so SLOT-VALUE can access the correct class_slots dict.
+        """
+        for cls in self.get_linearized_superclasses():
+            for slot in cls.direct_slots:
+                if slot.name.name == slot_name:
+                    return cls
+        return None
 
     def get_all_default_initargs(self) -> Dict[str, Any]:
         """CLHS 7.1.8 point 2: the default initargs in effect for this class

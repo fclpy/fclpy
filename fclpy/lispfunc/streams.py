@@ -617,17 +617,26 @@ def flush_output(stream=None):
 
 @_registry.cl_function('STREAM-POSITION')
 def stream_position(stream):
-    """Get the current position in a stream.
-    
+    """Get the current position in a stream (CLHS 21.2).
+
+    For a StringInputStream, returns the absolute position in the original
+    string (including the start offset), not the relative position in the
+    sliced substring.
+
     Args:
         stream: Stream to query
-    
+
     Returns:
         Integer position
     """
     if not isinstance(stream, Stream):
         raise TypeError(f"Expected Stream, got {type(stream)}")
-    
+
+    # For StringInputStream, position is relative to the substring start,
+    # but STREAM-POSITION should return the absolute position in the original
+    if isinstance(stream, StringInputStream):
+        return stream.position + stream.start_offset
+
     return stream.get_position()
 
 
@@ -731,10 +740,10 @@ def open_stream_p(stream):
 
 class StringInputStream(Stream):
     """Input stream that reads from a string."""
-    
+
     def __init__(self, string, start=0, end=None):
         """Create a string input stream.
-        
+
         Args:
             string: The string to read from
             start: Starting index (default 0)
@@ -744,6 +753,9 @@ class StringInputStream(Stream):
             end = len(string)
         self.string = string[start:end]
         self.position = 0
+        # Track the offset so that STREAM-POSITION returns the absolute position
+        # in the original string, not the relative position in the substring
+        self.start_offset = start
         # Create a StringIO for the underlying file object
         file_obj = _io.StringIO(self.string)
         super().__init__("<string-input-stream>", file_obj, 'input', 'character')
@@ -868,7 +880,14 @@ class FillPointerOutputStream(Stream):
     """
 
     def __init__(self, target, element_type='character'):
-        if not isinstance(target, lisptype.LispString):
+        from .arrays import LispArray
+        # Accept both LispString and LispArray (character vectors)
+        if isinstance(target, LispArray):
+            if target.rank != 1:
+                raise lisptype.LispTypeError(
+                    f"WITH-OUTPUT-TO-STRING: {target!r} has rank {target.rank}, not 1",
+                    expected_type='(SIMPLE-VECTOR CHARACTER)', actual_value=target)
+        elif not isinstance(target, lisptype.LispString):
             raise lisptype.LispTypeError(
                 f"WITH-OUTPUT-TO-STRING: {target!r} is not a string",
                 expected_type='STRING', actual_value=target)
@@ -888,6 +907,7 @@ class FillPointerOutputStream(Stream):
         return char
 
     def write_sequence(self, sequence):
+        from .arrays import LispArray
         if isinstance(sequence, lisptype.Character):
             text = chr(sequence.code)
         elif isinstance(sequence, (list, tuple)):
@@ -896,16 +916,25 @@ class FillPointerOutputStream(Stream):
                 for c in sequence)
         else:
             text = str(sequence)
-        for char in text:
-            # Append past the fill pointer, growing the backing store: the
-            # string is adjustable in every use the suite makes of it, and
-            # `_data`/`fill_pointer` is the same pair VECTOR-PUSH-EXTEND moves.
-            if self.target.fill_pointer < len(self.target._data):
-                self.target._data[self.target.fill_pointer] = char
-            else:
-                self.target._data.append(char)
-            self.target.fill_pointer += 1
-            self.position += 1
+
+        if isinstance(self.target, LispArray):
+            # For LispArray, use row_major_set to handle displacement
+            for char in text:
+                self.target.row_major_set(self.target.fill_pointer, char)
+                self.target.fill_pointer += 1
+                self.position += 1
+        else:
+            # For LispString, directly access _data
+            for char in text:
+                # Append past the fill pointer, growing the backing store: the
+                # string is adjustable in every use the suite makes of it, and
+                # `_data`/`fill_pointer` is the same pair VECTOR-PUSH-EXTEND moves.
+                if self.target.fill_pointer < len(self.target._data):
+                    self.target._data[self.target.fill_pointer] = char
+                else:
+                    self.target._data.append(char)
+                self.target.fill_pointer += 1
+                self.position += 1
         return sequence
 
     def peek_string(self):
@@ -916,43 +945,60 @@ class FillPointerOutputStream(Stream):
 
 
 @_registry.cl_function('%MAKE-FILL-POINTER-OUTPUT-STREAM')
-def make_fill_pointer_output_stream(target):
+def make_fill_pointer_output_stream(target, element_type='character'):
     """The stream `(WITH-OUTPUT-TO-STRING (var string) ...)` expands to.
 
     Named with a `%` prefix because it is not an ANSI operator -- it is the
     macro's runtime, the same way `%SPECIAL-REF` is a declaration's runtime.
+
+    Args:
+        target: The string to write into
+        element_type: The element type of the stream (optional)
     """
-    return FillPointerOutputStream(target)
+    return FillPointerOutputStream(target, element_type)
 
 
 @_registry.cl_function('MAKE-STRING-INPUT-STREAM')
-def make_string_input_stream(string, start=0, end=None):
+def make_string_input_stream(string, start=0, end=lisptype.OMITTED):
     """Create a string input stream.
-    
+
     Creates an input stream from which characters can be read.
     The characters are taken from the string between start and end.
-    
+    Handles any Lisp sequence (LispString, LispArray, list, etc.) and
+    converts it to a string for reading.
+
     Args:
-        string: The string to read from
+        string: The string to read from (sequence)
         start: Starting index (default 0)
-        end: Ending index (default len(string))
-    
+        end: Ending index (default None, meaning full length)
+
     Returns:
         A StringInputStream object
-    
+
     Example:
         (make-string-input-stream \"hello world\")
         (make-string-input-stream \"hello world\" 0 5)
     """
-    # Convert LispString to Python string
-    import fclpy.lisptype as lisptype
-    if isinstance(string, lisptype.LispString):
-        string = str(string)
-    elif not isinstance(string, str):
-        raise TypeError(f"Expected string, got {type(string)}")
-    if end is None:
-        end = len(string)
-    return StringInputStream(string, start, end)
+    from .sequence_protocol import seq_elements, seq_length
+
+    # Get elements through seq_elements which handles all sequence types
+    # (LispString, LispArray, list, str, etc.)
+    try:
+        elements = seq_elements(string, 'MAKE-STRING-INPUT-STREAM')
+        # Convert elements (which may be Character objects) back to a string
+        text = ''.join(
+            chr(e.code) if isinstance(e, lisptype.Character) else str(e)
+            for e in elements)
+    except lisptype.LispTypeError:
+        # Re-raise sequence type errors with the right context
+        raise
+
+    # Handle start/end parameters. When end is OMITTED or None/NIL, use full length.
+    # start is always an integer (CLHS specifies this).
+    if end is lisptype.OMITTED or end is None or end is lisptype.NIL:
+        end = len(text)
+
+    return StringInputStream(text, start, end)
 
 
 @_registry.cl_function('MAKE-STRING-OUTPUT-STREAM')

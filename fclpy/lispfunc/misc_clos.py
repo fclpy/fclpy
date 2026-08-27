@@ -196,7 +196,8 @@ def _default_allocate_instance(cls, *initargs):
 def _default_shared_initialize(instance, slot_names, *initargs):
     initarg_map = _initargs_to_map(initargs)
     initarg_positions = _initargs_to_positions(initargs)
-    for name, slot_def in instance.lisp_class.get_all_slots().items():
+    cls = instance.lisp_class
+    for name, slot_def in cls.get_all_slots().items():
         supplied = False
         # CLHS 7.1.2: a slot may declare more than one :initarg. Of the
         # ones actually supplied to this call, the one occurring leftmost
@@ -207,20 +208,40 @@ def _default_shared_initialize(instance, slot_names, *initargs):
         supplied_keys = [k for k in supplied_keys if k in initarg_map]
         if supplied_keys:
             winner = min(supplied_keys, key=lambda k: initarg_positions[k])
-            instance.slot_values[name] = initarg_map[winner]
+            value = initarg_map[winner]
             supplied = True
-        # A slot with no declared :initarg still accepts a same-named
-        # keyword as a convenience (predates this rewrite; no ANSI test
-        # can rely on it, since real CLHS-conforming code always declares
-        # the initarg it uses, but existing direct-Python callers of
-        # MAKE-INSTANCE do).
-        if not supplied and name in initarg_map:
-            instance.slot_values[name] = initarg_map[name]
-            supplied = True
-        if not supplied and name not in instance.slot_values \
-                and slot_def.initform is not None \
-                and _slot_names_selects(slot_names, name):
-            instance.slot_values[name] = _eval_initform(slot_def)
+        else:
+            # A slot with no declared :initarg still accepts a same-named
+            # keyword as a convenience (predates this rewrite; no ANSI test
+            # can rely on it, since real CLHS-conforming code always declares
+            # the initarg it uses, but existing direct-Python callers of
+            # MAKE-INSTANCE do).
+            if name in initarg_map:
+                value = initarg_map[name]
+                supplied = True
+
+        if slot_def.allocation == "class":
+            defining_class = cls.find_slot_definition_class(name) or cls
+            already_bound = name in defining_class.class_slots
+        else:
+            defining_class = None
+            already_bound = name in instance.slot_values
+
+        # CLHS 7.1.2 / 7.5.3: an initarg always (re)sets the slot. Absent
+        # one, the slot's initform applies only when slot-names selects it
+        # AND the slot is not already bound -- shared-initialize.1.10 sets
+        # slot A to 1000 then calls (shared-initialize obj '(a)) and requires
+        # A to still be 1000 afterward, not reset to its initform.
+        if supplied or (not already_bound and slot_def.initform is not None
+                        and _slot_names_selects(slot_names, name)):
+            if not supplied:
+                value = _eval_initform(slot_def)
+
+            if slot_def.allocation == "class":
+                # Store in the class that defined this slot
+                defining_class.class_slots[name] = value
+            else:
+                instance.slot_values[name] = value
     return instance
 
 
@@ -833,10 +854,24 @@ def slot_value(instance, slot_name):
     _update_if_obsolete(instance)
     name = _slot_name_str(slot_name)
     cls = instance.lisp_class
-    if name not in cls.get_all_slots():
+    slot_def = cls.get_all_slots().get(name)
+    if slot_def is None:
         return lisptype.primary_value(classes.call_generic_function(
             _protocol_gf('SLOT-MISSING'),
             [cls, instance, slot_name, _op_sym('SLOT-VALUE')]))
+
+    # For class-allocated slots, read from the class that defined them
+    # (all subclasses share the same class slot on the defining class)
+    if slot_def.allocation == "class":
+        defining_class = cls.find_slot_definition_class(name)
+        if defining_class is None:
+            defining_class = cls
+        if name not in defining_class.class_slots:
+            return lisptype.primary_value(classes.call_generic_function(
+                _protocol_gf('SLOT-UNBOUND'), [cls, instance, slot_name]))
+        return defining_class.class_slots[name]
+
+    # For instance-allocated slots, read from instance.slot_values
     if name not in instance.slot_values:
         return lisptype.primary_value(classes.call_generic_function(
             _protocol_gf('SLOT-UNBOUND'), [cls, instance, slot_name]))
@@ -854,12 +889,21 @@ def set_slot_value(value, instance, slot_name):
         raise lisptype.LispTypeError(f"SLOT-VALUE: not an instance: {instance}")
     name = _slot_name_str(slot_name)
     cls = instance.lisp_class
-    if name not in cls.get_all_slots():
+    slot_def = cls.get_all_slots().get(name)
+    if slot_def is None:
         classes.call_generic_function(
             _protocol_gf('SLOT-MISSING'),
             [cls, instance, slot_name, _op_sym('SETF'), value])
     else:
-        instance.slot_values[name] = value
+        # For class-allocated slots, write to the class that defined them
+        if slot_def.allocation == "class":
+            defining_class = cls.find_slot_definition_class(name)
+            if defining_class is None:
+                defining_class = cls
+            defining_class.class_slots[name] = value
+        # For instance-allocated slots, write to instance.slot_values
+        else:
+            instance.slot_values[name] = value
     return value
 
 
@@ -869,10 +913,19 @@ def slot_boundp(instance, slot_name):
         return lisptype.NIL
     name = _slot_name_str(slot_name)
     cls = instance.lisp_class
-    if name not in cls.get_all_slots():
+    slot_def = cls.get_all_slots().get(name)
+    if slot_def is None:
         return lisptype.primary_value(classes.call_generic_function(
             _protocol_gf('SLOT-MISSING'),
             [cls, instance, slot_name, _op_sym('SLOT-BOUNDP')]))
+
+    # For class-allocated slots, check the class that defined them
+    if slot_def.allocation == "class":
+        defining_class = cls.find_slot_definition_class(name)
+        if defining_class is None:
+            defining_class = cls
+        return lisptype.T if name in defining_class.class_slots else lisptype.NIL
+    # For instance-allocated slots, check instance.slot_values
     return lisptype.T if name in instance.slot_values else lisptype.NIL
 
 
@@ -881,12 +934,21 @@ def slot_makunbound(instance, slot_name):
     if isinstance(instance, classes.LispInstance):
         name = _slot_name_str(slot_name)
         cls = instance.lisp_class
-        if name not in cls.get_all_slots():
+        slot_def = cls.get_all_slots().get(name)
+        if slot_def is None:
             classes.call_generic_function(
                 _protocol_gf('SLOT-MISSING'),
                 [cls, instance, slot_name, _op_sym('SLOT-MAKUNBOUND')])
         else:
-            instance.slot_values.pop(name, None)
+            # For class-allocated slots, remove from the class that defined them
+            if slot_def.allocation == "class":
+                defining_class = cls.find_slot_definition_class(name)
+                if defining_class is None:
+                    defining_class = cls
+                defining_class.class_slots.pop(name, None)
+            # For instance-allocated slots, remove from instance.slot_values
+            else:
+                instance.slot_values.pop(name, None)
     return instance
 
 

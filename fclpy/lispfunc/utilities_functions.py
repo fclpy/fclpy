@@ -458,9 +458,12 @@ def lambda_parameters_limit():
     return 64
 
 
-# The sequence type specifiers COERCE shares with MAP/CONCATENATE/MERGE.
+# The sequence type specifiers COERCE supports for result-type.
+# CLHS 4.4.68 specifies that COERCE result-type can be a sequence type or class.
+# For sequences, this includes LIST (but not CONS - CONS is a type, not a
+# sequence result-type), VECTOR, ARRAY, STRING, and their subtypes.
 _SEQUENCE_TYPE_NAMES = frozenset((
-    'LIST', 'CONS', 'VECTOR', 'SIMPLE-VECTOR', 'ARRAY', 'SIMPLE-ARRAY',
+    'LIST', 'VECTOR', 'SIMPLE-VECTOR', 'ARRAY', 'SIMPLE-ARRAY',
     'STRING', 'SIMPLE-STRING', 'BASE-STRING', 'SIMPLE-BASE-STRING',
     'BIT-VECTOR', 'SIMPLE-BIT-VECTOR', 'SEQUENCE',
 ))
@@ -469,53 +472,78 @@ _SEQUENCE_TYPE_NAMES = frozenset((
 @_registry.cl_function('COERCE')
 def coerce(object, result_type):
     """Coerce object to the specified type.
-    
+
     Supports:
     - (COERCE sequence 'LIST) - converts sequence to list
     - (COERCE list 'VECTOR) - converts list to vector
-    - (COERCE sequence 'STRING) - converts sequence of characters to string  
+    - (COERCE sequence 'STRING) - converts sequence of characters to string
     - (COERCE character 'CHARACTER) - identity for characters
     - (COERCE number 'FLOAT) - converts integer to float
     - (COERCE number 'SINGLE-FLOAT) - converts to single-precision float
     - (COERCE number 'DOUBLE-FLOAT) - converts to double-precision float
     - (COERCE x 'T) - identity coercion
     - (COERCE object 'FUNCTION) - coerce to function
+    - (COERCE object class-object) - identity if object is of that class
     """
+    from .comparison import typep
+    from fclpy import classes
+
     # Get the type name as a string for comparison
     type_name = result_type
     if isinstance(result_type, lisptype.LispSymbol):
         type_name = result_type.name
+    elif isinstance(result_type, classes.LispClass):
+        # Handle class objects: check if object is already an instance of this class
+        # Fall through to the final typep check at the end
+        type_name = None
     elif hasattr(result_type, '__name__'):
         type_name = result_type.__name__
-    
+
     # Normalize type name to uppercase string
     if isinstance(type_name, str):
         type_name = type_name.upper()
 
-    # Compound COMPLEX, e.g. `(complex short-float)`: a list, so `type_name`
-    # above never matches it by name and it fell all the way through to the
-    # "unsupported result type" error. The component type isn't tracked
-    # separately here -- there is one Python `complex` behind every CL
-    # complex subtype, the same simplification `comparison.py` documents for
-    # the four CL float subtypes sharing one Python `float` -- so building it
-    # is the plain COMPLEX branch below, just also reached from a list head.
+    # Compound type specifiers like (COMPLEX ...), (VECTOR ...), (ARRAY ...) etc.
+    # These are lists, so type_name above is None and we need to extract the head.
     if _consp_internal(result_type):
         head = car(result_type)
         head_name = head.name.upper() if hasattr(head, 'name') else str(head).upper()
+
+        # Compound COMPLEX, e.g. `(complex short-float)`: a list, so `type_name`
+        # above never matches it by name and it fell all the way through to the
+        # "unsupported result type" error. The component type isn't tracked
+        # separately here -- there is one Python `complex` behind every CL
+        # complex subtype, the same simplification `comparison.py` documents for
+        # the four CL float subtypes sharing one Python `float` -- so building it
+        # is the plain COMPLEX branch below, just also reached from a list head.
         if head_name == 'COMPLEX':
             if isinstance(object, complex):
                 return object
-            elif isinstance(object, (int, float, Fraction)):
+            elif isinstance(object, float):
+                # Only floats become complex with an imaginary part
                 return complex(object, 0)
+            elif isinstance(object, (int, Fraction)):
+                # Integers and ratios stay as-is (they are already valid COMPLEX)
+                return object
             else:
                 raise lisptype.LispTypeError(f"COERCE: cannot convert to COMPLEX",
                                             expected_type=result_type,
                                             actual_value=object)
 
+        # Sequence type specifiers like (VECTOR *), (VECTOR * 2), etc.
+        # Check if object is already of this type first (identity coercion),
+        # before trying to build a sequence.
+        if head_name in _SEQUENCE_TYPE_NAMES:
+            # First check if object is already of this type
+            if typep(object, result_type) == lisptype.T:
+                return object
+            # Otherwise, try to build the sequence
+            return build_sequence(result_type, seq_elements(object, 'COERCE'), 'COERCE')
+
     # T - identity coercion (always works)
     if type_name == 'T':
         return object
-    
+
     # LIST / VECTOR / STRING and their subtypes are *sequence* type
     # specifiers, so they are built by the one sequence protocol rather than
     # by three more branches here. The branches this replaced were a fourth
@@ -523,39 +551,61 @@ def coerce(object, result_type):
     # branch returned a Python list, which is a **vector**, so
     # `(coerce "abc" 'list)` answered `#("a" "b" "c")` and `(listp ...)` of it
     # was NIL (plan.md standing rule 3, Finding M).
-    if type_name in _SEQUENCE_TYPE_NAMES:
+    # First check if object is already of this type (identity coercion).
+    if type_name is not None and type_name in _SEQUENCE_TYPE_NAMES:
+        if typep(object, result_type) == lisptype.T:
+            return object
         return build_sequence(result_type, seq_elements(object, 'COERCE'), 'COERCE')
 
-    # CHARACTER - must already be a character
+    # CHARACTER - accept characters and single-character strings/symbols
     if type_name == 'CHARACTER':
-        if isinstance(object, str) and len(object) == 1:
+        # Character object (from lisptype_basic.Character)
+        if isinstance(object, lisptype.Character):
             return object
+        # Single-character string (Python str)
+        elif isinstance(object, str) and len(object) == 1:
+            # Python strings should be returned as-is (they are characters)
+            return object
+        # LispString (single character)
+        elif isinstance(object, lisptype.LispString) and len(object) == 1:
+            # Extract the single character from the LispString and return as Character
+            from fclpy.lisptype_basic import Character
+            return Character(str(object)[0])
+        # Symbol with single character name
+        elif isinstance(object, lisptype.LispSymbol) and len(object.name) == 1:
+            # Return the first character as a Character object
+            from fclpy.lisptype_basic import Character
+            return Character(object.name[0])
         else:
             raise lisptype.LispTypeError(f"COERCE: cannot convert to CHARACTER",
                                         expected_type="CHARACTER",
                                         actual_value=object)
-    
+
     # FLOAT, SINGLE-FLOAT, DOUBLE-FLOAT - convert number to float
     if type_name in ('FLOAT', 'SINGLE-FLOAT', 'SHORT-FLOAT', 'DOUBLE-FLOAT', 'LONG-FLOAT'):
-        if isinstance(object, (int, float)):
+        if isinstance(object, (int, float, Fraction)):
             return float(object)
         else:
             raise lisptype.LispTypeError(f"COERCE: cannot convert {type(object).__name__} to FLOAT",
                                         expected_type="FLOAT",
                                         actual_value=object)
-    
-    # COMPLEX - convert to complex number
+
+    # COMPLEX - convert to complex number (floats only; ints/ratios stay as-is)
     if type_name == 'COMPLEX':
         if isinstance(object, complex):
             return object
-        elif isinstance(object, (int, float)):
+        elif isinstance(object, float):
             return complex(object, 0)
+        elif isinstance(object, (int, Fraction)):
+            # Integers and ratios are valid COMPLEX (with imaginary part 0),
+            # but COERCE does not change their representation
+            return object
         else:
             raise lisptype.LispTypeError(f"COERCE: cannot convert to COMPLEX",
                                         expected_type="COMPLEX",
                                         actual_value=object)
-    
-    # FUNCTION - coerce to function (e.g., from symbol)
+
+    # FUNCTION - coerce to function (e.g., from symbol or lambda form)
     if type_name == 'FUNCTION':
         if callable(object):
             return object
@@ -569,20 +619,50 @@ def coerce(object, result_type):
             raise lisptype.LispTypeError(f"COERCE: undefined function {object.name}",
                                         expected_type="FUNCTION",
                                         actual_value=object)
+        elif _consp_internal(object):
+            # Lambda form - evaluate it to get a function
+            from .evaluation_core import eval as lisp_eval
+            try:
+                func = lisp_eval(object, state.current_environment)
+                if callable(func):
+                    return func
+            except Exception:
+                pass
+            raise lisptype.LispTypeError(f"COERCE: cannot convert to FUNCTION",
+                                        expected_type="FUNCTION",
+                                        actual_value=object)
         else:
             raise lisptype.LispTypeError(f"COERCE: cannot convert to FUNCTION",
                                         expected_type="FUNCTION",
                                         actual_value=object)
-    
+
     # CLHS `coerce`: "if OBJECT is already of the given type, ... coerce
     # simply returns it." That is a general rule, not a per-type branch --
     # it is what makes `(coerce 2000 'integer)` and `(coerce 1/2 'rational)`
     # work without INTEGER/RATIONAL/RATIO/REAL/NUMBER each needing their own
     # copy of "return the object", so it belongs as the fallback here
     # instead of one more `if type_name == ...` above.
-    from .comparison import typep
+    # This also handles class objects: if the object is an instance of the class,
+    # return it unchanged.
     if typep(object, result_type) == lisptype.T:
         return object
+
+    # Special handling for class objects: if result_type is a class object,
+    # try to convert the object using the sequence protocol if it's convertible
+    if isinstance(result_type, classes.LispClass):
+        # Check if the class name corresponds to a sequence type
+        if hasattr(result_type, 'name'):
+            name = result_type.name
+            if isinstance(name, lisptype.LispSymbol):
+                class_name = name.name.upper()
+            else:
+                class_name = str(name).upper()
+            if class_name in _SEQUENCE_TYPE_NAMES:
+                # Try to build a sequence of this class type
+                try:
+                    return build_sequence(class_name, seq_elements(object, 'COERCE'), 'COERCE')
+                except Exception:
+                    pass
 
     # If we get here, the type is not supported
     raise lisptype.LispTypeError(f"COERCE: unsupported result type {result_type}",

@@ -534,6 +534,9 @@ def with_output_to_string_macro(spec, *body):
         body...
         (GET-OUTPUT-STREAM-STRING var))
 
+    Supports the :ELEMENT-TYPE keyword parameter:
+      (WITH-OUTPUT-TO-STRING (var :element-type 'base-char) body...)
+
     so the form returns the accumulated string. When a string argument is
     supplied -- `(WITH-OUTPUT-TO-STRING (var string) body...)` -- output is
     appended to that string instead and the form returns the *body's* value,
@@ -549,17 +552,33 @@ def with_output_to_string_macro(spec, *body):
     var, rest = _binding_parts(spec)
     positional = _strip_keywords(rest)
 
-    if positional:
+    # Extract :element-type keyword if present
+    keywords = {}
+    tail = rest[len(positional):]
+    for i in range(0, len(tail) - 1, 2):
+        key = tail[i]
+        if isinstance(key, lisptype.lispKeyword):
+            keywords[str(key.name).upper()] = tail[i + 1]
+
+    # Check if a non-NIL string was supplied as the first positional argument
+    has_string = (positional and
+                  positional[0] is not None and
+                  positional[0] is not lisptype.NIL)
+
+    if has_string:
         # Output accumulates into the supplied string and the value is the
         # body's, so `var` is bound to a stream that *writes into that string*
         # (streams.FillPointerOutputStream). This used to bind a fresh
         # MAKE-STRING-OUTPUT-STREAM and never transfer its contents anywhere,
         # so the supplied string stayed empty however much the body printed --
         # the measurement gate described on that class.
-        stream_form = _cons_from([
+        make_args = [
             lisptype.LispSymbol('%MAKE-FILL-POINTER-OUTPUT-STREAM'),
             positional[0],
-        ])
+        ]
+        if 'ELEMENT-TYPE' in keywords:
+            make_args.extend([lisptype.intern_keyword('ELEMENT-TYPE'), keywords['ELEMENT-TYPE']])
+        stream_form = _cons_from(make_args)
         binding = _cons_from([var, stream_form])
         return _cons_from([
             lisptype.LispSymbol('LET'),
@@ -567,7 +586,10 @@ def with_output_to_string_macro(spec, *body):
             _progn_of(body),
         ])
 
-    stream_form = _cons_from([lisptype.LispSymbol('MAKE-STRING-OUTPUT-STREAM')])
+    make_args = [lisptype.LispSymbol('MAKE-STRING-OUTPUT-STREAM')]
+    if 'ELEMENT-TYPE' in keywords:
+        make_args.extend([lisptype.intern_keyword('ELEMENT-TYPE'), keywords['ELEMENT-TYPE']])
+    stream_form = _cons_from(make_args)
     binding = _cons_from([var, stream_form])
     get_string = _cons_from([lisptype.LispSymbol('GET-OUTPUT-STREAM-STRING'), var])
 
@@ -738,10 +760,12 @@ def with_input_from_string_macro(spec, *body):
     """Macro expander for WITH-INPUT-FROM-STRING (CLHS 21.2).
 
     Transforms:
-      (WITH-INPUT-FROM-STRING (var string &key start end) body...)
-    into:
-      (LET ((var (MAKE-STRING-INPUT-STREAM string start end)))
-        body...)
+      (WITH-INPUT-FROM-STRING (var string &key start end index) body...)
+    into a form that creates a string input stream, executes the body, and
+    updates the :INDEX place with the final stream position if provided.
+
+    The :INDEX parameter, if provided, is a place that will be updated after
+    the body executes to contain the final position in the stream.
 
     The form returns the body's value. Like its output counterpart this was
     a `cl_function` stub, so its binding spec was evaluated as a call.
@@ -766,8 +790,46 @@ def with_input_from_string_macro(spec, *body):
             make_args.append(keywords['END'])
 
     binding = _cons_from([var, _cons_from(make_args)])
+
+    # If :INDEX is provided, wrap the body to update the index place with the
+    # stream's final position after execution.
+    if 'INDEX' in keywords:
+        index_place = keywords['INDEX']
+        # Use an UNWIND-PROTECT-like approach: execute the body, always update
+        # the index place, and return the body result.
+        if body:
+            # (progn body... (setf index-place (stream-position var)))
+            # But we need to capture the body result first, then update index,
+            # then return the body result. Use a PROG1 pattern.
+            wrapped_body = [
+                _cons_from([
+                    lisptype.LispSymbol('PROG1'),
+                    _cons_from([lisptype.LispSymbol('PROGN')] + list(body)),
+                    _cons_from([
+                        lisptype.LispSymbol('SETF'),
+                        index_place,
+                        _cons_from([lisptype.LispSymbol('STREAM-POSITION'), var])
+                    ])
+                ])
+            ]
+        else:
+            # No body: just set index and return nil
+            wrapped_body = [
+                _cons_from([
+                    lisptype.LispSymbol('PROGN'),
+                    _cons_from([
+                        lisptype.LispSymbol('SETF'),
+                        index_place,
+                        _cons_from([lisptype.LispSymbol('STREAM-POSITION'), var])
+                    ]),
+                    lisptype.NIL
+                ])
+            ]
+    else:
+        wrapped_body = list(body)
+
     return _cons_from(
-        [lisptype.LispSymbol('LET'), _cons_from([binding])] + list(body)
+        [lisptype.LispSymbol('LET'), _cons_from([binding])] + wrapped_body
     )
 
 
