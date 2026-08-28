@@ -26,25 +26,50 @@ history is preserved in condensed form in [Changelog](docs/changelog.md).
 
 ## 1. Status
 
-**Latest full run: 2026-08-27 (the second of two that day). 94.05% passing,
-1306 failing, and the run that found and then verified a real regression
-before it could reach the baseline.**
+**Latest full run: 2026-08-28. 95.4% passing, 1004 failing.**
 
 ```
-COMPLETENESS: total=21881 passed=20575 failed=1306 accounted=21881 missing=0 extra=0
+COMPLETENESS: total=21881 passed=20877 failed=1004 accounted=21881 missing=0 extra=0
 COMPLETENESS: OK
 ```
 
-| | value | previous full run (2026-08-27, first) | previous full run (2026-08-24) |
+| | value | previous full run (2026-08-27, second) | previous full run (2026-08-27, first) |
 |---|---|---|---|
 | Registered tests | 21881 | 21881 | 21881 |
 | Executed (`accounted`) | **21881 (100%)** | 21881 (100%) | 21881 (100%) |
-| Passed | **20575 (94.05%)** | 20553 (93.9%) | 19779 (90.4%) |
-| Failed | **1306** | 1328 | 2102 |
+| Passed | **20877 (95.4%)** | 20575 (94.05%) | 20553 (93.9%) |
+| Failed | **1004** | 1306 | 1328 |
 | Never executed | **0** | 0 | 0 |
-| Wall time | ~102 minutes | ~127 minutes | ~131 minutes |
+| Wall time | ~127 minutes (7612s) | ~102 minutes | ~127 minutes |
 
-`docs/ansi_checklist_baseline.json` was refreshed from this run (`ansi_checklist.py --save-baseline`) — the only way that file is allowed to move (§7, "Ways to fake compliance"). `gate.py` is clean against it.
+`docs/ansi_checklist_baseline.json` was refreshed from this run
+(`ansi_checklist.py --save-baseline`) — the only way that file is allowed to
+move (§7, "Ways to fake compliance"). Refreshing it was **not** contingent on
+a clean gate this time: the run surfaced four small file-level regressions
+against the 2026-08-27 baseline —
+
+| file | 08-27 baseline | 08-28 | delta |
+|---|---|---|---|
+| `numbers/number-comparison.lsp` | 8 | 14 | +6 |
+| `numbers/divide.lsp` | 12 | 13 | +1 |
+| `printer/format/format-e.lsp` | 1 | 3 | +2 |
+| `types-and-classes/types-and-class.lsp` | 8 | 9 | +1 |
+
+— and they were **accepted in writing rather than root-caused**: the user
+explicitly asked for the baseline to move to this run's numbers without first
+isolating the regressing commits. That is a deliberate exception to the
+default rule in [Ways to fake compliance](#ways-to-fake-compliance) ("only
+once the regression is understood and accepted in writing or fixed"); the
+"accepted in writing" branch is what was invoked, not "understood." These
+four files are real, un-investigated regressions carried forward as debt —
+they are not visible as `+N REGRESSION` markers any more because the baseline
+now equals the current run, but they represent a net decline from 08-27 in
+those four files specifically, inside a run whose total moved forward
+(1306 → 1004 failing) by a wide enough margin that the aggregate number does
+not surface it. Whoever next touches `number-comparison.lsp`, `divide.lsp`,
+`format-e.lsp` or `types-and-class.lsp` should diff their current failures
+against what 08-27's checklist recorded for them before assuming a clean
+slate.
 
 > ### Same day, two full runs — why
 >
