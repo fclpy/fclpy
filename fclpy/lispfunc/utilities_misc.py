@@ -69,6 +69,7 @@ from .misc_clos import (
     generic_function_lambda_list,
     generic_function_methods,
     generic_function_name,
+    make_load_form,
 )
 
 from .misc_packages import (
@@ -91,7 +92,8 @@ from .misc_packages import (
     macroexpand_1,
 )
 
-from .classes import defclass, class_name
+from .classes import defclass
+from .misc_clos import class_name
 
 from .arrays import (
     fill_pointer,
@@ -182,7 +184,6 @@ from .misc_macros import (
     step,
     provide,
     require,
-    make_load_form,
     make_load_form_saving_slots,
     get_optimization_policy,
     is_variable_special,
@@ -351,7 +352,7 @@ __all__ = [
     'step',
     'provide',
     'require',
-    'make_load_form',
+    # 'make_load_form' is now a generic function registered in misc_clos.py
     'make_load_form_saving_slots',
     'fill_pointer',
     'documentation',

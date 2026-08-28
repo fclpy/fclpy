@@ -281,10 +281,20 @@ class _PackageIterator:
                             seen.add(id(sym))
                             symbols.append((sym, kind, pkg))
                 else:  # INTERNAL: present but NOT exported (CLHS 11.2)
-                    exported = getattr(pkg, 'external_symbols', ()) or ()
+                    # external_symbols might contain symbol names (strings) or symbol objects
+                    # Normalize to a set of names for comparison
+                    exported_set = set()
+                    for item in (getattr(pkg, 'external_symbols', ()) or ()):
+                        if isinstance(item, str):
+                            exported_set.add(item)
+                        elif hasattr(item, 'name'):
+                            exported_set.add(item.name)
+                        else:
+                            exported_set.add(str(item))
+
                     for sym in package_symbols(pkg, 'present-symbols'):
                         name = sym.name if hasattr(sym, 'name') else str(sym)
-                        if name in exported:
+                        if name in exported_set:
                             continue
                         if id(sym) not in seen:
                             seen.add(id(sym))
@@ -385,15 +395,63 @@ def make_package(*args):
 
 @_registry.cl_function('PACKAGE-NAME')
 def package_name(package):
-    """Get package name."""
-    pkg = coerce_to_package(package)
+    """Get package name (CLHS 11.2).
+
+    Returns NIL if the package has been deleted.
+    Raises TYPE-ERROR if the argument is not a valid package designator.
+    """
+    # Check if it's a package object
+    if isinstance(package, lisptype.Package):
+        pkg = package
+    elif package is None or package is lisptype.NIL:
+        # NIL means current package
+        pkg = state.current_package_value()
+    else:
+        # Try to interpret as a string designator
+        try:
+            name_str = _designator_to_string(package)
+            pkg = lisptype.find_package(name_str)
+            if pkg is None:
+                raise lisptype.LispTypeError(
+                    f"PACKAGE-NAME: {package!r} is not a valid package designator",
+                    expected_type='PACKAGE', actual_value=package)
+        except (AttributeError, TypeError):
+            raise lisptype.LispTypeError(
+                f"PACKAGE-NAME: {package!r} is not a valid package designator",
+                expected_type='PACKAGE', actual_value=package)
+
+    # After DELETE-PACKAGE, the package is marked as deleted
+    if getattr(pkg, '_deleted', False):
+        return lisptype.NIL
     return lisptype.LispString(pkg.name)
 
 
 @_registry.cl_function('PACKAGE-NICKNAMES')
 def package_nicknames(package):
-    """Get package nicknames."""
-    pkg = coerce_to_package(package)
+    """Get package nicknames (CLHS 11.2).
+
+    Raises TYPE-ERROR if the argument is not a valid package designator.
+    """
+    # Check if it's a package object
+    if isinstance(package, lisptype.Package):
+        pkg = package
+    elif package is None or package is lisptype.NIL:
+        # NIL means current package
+        pkg = state.current_package_value()
+    else:
+        # Try to interpret as a string designator
+        try:
+            name_str = _designator_to_string(package)
+            pkg = lisptype.find_package(name_str)
+            if pkg is None:
+                raise lisptype.LispTypeError(
+                    f"PACKAGE-NICKNAMES: {package!r} is not a valid package designator",
+                    expected_type='PACKAGE', actual_value=package)
+        except (AttributeError, TypeError):
+            raise lisptype.LispTypeError(
+                f"PACKAGE-NICKNAMES: {package!r} is not a valid package designator",
+                expected_type='PACKAGE', actual_value=package)
+
     # Package class uses `nick_names`; accept either for compatibility
     names = getattr(pkg, 'nick_names', None) or getattr(pkg, 'nicknames', [])
     return _lisp_list(lisptype.LispString(n) for n in names)
@@ -401,10 +459,38 @@ def package_nicknames(package):
 
 @_registry.cl_function('RENAME-PACKAGE')
 def rename_package(package, new_name, new_nicknames=None):
-    """Rename a package."""
-    if isinstance(package, lisptype.Package):
-        package.name = str(new_name)
-    return package
+    """Rename a package (CLHS 11.2).
+
+    Changes the package's name and nicknames in the global registry.
+    Returns the package object.
+    """
+    pkg = coerce_to_package(package)
+    new_name_str = _designator_to_string(new_name)
+
+    # Remove old entries from registry
+    old_name = pkg.name
+    if old_name in state.packages and state.packages[old_name] is pkg:
+        del state.packages[old_name]
+    for nick in getattr(pkg, 'nick_names', []):
+        if nick in state.packages and state.packages[nick] is pkg:
+            del state.packages[nick]
+
+    # Update package name
+    pkg.name = new_name_str
+
+    # Update nicknames
+    new_nicks = []
+    if new_nicknames is not None:
+        for nick_designator in _as_list(new_nicknames):
+            new_nicks.append(_designator_to_string(nick_designator))
+    pkg.nick_names = new_nicks
+
+    # Add new entries to registry
+    state.packages[new_name_str] = pkg
+    for nick in new_nicks:
+        state.packages[nick] = pkg
+
+    return pkg
 
 
 @_registry.cl_function('PACKAGE-USE-LIST')
@@ -636,13 +722,31 @@ def unuse_package(packages, package=None):
 
 @_registry.cl_function('DELETE-PACKAGE')
 def delete_package(package):
-    """Delete a package by instance or name.
+    """Delete a package (CLHS 11.2).
 
-    Removes the package from the global package registry and
-    from other packages' use-lists. Returns T if deleted, NIL otherwise.
+    Removes the package from the global package registry, from other packages'
+    use-lists, and clears the package's name to mark it as deleted.
+    Returns T if deleted, NIL if already deleted (when given a package object).
+    Signals PACKAGE-ERROR if a package designator is not found.
     """
-    pkg = package if isinstance(package, lisptype.Package) else lisptype.find_package(_designator_to_string(package))
+    if isinstance(package, lisptype.Package):
+        pkg = package
+        is_object = True
+    else:
+        is_object = False
+        designator_str = _designator_to_string(package)
+        pkg = lisptype.find_package(designator_str)
+
     if pkg is None:
+        # Package not found by designator: signal PACKAGE-ERROR
+        from .evaluation_conditions import signal_error_object
+        condition = lisptype.PackageError(message=f"Package not found")
+        condition.package = package
+        signal_error_object(condition)
+
+    # If the package has already been deleted
+    if getattr(pkg, '_deleted', False):
+        # Return NIL without error (package was already deleted)
         return lisptype.NIL
 
     # Remove any entries in state.packages that point to this package
@@ -665,6 +769,10 @@ def delete_package(package):
                 getattr(p, 'use_list').remove(pkg)
         except Exception:
             pass
+
+    # Mark the package as deleted by adding a marker attribute
+    # (we can't set name to None because other code iterates over it)
+    pkg._deleted = True
 
     return lisptype.T
 

@@ -447,8 +447,6 @@ def make_list(size, *, initial_element=None):
     side became a proper Lisp list -- exactly what happened once FORMATTER's
     tail was fixed to return one.
     """
-    if isinstance(size, lisptype.lispCons):
-        size = size.car
     # CLHS: size is an `unsigned-byte`. `int(size)` accepted a float and then
     # tried to build the list, so `(make-list 1.0e18)` allocated until the
     # process died -- see arrays.nonnegative_integer.

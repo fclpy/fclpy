@@ -1550,14 +1550,11 @@ def require(module_name, pathname_list=None):
 
 
 # --- Form utilities ---
-@_registry.cl_function('MAKE-LOAD-FORM')
-def make_load_form(object, environment=None):
-    """Make load form."""
-    return object
-
+# MAKE-LOAD-FORM is registered as a generic function in misc_clos.py,
+# not here, so that user code can define methods on it via DEFMETHOD.
 
 @_registry.cl_function('MAKE-LOAD-FORM-SAVING-SLOTS')
-def make_load_form_saving_slots(object, *, slot_names=lisptype.OMITTED):
+def make_load_form_saving_slots(object, *, slot_names=lisptype.OMITTED, environment=lisptype.OMITTED):
     """MAKE-LOAD-FORM-SAVING-SLOTS (CLHS 3.2.4.4): the two forms that rebuild
     `object` -- a *creation form* and an *initialization form*.
 
@@ -1787,7 +1784,7 @@ __all__ = [
     'step',
     'provide',
     'require',
-    'make_load_form',
+    # make_load_form is now a generic function in misc_clos.py
     'make_load_form_saving_slots',
     # documentation moved to misc_clos.py (a generic function, not a plain one)
     'get_optimization_policy',

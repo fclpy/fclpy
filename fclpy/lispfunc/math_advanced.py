@@ -40,8 +40,62 @@ def _irrational(real_fn, complex_fn, x):
 # Exponential and logarithmic functions
 @_registry.cl_function('EXP')
 def exp(x):
-    """Exponential function."""
-    return _irrational(math.exp, cmath.exp, x)
+    """Exponential function.
+
+    CLHS 12.1.5.1: Must signal FLOATING-POINT-OVERFLOW or FLOATING-POINT-UNDERFLOW
+    when the result is too large or too small for the float type.
+    """
+    try:
+        result = _irrational(math.exp, cmath.exp, x)
+    except OverflowError:
+        # Python's math.exp raised OverflowError before we could get a result
+        from fclpy.lispfunc.evaluation_conditions import signal_condition
+        signal_condition(lisptype.FloatingPointOverflow(
+            f"EXP: result overflows the range of the float type"))
+        return
+
+    # Check if result overflows/underflows
+    if isinstance(result, (int, float)):
+        # For real results, check overflow/underflow
+        from fclpy.lispfunc.evaluation_conditions import signal_condition
+
+        # Short/single float range
+        short_max = 3.4028235e+38
+        short_min = 1.4e-45
+
+        # Double/long float range (Python's full range)
+        double_max = sys.float_info.max
+        double_min = sys.float_info.min
+
+        # Check for overflow (result larger than ANY type's max)
+        if abs(result) > double_max:
+            signal_condition(lisptype.FloatingPointOverflow(
+                f"EXP: result overflows the range of the float type"))
+            return
+
+        if abs(result) > short_max:
+            signal_condition(lisptype.FloatingPointOverflow(
+                f"EXP: result overflows the range of the float type"))
+            return
+
+        # Check for underflow. If result is 0.0, check if it's due to underflow
+        # by examining the input: if x < log(double_min), then exp(x) would underflow
+        if isinstance(x, (int, float)):
+            # log(sys.float_info.min) is approximately -744.4 for IEEE 754 doubles
+            underflow_threshold = math.log(double_min)
+            if x < underflow_threshold:
+                signal_condition(lisptype.FloatingPointUnderflow(
+                    f"EXP: result underflows the range of the float type"))
+                return
+
+        # Also check for small non-zero results that are below the minimum normal
+        if result != 0.0:
+            if abs(result) < double_min or abs(result) < short_min:
+                signal_condition(lisptype.FloatingPointUnderflow(
+                    f"EXP: result underflows the range of the float type"))
+                return
+
+    return result
 
 @_registry.cl_function('LOG')
 def log(x, base=None):
@@ -107,7 +161,32 @@ def _check_float_overflow(result, base):
 
 @_registry.cl_function('EXPT')
 def expt(base, power):
-    """Raise base to power."""
+    """Raise base to power.
+
+    CLHS 12.1.4.1: x^0 must equal 1 for any x. If the result overflows or
+    underflows, signal FLOATING-POINT-OVERFLOW or FLOATING-POINT-UNDERFLOW.
+    Complex results with zero imaginary part should be simplified to reals.
+    """
+    # Special case: any number to the power 0 is 1, preserving the type
+    if power == 0:
+        if isinstance(base, float):
+            return 1.0
+        elif isinstance(base, complex):
+            # Check if the base is an exact complex (created from exact inputs)
+            # In Python, all complex parts are floats, but we can heuristically detect
+            # exact complex if both real and imaginary parts are whole numbers.
+            # Exact complex (like #C(1 1) in Lisp) => return exact 1
+            # Float complex (like #C(1.5f0 2.3f0)) => return #C(1.0 0.0)
+            if (isinstance(base.real, int) or base.real == int(base.real)) and \
+               (isinstance(base.imag, int) or base.imag == int(base.imag)):
+                # Both parts look like whole numbers: treat as exact
+                return 1
+            else:
+                # At least one part has fractional component: return float complex
+                return complex(1.0, 0.0)
+        else:
+            return 1
+
     try:
         result = base ** power
     except OverflowError:
@@ -115,7 +194,33 @@ def expt(base, power):
         # Signal overflow based on base's type
         _signal_float_overflow(base)
         return
+    except ZeroDivisionError:
+        # 0.0 to a negative or complex power raises ZeroDivisionError
+        from fclpy.lispfunc.evaluation_conditions import signal_condition
+        signal_condition(lisptype.DivisionByZero(
+            f"EXPT: 0.0 to a negative or complex power"))
+        return
+
+    # If result is complex with zero imaginary part, simplify to real
+    if isinstance(result, complex) and result.imag == 0.0:
+        result = result.real
+
+    # Check for overflow/underflow
     _check_float_overflow(result, base)
+
+    # Additional underflow check: if result is 0.0 but base is non-zero and small,
+    # it might be an underflow that Python truncated to 0.0
+    if isinstance(result, float) and result == 0.0:
+        if isinstance(base, float) and base != 0.0:
+            from fclpy.lispfunc.evaluation_conditions import signal_condition
+            # If base is smaller than sqrt(double_min) and power > 1, it underflows
+            double_min = sys.float_info.min
+            underflow_threshold = math.sqrt(double_min)
+            if abs(base) < underflow_threshold and isinstance(power, (int, float)) and power > 1:
+                signal_condition(lisptype.FloatingPointUnderflow(
+                    f"EXPT: result underflows the range of the float type"))
+                return
+
     return result
 
 

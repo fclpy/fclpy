@@ -3581,6 +3581,32 @@ def eval_pop(form, env):
     return old_value.car
 
 
+def _remf_expander(*args):
+    """REMF macro expander: mark REMF as a macro for MACRO-FUNCTION.
+
+    This is the callable returned by (MACRO-FUNCTION 'REMF). It is flagged
+    with __is_macro__ so the macro-expander recognises it.
+
+    REMF works with generalized places and returns a boolean, so a simple
+    expansion is not practical. The actual expansion is handled by the
+    evaluator's special form dispatch to eval_remf.
+    """
+    # This function is not meant to be called as a macro expander during
+    # evaluation -- the evaluator routes REMF directly to eval_remf.
+    # This function exists only so that (MACRO-FUNCTION 'REMF) returns
+    # a callable, marking REMF as a macro.
+    raise lisptype.LispNotImplementedError("REMF macro expander should not be called directly")
+
+# Mark as a proper macro callable and register it so (MACRO-FUNCTION 'REMF) returns it.
+_remf_expander.__is_macro__ = True
+_registry.function_registry['REMF'] = _registry.RegistryEntry(
+    name='REMF',
+    py_name='_remf_expander',
+    kind='macro',
+    func=_remf_expander,
+)
+
+
 def eval_remf(form, env):
     """Evaluate REMF special form.
 
@@ -3683,6 +3709,32 @@ def eval_push(form, env):
     new_value = cons(item, getter())
     setter(new_value)
     return new_value
+
+
+def _pushnew_expander(*args):
+    """PUSHNEW macro expander: mark PUSHNEW as a macro for MACRO-FUNCTION.
+
+    This is the callable returned by (MACRO-FUNCTION 'PUSHNEW). It is flagged
+    with __is_macro__ so the macro-expander recognises it.
+
+    Unlike PUSH, PUSHNEW supports keyword arguments and generalized places,
+    so a simple expansion is not practical here. The actual expansion is
+    handled by the evaluator's special form dispatch to eval_pushnew.
+    """
+    # This function is not meant to be called as a macro expander during
+    # evaluation -- the evaluator routes PUSHNEW directly to eval_pushnew.
+    # This function exists only so that (MACRO-FUNCTION 'PUSHNEW) returns
+    # a callable, marking PUSHNEW as a macro.
+    raise lisptype.LispNotImplementedError("PUSHNEW macro expander should not be called directly")
+
+# Mark as a proper macro callable and register it so (MACRO-FUNCTION 'PUSHNEW) returns it.
+_pushnew_expander.__is_macro__ = True
+_registry.function_registry['PUSHNEW'] = _registry.RegistryEntry(
+    name='PUSHNEW',
+    py_name='_pushnew_expander',
+    kind='macro',
+    func=_pushnew_expander,
+)
 
 
 def eval_pushnew(form, env):

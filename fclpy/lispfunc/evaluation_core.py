@@ -1168,12 +1168,12 @@ def eval(form, env=None):
                                     target.car = result
                                 else:
                                     raise lisptype.LispError("SETF CAR: target is not a cons")
-                            elif op_name == 'CDR':
+                            elif op_name in ('CDR', 'REST'):
                                 target = eval(car(place_args), env)
                                 if _consp_internal(target):
                                     target.cdr = result
                                 else:
-                                    raise lisptype.LispError("SETF CDR: target is not a cons")
+                                    raise lisptype.LispError(f"SETF {op_name}: target is not a cons")
                             elif _arrays.is_array_place(op_name):
                                 # (SETF (AREF arr i j) val), (SETF (FILL-POINTER v) n), ...
                                 _arrays.array_place_write(

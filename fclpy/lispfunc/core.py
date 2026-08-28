@@ -14,7 +14,7 @@ def _null_internal(obj):
     """
     return (obj is None
             or obj is lisptype.NIL
-            or (type(obj) is lisptype.LispSymbol and obj.name == 'NIL'))
+            or (type(obj) is lisptype.LispSymbol and obj.name == 'NIL' and obj.package is not None))
 
 
 def _listp_internal(obj):

@@ -1570,7 +1570,7 @@ def _check_justification_conflicts(control_string):
 
 def _capitalize_words(s):
     """~:( ... ~) - capitalize the first letter of each word, force the
-    rest of each word to lower case."""
+    rest of each word to lower case. A word starts after whitespace."""
     result = []
     at_word_start = True
     for ch in s:
@@ -1579,7 +1579,11 @@ def _capitalize_words(s):
             at_word_start = False
         else:
             result.append(ch)
-            at_word_start = True
+            # Preserve at_word_start unless we see whitespace (which ends a word)
+            # Non-whitespace, non-alpha chars (digits, punctuation) don't reset word-start
+            if ch.isspace():
+                at_word_start = True
+            # else: keep current at_word_start value
     return ''.join(result)
 
 
@@ -1599,7 +1603,11 @@ def _capitalize_first_word(s):
             at_word_start = False
         else:
             result.append(ch)
-            at_word_start = True
+            # Preserve at_word_start unless we see whitespace (which ends a word)
+            # Non-whitespace, non-alpha chars (digits, punctuation) don't reset word-start
+            if ch.isspace():
+                at_word_start = True
+            # else: keep current at_word_start value
     return ''.join(result)
 
 
@@ -3393,21 +3401,22 @@ def _format_directive(control_string, cursor, pos, emitted=None):
             return ('', pos)
 
     elif directive == 'P':
-        # ~P - Plural. ~:P re-examines the previously consumed argument
-        # without consuming a new one, so the cursor must not move at all
-        # (net-zero) - unlike the old code, which shifted it by one extra.
+        # ~P - Plural (CLHS 22.3.5.4).
+        # ~:P re-examines the previously consumed argument without consuming a new one.
+        # Plain ~P outputs '' if arg==1 (EQL), else 's'
+        # ~@P outputs 'y' if arg==1 (EQL), else 'ies'
         if colon_flag:
             val = cursor.prev()
         else:
             val = get_arg()
-        try:
-            num = int(val) if val is not None else 1
-            if at_flag:
-                result = 'y' if num == 1 else 'ies'
-            else:
-                result = '' if num == 1 else 's'
-        except (TypeError, ValueError):
-            result = 's'
+
+        # Check EQL to the integer 1, not numeric equality
+        is_one = val == 1 and isinstance(val, int)
+
+        if at_flag:
+            result = 'y' if is_one else 'ies'
+        else:
+            result = '' if is_one else 's'
         return (result, pos)
 
     else:

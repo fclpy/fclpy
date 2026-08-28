@@ -181,11 +181,7 @@ def special_handler_case(*args):
 # WITH-OPEN-FILE is implemented as a macro (registered at import time
 # by `evaluation_special_forms`). Do not register it as a special.
 
-
-@_registry.cl_special('LOOP-FINISH')
-def special_loop_finish(*args):
-    """LOOP-FINISH special form (handled by evaluator)."""
-    raise lisptype.LispNotImplementedError('LOOP-FINISH (evaluated in evaluator)')
+# LOOP-FINISH is now implemented in evaluation_loops_conditionals.py
 
 
 @_registry.cl_special('INLINE')
@@ -516,7 +512,6 @@ __all__ = [
     'special_handler_bind',
     'special_handler_case',
     'special_with_open_file',
-    'special_loop_finish',
     'special_inline',
     'special_ignore',
     'special_ignorable',

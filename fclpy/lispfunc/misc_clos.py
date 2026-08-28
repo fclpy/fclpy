@@ -314,6 +314,41 @@ def _default_slot_missing(class_obj, instance, slot_name, operation, *new_value)
     raise lisptype.LispError(f"The slot {slot_name} is missing from {instance}.")
 
 
+def _default_make_load_form(object_arg, environment=None):
+    """MAKE-LOAD-FORM's default method (CLHS 3.2.4): signals an error.
+
+    MAKE-LOAD-FORM is a generic function that objects may specialize to
+    provide custom serialization forms. The default method signals an error
+    because most objects have no portable load form. User code can define
+    methods specializing on their own classes to provide custom behavior.
+    """
+    raise lisptype.LispError(f"No MAKE-LOAD-FORM method for {object_arg}")
+
+
+def _default_class_name(class_obj):
+    """CLASS-NAME's default method (CLHS 7.6.15): return the class name.
+
+    CLASS-NAME is a generic function that returns the name of a class.
+    User code can specialize it to customize behavior for their classes.
+    """
+    if not isinstance(class_obj, classes.LispClass):
+        raise lisptype.LispTypeError(f"CLASS-NAME: expected a class, got {class_obj}",
+                                    expected_type="CLASS", actual_value=class_obj)
+    return class_obj.name
+
+
+def _default_set_class_name(new_name, class_obj):
+    """(SETF CLASS-NAME)'s default method (CLHS 7.6.15): set the class name.
+
+    The writer for CLASS-NAME allows renaming a class at runtime.
+    """
+    if not isinstance(class_obj, classes.LispClass):
+        raise lisptype.LispTypeError(f"(SETF CLASS-NAME): expected a class, got {class_obj}",
+                                    expected_type="CLASS", actual_value=class_obj)
+    class_obj.name = new_name
+    return new_name
+
+
 # Specialized on T (None), not STANDARD-OBJECT: any user method
 # specializing on the instance's own class is still more specific and
 # still wins ordinary dispatch (T scores lowest in
@@ -580,6 +615,13 @@ _PROTOCOL_DEFAULTS = [
     ('CHANGE-CLASS', [None, None], _default_change_class),
     ('SLOT-UNBOUND', [None, None, None], _default_slot_unbound),
     ('SLOT-MISSING', [None, None, None, None], _default_slot_missing),
+    # MAKE-LOAD-FORM (CLHS 3.2.4) is a generic function so users can define
+    # methods that provide custom serialization forms for their objects.
+    # The environment parameter is optional, so only one specializer.
+    ('MAKE-LOAD-FORM', [None], _default_make_load_form),
+    # CLASS-NAME (CLHS 7.6.15) is a generic function that returns/sets class names
+    ('CLASS-NAME', [None], _default_class_name),
+    ('(SETF CLASS-NAME)', [None, None], _default_set_class_name),
     # DESCRIBE-OBJECT (CLHS 25.1.2) is a generic function for the same reason
     # the metaobject protocol operations above are: `(defmethod
     # describe-object ((x my-class) stream) ...)` is the specified way to
@@ -633,6 +675,17 @@ for _name, _specializers, _fn in _PROTOCOL_DEFAULTS:
     classes.register_default_method_installer(_name, _installer)
     _installer(_protocol_gf(_name))
 del _name, _specializers, _fn, _installer
+
+# For generic functions that should be directly accessible as GenericFunction objects
+# (not as plain function wrappers), bind them in the current environment now that
+# they've been created. This makes (TYPEP #'(SETF CLASS-NAME) 'STANDARD-GENERIC-FUNCTION)
+# return T even before any DEFMETHOD is evaluated on them.
+import fclpy.state as _state
+_current_env = _state.current_environment
+if _current_env is not None:
+    _setf_class_name_gf = _protocol_gf('(SETF CLASS-NAME)')
+    _current_env.bind_function(lisptype.py_str_to_sym('(SETF CLASS-NAME)'), _setf_class_name_gf)
+del _current_env, _setf_class_name_gf
 
 
 # --- CLOS class and instance operations ---
@@ -727,6 +780,35 @@ def change_class(instance, new_class, *initargs):
     `_default_change_class` (or a more specific user method) directly.
     """
     return classes.call_generic_function(_protocol_gf('CHANGE-CLASS'), [instance, new_class] + list(initargs))
+
+
+@_registry.cl_function('MAKE-LOAD-FORM')
+def make_load_form(object_arg, environment=None):
+    """MAKE-LOAD-FORM is itself a standard generic function (CLHS 3.2.4), the
+    same shape as CHANGE-CLASS above: user code can define DEFMETHODs directly
+    on it, which replaces its *entire* environment binding with the bare
+    GenericFunction object the moment the first one is evaluated -- so this
+    thin wrapper only matters for a direct Python call; every Lisp-level call
+    after that point reaches `_default_make_load_form` (or a more specific
+    user method) directly.
+    """
+    return classes.call_generic_function(_protocol_gf('MAKE-LOAD-FORM'), [object_arg, environment])
+
+
+@_registry.cl_function('CLASS-NAME')
+def class_name(class_obj):
+    """CLASS-NAME is a standard generic function (CLHS 7.6.15) that returns
+    a class's name. User code can define DEFMETHODs to customize behavior.
+    This wrapper is replaced by the GenericFunction when user code evaluates
+    DEFMETHOD on CLASS-NAME.
+    """
+    return classes.call_generic_function(_protocol_gf('CLASS-NAME'), [class_obj])
+
+
+# (SETF CLASS-NAME) is handled as a pure generic function in _PROTOCOL_DEFAULTS.
+# It is not registered as a plain wrapper function, so when accessed via
+# #'(setf class-name), it should return the GenericFunction object directly.
+# The generic function dispatch mechanism makes it callable for SETF forms.
 
 
 @_registry.cl_function('BUILT-IN-CLASS')

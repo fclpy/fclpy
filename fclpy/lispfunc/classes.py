@@ -380,18 +380,8 @@ def make_instance(class_spec, *args, **kwargs):
 # which one every caller got.
 
 
-@_registry.cl_function('CLASS-NAME')
-def class_name(lisp_class):
-    """CLASS-NAME: Get the name of a class."""
-    # Handle T specially - it represents the universal type
-    if isinstance(lisp_class, lisptype.LispSymbol) and lisp_class.name.upper() == 'T':
-        return lisptype.T
-    if not isinstance(lisp_class, classes.LispClass):
-        raise lisptype.LispTypeError(
-            f"Expected a class, got {lisp_class!r}",
-            expected_type='CLASS', actual_value=lisp_class)
-    return lisp_class.name
-
+# CLASS-NAME is registered as a generic function in misc_clos.py, not here,
+# so that user code can define methods on it via DEFMETHOD.
 
 @_registry.cl_function('CLASS-DIRECT-SLOTS')
 def class_direct_slots(lisp_class):

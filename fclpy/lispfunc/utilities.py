@@ -266,7 +266,7 @@ __all__ = [
     'step',
     'provide',
     'require',
-    'make_load_form',
+    # make_load_form is now registered as a generic function in misc_clos.py
     'make_load_form_saving_slots',
     'fill_pointer',
     'documentation',

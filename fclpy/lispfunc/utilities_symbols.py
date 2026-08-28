@@ -306,17 +306,36 @@ def find_package(*args):
 
 @_registry.cl_function('FIND-ALL-SYMBOLS')
 def find_all_symbols(*args):
-    """Find all symbols with given name across all packages."""
+    """Find all symbols with given name across all packages (CLHS 11.2).
+
+    Searches all packages, including built-in COMMON-LISP and KEYWORD packages,
+    for symbols with the given name. Returns a list of all matching symbols.
+    Special handling for NIL: also returns the NIL value itself as one of
+    the symbols named "NIL".
+    """
     if len(args) != 1:
         raise lisptype.LispProgramError(
             f"FIND-ALL-SYMBOLS: wrong number of arguments (got {len(args)}, expected 1)"
         )
-    name = args[0]
+    from . import misc_packages
+    # Handle string designators properly (symbols, strings, characters)
+    name_str = misc_packages._designator_to_string(args[0])
     results = []
-    for pkg in list({id(p): p for p in state.packages.values()}.values()):
-        sym, status = pkg.find_symbol(name)
-        if sym is not None:
+
+    # Special case: NIL is a symbol that deserves special treatment
+    # It should be included when searching for "NIL", appearing once in the results
+    if name_str.upper() == "NIL":
+        results.append(lisptype.NIL)
+
+    # Use all_packages() to include built-in packages
+    # Deduplicate by identity to avoid returning the same symbol multiple times
+    seen_ids = {id(lisptype.NIL)} if name_str.upper() == "NIL" else set()
+    for pkg in misc_packages.all_packages():
+        sym, status = pkg.find_symbol(name_str)
+        if sym is not None and id(sym) not in seen_ids:
             results.append(sym)
+            seen_ids.add(id(sym))
+
     result = lisptype.NIL
     for sym in reversed(results):
         result = lisptype.lispCons(sym, result)

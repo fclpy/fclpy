@@ -2,6 +2,19 @@
 
 import fclpy.lisptype as lisptype
 from .core import car, cdr, _consp_internal, _null_internal, cons, _check_list
+from .evaluation_core import ThrowException
+
+
+class LoopFinishException(ThrowException):
+    """Exception raised by LOOP-FINISH to terminate the loop immediately.
+
+    This is a control flow mechanism subclassed from ThrowException so it
+    propagates through all eval pass-through tuples automatically (CLHS 6.1.5).
+    """
+    def __init__(self):
+        # LoopFinishException doesn't use tag/value like ThrowException,
+        # but we need to initialize the parent. Use sentinel values.
+        super().__init__(tag=None, value=None)
 
 
 def _list_from(elements):
@@ -1579,19 +1592,21 @@ def eval_loop(form, env):
             'form': _substitute_it(forms[i+1], it_form),
             'into': None,
             'conditionals': list(active_conditionals),
+            'type_spec': None,
         }
         i += 2
         # CLHS 6.1.3: "into var" accumulates into a loop-local variable
         # instead of into the loop's value.
         if i < len(forms) and sym_name(forms[i]) == 'INTO':
-            clause['into'] = forms[i+1]
+            into_var = forms[i+1]
+            clause['into'] = into_var
             i += 2
         # `maximize x fixnum` / `sum x into total of-type integer`: only the
         # numeric accumulations take a trailing type-spec (CLHS 6.1.3.2), so
         # only they may consume one -- `collect x` followed by `t` would
         # otherwise lose the T.
         if clause['type'] in NUMERIC_ACCUMULATIONS:
-            i, _acc_type_spec = _loop_type_spec(forms, i)
+            i, clause['type_spec'] = _loop_type_spec(forms, i)
         accumulations.append(clause)
 
     def _parse_selectable_clause(active_conditionals, it_form=None):
@@ -1722,38 +1737,57 @@ def eval_loop(form, env):
             driver_symbol_set = None
             driver_using_part = None
             driver_using_var = None
+            # Track the order in which FROM/TO/BY etc. are parsed (for correct evaluation order)
+            driver_eval_order = []
 
             while j < len(forms):
                 fname = sym_name(forms[j])
                 if fname == 'FROM':
                     saw_driver_keyword = True
                     driver_start = forms[j+1]
+                    driver_eval_order.append(('FROM', forms[j+1]))
+                    j += 2
+                elif fname == 'UPFROM':
+                    saw_driver_keyword = True
+                    driver_start = forms[j+1]
+                    driver_eval_order.append(('FROM', forms[j+1]))
+                    j += 2
+                elif fname == 'DOWNFROM':
+                    saw_driver_keyword = True
+                    driver_start = forms[j+1]
+                    driver_downward = True
+                    driver_eval_order.append(('FROM', forms[j+1]))
                     j += 2
                 elif fname in ('TO', 'UPTO'):
                     saw_driver_keyword = True
                     driver_end = forms[j+1]
                     driver_kind = 'for-range'
+                    driver_eval_order.append(('TO', forms[j+1]))
                     j += 2
                 elif fname == 'BELOW':
                     saw_driver_keyword = True
                     driver_end = forms[j+1]
                     driver_kind = 'for-below'
+                    driver_eval_order.append(('BELOW', forms[j+1]))
                     j += 2
                 elif fname == 'DOWNTO':
                     saw_driver_keyword = True
                     driver_end = forms[j+1]
                     driver_kind = 'for-range'
                     driver_downward = True
+                    driver_eval_order.append(('DOWNTO', forms[j+1]))
                     j += 2
                 elif fname == 'ABOVE':
                     saw_driver_keyword = True
                     driver_end = forms[j+1]
                     driver_kind = 'for-below'
                     driver_downward = True
+                    driver_eval_order.append(('ABOVE', forms[j+1]))
                     j += 2
                 elif fname == 'BY':
                     saw_driver_keyword = True
                     driver_step = forms[j+1]
+                    driver_eval_order.append(('BY', forms[j+1]))
                     j += 2
                 elif fname == 'IN':
                     saw_driver_keyword = True
@@ -1870,6 +1904,8 @@ def eval_loop(form, env):
                 'symbol_set': driver_symbol_set,
                 'using_part': driver_using_part,
                 'using_var': driver_using_var,
+                'eval_order': driver_eval_order,
+                'downward': driver_downward,
             })
 
             i = j
@@ -1944,7 +1980,25 @@ def eval_loop(form, env):
             if not iteration_drivers and not termination_tests:
                 body_clauses.append({'conditionals': [], 'forms': [token]})
             i += 1
-    
+
+    # CLHS 6.1.3: Validate that boolean-termination clauses (ALWAYS, NEVER,
+    # THEREIS) are not mixed with value-accumulation clauses that return to the
+    # loop value (COLLECT, APPEND, NCONC, SUM, COUNT without INTO). If the
+    # accumulation goes INTO a variable, both can coexist.
+    has_loop_value_accumulation = False  # accumulation without INTO
+    has_boolean_termination = False
+    for clause in accumulations:
+        acc_type = clause['type']
+        # Only value accumulations without INTO return to the loop value
+        if acc_type in ('collect', 'append', 'nconc', 'sum', 'count', 'maximize', 'minimize'):
+            if clause['into'] is None:
+                has_loop_value_accumulation = True
+        elif acc_type in BOOLEAN_TERMINATION_CLAUSES:
+            has_boolean_termination = True
+        if has_loop_value_accumulation and has_boolean_termination:
+            raise lisptype.LispProgramError(
+                'LOOP cannot mix value-accumulation clauses without INTO with boolean-termination clauses (ALWAYS, NEVER, THEREIS)')
+
     # Execute the loop
     #
     # CLHS 6.1.1.4 gives the LOOP form exactly four possible values, and every
@@ -1986,8 +2040,18 @@ def eval_loop(form, env):
     for _clause in accumulations:
         _key = _acc_key(_clause)
         if _key not in acc_states:
+            # For numeric accumulations, use the type-spec to determine the
+            # correct initial value (e.g., 0.0 for FLOAT types, not 0)
+            initial_number = 0
+            if _clause['type'] in NUMERIC_ACCUMULATIONS and _clause['type_spec'] is not None:
+                # Extract base type from type-spec (e.g., INTEGER from (INTEGER 0 100))
+                base_type = _clause['type_spec']
+                if _consp_internal(base_type):
+                    base_type = car(base_type)
+                base_type_name = _loop_sym_name(base_type)
+                initial_number = _LOOP_ZERO_BY_TYPE.get(base_type_name, 0)
             acc_states[_key] = {'type': _clause['type'], 'items': [],
-                                'number': 0, 'extremum': None}
+                                'number': initial_number, 'extremum': None, 'tail': None}
 
     def _conditionals_pass(clause_conditionals, loop_env):
         """Evaluate a WHEN/UNLESS conditional list against this iteration."""
@@ -2011,7 +2075,10 @@ def eval_loop(form, env):
             return lisptype.NIL
         acc_type = state['type']
         if acc_type in ('collect', 'append', 'nconc'):
-            result_list = lisptype.NIL
+            # For append/nconc, start with the tail (which may be NIL or a dotted tail)
+            result_list = state.get('tail') if acc_type in ('append', 'nconc') else lisptype.NIL
+            if result_list is None:
+                result_list = lisptype.NIL
             for item in reversed(state['items']):
                 result_list = cons(item, result_list)
             return result_list
@@ -2064,6 +2131,9 @@ def eval_loop(form, env):
                     while _consp_internal(cur):
                         state['items'].append(car(cur))
                         cur = cdr(cur)
+                    # If cur is non-NIL here, it's a dotted tail (e.g., (A B C . TAIL))
+                    if cur is not lisptype.NIL and cur is not None:
+                        state['tail'] = cur
                 elif acc_type == 'append' and acc_value is not lisptype.NIL and acc_value is not None:
                     state['items'].append(acc_value)
             elif acc_type == 'sum':
@@ -2168,13 +2238,7 @@ def eval_loop(form, env):
                 # present but None; the CLHS default is 0. (driver.get('start', 0)
                 # does not do this -- the key exists, so the default never
                 # applies and the loop evaluated None as its start value.)
-                start_form = driver.get('start')
-                if start_form is None:
-                    start_form = 0
-                end_form = driver.get('end')
-                step_form = driver.get('step')
-                if step_form is None:
-                    step_form = 1
+
                 # CLHS 5.1.2: FROM/TO/BY are single-value contexts, so a bound
                 # like `(floor ...)` -- which returns quotient *and*
                 # remainder -- must be reduced to its primary value here, the
@@ -2182,36 +2246,68 @@ def eval_loop(form, env):
                 # Left as `eval(...)` directly, `end` became the
                 # `MultipleValues` wrapper itself, which `_driver_has_value`'s
                 # `cur <= end` cannot compare against an int at all.
-                start = (start_form if isinstance(start_form, int)
-                         else _primary_value(eval(start_form, loop_env)))
-                end = _primary_value(eval(end_form, loop_env))
-                step = (step_form if isinstance(step_form, int)
-                        else _primary_value(eval(step_form, loop_env)))
-                if step == 0:
+
+                # Evaluate forms in source order (CLHS 6.1.2.1.3). This matters for
+                # side effects like INCF. We track source order via eval_order.
+                start_value = 0  # default
+                end_value = None
+                step_value = 1    # default
+
+                eval_order = driver.get('eval_order', [])
+                for keyword, form in eval_order:
+                    if keyword in ('FROM', 'UPFROM', 'DOWNFROM'):
+                        start_value = (form if isinstance(form, int)
+                                     else _primary_value(eval(form, loop_env)))
+                    elif keyword in ('TO', 'UPTO', 'DOWNTO', 'BELOW', 'ABOVE'):
+                        end_value = _primary_value(eval(form, loop_env))
+                    elif keyword == 'BY':
+                        # Evaluate the form for side effects, get its value
+                        step_value = (form if isinstance(form, int)
+                                    else _primary_value(eval(form, loop_env)))
+
+                # If no end was explicitly set in eval_order, get default
+                if end_value is None:
+                    end_form = driver.get('end')
+                    if end_form is not None and not isinstance(end_form, int):
+                        end_value = _primary_value(eval(end_form, loop_env))
+
+                # If we're counting downward (DOWNFROM, DOWNTO, or ABOVE),
+                # negate the step (driver['downward'] flag tells us this)
+                downward = driver.get('downward', False)
+                if downward and step_value > 0:
+                    step_value = -step_value
+
+                if step_value == 0:
                     raise lisptype.LispNotImplementedError('LOOP BY step cannot be 0')
-                driver['_cur'] = start
-                driver['_end'] = end
-                driver['_step'] = step
+                driver['_cur'] = start_value
+                driver['_end'] = end_value
+                driver['_step'] = step_value
                 return True
             if kind == 'for-from':
-                # `for x to 5` and `for x below 5` omit FROM, so 'start' is
-                # present but None; the CLHS default is 0. (driver.get('start', 0)
-                # does not do this -- the key exists, so the default never
-                # applies and the loop evaluated None as its start value.)
-                start_form = driver.get('start')
-                if start_form is None:
-                    start_form = 0
+                # `for x from n` without TO/BELOW: an unbounded driver that counts
+                # forever (or until REPEAT or another bound terminates it).
+                # Evaluate FROM and BY in source order.
+                start_value = 0  # default
+
+                eval_order = driver.get('eval_order', [])
+                for keyword, form in eval_order:
+                    if keyword in ('FROM', 'UPFROM', 'DOWNFROM'):
+                        start_value = (form if isinstance(form, int)
+                                     else _primary_value(eval(form, loop_env)))
+
+                # Get the step form from driver dict, which may have negation
+                # applied (at parse time for DOWNFROM)
                 step_form = driver.get('step')
                 if step_form is None:
-                    step_form = 1
-                start = (start_form if isinstance(start_form, int)
-                         else _primary_value(eval(start_form, loop_env)))
-                step = (step_form if isinstance(step_form, int)
-                        else _primary_value(eval(step_form, loop_env)))
-                if step == 0:
+                    step_value = 1
+                else:
+                    step_value = (step_form if isinstance(step_form, int)
+                                else _primary_value(eval(step_form, loop_env)))
+
+                if step_value == 0:
                     raise lisptype.LispNotImplementedError('LOOP BY step cannot be 0')
-                driver['_cur'] = start
-                driver['_step'] = step
+                driver['_cur'] = start_value
+                driver['_step'] = step_value
                 return True
             if kind == 'repeat':
                 count = _primary_value(eval(driver['count'], loop_env))
@@ -2432,9 +2528,17 @@ def eval_loop(form, env):
         # INTO names a variable local to the loop (CLHS 6.1.3), so bind it
         # through the frame: the accumulation must not assign through to an
         # outer binding of the same name and clobber it.
+        # CLHS 6.1.1.7: error if INTO variable matches an existing binding
+        seen_into_vars = set()
         for clause in accumulations:
             if clause['into'] is not None:
-                frame.bind(clause['into'], _accumulated_value(_acc_key(clause)))
+                for var_name in _loop_varspec_names(clause['into']):
+                    if var_name in bound_variable_names:
+                        raise lisptype.LispProgramError(
+                            f'LOOP accumulates INTO {var_name} which is already bound')
+                    if var_name not in seen_into_vars:
+                        frame.bind(clause['into'], _accumulated_value(_acc_key(clause)))
+                        seen_into_vars.add(var_name)
 
         # The prologue runs once, after the iteration variables exist and
         # before the first termination test (CLHS 6.1.7.1).
@@ -2444,28 +2548,33 @@ def eval_loop(form, env):
         # With no drivers, no termination test and nothing to execute there is
         # nothing to iterate; running would just spin until the hard cap.
         if iteration_drivers or termination_tests or body_clauses or accumulations:
-            while all(_driver_has_value(d) for d in iteration_drivers):
-                check_loop_timeout()
+            try:
+                while all(_driver_has_value(d) for d in iteration_drivers):
+                    check_loop_timeout()
 
-                # Bind before testing. A termination test routinely reads the
-                # variable its own driver supplies -- (loop for x = 1 then (* 2 x)
-                # while (< x 20) ...) -- so testing first sees either an unbound
-                # variable on the first iteration or a stale one thereafter.
-                for d in iteration_drivers:
-                    _bind_driver(frame, d)
+                    # Bind before testing. A termination test routinely reads the
+                    # variable its own driver supplies -- (loop for x = 1 then (* 2 x)
+                    # while (< x 20) ...) -- so testing first sees either an unbound
+                    # variable on the first iteration or a stale one thereafter.
+                    for d in iteration_drivers:
+                        _bind_driver(frame, d)
 
-                if _termination_break(loop_env, after_body=False):
-                    break
+                    if _termination_break(loop_env, after_body=False):
+                        break
 
-                execute_iteration_body(loop_env)
-                if return_triggered:
-                    break
+                    execute_iteration_body(loop_env)
+                    if return_triggered:
+                        break
 
-                if _termination_break(loop_env, after_body=True):
-                    break
+                    if _termination_break(loop_env, after_body=True):
+                        break
 
-                for d in iteration_drivers:
-                    _step_driver(loop_env, d)
+                    for d in iteration_drivers:
+                        _step_driver(loop_env, d)
+            except LoopFinishException:
+                # LOOP-FINISH terminates the loop immediately, skipping any
+                # remaining body forms and drivers. The FINALLY clauses still run.
+                pass
 
         # CLHS 6.1.2.2: ALWAYS/NEVER/THEREIS terminate the loop *immediately*
         # when their test decides the answer -- the epilogue does not run, so a
@@ -3010,6 +3119,16 @@ def eval_do_all_symbols(form, env):
         return _run_with_nil_block(_loop)
 
 
+@_registry.cl_special('LOOP-FINISH')
+def eval_loop_finish(*args):
+    """Terminate the current LOOP immediately, proceeding to FINALLY clauses.
+
+    CLHS 6.1.5: The LOOP-FINISH macro causes the immediate termination
+    of a loop and the execution of the loop epilogue (FINALLY clauses).
+    """
+    raise LoopFinishException()
+
+
 __all__ = [
     'eval_when',
     'eval_unless',
@@ -3033,4 +3152,5 @@ __all__ = [
     'eval_do_symbols',
     'eval_do_external_symbols',
     'eval_do_all_symbols',
+    'eval_loop_finish',
 ]

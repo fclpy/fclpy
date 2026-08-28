@@ -156,14 +156,39 @@ def min_fn(*args):
 
 @_registry.cl_function('SIGNUM')
 def signum(x):
-    """Sign of number."""
+    """Sign of number.
+
+    CLHS 12.1.2: For a real number, returns a number of the same type as x
+    with value -1, 0, or 1 based on sign. For a complex number, returns the
+    unit vector in the direction of x, i.e., x / |x| (or 0 if x is zero).
+    """
+    import cmath
     _ensure_number(x, 'SIGNUM')
-    if x > 0:
-        return 1
-    elif x < 0:
-        return -1
+
+    if isinstance(x, complex):
+        # For complex: return x / |x| (unit vector)
+        magnitude = abs(x)
+        if magnitude == 0:
+            # For complex zero, return x itself (preserves +0/-0 distinction)
+            return x
+        else:
+            return x / magnitude
+    elif isinstance(x, float):
+        # For float: return -1.0, 0.0, or 1.0 (preserving float type)
+        if x > 0:
+            return 1.0
+        elif x < 0:
+            return -1.0
+        else:
+            return 0.0 if x == 0.0 else x  # Preserve -0.0 vs +0.0
     else:
-        return 0
+        # For integer/rational: return -1, 0, or 1
+        if x > 0:
+            return 1
+        elif x < 0:
+            return -1
+        else:
+            return 0
 
 
 @_registry.cl_function('EVENP')
@@ -548,7 +573,13 @@ def logeqv(*args):
 
 @_registry.cl_function('ASH')
 def ash(i, count):
-    """Arithmetic shift left/right."""
+    """Arithmetic shift left/right.
+
+    Shifts i left by count bits (or right if count is negative).
+    Both i and count must be integers.
+    """
+    _ensure_integer(i, 'ASH')
+    _ensure_integer(count, 'ASH')
     return i << count if count >= 0 else i >> -count
 
 
@@ -833,35 +864,44 @@ def _s_star_(*args):
 @_registry.cl_function('/')
 def _s_slash_(*args):
     """Division operator (/).
-    
+
     When dividing integers, returns an exact ratio (Fraction) if result is not exact.
     Automatically reduces fractions and normalizes signs.
+    Signals DIVISION-BY-ZERO when dividing by zero.
     """
     from fractions import Fraction
-    
+
     if not args:
-        raise ValueError("/ requires at least one argument")
-    if len(args) == 1:
-        # Reciprocal: (/ x) = 1/x
-        x = args[0]
-        if isinstance(x, int) and x != 0:
-            return _canonicalize_rational(Fraction(1, x))
-        return 1 / x
-    
-    result = args[0]
-    for x in args[1:]:
-        # If both are integers and division is not exact, return a Fraction
-        if isinstance(result, int) and isinstance(x, int) and x != 0:
-            # Use Fraction for exact rational arithmetic
-            result = Fraction(result, x)
-        elif isinstance(result, Fraction) and isinstance(x, int) and x != 0:
-            result = result / x
-        elif isinstance(result, Fraction) and isinstance(x, Fraction):
-            result = result / x
-        else:
-            result = result / x
-    
-    return _canonicalize_rational(result)
+        raise lisptype.LispProgramError("/ requires at least one argument")
+
+    try:
+        if len(args) == 1:
+            # Reciprocal: (/ x) = 1/x
+            x = args[0]
+            if isinstance(x, int) and x != 0:
+                return _canonicalize_rational(Fraction(1, x))
+            return 1 / x
+
+        result = args[0]
+        for x in args[1:]:
+            # If both are integers and division is not exact, return a Fraction
+            if isinstance(result, int) and isinstance(x, int) and x != 0:
+                # Use Fraction for exact rational arithmetic
+                result = Fraction(result, x)
+            elif isinstance(result, Fraction) and isinstance(x, int) and x != 0:
+                result = result / x
+            elif isinstance(result, Fraction) and isinstance(x, Fraction):
+                result = result / x
+            else:
+                result = result / x
+
+        return _canonicalize_rational(result)
+    except ZeroDivisionError:
+        # Signal DIVISION-BY-ZERO condition
+        from fclpy.lispfunc.evaluation_conditions import signal_condition
+        signal_condition(lisptype.DivisionByZero(
+            f"Division by zero"))
+        return
 
 
 @_registry.cl_function('1+')
