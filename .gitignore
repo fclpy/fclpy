@@ -171,3 +171,4 @@ _probe*.py
 probe_err.txt
 probe_out.txt
 wpi_*.txt
+.opencode/
