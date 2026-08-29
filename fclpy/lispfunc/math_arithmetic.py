@@ -926,18 +926,21 @@ def ldb_test(bytespec, integer):
 
 @_registry.cl_function('DPB')
 def dpb(newbyte, bytespec, integer):
-    """Deposit byte."""
-    return deposit_field(newbyte, bytespec, integer)
+    """Deposit byte: newbyte's low `size` bits, shifted to `position`."""
+    size, position = bytespec
+    mask = (1 << size) - 1
+    cleared = integer & ~(mask << position)
+    return cleared | ((newbyte & mask) << position)
 
 
 @_registry.cl_function('DEPOSIT-FIELD')
 def deposit_field(newbyte, bytespec, integer):
-    """Deposit field in integer."""
+    """Deposit field: newbyte's bits already *at* the byte's positions
+    replace integer's bits there -- unlike DPB there is no shift, so
+    bits of newbyte outside [position, position+size) are ignored."""
     size, position = bytespec
-    mask = (1 << size) - 1
-    # Clear the field and insert new value
-    cleared = integer & ~(mask << position)
-    return cleared | ((newbyte & mask) << position)
+    mask = ((1 << size) - 1) << position
+    return (integer & ~mask) | (newbyte & mask)
 
 
 @_registry.cl_function('MASK-FIELD')

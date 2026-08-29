@@ -52,7 +52,7 @@ def _resolve_class(class_spec):
 
 
 def _initarg_key(key):
-    name = key.name if hasattr(key, 'name') else str(key)
+    name = _initarg_name(key)
     return name.upper().lstrip(':')
 
 
@@ -165,9 +165,135 @@ def _merge_default_initargs(cls, initargs):
 # plain Python function bound under one of these names can never be
 # extended by a DEFMETHOD; only a real GenericFunction object can.
 
+def _method_declared_initargs(instance, cls):
+    """The initialization arguments declared valid by the lambda lists of
+    applicable methods (CLHS 7.1.2, second means): the keyword parameter
+    names of every method on ALLOCATE-INSTANCE, INITIALIZE-INSTANCE,
+    SHARED-INITIALIZE, REINITIALIZE-INSTANCE,
+    UPDATE-INSTANCE-FOR-DIFFERENT-CLASS and
+    UPDATE-INSTANCE-FOR-REDEFINED-CLASS applicable to this instance, plus
+    whether any of them carries &allow-other-keys -- whose presence, per
+    that section, disables validity checking."""
+    valid = set()
+    allow_all = False
+    for gf_name, first_arg in (
+            ('ALLOCATE-INSTANCE', cls),
+            ('INITIALIZE-INSTANCE', instance),
+            ('SHARED-INITIALIZE', instance),
+            ('REINITIALIZE-INSTANCE', instance),
+            ('UPDATE-INSTANCE-FOR-DIFFERENT-CLASS', instance),
+            ('UPDATE-INSTANCE-FOR-REDEFINED-CLASS', instance)):
+        try:
+            gf = classes._generic_registry.find_generic(
+                classes.generic_function_key(
+                    lisptype.COMMON_LISP_PACKAGE.intern_symbol(gf_name)))
+            if gf is None:
+                continue
+            for method in classes.compute_applicable_methods(gf, [first_arg]):
+                ll = getattr(method, 'lambda_list', None)
+                if ll is None:
+                    continue
+                from .evaluation_core import parse_lambda_list
+                tail = parse_lambda_list(ll)
+                if tail.get('allow_other_keys'):
+                    allow_all = True
+                from .evaluation_special_forms import (_keyword_param_parts,
+                                                       keyword_argument_key)
+                for spec in tail.get('keyword', []):
+                    keyword = _keyword_param_parts(spec)[0]
+                    valid.add(keyword_argument_key(keyword)[1].upper())
+        except Exception:
+            continue
+    return valid, allow_all
+
+
+def _initarg_name(key):
+    """The upper-case name of one initialization-argument name symbol. NIL
+    itself is a legal initarg name (class-14's `:initarg nil`), so the
+    lispNull spelling must normalize to 'NIL' like any other symbol."""
+    if key is lisptype.NIL or isinstance(key, lisptype.lispNull):
+        return 'NIL'
+    name = getattr(key, 'name', None)
+    if isinstance(name, str):
+        return name.upper().lstrip(':')
+    return str(key).upper()
+
+
+def _check_initargs_valid(instance, cls, initargs):
+    """CLHS 7.1.2: an initialization argument supplied to any of the four
+    initialization situations (making, reinitializing, redefined-class
+    updating, different-class updating) must be valid -- declared by a
+    slot's :initarg (inherited over the whole CPL), by :default-initargs,
+    or by the lambda list of an applicable method on one of the six
+    protocol generic functions -- or an error is signaled. A true
+    :allow-other-keys in the call, or &allow-other-keys in an applicable
+    method's lambda list, disables the check. `initargs` is the flat
+    keyword/value plist the situation received."""
+    flat = list(initargs)
+    if len(flat) % 2:
+        raise lisptype.LispProgramError(
+            "odd number of initialization arguments: "
+            f"{flat[-1]!r} has no value")
+
+    supplied_keys = []
+    aok_value = False
+    aok_seen = False
+    i = 0
+    while i < len(flat):
+        key = flat[i]
+        # A plain Python string is the Python-direct-call spelling of an
+        # initarg name (the unit-test suite calls MAKE-INSTANCE with
+        # **kwargs); only *non-string, non-symbol* names are malformed.
+        if not (lisptype.is_symbol(key) or isinstance(key, str)):
+            raise lisptype.LispProgramError(
+                f"{key!r} is not a valid initialization argument name")
+        name = _initarg_name(key)
+        supplied_keys.append(name)
+        if name == 'ALLOW-OTHER-KEYS' and not aok_seen:
+            # CLHS 3.4.1.4.1: the leftmost :allow-other-keys pair governs.
+            aok_seen = True
+            aok_value = lisptype.is_truthy(flat[i + 1])
+        i += 2
+
+    if aok_value:
+        return
+
+    valid = set()
+    valid.add('ALLOW-OTHER-KEYS')
+    for slot_def in cls.get_all_slots().values():
+        for initarg in slot_def.initargs:
+            valid.add(_initarg_key(initarg))
+    for initarg_sym, _form, _env in cls.get_all_default_initargs().values():
+        valid.add(_initarg_key(initarg_sym))
+    declared, allow_all = _method_declared_initargs(instance, cls)
+    valid.update(declared)
+
+    if allow_all:
+        return
+    unknown = [name for name in supplied_keys if name not in valid]
+    if unknown:
+        raise lisptype.LispError(
+            "not a valid initialization argument for "
+            f"{cls.name.name}: :{unknown[0]}")
+
+
+def _check_no_builtin_instance(obj, what):
+    """CLHS 4.3.7 (BUILT-IN-CLASS): calling MAKE-INSTANCE to create a
+    generalized instance of a built-in class, or CHANGE-CLASS to or from
+    one, signals an error. The metaclass decides: an instance of
+    built-in-class is what that page means by a built-in class."""
+    if (isinstance(obj, classes.LispClass)
+            and getattr(obj, 'metaclass_name', 'STANDARD-CLASS') == 'BUILT-IN-CLASS'):
+        raise lisptype.LispError(
+            f"{what}: {obj.name.name} is a built-in class; the operation "
+            f"is not permitted on it")
+
+
 def _default_make_instance(class_obj, *initargs):
     """MAKE-INSTANCE's default method (CLHS 7.1): resolve a symbol/string
-    designator to its class, then allocate and initialize.
+    designator to its class, then allocate, check the validity of the
+    initialization arguments (CLHS 7.1.2's "making an instance" situation),
+    and initialize.
 
     Resolving here, not only in `lispfunc.classes.make_instance`, matters:
     evaluating even one DEFMETHOD on MAKE-INSTANCE (ansi-test's
@@ -180,12 +306,15 @@ def _default_make_instance(class_obj, *initargs):
     class_obj = classes.resolve_class_designator(class_obj)
     if not isinstance(class_obj, classes.LispClass):
         raise lisptype.LispTypeError(f"MAKE-INSTANCE: expected a class or class name, got {class_obj}")
+    _check_no_builtin_instance(class_obj, 'MAKE-INSTANCE')
     # CLHS 7.1.8: default-initargs are merged in here, once, by MAKE-INSTANCE
     # itself -- before ALLOCATE-INSTANCE/INITIALIZE-INSTANCE run -- so every
     # later step in the protocol (including a user :around method) sees them
     # exactly as if the caller had supplied them.
     initargs = _merge_default_initargs(class_obj, initargs)
     instance = classes.call_generic_function(_protocol_gf('ALLOCATE-INSTANCE'), [class_obj] + list(initargs))
+    if isinstance(instance, classes.LispInstance):
+        _check_initargs_valid(instance, instance.lisp_class, initargs)
     classes.call_generic_function(_protocol_gf('INITIALIZE-INSTANCE'), [instance] + list(initargs))
     return instance
 
@@ -206,6 +335,31 @@ def _default_allocate_instance(cls, *initargs):
 
 
 def _default_shared_initialize(instance, slot_names, *initargs):
+    """SHARED-INITIALIZE's default method (CLHS 7.1.2): fill the slots
+    slot-names selects, and every slot an initarg of this call names.
+
+    The plist shape is checked here -- an odd number of keyword arguments
+    is a PROGRAM-ERROR (CLHS 3.4.1.4; shared-initialize.error.3/.4 call
+    shared-initialize directly with a broken plist) -- but the *validity*
+    of the initialization arguments is not: CLHS 7.1.2 puts that check in
+    the four *situations* (make-instance, reinitialize-instance,
+    update-instance-for-redefined-class, update-instance-for-different-
+    class), and shared-initialize.6.8 passes an undeclared `:foo` that the
+    situation's own check accepts by the &allow-other-keys rule.
+    """
+    flat = list(initargs)
+    if len(flat) % 2:
+        raise lisptype.LispProgramError(
+            "odd number of initialization arguments: "
+            f"{flat[-1]!r} has no value")
+    for i in range(0, len(flat), 2):
+        if not (lisptype.is_symbol(flat[i]) or isinstance(flat[i], str)):
+            # CLHS 3.4.1.4: a keyword argument name that is not a symbol is
+            # a PROGRAM-ERROR in the callee's own argument processing
+            # (shared-initialize.error.4). A plain Python string is the
+            # Python-direct-call spelling of a name, not a malformed one.
+            raise lisptype.LispProgramError(
+                f"{flat[i]!r} is not a valid initialization argument name")
     initarg_map = _initargs_to_map(initargs)
     initarg_positions = _initargs_to_positions(initargs)
     cls = instance.lisp_class
@@ -263,20 +417,40 @@ def _default_initialize_instance(instance, *initargs):
 
 
 def _default_reinitialize_instance(instance, *initargs):
+    """REINITIALIZE-INSTANCE's default method (CLHS 7.1.5): check the
+    validity of the initialization arguments (the "re-initializing an
+    instance" situation of CLHS 7.1.2 -- reinitialize-instance.error.1's
+    `:garbage` must signal, while the `:x` of reinitialize-instance.9 is
+    declared valid by the :after method's `&key (x nil x-p)`) and then
+    shared-initialize only what the initargs name."""
+    _check_initargs_valid(instance, instance.lisp_class, initargs)
     classes.call_generic_function(_protocol_gf('SHARED-INITIALIZE'), [instance, lisptype.NIL] + list(initargs))
     return instance
 
 
 def _default_update_instance_for_different_class(previous, current, *initargs):
-    added = [name for name in current.lisp_class.get_all_slots() if name not in current.slot_values]
-    if added:
-        from fclpy.lispfunc.sequence_protocol import make_lisp_list
-        added_list = make_lisp_list([lisptype.COMMON_LISP_PACKAGE.intern_symbol(n) for n in added])
-        classes.call_generic_function(_protocol_gf('SHARED-INITIALIZE'), [current, added_list] + list(initargs))
+    """UPDATE-INSTANCE-FOR-DIFFERENT-CLASS's default method (CLHS 7.2.2):
+    shared-initialize the new instance with the *added* slots -- those of
+    the new class that name no slot of the old class -- plus the initargs
+    change-class was given. (The old computation here, "every unbound slot
+    of the new class", re-initialized slots the two classes share and
+    wrongly initialized slots an allocate-instance'd same-class change had
+    no business touching -- change-class.4.5.)"""
+    old_names = set(previous.lisp_class.get_all_slots())
+    added = [name for name in current.lisp_class.get_all_slots()
+             if name not in old_names]
+    # The call happens whether or not any slot was added (CLHS 7.2.2): the
+    # initargs can still initialize *shared* slots of the new class --
+    # change-class.7.3 passes `:b 10` across a same-class change and
+    # requires B to receive it.
+    from fclpy.lispfunc.sequence_protocol import make_lisp_list
+    added_list = make_lisp_list([lisptype.COMMON_LISP_PACKAGE.intern_symbol(n) for n in added])
+    classes.call_generic_function(_protocol_gf('SHARED-INITIALIZE'), [current, added_list] + list(initargs))
     return current
 
 
 def _default_update_instance_for_redefined_class(instance, added_slots, discarded_slots, property_list, *initargs):
+    _check_initargs_valid(instance, instance.lisp_class, initargs)
     classes.call_generic_function(_protocol_gf('SHARED-INITIALIZE'), [instance, added_slots] + list(initargs))
     return instance
 
@@ -284,28 +458,46 @@ def _default_update_instance_for_redefined_class(instance, added_slots, discarde
 def _default_change_class(instance, new_class, *initargs):
     """CHANGE-CLASS's default method (CLHS 7.2): change instance's class
     in place, keeping the values of slots the old and new class share by
-    name, discarding the rest, and running
-    UPDATE-INSTANCE-FOR-DIFFERENT-CLASS -- whose default method fills in
-    any slot the new class adds via SHARED-INITIALIZE. This replaces just
-    swapping `.lisp_class` and leaving every newly-added slot unbound and
-    never initialized.
+    name (a class-allocated old slot's value is one of those: it lives on
+    the class that allocated it, not in instance.slot_values), discarding
+    the rest, and running UPDATE-INSTANCE-FOR-DIFFERENT-CLASS -- whose
+    default method fills in the *added* slots (the new class's slots that
+    name no slot of the old class, CLHS 7.2.2) via SHARED-INITIALIZE.
+    This replaces just swapping `.lisp_class` and leaving every
+    newly-added slot unbound and never initialized.
     """
     if not isinstance(instance, classes.LispInstance):
         raise lisptype.LispTypeError(f"CHANGE-CLASS: not an instance: {instance}")
     new_cls = _resolve_class(new_class)
+    # CLHS 4.3.7 (BUILT-IN-CLASS): changing the class of an object to or
+    # from a built-in class signals an error (change-class.error.5).
+    _check_no_builtin_instance(new_cls, 'CHANGE-CLASS')
+    _check_no_builtin_instance(instance.lisp_class, 'CHANGE-CLASS')
 
     old_class = instance.lisp_class
-    old_slot_values = dict(instance.slot_values)
-    new_all_slots = new_cls.get_all_slots()
+    old_all_slots = old_class.get_all_slots()
+    old_slot_values = {}
+    for name, slot_def in old_all_slots.items():
+        if slot_def.allocation == "class":
+            defining_class = old_class.find_slot_definition_class(name) or old_class
+            if name in defining_class.class_slots:
+                old_slot_values[name] = defining_class.class_slots[name]
+        else:
+            if name in instance.slot_values:
+                old_slot_values[name] = instance.slot_values[name]
 
+    new_all_slots = new_cls.get_all_slots()
     # CLHS 7.2.2: `previous` is a snapshot of the instance as it was in its
     # old class, passed to UPDATE-INSTANCE-FOR-DIFFERENT-CLASS for
     # introspection (e.g. reading a slot the new class discarded).
-    previous = classes.LispInstance(lisp_class=old_class, slot_values=old_slot_values)
+    previous = classes.LispInstance(lisp_class=old_class,
+                                    slot_values=dict(old_slot_values))
 
     instance.lisp_class = new_cls
-    instance.slot_values = {name: val for name, val in old_slot_values.items() if name in new_all_slots}
+    instance.slot_values = {name: val for name, val in old_slot_values.items()
+                            if name in new_all_slots}
 
+    _check_initargs_valid(instance, new_cls, initargs)
     classes.call_generic_function(_protocol_gf('UPDATE-INSTANCE-FOR-DIFFERENT-CLASS'),
                                    [previous, instance] + list(initargs))
     return instance
@@ -498,6 +690,12 @@ def _default_documentation(x, doc_type=None):
             if comb is not None and getattr(comb, 'documentation', None):
                 return comb.documentation
             return _symbol_doc(x, 'METHOD-COMBINATION-DOCUMENTATION')
+        if kind == 'COMPILER-MACRO':
+            # CLHS 25.1.3: a compiler macro's documentation is its own --
+            # separate from the function documentation a DEFUN on the same
+            # name stores (define-compiler-macro.5/.6 define both and
+            # require the answers not to interfere).
+            return _symbol_doc(x, 'COMPILER-MACRO-DOCUMENTATION')
         # FUNCTION (and T): the symbol's function documentation. A generic
         # function named by the symbol carries its own doc too.
         gf = classes._generic_registry.find_generic(
@@ -616,34 +814,59 @@ def _default_set_documentation(doc, x, doc_type=None):
         f"(SETF DOCUMENTATION): cannot set documentation on {x!r}")
 
 
+# The CLHS lambda list of each protocol generic function (CLHS 7.1/7.2/7.5's
+# own lambda lists). Installed on the generic function when the default
+# method is, so that (a) a user DEFMETHOD on these names is congruence-
+# checked against the lambda list the standard gives it, and (b) the CLHS
+# 7.6.5 keyword-argument rule -- "the set of keyword arguments accepted ...
+# is the union of the keyword arguments accepted by all applicable methods
+# and the keyword arguments mentioned after &key in the generic function
+# definition" -- can see the &key/&allow-other-keys the standard puts in
+# these lambda lists (reinitialize-instance.8's :after method binds &key
+# while the call passes other keywords, which only the generic function's
+# own &allow-other-keys makes legal).
 _PROTOCOL_DEFAULTS = [
-    ('MAKE-INSTANCE', [None], _default_make_instance),
-    ('ALLOCATE-INSTANCE', [None], _default_allocate_instance),
-    ('INITIALIZE-INSTANCE', [None], _default_initialize_instance),
-    ('REINITIALIZE-INSTANCE', [None], _default_reinitialize_instance),
-    ('SHARED-INITIALIZE', [None, None], _default_shared_initialize),
-    ('UPDATE-INSTANCE-FOR-DIFFERENT-CLASS', [None, None], _default_update_instance_for_different_class),
-    ('UPDATE-INSTANCE-FOR-REDEFINED-CLASS', [None], _default_update_instance_for_redefined_class),
-    ('CHANGE-CLASS', [None, None], _default_change_class),
-    ('SLOT-UNBOUND', [None, None, None], _default_slot_unbound),
-    ('SLOT-MISSING', [None, None, None, None], _default_slot_missing),
+    ('MAKE-INSTANCE', [None], _default_make_instance,
+     '(class &rest initargs &key &allow-other-keys)'),
+    ('ALLOCATE-INSTANCE', [None], _default_allocate_instance,
+     '(class &rest initargs &key &allow-other-keys)'),
+    ('INITIALIZE-INSTANCE', [None], _default_initialize_instance,
+     '(instance &rest initargs &key &allow-other-keys)'),
+    ('REINITIALIZE-INSTANCE', [None], _default_reinitialize_instance,
+     '(instance &rest initargs &key &allow-other-keys)'),
+    ('SHARED-INITIALIZE', [None, None], _default_shared_initialize,
+     '(instance slot-names &rest initargs &key &allow-other-keys)'),
+    ('UPDATE-INSTANCE-FOR-DIFFERENT-CLASS', [None, None],
+     _default_update_instance_for_different_class,
+     '(previous current &rest initargs &key &allow-other-keys)'),
+    ('UPDATE-INSTANCE-FOR-REDEFINED-CLASS', [None],
+     _default_update_instance_for_redefined_class,
+     '(instance added-slots discarded-slots property-list &rest initargs &key &allow-other-keys)'),
+    ('CHANGE-CLASS', [None, None], _default_change_class,
+     '(instance new-class &rest initargs &key &allow-other-keys)'),
+    ('SLOT-UNBOUND', [None, None, None], _default_slot_unbound,
+     '(class instance slot-name)'),
+    ('SLOT-MISSING', [None, None, None, None], _default_slot_missing,
+     '(class instance slot-name operation &optional new-value)'),
     # MAKE-LOAD-FORM (CLHS 3.2.4) is a generic function so users can define
     # methods that provide custom serialization forms for their objects.
     # The environment parameter is optional, so only one specializer.
-    ('MAKE-LOAD-FORM', [None], _default_make_load_form),
+    ('MAKE-LOAD-FORM', [None], _default_make_load_form,
+     '(object &optional environment)'),
     # CLASS-NAME (CLHS 7.6.15) is a generic function that returns/sets class names
-    ('CLASS-NAME', [None], _default_class_name),
-    ('(SETF CLASS-NAME)', [None, None], _default_set_class_name),
+    ('CLASS-NAME', [None], _default_class_name, None),
+    ('(SETF CLASS-NAME)', [None, None], _default_set_class_name, None),
     # DESCRIBE-OBJECT (CLHS 25.1.2) is a generic function for the same reason
     # the metaobject protocol operations above are: `(defmethod
     # describe-object ((x my-class) stream) ...)` is the specified way to
     # describe your own objects, and a plain `cl_function` registration is
     # something no DEFMETHOD can reach.
-    ('DESCRIBE-OBJECT', [None, None], _describe_object_default()),
+    ('DESCRIBE-OBJECT', [None, None], _describe_object_default(),
+     '(object stream)'),
     # DOCUMENTATION and its SETF writer (CLHS 25.1.3) -- see the block comment
     # above `_default_documentation`.
-    ('DOCUMENTATION', [None, None], _default_documentation),
-    ('(SETF DOCUMENTATION)', [None, None, None], _default_set_documentation),
+    ('DOCUMENTATION', [None, None], _default_documentation, None),
+    ('(SETF DOCUMENTATION)', [None, None, None], _default_set_documentation, None),
 ]
 
 
@@ -678,15 +901,33 @@ def set_documentation(doc, x, doc_type=None):
     """
     return classes.call_generic_function(_protocol_gf('(SETF DOCUMENTATION)'),
                                           [doc, x, doc_type])
-def _make_installer(specializers, fn):
-    return lambda gf: classes.add_method(gf, specializers, fn)
+def _ll_from_string(text):
+    """A lambda list written as a Python string (the CLHS lambda lists in
+    `_PROTOCOL_DEFAULTS`) as a Lisp list of symbols."""
+    result = lisptype.NIL
+    for token in reversed(text.replace('(', ' ').replace(')', ' ').split()):
+        result = lisptype.lispCons(lisptype.intern_symbol(token), result)
+    return result
 
 
-for _name, _specializers, _fn in _PROTOCOL_DEFAULTS:
-    _installer = _make_installer(_specializers, _fn)
+def _make_installer(specializers, fn, lambda_list=None):
+    def installer(gf):
+        # Install the standard's own lambda list for a protocol generic
+        # function, unless something more specific already set one (a
+        # DEFGENERIC naming one of these wins).
+        if (lambda_list is not None
+                and getattr(gf, 'lambda_list', None) is None):
+            gf.lambda_list = (lambda_list if not isinstance(lambda_list, str)
+                              else _ll_from_string(lambda_list))
+        classes.add_method(gf, specializers, fn)
+    return installer
+
+
+for _name, _specializers, _fn, _ll in _PROTOCOL_DEFAULTS:
+    _installer = _make_installer(_specializers, _fn, _ll)
     classes.register_default_method_installer(_name, _installer)
     _installer(_protocol_gf(_name))
-del _name, _specializers, _fn, _installer
+del _name, _specializers, _fn, _ll, _installer
 
 # For generic functions that should be directly accessible as GenericFunction objects
 # (not as plain function wrappers), bind them in the current environment now that
@@ -930,6 +1171,26 @@ def make_instances_obsolete(class_):
     return class_
 
 
+def _signal_builtin_slot_access(instance, op):
+    """CLHS 4.3.7 (BUILT-IN-CLASS): calling SLOT-VALUE, (SETF SLOT-VALUE),
+    SLOT-BOUNDP or SLOT-MAKUNBOUND on a generalized instance of a built-in
+    class signals an error (slot-value.error.6, slot-boundp.error.5 and
+    slot-makunbound.error.4 walk the mini-universe's built-in instances
+    asserting this). Only *built-in-class* instances -- a condition or a
+    STANDARD-CLASS instance has ordinary, accessible slots."""
+    if isinstance(instance, classes.LispInstance):
+        return
+    if isinstance(instance, lisptype.Condition):
+        return
+    cls = classes.class_of(instance)
+    if (isinstance(cls, classes.LispClass)
+            and getattr(cls, 'metaclass_name', 'STANDARD-CLASS') == 'BUILT-IN-CLASS'):
+        raise lisptype.LispTypeError(
+            f"{op}: {instance!r} is a generalized instance of the built-in "
+            f"class {cls.name.name}; its slots are not accessible",
+            expected_type='STANDARD-OBJECT', actual_value=instance)
+
+
 @_registry.cl_function('SLOT-VALUE')
 def slot_value(instance, slot_name):
     """SLOT-VALUE (CLHS 7.5.3, 7.5.5): read a slot's value directly.
@@ -938,6 +1199,7 @@ def slot_value(instance, slot_name):
     returning `(values 1 2 3)`) is reduced to its primary value here, the
     same rule `primary_value` applies at every other single-value context.
     """
+    _signal_builtin_slot_access(instance, 'SLOT-VALUE')
     if isinstance(instance, classes.LispInstance):
         pass  # ordinary CLOS path below
     elif isinstance(instance, lisptype.Condition) and _condition_slot_table(type(instance)):
@@ -1006,6 +1268,7 @@ def set_slot_value(value, instance, slot_name):
     *becomes* bound. A slot-name naming no slot at all invokes SLOT-MISSING
     for effect only; the setf form's value is always `value` regardless.
     """
+    _signal_builtin_slot_access(instance, 'SLOT-VALUE')
     if not isinstance(instance, classes.LispInstance):
         raise lisptype.LispTypeError(f"SLOT-VALUE: not an instance: {instance}")
     name = _slot_name_str(slot_name)
@@ -1030,6 +1293,7 @@ def set_slot_value(value, instance, slot_name):
 
 @_registry.cl_function('SLOT-BOUNDP')
 def slot_boundp(instance, slot_name):
+    _signal_builtin_slot_access(instance, 'SLOT-BOUNDP')
     if not isinstance(instance, classes.LispInstance):
         return lisptype.NIL
     name = _slot_name_str(slot_name)
@@ -1052,6 +1316,7 @@ def slot_boundp(instance, slot_name):
 
 @_registry.cl_function('SLOT-MAKUNBOUND')
 def slot_makunbound(instance, slot_name):
+    _signal_builtin_slot_access(instance, 'SLOT-MAKUNBOUND')
     if isinstance(instance, classes.LispInstance):
         name = _slot_name_str(slot_name)
         cls = instance.lisp_class
@@ -1104,11 +1369,19 @@ def slot_exists_p(instance, slot_name):
     class's slot definitions, which happened to work only because the old
     MAKE-INSTANCE always pre-populated every slot's dict entry (even to
     None) at creation time -- a real ALLOCATE-INSTANCE leaves it empty.
-    """
+
+    Conditions are objects with slots too (CLHS 9.1: condition classes
+    are standard-objects): a DEFINE-CONDITION slot answers T here just
+    like a DEFCLASS slot (slot-exists-p.15/.16)."""
     try:
         if isinstance(instance, classes.LispInstance):
             name = slot_name.name if hasattr(slot_name, 'name') else slot_name
             return lisptype.T if name in instance.lisp_class.get_all_slots() else lisptype.NIL
+        if isinstance(instance, lisptype.Condition):
+            table = _condition_slot_table(type(instance))
+            if table is not None:
+                name = _slot_name_str(slot_name)
+                return lisptype.T if name in table else lisptype.NIL
     except Exception:
         pass
     return lisptype.NIL
@@ -1134,12 +1407,19 @@ def _specifier_name(spec):
 @_registry.cl_function('FIND-METHOD')
 def find_method(generic_function, qualifiers, specializers, errorp=True):
     """FIND-METHOD (CLHS 7.6.6): find a method by qualifiers and
-    specializers. errorp defaults to T; NIL makes a miss return NIL
-    instead of signaling."""
-    from fclpy.lispfunc.core import _consp_internal, car, cdr
+    specializers.
 
-    if errorp is None:
-        errorp = True
+    - `specializers` holds *parameter specializer designators*: a class,
+      a symbol naming one, or an `(eql form)` list whose value part is
+      compared EQL against the method's specializer value.
+    - The number of specializers must match the number of required
+      parameters of the generic function's lambda list (CLHS: "an error
+      is signaled if ... the number of specializers does not correspond
+      to the number of required parameters"), regardless of `errorp`.
+    - `errorp` decides only a *miss with matching arity*: any non-NIL
+      value signals; NIL returns NIL.
+    """
+    from fclpy.lispfunc.core import _consp_internal, car, cdr
 
     def _to_list(lisp_list):
         out = []
@@ -1152,15 +1432,63 @@ def find_method(generic_function, qualifiers, specializers, errorp=True):
     q_list = _to_list(qualifiers)
     spec_list = _to_list(specializers)
 
+    def _resolve_spec(spec):
+        """One specializer designator -> a comparable specializer: an
+        EqlSpecializer for `(eql form)`, the class object for a resolvable
+        name, the object itself otherwise."""
+        if _consp_internal(spec):
+            head = car(spec)
+            if (isinstance(head, lisptype.LispSymbol)
+                    and head.name.upper() == 'EQL'
+                    and _consp_internal(cdr(spec))):
+                return classes.EqlSpecializer(car(cdr(spec)))
+            return spec
+        if isinstance(spec, lisptype.LispSymbol):
+            cls = classes.find_class(spec.name)
+            if cls is not None:
+                return cls
+        return spec
+
+    def _spec_matches(method_spec, given_spec):
+        if isinstance(method_spec, classes.EqlSpecializer):
+            if isinstance(given_spec, classes.EqlSpecializer):
+                from fclpy.lispfunc.comparison import eql as _eql
+                return _eql(method_spec.value, given_spec.value) is lisptype.T
+            return False
+        if isinstance(method_spec, classes.LispClass):
+            return method_spec is given_spec
+        # A raw type-name symbol the registry had no class for: compare
+        # by name.
+        return _specifier_name(method_spec) == _specifier_name(given_spec)
+
+    # Arity mismatch is an error regardless of errorp (CLHS find-method).
+    required_count = None
+    if (isinstance(generic_function, classes.GenericFunction)
+            and getattr(generic_function, 'lambda_list', None) is not None):
+        from .evaluation_core import parse_lambda_list
+        required_count = len(parse_lambda_list(generic_function.lambda_list)
+                              .get('required', []))
+    if required_count is None:
+        counts = {len(m.specializers)
+                  for m in getattr(generic_function, 'methods', [])}
+        required_count = counts.pop() if len(counts) == 1 else None
+    if required_count is not None and len(spec_list) != required_count:
+        raise lisptype.LispError(
+            f"FIND-METHOD: {len(spec_list)} specializer(s) given, but the "
+            f"generic function takes {required_count} required parameter(s)")
+
+    resolved = [_resolve_spec(s) for s in spec_list]
     for method in getattr(generic_function, 'methods', []):
         m_quals = [_specifier_name(q) for q in method.qualifiers]
         if m_quals != [_specifier_name(q) for q in q_list]:
             continue
-        m_specs = [_specifier_name(s) for s in method.specializers]
-        if m_specs == [_specifier_name(s) for s in spec_list]:
+        if len(method.specializers) != len(resolved):
+            continue
+        if all(_spec_matches(ms, gs)
+               for ms, gs in zip(method.specializers, resolved)):
             return method
 
-    if errorp is True or errorp is lisptype.T:
+    if errorp is None or lisptype.is_truthy(errorp):
         raise lisptype.LispError(f"No method found for specializers: {specializers}")
     return lisptype.NIL
 
@@ -1176,6 +1504,82 @@ def defmethod(name, *args):
     matching DEFGENERIC/DEFCONSTANT/DEFPACKAGE/DEFSTRUCT's identical
     placeholders in misc_macros.py."""
     return name
+
+
+@_registry.cl_function('CLASS-PRECEDENCE-LIST')
+def class_precedence_list(class_obj):
+    """CLASS-PRECEDENCE-LIST (CLHS 4.3.5 / 7.6.15): the class precedence
+    list of `class_obj`, most specific first -- the total order method
+    dispatch ranks specializers by, computed by CLHS 4.3.5.1's
+    deterministic topological sort (`classes._topological_cpl`)."""
+    if not isinstance(class_obj, classes.LispClass):
+        raise lisptype.LispTypeError(
+            f"CLASS-PRECEDENCE-LIST: expected a class, got {class_obj!r}",
+            expected_type='CLASS', actual_value=class_obj)
+    from fclpy.lispfunc.sequence_protocol import make_lisp_list
+    return make_lisp_list(class_obj.get_linearized_superclasses())
+
+
+@_registry.cl_function('COMPUTE-CLASS-PRECEDENCE-LIST')
+def compute_class_precedence_list(class_obj):
+    """COMPUTE-CLASS-PRECEDENCE-LIST (CLHS 4.3.5): compute the class
+    precedence list of `class_obj` -- the same computation CLASS-PRECEDENCE-LIST
+    answers with, named as the MOP-level hook."""
+    if not isinstance(class_obj, classes.LispClass):
+        raise lisptype.LispTypeError(
+            f"COMPUTE-CLASS-PRECEDENCE-LIST: expected a class, got {class_obj!r}",
+            expected_type='CLASS', actual_value=class_obj)
+    from fclpy.lispfunc.sequence_protocol import make_lisp_list
+    return make_lisp_list(class_obj.get_linearized_superclasses())
+
+
+@_registry.cl_function('ADD-METHOD')
+def add_method(generic_function, method):
+    """ADD-METHOD (CLHS 7.6.6.2): add one *method object* to a generic
+    function. The method becomes an element of *this* generic function: a
+    method congruent in qualifiers and specializers to an existing one
+    replaces it (CLHS 7.6.3, add-method.2). Exceptional situations (CLHS
+    add-method): a method whose lambda list is not congruent with the
+    generic function's signals an error, and so does adding a method that
+    is still a method object of *another* generic function (add-method.1
+    removes it from its owner first)."""
+    if not isinstance(generic_function, classes.GenericFunction):
+        raise lisptype.LispTypeError(
+            f"ADD-METHOD: {generic_function!r} is not a generic function",
+            expected_type='GENERIC-FUNCTION', actual_value=generic_function)
+    if not isinstance(method, classes.Method):
+        raise lisptype.LispTypeError(
+            f"ADD-METHOD: {method!r} is not a method",
+            expected_type='METHOD', actual_value=method)
+    owner = method.generic_function
+    if owner is not None and owner is not generic_function:
+        raise lisptype.LispError(
+            "ADD-METHOD: the method is still a method of another generic "
+            "function -- remove it from that one first")
+    # CLHS 7.6.4 congruence, against a lambda list the generic function
+    # actually declared (a generic function created implicitly by DEFMETHOD
+    # has none until the first method establishes it).
+    if getattr(generic_function, 'lambda_list', None) is not None:
+        method_ll = getattr(method, 'lambda_list', None)
+        if method_ll is not None:
+            from .evaluation_core import parse_lambda_list
+            from .evaluation_special_forms import _check_method_congruent
+            tail = parse_lambda_list(method_ll)
+            _check_method_congruent(generic_function.name,
+                                     generic_function.lambda_list,
+                                     tail.get('required', []), tail)
+    for i, existing in enumerate(generic_function.methods):
+        if existing is method:
+            return generic_function
+        if (existing.qualifiers == method.qualifiers
+                and classes._specializers_congruent(existing.specializers,
+                                                     method.specializers)):
+            method.generic_function = generic_function
+            generic_function.methods[i] = method
+            return generic_function
+    method.generic_function = generic_function
+    generic_function.methods.append(method)
+    return generic_function
 
 
 @_registry.cl_function('REMOVE-METHOD')
@@ -1389,35 +1793,19 @@ def ensure_generic_function(function_name, *options):
 
     # CLHS 7.6.6.1: :argument-precedence-order is a permutation of the
     # lambda list's required parameters naming the order they are compared
-    # in when ordering applicable methods. Stored as *positions* into the
-    # specializer list, which is what `_specificity_key` consumes.
+    # in when ordering applicable methods. Validation and installation are
+    # shared with DEFGENERIC via `classes.set_argument_precedence_order`.
     apo = kwargs.get('ARGUMENT-PRECEDENCE-ORDER')
     if apo is not None:
         from .evaluation_core import _consp_internal as _ci, car as _car
-        required_names = []
-        cur = lambda_list if lambda_list is not None else gf.lambda_list
-        while _ci(cur):
-            p = _car(cur)
-            if isinstance(p, lisptype.LispSymbol) and p.name.startswith('&'):
-                break
-            required_names.append(p.name.upper())
-            cur = cdr(cur)
-        order_positions = []
-        ok = True
+        order_list = []
         cur = apo
         while _ci(cur):
-            p = _car(cur)
-            name = p.name.upper() if isinstance(p, lisptype.LispSymbol) else None
-            if name not in required_names or order_positions.count(required_names.index(name)) > 0:
-                ok = False
-                break
-            order_positions.append(required_names.index(name))
+            order_list.append(_car(cur))
             cur = cdr(cur)
-        if not ok or sorted(order_positions) != list(range(len(required_names))):
-            raise lisptype.LispProgramError(
-                f"ENSURE-GENERIC-FUNCTION: :argument-precedence-order is not "
-                f"a permutation of the required parameters")
-        gf.argument_precedence_order = order_positions
+        classes.set_argument_precedence_order(
+            gf, lambda_list if lambda_list is not None else gf.lambda_list,
+            order_list)
 
     # CLHS 7.7.1: "The generic function is added to the environment" --
     # ensuring a generic function makes the name fbound, exactly as

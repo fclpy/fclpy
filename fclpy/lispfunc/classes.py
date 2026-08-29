@@ -204,10 +204,19 @@ def defclass(name, direct_superclasses=None, slots=None, **options):
     # CLHS requires that when a class is redefined, the identity is preserved --
     # the same class object is modified rather than a new one created. This applies
     # both to forward-referenced classes (where a placeholder was created earlier)
-    # and to regular classes being redefined.
-    existing = classes.find_class(
-        name.name if isinstance(name, lisptype.LispSymbol) else str(name))
-    if existing is not None:
+    # and to regular classes being redefined. "Redefined" means the *name* still
+    # denotes that class: (setf class-name) may have renamed the registered class
+    # object away (class-0309.1/.0310.1 rename CLASS1 to NIL / another name and
+    # then require re-running defclass to create a *fresh* class object).
+    name_str = name.name if isinstance(name, lisptype.LispSymbol) else str(name)
+    existing = classes.find_class(name_str)
+    if existing is not None and isinstance(existing, classes.LispClass):
+        existing_still_named = (isinstance(existing.name, lisptype.LispSymbol)
+                                and existing.name.name.upper() == name_str.upper())
+    else:
+        existing = None
+        existing_still_named = False
+    if existing is not None and existing_still_named:
         if existing.forward_referenced:
             # Fill in a forward-referenced placeholder class
             lisp_class = classes.define_forward_referenced_class(
@@ -352,19 +361,15 @@ def make_instance(class_spec, *args, **kwargs):
     # Build a flat initarg plist from both call conventions this function
     # supports: ordinary Lisp calls pass alternating keyword/value *args;
     # the Python-level test suite calls this directly with **kwargs (plain
-    # string keys, no leading colon).
-    initargs = []
+    # string keys, no leading colon). Every argument is passed through
+    # unchanged -- an odd plist (a trailing keyword with no value) must
+    # reach SHARED-INITIALIZE, which is where CLHS 7.1.2's check turns it
+    # into a PROGRAM-ERROR, not something this wrapper silently drops
+    # (make-instance.error.2).
+    initargs = list(args)
     for key, value in kwargs.items():
         initargs.append(key)
         initargs.append(value)
-    i = 0
-    while i < len(args):
-        if isinstance(args[i], lisptype.lispKeyword) and i + 1 < len(args):
-            initargs.append(args[i])
-            initargs.append(args[i + 1])
-            i += 2
-        else:
-            i += 1
 
     gf = classes.ensure_generic_function(lisptype.COMMON_LISP_PACKAGE.intern_symbol('MAKE-INSTANCE'))
     return classes.call_generic_function(gf, [class_designator] + initargs)
@@ -495,35 +500,12 @@ def class_of(obj):
 # `.classes`) and silently replaced the real operator with a symbol-only,
 # no-options stub -- the duplicate-register defect class.
 
-@_registry.cl_function('ADD-METHOD')
-def add_method(gf, specializers, method_func):
-    """ADD-METHOD: Add a method to a generic function."""
-    if not isinstance(gf, classes.GenericFunction):
-        raise TypeError(f"Not a generic function: {gf}")
-    
-    # Parse specializers (list of class objects or NIL for T)
-    spec_list = []
-    if isinstance(specializers, (list, tuple)):
-        spec_list = list(specializers)
-    else:
-        spec_list = [specializers]
-    
-    # Convert NIL, T, or T-like symbols to None (no specializer)
-    parsed_specs = []
-    for spec in spec_list:
-        if spec is None or spec is lisptype.NIL:
-            parsed_specs.append(None)
-        elif spec is lisptype.T:
-            parsed_specs.append(None)
-        elif isinstance(spec, lisptype.LispSymbol) and spec.name.upper() == 'T':
-            # Handle T symbols from parsed forms (compare by name, not identity)
-            parsed_specs.append(None)
-        elif isinstance(spec, classes.LispClass):
-            parsed_specs.append(spec)
-        else:
-            raise TypeError(f"Specializer must be a class, got {spec}")
-    
-    return classes.add_method(gf, parsed_specs, method_func)
+# ADD-METHOD (CLHS 7.6.6.2: `(add-method generic-function method)`) is
+# registered once, in `misc_clos.py`, beside FIND-METHOD/REMOVE-METHOD. The
+# registration this replaced had MAKE-INSTANCE's parameter list
+# (`generic-function specializers function`) -- not the standard's two
+# arguments, so every ansi-test ADD-METHOD call died on arity, and it
+# bypassed the method-object protocol entirely.
 
 
 @_registry.cl_function('CALL-GENERIC-FUNCTION')

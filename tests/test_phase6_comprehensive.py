@@ -292,8 +292,8 @@ class TestMethodDispatchWithTypes:
             return 3.14159
         
         # Add more specific method first (shouldn't matter due to sorting)
-        lispfunc.add_method(gf, [circle_cls], circle_area)
-        lispfunc.add_method(gf, [shape_cls], shape_area)
+        classes.add_method(gf, [circle_cls], circle_area)
+        classes.add_method(gf, [shape_cls], shape_area)
         
         # Test dispatch
         circle = lispfunc.make_instance('CIRCLE')
@@ -317,7 +317,7 @@ class TestMethodDispatchWithTypes:
         def speak_general(*args):
             return "sound"
         
-        lispfunc.add_method(gf, [None], speak_general)
+        classes.add_method(gf, [None], speak_general)
         
         # Call with any object
         animal = lispfunc.make_instance('ANIMAL')
@@ -364,8 +364,8 @@ class TestIntegrationWithPhase6:
         def bike_wheels(obj):
             return 2
         
-        lispfunc.add_method(gf, [car_cls], car_wheels)
-        lispfunc.add_method(gf, [bike_cls], bike_wheels)
+        classes.add_method(gf, [car_cls], car_wheels)
+        classes.add_method(gf, [bike_cls], bike_wheels)
         
         # Test dispatch
         car = lispfunc.make_instance('CAR')

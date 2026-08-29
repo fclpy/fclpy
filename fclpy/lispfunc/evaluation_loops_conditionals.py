@@ -1165,8 +1165,14 @@ def eval_quasiquote(form, env):
         # If an explicit (UNQUOTE e) form
         if _consp_internal(obj) and isinstance(car(obj), lisptype.LispSymbol) and car(obj).name == 'UNQUOTE':
             if level == 1:
-                # At outermost level, evaluate the unquote
-                return eval(car(cdr(obj)), env)
+                # At outermost level, evaluate the unquote. The template is
+                # a *single-value* context: `(quote ,(macroexpand x env))`
+                # contributes MACROEXPAND's primary value only -- the
+                # MultipleValues wrapper itself became the constructed
+                # form's second value and surfaced as a bogus extra return
+                # value of every macro whose body unquoted a multi-valued
+                # call (defmacro.17/.17A).
+                return lisptype.primary_value(eval(car(cdr(obj)), env))
             else:
                 # Inside nested quasiquote, decrease level and recurse
                 return cons(car(obj), cons(_quasi(car(cdr(obj)), level - 1), lisptype.NIL))
@@ -1200,7 +1206,7 @@ def eval_quasiquote(form, env):
             if (isinstance(head, lisptype.LispSymbol) and head.name == 'UNQUOTE'
                     and _consp_internal(cdr(cur))):
                 if level == 1:
-                    tail = eval(car(cdr(cur)), env)
+                    tail = lisptype.primary_value(eval(car(cdr(cur)), env))
                 else:
                     tail = cons(head, cons(_quasi(car(cdr(cur)), level - 1),
                                            lisptype.NIL))
@@ -1235,9 +1241,11 @@ def eval_quasiquote(form, env):
                         continue
                 elif name == 'UNQUOTE':
                     if level == 1:
-                        # At outermost level, evaluate
-                        val = eval(car(cdr(item)), env)
-                        parts.append(val)
+                        # At outermost level, evaluate. Single-value context
+                        # -- the element contributes MACROEXPAND-1's primary
+                        # value only (defmacro.17/.17A).
+                        parts.append(
+                            lisptype.primary_value(eval(car(cdr(item)), env)))
                         cur = cdr(cur)
                         continue
                     else:
@@ -1527,8 +1535,18 @@ def eval_loop(form, env):
     # Accumulation clauses, in order. CLHS 6.1.3 permits several in one loop
     # (`collect i into foo always (< i 20)`); a single slot silently kept only
     # the last one parsed and discarded the rest.
-    # Each entry: {'type', 'form', 'into', 'conditionals'}.
+    # Each entry: {'type', 'form', 'into', 'conditionals', 'type_spec'}.
     accumulations = []
+
+    # The loop's *main* clauses in source order (CLHS 6.1.2.1: the main
+    # clauses of one iteration are executed in the order they were written).
+    # Each entry: ('do', clause) or ('accum', clause) -- the same clause dicts
+    # the two lists above hold, so nothing downstream changes shape. One
+    # ordered list is what makes `do (f) collect (g) do (h)` run f, g, h in
+    # that order; running the two lists separately made every `do` precede
+    # every accumulation, which is observable whenever a `collect` form's
+    # side effect (or a later `do`'s) depends on the interleaving.
+    main_clauses = []
 
     def _substitute_it(form, it_form):
         """CLHS 6.1.3: in the *one* selectable-clause immediately governed by
@@ -1563,6 +1581,7 @@ def eval_loop(form, env):
             i += 1
         body_clauses.append({'conditionals': list(active_conditionals),
                              'forms': do_forms})
+        main_clauses.append(('do', body_clauses[-1]))
 
     def _parse_return_clause(active_conditionals, it_form=None):
         """CLHS 6.1.5.3: `return expr` **is** `do (return expr)` -- see the
@@ -1579,6 +1598,7 @@ def eval_loop(form, env):
         body_clauses.append({'conditionals': list(active_conditionals),
                              'forms': [cons(lisptype.LispSymbol('RETURN-FROM'),
                                             _list_from([block_name] + return_args))]})
+        main_clauses.append(('do', body_clauses[-1]))
         i += 2 if return_args else 1
 
     def _parse_accumulation_clause(active_conditionals, it_form=None):
@@ -1608,6 +1628,7 @@ def eval_loop(form, env):
         if clause['type'] in NUMERIC_ACCUMULATIONS:
             i, clause['type_spec'] = _loop_type_spec(forms, i)
         accumulations.append(clause)
+        main_clauses.append(('accum', clause))
 
     def _parse_selectable_clause(active_conditionals, it_form=None):
         """Parse exactly one selectable-clause (CLHS 6.1.3): a conditional
@@ -1979,6 +2000,7 @@ def eval_loop(form, env):
             # Discovered issues, this is the one remaining silent path in LOOP.
             if not iteration_drivers and not termination_tests:
                 body_clauses.append({'conditionals': [], 'forms': [token]})
+                main_clauses.append(('do', body_clauses[-1]))
             i += 1
 
     # CLHS 6.1.3: Validate that boolean-termination clauses (ALWAYS, NEVER,
@@ -2096,82 +2118,93 @@ def eval_loop(form, env):
             return lisptype.NIL if acc_type == 'thereis' else lisptype.T
         return lisptype.NIL
 
+    def _execute_accumulation_clause(clause, loop_env):
+        """Run one accumulation clause for this iteration (its guards have
+        already passed)."""
+        nonlocal return_triggered
+        acc_type = clause['type']
+        key = _acc_key(clause)
+        state = acc_states[key]
+        acc_value = eval(clause['form'], loop_env)
+
+        if acc_type == 'collect':
+            state['items'].append(acc_value)
+        elif acc_type in ('append', 'nconc'):
+            # NCONC is destructive in ANSI; the observable result is the
+            # same here because the accumulator owns its own list.
+            if _consp_internal(acc_value):
+                cur = acc_value
+                while _consp_internal(cur):
+                    state['items'].append(car(cur))
+                    cur = cdr(cur)
+                # If cur is non-NIL here, it's a dotted tail (e.g., (A B C . TAIL))
+                if cur is not lisptype.NIL and cur is not None:
+                    state['tail'] = cur
+            elif acc_type == 'append' and acc_value is not lisptype.NIL and acc_value is not None:
+                state['items'].append(acc_value)
+        elif acc_type == 'sum':
+            state['number'] += acc_value
+        elif acc_type == 'count':
+            if lisptype.is_truthy(acc_value):
+                state['number'] += 1
+        elif acc_type in ('maximize', 'minimize'):
+            # CLHS 6.1.3.2: the largest/smallest value the form takes. The
+            # first value seeds the extremum -- there is no identity element
+            # to start from, since the values need only be REALs and may be
+            # all negative or all positive.
+            extremum = state['extremum']
+            if extremum is None:
+                state['extremum'] = acc_value
+            elif (acc_value > extremum) if acc_type == 'maximize' else (acc_value < extremum):
+                state['extremum'] = acc_value
+        elif acc_type in BOOLEAN_TERMINATION_CLAUSES:
+            # CLHS 6.1.2.2. ALWAYS fails on the first false value, NEVER on
+            # the first true one, and THEREIS succeeds on the first true
+            # one; in every case the decision ends the loop at once. One
+            # branch, because they are one clause family that differs only
+            # in which truth value decides and what the answer then is.
+            is_true = lisptype.is_truthy(acc_value)
+            decides = (not is_true) if acc_type == 'always' else is_true
+            if decides:
+                early_decision['decided'] = True
+                early_decision['value'] = acc_value if acc_type == 'thereis' else lisptype.NIL
+                return_triggered = True
+
+        if clause['into'] is not None:
+            # Through the frame that established it, for the same reason the
+            # establishing bind goes through the frame: `set_variable` would
+            # walk out to an enclosing binding of the same name.
+            loop_frame[0].bind(clause['into'], _accumulated_value(key))
+
     def execute_iteration_body(loop_env):
-        """Execute one iteration of the loop body."""
+        """Execute one iteration of the loop body.
+
+        CLHS 6.1.2.1: the main clauses of one iteration run *in the order
+        they were written* -- a `collect` clause between two `do` clauses
+        accumulates between them, and each clause's WHEN/UNLESS guards
+        apply only to it. This used to run every `do` clause before every
+        accumulation clause (two separate lists walked back to back), so
+        `(loop repeat 2 do (push 'do1 log) collect (push 'col log) do
+        (push 'do2 log))` logged do1-do2-col instead of do1-col-do2 --
+        an observable difference, e.g. a `collect (file-length os)` that
+        must see the stream a preceding `do (open ...)` made.
+        """
         nonlocal return_triggered
 
-        # Each body clause carries its own WHEN/UNLESS guards, so a condition
-        # applies to the clause it precedes and to nothing after it.
-        for clause in body_clauses:
+        for kind, clause in main_clauses:
             if not _conditionals_pass(clause['conditionals'], loop_env):
                 continue
-            for f in clause['forms']:
-                # For effect only -- a `do` clause never supplies the loop's
-                # value (CLHS 6.1.1.4).
-                eval(f, loop_env)
+            if kind == 'do':
+                for f in clause['forms']:
+                    # For effect only -- a `do` clause never supplies the loop's
+                    # value (CLHS 6.1.1.4).
+                    eval(f, loop_env)
+                    if return_triggered:
+                        return
+            else:
+                _execute_accumulation_clause(clause, loop_env)
                 if return_triggered:
                     return
-
-        # Each accumulation clause has its own conditionals (possibly empty).
-        for clause in accumulations:
-            if not _conditionals_pass(clause['conditionals'], loop_env):
-                continue
-            acc_type = clause['type']
-            key = _acc_key(clause)
-            state = acc_states[key]
-            acc_value = eval(clause['form'], loop_env)
-
-            if acc_type == 'collect':
-                state['items'].append(acc_value)
-            elif acc_type in ('append', 'nconc'):
-                # NCONC is destructive in ANSI; the observable result is the
-                # same here because the accumulator owns its own list.
-                if _consp_internal(acc_value):
-                    cur = acc_value
-                    while _consp_internal(cur):
-                        state['items'].append(car(cur))
-                        cur = cdr(cur)
-                    # If cur is non-NIL here, it's a dotted tail (e.g., (A B C . TAIL))
-                    if cur is not lisptype.NIL and cur is not None:
-                        state['tail'] = cur
-                elif acc_type == 'append' and acc_value is not lisptype.NIL and acc_value is not None:
-                    state['items'].append(acc_value)
-            elif acc_type == 'sum':
-                state['number'] += acc_value
-            elif acc_type == 'count':
-                if lisptype.is_truthy(acc_value):
-                    state['number'] += 1
-            elif acc_type in ('maximize', 'minimize'):
-                # CLHS 6.1.3.2: the largest/smallest value the form takes. The
-                # first value seeds the extremum -- there is no identity element
-                # to start from, since the values need only be REALs and may be
-                # all negative or all positive.
-                extremum = state['extremum']
-                if extremum is None:
-                    state['extremum'] = acc_value
-                elif (acc_value > extremum) if acc_type == 'maximize' else (acc_value < extremum):
-                    state['extremum'] = acc_value
-            elif acc_type in BOOLEAN_TERMINATION_CLAUSES:
-                # CLHS 6.1.2.2. ALWAYS fails on the first false value, NEVER on
-                # the first true one, and THEREIS succeeds on the first true
-                # one; in every case the decision ends the loop at once. One
-                # branch, because they are one clause family that differs only
-                # in which truth value decides and what the answer then is.
-                is_true = lisptype.is_truthy(acc_value)
-                decides = (not is_true) if acc_type == 'always' else is_true
-                if decides:
-                    early_decision['decided'] = True
-                    early_decision['value'] = acc_value if acc_type == 'thereis' else lisptype.NIL
-                    return_triggered = True
-
-            if clause['into'] is not None:
-                # Through the frame that established it, for the same reason the
-                # establishing bind goes through the frame: `set_variable` would
-                # walk out to an enclosing binding of the same name.
-                loop_frame[0].bind(clause['into'], _accumulated_value(key))
-
-            if return_triggered:
-                return
 
     loop_watchdog = LoopWatchdog(
         'LOOP',

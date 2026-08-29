@@ -372,10 +372,11 @@ def special_get_setf_expansion(*args):
     raise lisptype.LispNotImplementedError('GET-SETF-EXPANSION (evaluated in evaluator)')
 
 
-@_registry.cl_special('DEFINE-COMPILER-MACRO')
-def special_define_compiler_macro(*args):
-    """DEFINE-COMPILER-MACRO special form (handled by evaluator)."""
-    raise lisptype.LispNotImplementedError('DEFINE-COMPILER-MACRO (evaluated in evaluator)')
+# DEFINE-COMPILER-MACRO is a MACRO (CLHS 3.2.2.1), not a special operator:
+# its expander lives in evaluation_special_forms.py and the runtime half
+# (%DEFINE-COMPILER-MACRO) in utilities_functions.py. The cl_special stub
+# that stood here made SPECIAL-OPERATOR-P answer T for it and registered
+# nothing usable.
 
 
 @_registry.cl_special('DEFINE-CONDITION')

@@ -558,9 +558,15 @@ class TestFormatJustification:
         arg = _cons_list(_cons_list(1), _cons_list(2, 3))
         assert format_fn(None, "~:{~A~^-~A~}", arg) == "12-3"
 
-    def test_colon_escape_inside_colon_iteration_ends_everything(self):
-        arg = _cons_list(_cons_list(1), _cons_list(2, 3))
-        assert format_fn(None, "~:{~A~:^-~A~}", arg) == "1"
+    def test_colon_escape_inside_colon_iteration_ends_on_last_sublist(self):
+        """CLHS 22.3.9.2: in ~:{...~} a ~:^ exits the iteration only when
+        the current sublist is the LAST one, suppressing the rest of the
+        body. Both shapes are direct ports of ansi-test's
+        format.:^.{.2/.1 (printer/format/format-circumflex.lsp)."""
+        arg3 = _cons_list(_cons_list(1), _cons_list(2), _cons_list(3))
+        assert format_fn(None, "(~:{~A~:^,~})", arg3) == "(1,2,3)"
+        arg1 = _cons_list(_cons_list())
+        assert format_fn(None, "~:{~:^~A~}", arg1) == ""
 
     def test_colon_separator_marks_a_line_prefix_that_is_omitted(self):
         """CLHS 22.3.6.2: a first segment ended by ~:; is a line prefix,

@@ -344,16 +344,23 @@ class TestGenericFunctions:
             return x * 2
         
         # Add a method with no specializers
-        result = lispfunc.add_method(gf, [None], my_method)
+        result = classes.add_method(gf, [None], my_method)
         
         assert result is gf
         assert len(gf.methods) == 1
     
     def test_method_dispatch_simple(self):
         """Test basic method dispatch."""
-        # Define a simple class
+        # Define a simple class. The slot declares :initarg :value -- CLHS
+        # 7.1.2 admits only slot initargs, :default-initargs and
+        # applicable-method keyword parameters as valid initialization
+        # arguments, so MAKE-INSTANCE (now correctly) rejects :VALUE for a
+        # slot that never declared it.
         cls_name = lisptype.LispSymbol('NUMBER-HOLDER')
-        lispfunc.defclass(cls_name, [], [lisptype.LispSymbol('VALUE')])
+        lispfunc.defclass(cls_name, [], [
+            (lisptype.LispSymbol('VALUE'),
+             lisptype.lispKeyword('INITARG'),
+             lisptype.lispKeyword('VALUE'))])
         
         # Create generic function
         gf = lispfunc.ensure_generic_function(lisptype.LispSymbol('DOUBLE'))
@@ -366,7 +373,7 @@ class TestGenericFunctions:
             return val * 2
         
         # Add method specialized on NUMBER-HOLDER
-        lispfunc.add_method(gf, [lisp_class], double_method)
+        classes.add_method(gf, [lisp_class], double_method)
         
         # Create instance
         instance = lispfunc.make_instance('NUMBER-HOLDER', VALUE=5)
@@ -383,7 +390,7 @@ class TestGenericFunctions:
             return "Unknown"
         
         # Add method with no specializer (T)
-        lispfunc.add_method(gf, [None], default_method)
+        classes.add_method(gf, [None], default_method)
         
         # Call with any argument
         result = lispfunc.call_generic_function(gf, [42])
@@ -500,7 +507,7 @@ class TestIntegration:
             y = lispfunc.slot_value(point, 'Y')
             return (x ** 2 + y ** 2) ** 0.5
         
-        lispfunc.add_method(gf, [point_class], distance_method)
+        classes.add_method(gf, [point_class], distance_method)
         
         # Test the method
         point = lispfunc.make_instance('POINT', X=3, Y=4)

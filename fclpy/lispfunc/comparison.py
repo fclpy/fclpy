@@ -860,17 +860,33 @@ def typep(object, type_specifier):
         return lisptype.lisp_bool(
             null(object) == lisptype.T or object is lisptype.T)
     else:
-        # Try to find a user-defined class with this name
+        # Try to find a class with this name (user-defined or standardized).
         try:
             cls = classes.find_class(type_name)
-            if cls and isinstance(object, classes.LispInstance):
-                # Check if object is instance of this class
-                for c in object.lisp_class.get_linearized_superclasses():
-                    if c is cls:
-                        return lisptype.T
+            if cls:
+                if isinstance(object, classes.LispInstance):
+                    # Check if object is instance of this class
+                    for c in object.lisp_class.get_linearized_superclasses():
+                        if c is cls:
+                            return lisptype.T
+                else:
+                    # CLHS 4.2: a non-LispInstance object can still be a
+                    # *generalized instance* of a modeled class -- a generic
+                    # function, a condition, a stream, a package. CLASS-OF is
+                    # the one resolver for that (it is the class the method
+                    # dispatcher ranks by), so TYPEP on a class name walks
+                    # its CPL -- the same rule
+                    # `classes._arg_matches_specializer` applies
+                    # (defgeneric.30 typep's a generic function against its
+                    # :generic-function-class).
+                    arg_class = classes.class_of(object)
+                    if isinstance(arg_class, classes.LispClass):
+                        for c in arg_class.get_linearized_superclasses():
+                            if c is cls:
+                                return lisptype.T
         except Exception:
             pass
-        
+
         return lisptype.NIL
 
 

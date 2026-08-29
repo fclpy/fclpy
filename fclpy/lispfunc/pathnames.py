@@ -1134,6 +1134,18 @@ def translate_logical_pathname(pathname, **kwargs):
 
 # ===== Directory listing / probing =====
 
+def _error_if_wild(pn, operator):
+    """The CLHS 19.4 "wild" refusal shared by the file probes: PROBE-FILE,
+    FILE-WRITE-DATE and friends each specify "an error of type FILE-ERROR is
+    signaled if pathspec is wild" -- the operation cannot name one file, so
+    the answer would be a lie. The condition carries `pn` itself (the
+    designator as given, before any translation), which is what
+    `file-error.1`'s EQUALP check compares against."""
+    from .evaluation_conditions import signal_file_error
+    if any(_field_is_wild(pn, field) for field in _WILD_FIELD_NAMES.values()):
+        signal_file_error(pn, f"{operator}: wild pathname: {pn.namestring()}")
+
+
 def _directory_error_check(pn, signal_file_error):
     """DIRECTORY signals a FILE-ERROR (CLHS 20.2), not a TYPE-ERROR, for a
     directory list that cannot name anything: `:UP`/`:BACK` at the root of
@@ -1221,7 +1233,9 @@ def truename(pathname):
 
 @_registry.cl_function('PROBE-FILE')
 def probe_file(pathname):
-    path_str = resolve_filespec(pathname)
+    pn = _coerce_pathname_designator(pathname, 'PROBE-FILE')
+    _error_if_wild(pn, 'PROBE-FILE')
+    path_str = resolve_filespec(pn)
     if os.path.exists(path_str) and os.path.isfile(path_str):
         return pathname_from_os_path(os.path.realpath(path_str))
     return lisptype.NIL
@@ -1229,7 +1243,9 @@ def probe_file(pathname):
 
 @_registry.cl_function('FILE-WRITE-DATE')
 def file_write_date(pathname):
-    path_str = resolve_filespec(pathname)
+    pn = _coerce_pathname_designator(pathname, 'FILE-WRITE-DATE')
+    _error_if_wild(pn, 'FILE-WRITE-DATE')
+    path_str = resolve_filespec(pn)
     if os.path.exists(path_str):
         return int(os.path.getmtime(path_str))
     return lisptype.NIL
@@ -1250,9 +1266,27 @@ def relative_pathname_p(pathname):
 @_registry.cl_function('ENSURE-DIRECTORIES-EXIST')
 def ensure_directories_exist(pathspec, **kwargs):
     pn = _coerce_pathname_designator(pathspec, 'ENSURE-DIRECTORIES-EXIST')
-    dir_str = _render_directory_physical(pn.directory)
+    # A wild directory cannot be created, and CLHS's exceptional situation
+    # for this operator is a FILE-ERROR -- which ENSURE-DIRECTORIES-EXIST
+    # (ansi-test files/ensure-directories-exist.lsp) drives with a
+    # `(:relative :wild)` directory and requires by type. Checking before
+    # the OS call also keeps Python's OSError from surfacing as the value of
+    # the form (standing rule 2); the `os.makedirs` below is guarded the
+    # same way for whatever an OS rejects on a non-wild path.
+    _error_if_wild(pn, 'ENSURE-DIRECTORIES-EXIST')
+    # The directory portion of the *resolved* filespec -- not
+    # `pn.directory` rendered against the process's working directory: a
+    # `(:relative "scratch")` directory is defined relative to
+    # *DEFAULT-PATHNAME-DEFAULTS* (CLHS 19.2.3's merge), and
+    # `resolve_filespec` is the one resolver that knows that search.
+    dir_str = os.path.dirname(resolve_filespec(pn))
     created = False
     if dir_str and not os.path.isdir(dir_str):
-        os.makedirs(dir_str, exist_ok=True)
+        try:
+            os.makedirs(dir_str, exist_ok=True)
+        except OSError as error:
+            from .evaluation_conditions import signal_file_error
+            signal_file_error(
+                pn, f"ENSURE-DIRECTORIES-EXIST: cannot create directory: {error}")
         created = True
     return lisptype.MultipleValues(pn, lisptype.lisp_bool(created))

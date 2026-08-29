@@ -8,6 +8,7 @@ DEFSTRUCT: Accept keywords as structure names (v2).
 
 import fclpy.lisptype as lisptype
 import fclpy.state as state
+import fclpy.classes as _clos_classes
 from fclpy.lispfunc.core import car, cdr, _consp_internal, cons, _null_internal
 from .binding import proclaim_special, root_environment, BindingFrame
 from . import registry as _registry
@@ -1136,6 +1137,58 @@ def _standard_io_syntax_bindings():
     ]
 
 
+@_registry.cl_macro('DEFINE-COMPILER-MACRO',
+                    documentation='DEFINE-COMPILER-MACRO macro expander')
+def define_compiler_macro_macro(*args):
+    """DEFINE-COMPILER-MACRO (CLHS 3.2.2.1) expander: quote the definition
+    into a call to `%DEFINE-COMPILER-MACRO`, the runtime half (in
+    utilities_functions.py) that builds the macro function through the one
+    macro binder and installs it as the name's compiler macro function.
+    Expanding to a *call* -- rather than registering as a side effect of
+    expansion -- is what makes the definition happen at LOAD time of
+    compiled output, like every defining form. `name` may be a symbol or a
+    ``(setf symbol)`` function name. The expander receives the call's raw
+    arguments (name lambda-list body...), the same convention every
+    cl_macro expander follows."""
+    import fclpy.lisptype as lisptype
+
+    def quote(x):
+        return _ccm_list([lisptype.LispSymbol('QUOTE'), x])
+
+    name = args[0] if args else lisptype.NIL
+    lambda_list = args[1] if len(args) > 1 else lisptype.NIL
+    body_forms = [quote(item) for item in args[2:]]
+
+    # ANSI: the macro function of a defining macro signals PROGRAM-ERROR
+    # when funcalled malformed -- (macro-function 'define-compiler-macro)
+    # funcalled with 0/1 args, or with a name that is neither a symbol nor
+    # a (setf symbol) function name (define-compiler-macro.error.1-.3).
+    if len(args) < 3:
+        raise lisptype.LispProgramError(
+            "DEFINE-COMPILER-MACRO requires a name, a lambda list and a body")
+    valid_name = (isinstance(name, lisptype.LispSymbol)
+                  or (_consp_internal(name) and len(args[0]) == 2
+                      and isinstance(car(name), lisptype.LispSymbol)
+                      and car(name).name.upper() == 'SETF'
+                      and isinstance(car(cdr(name)), lisptype.LispSymbol)))
+    if not valid_name:
+        raise lisptype.LispProgramError(
+            "DEFINE-COMPILER-MACRO: invalid function name")
+
+    call_items = [lisptype.LispSymbol('%DEFINE-COMPILER-MACRO'),
+                  quote(name), quote(lambda_list)] + body_forms
+    return _ccm_list(call_items)
+
+
+def _ccm_list(items):
+    """A Lisp list from a Python sequence (local to the compiler-macro
+    expanders)."""
+    result = lisptype.NIL
+    for item in reversed(items):
+        result = lisptype.lispCons(item, result)
+    return result
+
+
 @_registry.cl_macro('WITH-COMPILATION-UNIT',
                     documentation='WITH-COMPILATION-UNIT macro expander')
 def with_compilation_unit_macro(options, *body):
@@ -1355,6 +1408,13 @@ def _canonicalize_nil_symbol(value):
     return value
 
 
+def _current_frame_keyword_context():
+    """The CLHS 7.6.5 keyword-argument validity of the generic-function
+    call whose method is currently executing, or None outside any method --
+    see `classes.call_frame_keyword_context`."""
+    return _clos_classes.call_frame_keyword_context()
+
+
 def keyword_argument_key(symbol):
     """The identity on which a `&key` parameter and an actual argument match.
 
@@ -1481,8 +1541,22 @@ def _bind_keyword_parameters(parsed, trailing, func_env, eval_fn, frame, default
             continue
         if (name not in declared_names and name != allow_other_keys_key
                 and not allow_other_keys):
-            raise lisptype.LispProgramError(
-                f"unrecognized keyword argument: {name[1]}")
+            # CLHS 7.6.5: the keyword arguments accepted by a generic
+            # function for a particular call are the union of those named
+            # by its own lambda list and by every applicable method's. A
+            # method binder therefore must not reject a keyword the
+            # *generic function* accepted -- reinitialize-instance.8's
+            # :after method binds `&key x` while the call passes other
+            # keywords, and defgeneric.28's `(fn 1 :bar 'b)` passes a
+            # keyword only a less-specific applicable method names. The
+            # frame carries what the dispatching call computed; outside
+            # any method (an ordinary DEFUN) there is no frame and this
+            # check is exactly what it was before.
+            frame_ctx = _current_frame_keyword_context()
+            frame_keys, frame_aok = frame_ctx if frame_ctx is not None else (None, False)
+            if not frame_aok and (frame_keys is None or name not in frame_keys):
+                raise lisptype.LispProgramError(
+                    f"unrecognized keyword argument: {name[1]}")
         supplied_values[name] = value
 
     # CLHS 3.4.1.1: a parameter's init-form is evaluated, in left-to-right
@@ -1911,7 +1985,10 @@ def eval_defun(form, env):
         # (CLHS 25.1.3; documentation.function.t.2).
         user_function.__doc__ = str(docstring)
 
-    return func_name
+    # CLHS: DEFUN returns the function *name* -- as written, so a
+    # ``(defun (setf foo) ...)`` answers the list ``(SETF FOO)`` and not
+    # the internal storage symbol (define-compiler-macro.4's second check).
+    return func_name_spec
 def _create_macro_function(macro_name, lambda_list, body, env,
                            unsupplied_default=None):
     """Create a macro function callable from lambda-list and body.
@@ -4994,6 +5071,25 @@ def eval_defclass(form, env):
                             dinit_current = cdr(dinit_rest)
             current = cdr(current)
     
+    # CLHS 4.3.7: a built-in class cannot be subclassed with defclass --
+    # "Attempting to use defclass to define subclasses of a built-in-class
+    # signals an error" -- nor redefined by naming it (defclass.error.23
+    # and .24 walk *built-in-classes* asserting exactly this for every
+    # class whose metaclass is built-in-class). Classes with the other
+    # metaclasses (standard-class, structure-class) remain subclassable.
+    for sc in superclasses_list:
+        if (isinstance(sc, fclpy.classes.LispClass)
+                and getattr(sc, 'metaclass_name', 'STANDARD-CLASS') == 'BUILT-IN-CLASS'):
+            raise lisptype.LispProgramError(
+                f"DEFCLASS: cannot define a subclass of the built-in class "
+                f"{sc.name.name}")
+    existing_named = fclpy.classes.find_class(
+        class_name.name if isinstance(class_name, lisptype.LispSymbol) else str(class_name))
+    if (existing_named is not None
+            and getattr(existing_named, 'metaclass_name', 'STANDARD-CLASS') == 'BUILT-IN-CLASS'):
+        raise lisptype.LispProgramError(
+            f"DEFCLASS: {class_name} names a built-in class and cannot be redefined")
+
     # Call the defclass function to create the class. `definition_env` is
     # threaded through so a slot's :initform is later evaluated where this
     # DEFCLASS lexically appeared (CLHS 7.1.2), and so :reader/:writer/
@@ -5149,11 +5245,31 @@ def _make_method_function(required_params, optional_lambda_list, body, captured_
         declaration_body = lisptype.lispCons(decl, declaration_body)
     parameters = list(required_params) + _lambda_list_variables(optional_lambda_list)
 
+    n_required = len(required_params)
+    n_optional = len(optional_lambda_list.get('optional', []))
+    # &optional bounds the argument count (checked below); only &rest/&key
+    # make it unbounded (&key's even-pair structure is the binder's own
+    # CLHS 3.4.1.4 check).
+    accepts_extra = bool(optional_lambda_list.get('mentions_rest')
+                         or optional_lambda_list.get('mentions_key')
+                         or optional_lambda_list.get('allow_other_keys'))
+
     def method_func(*call_args):
+        # CLHS 3.5.1: a wrong argument count is a PROGRAM-ERROR -- the
+        # dispatch above only checks specializer applicability, not arity,
+        # so a method whose lambda list is `(x)` called with two arguments
+        # used to silently drop the surplus (defmethod.error.13,
+        # make-load-form.error.2).
+        if len(call_args) < n_required:
+            raise lisptype.LispProgramError(
+                f"method takes {n_required} required argument(s), got {len(call_args)}")
+        if not accepts_extra and len(call_args) > n_required + n_optional:
+            raise lisptype.LispProgramError(
+                f"method takes {n_required + n_optional} argument(s), got {len(call_args)}")
         method_env = lisptype.Environment(captured_env)
         # A method's parameters obey the same CLHS 3.4.1/11.1.2.1.2 rule as
-        # any other function's: one declared SPECIAL binds dynamically and is
-        # undone on exit. `BindingFrame` is the one place that decides which.
+        # any other function's: one declared SPECIAL binds dynamically and
+        # is undone on exit. `BindingFrame` is the one place that decides which.
         frame = BindingFrame(method_env, body=declaration_body,
                              bound_vars=parameters,
                              defer_free_declarations=True)
@@ -5169,6 +5285,33 @@ def _make_method_function(required_params, optional_lambda_list, body, captured_
             _bind_ordinary_lambda_list_tail(
                 optional_lambda_list, call_args, arg_index, method_env, eval, frame)
             frame.install_free_declarations()
+
+            # CALL-NEXT-METHOD and NEXT-METHOD-P have *indefinite extent*
+            # (CLHS 7.6.6.2): a method may return the function itself --
+            # `(defmethod f (x) #'call-next-method)` -- and the caller may
+            # FUNCALL it long after the method finished. What it closes
+            # over is the frame `classes.call_method` pushed for this very
+            # invocation; binding them as local functions of the method's
+            # environment (which is what a FLET would do) is what makes
+            # both the bare-operator and the #'-quoted uses resolve to the
+            # frame-capturing closures instead of the frame-less global
+            # operator.
+            cnm_frame = _clos_classes.current_call_frame()
+            if cnm_frame is not None:
+                captured = cnm_frame
+
+                def _local_call_next_method(*cnm_args):
+                    return _clos_classes.call_next_method_in_frame(captured, *cnm_args)
+
+                def _local_next_method_p():
+                    return lisptype.lisp_bool(bool(captured['next']))
+
+                method_env.add_function(
+                    lisptype.intern_symbol('CALL-NEXT-METHOD'),
+                    _local_call_next_method)
+                method_env.add_function(
+                    lisptype.intern_symbol('NEXT-METHOD-P'),
+                    _local_next_method_p)
 
             def _run_body():
                 result = lisptype.NIL
@@ -5357,6 +5500,8 @@ def eval_defgeneric(form, env):
 
     documentation = None
     method_combination = None
+    apo_order = None
+    gf_class_name = None
     method_specs = []  # (qualifiers, specializers, params, body)
     seen = set()
 
@@ -5372,7 +5517,9 @@ def eval_defgeneric(form, env):
             qualifiers, specialized_lambda_list, method_body = _parse_defmethod_tail(cdr(option))
             required_params, specializers, optional_lambda_list = _parse_specialized_lambda_list(
                 specialized_lambda_list, env)
-            method_specs.append((qualifiers, specializers, required_params, optional_lambda_list, method_body))
+            method_specs.append((qualifiers, specializers, required_params,
+                                 optional_lambda_list, method_body,
+                                 specialized_lambda_list))
             continue
 
         # CLHS 7.7 names exactly which options may appear at most once.
@@ -5394,12 +5541,16 @@ def eval_defgeneric(form, env):
         elif opt_name == 'METHOD-COMBINATION':
             method_combination = _resolve_method_combination(func_name, cdr(option))
         elif opt_name == 'ARGUMENT-PRECEDENCE-ORDER':
+            apo_order = _list_elements(cdr(option))
             _check_argument_precedence_order(func_name, lambda_list, cdr(option))
         elif opt_name in ('GENERIC-FUNCTION-CLASS', 'METHOD-CLASS', 'DECLARE'):
-            # Accepted and recorded nowhere yet: this implementation has one
-            # generic-function class and one method class, so there is
-            # nothing for them to select. They are not errors, though, and
-            # must not fall through to the unknown-option branch.
+            # :generic-function-class is recorded below and answers through
+            # CLASS-OF/TYPEP; :method-class and (declare ...) still have
+            # nothing to select and are accepted without effect. They are
+            # not errors, and must not fall through to the unknown-option
+            # branch.
+            if opt_name == 'GENERIC-FUNCTION-CLASS':
+                gf_class_name = car(cdr(option))
             pass
         else:
             raise lisptype.LispProgramError(
@@ -5412,13 +5563,69 @@ def eval_defgeneric(form, env):
         raise lisptype.LispProgramError(
             f"DEFGENERIC: {func_name} already names a non-generic function")
 
+    # CLHS 7.6.4: re-declaring a generic function's lambda list with a
+    # different required-parameter count while *independently added* methods
+    # exist makes every one of those methods incongruent with the new
+    # definition -- an error, not a silent discard (defgeneric.error.22).
+    # Methods the previous DEFGENERIC's own :method options generated are
+    # replaced by the re-execution (defgeneric.31 does exactly that with a
+    # wider lambda list), so they do not make the redefinition an error.
+    # Checked *before* ensure_generic_function runs, because that call's own
+    # recovery is exactly the discard this must forbid.
+    existing_gf = classes._generic_registry.find_generic(
+        classes.generic_function_key(func_name))
+    existing_user_methods = [m for m in existing_gf.methods
+                             if not getattr(m, 'initial_method', False)] \
+        if existing_gf is not None else []
+    if (existing_user_methods and existing_gf.lambda_list is not None
+            and classes._required_param_count(lambda_list)
+            != classes._required_param_count(existing_gf.lambda_list)):
+        raise lisptype.LispProgramError(
+            f"DEFGENERIC: new lambda list for {func_name} is incongruent "
+            f"with its existing methods")
+
     gf = classes.ensure_generic_function(func_name, documentation=documentation, lambda_list=lambda_list)
     gf.method_combination = method_combination
 
-    for qualifiers, specializers, required_params, optional_lambda_list, method_body in method_specs:
+    # CLHS 7.7: :generic-function-class names the class of the generic
+    # function object itself. Record the class on the object: CLASS-OF
+    # answers it and TYPEP walks its CPL (defgeneric.30 typep's the
+    # generic function against the class and against STANDARD-GENERIC-
+    # FUNCTION, both of which must answer T).
+    if gf_class_name is not None:
+        _gf_cls_name = (gf_class_name.name if isinstance(gf_class_name, lisptype.LispSymbol)
+                        else str(gf_class_name))
+        _gf_cls = classes.find_class(_gf_cls_name)
+        if _gf_cls is not None:
+            gf.gf_class = _gf_cls
+
+    # CLHS 7.6.6.1: :argument-precedence-order is a permutation of the
+    # lambda list's required parameters naming the order they are compared
+    # in when ordering applicable methods. Validation and installation are
+    # shared with ENSURE-GENERIC-FUNCTION via
+    # `classes.set_argument_precedence_order`; this used to validate the
+    # permutation and then throw it away, so the ordering option changed
+    # nothing about dispatch (defgeneric.4).
+    if apo_order is not None:
+        classes.set_argument_precedence_order(gf, lambda_list, apo_order)
+
+    # CLHS defgeneric: re-executing the form replaces the previous
+    # definition's own :method options -- the methods it generated -- while
+    # leaving methods added independently (DEFMETHOD, ADD-METHOD) alone.
+    # defgeneric.32 redefines a generic function with a more general
+    # method and requires the redefinition's method to win.
+    gf.methods = [m for m in gf.methods
+                  if not getattr(m, 'initial_method', False)]
+
+    for qualifiers, specializers, required_params, optional_lambda_list, method_body, raw_lambda_list in method_specs:
         _check_method_congruent(func_name, lambda_list, required_params, optional_lambda_list)
         method_fn = _make_method_function(required_params, optional_lambda_list, method_body, env, func_name)
-        classes.add_method(gf, specializers, method_fn, qualifiers=qualifiers)
+        classes.add_method(gf, specializers, method_fn, qualifiers=qualifiers,
+                           lambda_list=raw_lambda_list)
+        # The methods this DEFGENERIC form itself generates are its
+        # "initial methods" (CLHS defgeneric): a re-execution of the form
+        # replaces them, while methods added by DEFMETHOD/ADD-METHOD stay.
+        next(m for m in gf.methods if m.function is method_fn).initial_method = True
 
     global_env = env
     while global_env.parent is not None:
@@ -5490,7 +5697,8 @@ def eval_defmethod(form, env):
     # yet (CLHS lets the *first* method establish it instead).
     if gf.lambda_list is not None:
         _check_method_congruent(func_name, gf.lambda_list, required_params, optional_lambda_list)
-    classes.add_method(gf, specializers, method_fn, qualifiers=qualifiers)
+    classes.add_method(gf, specializers, method_fn, qualifiers=qualifiers,
+                       lambda_list=specialized_lambda_list)
     new_method = next(m for m in gf.methods if m.function is method_fn)
     # CLHS 7.6.2/25.1.3: the body's documentation string, if any, belongs to
     # the method object `(documentation method t)` reads.

@@ -1457,12 +1457,22 @@ class _FormatCursor:
     argument scope per CLHS (~{...~} iterating over a list argument's
     elements; ~? with a separate format-args list) construct a fresh
     cursor instead of sharing this one - that is correct, not a bug.
-    """
-    __slots__ = ('args', 'idx')
 
-    def __init__(self, args, idx=0):
+    `last_item` records, for a cursor driving one pass of a `~:{...~}` or
+    `~:@{...~}` iteration, whether the sublist it holds is the LAST one --
+    the fact CLHS 22.3.9.2's `~:^` needs ("the entire iteration process is
+    terminated if and only if the sublist that is supplying the arguments
+    for the current iteration step is the last"): a no-parameter `~:^` fires
+    only on that pass. It is meaningless on every other cursor, and the
+    default True keeps `~:^` outside any iteration behaving as it always
+    did (terminating).
+    """
+    __slots__ = ('args', 'idx', 'last_item')
+
+    def __init__(self, args, idx=0, last_item=True):
         self.args = list(args) if args else []
         self.idx = idx
+        self.last_item = last_item
 
     def next(self):
         if self.idx < len(self.args):
@@ -1537,6 +1547,34 @@ def _format_args_list(value):
         from .sequence_protocol import seq_elements
         return seq_elements(value)
     return [value]
+
+
+def _check_format_sublist(item, directive):
+    """Each element feeding one pass of a `~:{...~}`/`~:@{...~}` iteration
+    must be a list (CLHS 22.3.7.2: "each element ... must be a list"), and a
+    dotted one is not -- a dotted tail is not a set of arguments for the
+    pass. NIL is the empty sublist. Anything else is a TYPE-ERROR
+    (`format.:{.error.1`/`.4`/`.5`, `format.:@{.error.1`-`.4`), not a
+    one-element pass over the non-list as if it were `([item])` -- which is
+    what `_format_args_list`'s fall-through would have made of it.
+
+    The proper-list walk (and its dotted-tail TYPE-ERROR) is `list_cells`'s
+    own, not a second copy. Note a *vector* is not a list either: the suite
+    reads `#(X Y Z)` as a Python list, which is why this check does not
+    accept one the way the outer `~{` argument check does.
+    """
+    if item is None or item is lisptype.NIL:
+        return
+    from .core import _consp_internal
+    if _consp_internal(item):
+        from .sequence_protocol import list_cells
+        for _ in list_cells(item, f"FORMAT {directive}", dotted='error'):
+            pass
+        return
+    raise lisptype.LispTypeError(
+        f"FORMAT: {directive} argument is not a list: "
+        f"{_write_object(item, escape=True)}",
+        expected_type='LIST', actual_value=item)
 
 
 def _lisp_number(value, default=0):
@@ -2025,11 +2063,30 @@ def _insert_comma_groups(digits, commachar, interval):
     return commachar.join(parts)
 
 
-def _format_A_fallback(val):
-    """CLHS 22.3.2: if the argument to `~D`/`~X`/`~O`/`~B`/`~R` is not an
-    integer, it is printed as if by `~A` -- a fresh, unmodified `~A`, not
-    this directive's own colon/at flags reinterpreted."""
-    return _printer.princ_to_string(val)
+def _format_A_fallback(val, radix=None):
+    """CLHS 22.3.2.1: `~nR` -- and so `~D`/`~X`/`~O`/`~B` -- binds
+    *PRINT-ESCAPE*, *PRINT-RADIX*, *PRINT-BASE* and *PRINT-READABLY* for the
+    extent of the directive, so a non-integer argument is printed as if by
+    `~A` with *PRINT-BASE* bound to the radix: `format.b.18`'s `~b` of 3/5
+    is "11/101", not the base-10 "3/5" plain PRINC would give. `radix=None`
+    is the ~A fall-through for the float directives (~F/~E/~G, CLHS
+    22.3.3.1), which bind nothing."""
+    if radix is None:
+        return _printer.princ_to_string(val)
+    from .binding import dynamic_value, set_dynamic_value
+    saved = []
+    try:
+        for name, value in (('*PRINT-ESCAPE*', lisptype.NIL),
+                            ('*PRINT-RADIX*', lisptype.NIL),
+                            ('*PRINT-BASE*', radix),
+                            ('*PRINT-READABLY*', lisptype.NIL)):
+            symbol = lisptype.COMMON_LISP_PACKAGE.intern_symbol(name)
+            saved.append((symbol, dynamic_value(symbol)))
+            set_dynamic_value(symbol, value)
+        return _printer.princ_to_string(val)
+    finally:
+        for symbol, old in reversed(saved):
+            set_dynamic_value(symbol, old)
 
 
 def _format_integer_directive(val, radix, params, colon_flag, at_flag):
@@ -2038,7 +2095,7 @@ def _format_integer_directive(val, radix, params, colon_flag, at_flag):
     `mincol`/`padchar` right-justification -- in that order, since padding
     must see the sign and commas already in place (CLHS 22.3.2)."""
     if not isinstance(val, int):
-        return _format_A_fallback(val)
+        return _format_A_fallback(val, radix)
     mincol, padchar, commachar, comma_interval = _numeric_pad_params(params)
     neg = val < 0
     digits = _int_to_radix_digits(abs(val), radix)
@@ -2935,6 +2992,25 @@ def _pp_bounded_list_elements(obj):
             itertools.islice(list_cells(obj, 'FORMAT ~<...~:>', dotted='allow'), _PP_LIST_BUDGET)]
 
 
+#: Depth of `~<...~:>` logical blocks whose bodies are currently being
+#: processed. `~:T`/`~:@T` are PPRINT-TAB's section forms (CLHS 22.3.6.1):
+#: they mean something only to a pretty-printing stream, and a `~<...~:>`
+#: body is the one such context the FORMAT engine has -- outside one (or
+#: with `*PRINT-PRETTY*` false) the directives do nothing. A counter, not a
+#: boolean, because the bodies nest; `_format_directive` is not re-entrant
+#: across threads, and an escape unwinds it through the `finally`.
+_FORMAT_SECTION_DEPTH = 0
+
+
+def _in_pretty_section():
+    """True when a `~<...~:>` logical-block body is being processed and
+    `*PRINT-PRETTY*` is currently true -- the only context in which the
+    section forms of `~T` act (CLHS 22.3.6.1)."""
+    if _FORMAT_SECTION_DEPTH <= 0:
+        return False
+    return _printer._true(_printer.resolve_control('*PRINT-PRETTY*'))
+
+
 def _format_directive(control_string, cursor, pos, emitted=None):
     """Process a single format directive starting at pos (after ~).
 
@@ -3025,22 +3101,14 @@ def _format_directive(control_string, cursor, pos, emitted=None):
         val = get_arg()
         if colon_flag and (val is None or val is lisptype.NIL):
             result = "()"
-        elif callable(val) and not isinstance(val, (str, lisptype.LispString, int, float, bool, lisptype.LispSymbol, lisptype.Character, lisptype.LispString)):
-            # CLHS 22.3.4.1: if the argument to ~A is a function (e.g. the
-            # result of FORMATTER), it is called as a format control. The
-            # function takes (stream, &rest args) -- the *format-time* args,
-            # not the parent FORMAT's -- which is empty for ~A/~S, so we
-            # pass through whatever args the parent had left at this
-            # position. `format_fn` (the one `FORMATTER` builds) does the
-            # actual recursion. Without this, the function's Python repr
-            # would leak out as the value of ~A, which is exactly what
-            # `format.{.18`/`{.19`/etc. catch.
-            from .streams import make_string_output_stream as _make_sos
-            from .streams import get_output_stream_string as _get_oss
-            sub = _make_sos()
-            val(sub)
-            result = str(_get_oss(sub))
         else:
+            # A function argument prints as the printer prints any other
+            # function object (#<FUNCTION ...>), exactly as PRINC would.
+            # The old "a callable is a format control" shortcut was not
+            # CLHS: the function-as-control rule belongs to FORMAT's own
+            # control-string designator and to `~{~}`'s empty body -- not
+            # to ~A's argument -- and it crashed `(format nil "~a" #'cons)`
+            # inside `format.b.18`'s mini-universe sweep.
             result = _printer.princ_to_string(val)
         return (_format_pad(result, params, at_flag), pos)
 
@@ -3049,18 +3117,38 @@ def _format_directive(control_string, cursor, pos, emitted=None):
         val = get_arg()
         if colon_flag and (val is None or val is lisptype.NIL):
             result = "()"
-        elif callable(val) and not isinstance(val, (str, lisptype.LispString, int, float, bool, lisptype.LispSymbol, lisptype.Character, lisptype.LispString)):
-            # Same recursion as ~A: a function arg is treated as a format
-            # control, per CLHS 22.3.4.1.
-            from .streams import make_string_output_stream as _make_sos
-            from .streams import get_output_stream_string as _get_oss
-            sub = _make_sos()
-            val(sub)
-            result = str(_get_oss(sub))
         else:
             result = _printer.prin1_to_string(val)
         return (_format_pad(result, params, at_flag), pos)
 
+
+    elif directive == 'W':
+        # ~W - Write (CLHS 22.3.4.3): the argument is printed as by WRITE,
+        # obeying every printer control variable. `:` binds *PRINT-PRETTY*
+        # true and `@` binds *PRINT-LEVEL*/*PRINT-LENGTH* nil, for the
+        # extent of the print; ~W takes no prefix parameters. Without the
+        # directive, `~W` fell through to the unknown-directive fallback
+        # and printed "~W" literally -- `format.:_.6` builds its whole
+        # tabulation out of ~W's.
+        val = get_arg()
+        from .binding import dynamic_value, set_dynamic_value
+        bindings = []
+        if colon_flag:
+            bindings.append(('*PRINT-PRETTY*', lisptype.T))
+        if at_flag:
+            bindings.append(('*PRINT-LEVEL*', lisptype.NIL))
+            bindings.append(('*PRINT-LENGTH*', lisptype.NIL))
+        saved = []
+        try:
+            for name, value in bindings:
+                symbol = lisptype.COMMON_LISP_PACKAGE.intern_symbol(name)
+                saved.append((symbol, dynamic_value(symbol)))
+                set_dynamic_value(symbol, value)
+            result = _dispatch_print(val, {}, None)
+        finally:
+            for symbol, old in reversed(saved):
+                set_dynamic_value(symbol, old)
+        return (result, pos)
 
     elif directive == 'D':
         # ~D - Decimal integer (CLHS 22.3.2)
@@ -3088,7 +3176,7 @@ def _format_directive(control_string, cursor, pos, emitted=None):
             if isinstance(val, int):
                 result = _format_integer_directive(val, radix, params[1:], colon_flag, at_flag)
             else:
-                result = _format_A_fallback(val)
+                result = _format_A_fallback(val, radix)
         else:
             val = get_arg()
             if not isinstance(val, int):
@@ -3108,9 +3196,17 @@ def _format_directive(control_string, cursor, pos, emitted=None):
         val = get_arg()
         if isinstance(val, lisptype.Character):
             if colon_flag:
-                # Pretty print special characters
-                char_names = {' ': 'Space', '\n': 'Newline', '\t': 'Tab', '\r': 'Return'}
-                result = char_names.get(val.char, val.char)
+                # Pretty print special characters. A non-graphic character
+                # prints as its CHAR-NAME (CLHS 22.3.1.4's ~:C is "as the
+                # character would be printed by PRINC with its name spelled
+                # out" -- ansi-test compares ~(format nil "~:C" c) directly
+                # against (char-name c), so the name table lives in one
+                # place: CHAR-NAME. Unnamed characters print as themselves.
+                if not val.char.isprintable() or val.char == ' ':
+                    from .characters import char_name
+                    result = char_name(val) or val.char
+                else:
+                    result = val.char
             elif at_flag:
                 # Lisp readable form
                 char_names = {' ': '#\\Space', '\n': '#\\Newline', '\t': '#\\Tab', '\r': '#\\Return'}
@@ -3180,26 +3276,38 @@ def _format_directive(control_string, cursor, pos, emitted=None):
     elif directive == 'T':
         # ~T - Tabulation (CLHS 22.3.6.1). `_tab_padding` owns the arithmetic;
         # the column comes from what this control string has emitted so far.
-        # `~:T`/`~:@T` are PPRINT-TAB's :section forms, which measure from the
-        # start of the enclosing logical block rather than the line; with no
-        # block established that is the same column, so they share this path
-        # (and inside a `~<...~>` they are rejected outright -- see
-        # `_check_justification_conflicts`).
+        # `~:T`/`~:@T` are PPRINT-TAB's :section forms, which are meaningful
+        # only to a pretty-printing stream: outside a `~<...~:>` logical
+        # block -- or with *PRINT-PRETTY* false -- they do nothing at all
+        # (`format.:t.1`-`.3`, `format.:@t.4`/`.5`). Inside one they measure
+        # from the start of the block's body, which is what the body-local
+        # `_current_column` answers.
+        if colon_flag and not _in_pretty_section():
+            return ('', pos)
         return (_tab_padding(_current_column(emitted), params,
                              colon_flag, at_flag), pos)
 
     elif directive == '*':
-        # ~* - Go to argument
+        # ~* - Go to argument (CLHS 22.3.9.1). A `~V` parameter whose
+        # argument is NIL means the parameter was not supplied (CLHS 22.3),
+        # so the directive's own default applies -- 1 for the plain and
+        # colon forms, 0 for the absolute `~@*` form. Reading an
+        # unspecified parameter as a count made `~v*` attempt `idx + NIL`
+        # and blow up as a Python TypeError (`format.*.5`).
         if at_flag:
             # Go to absolute argument position
-            cursor.idx = params[0] if params and params[0] is not None else 0
+            count = 0 if not params or _is_unspecified(params[0]) \
+                else _lisp_number(params[0])
+            cursor.idx = max(0, count)
         elif colon_flag:
             # Go backwards
-            count = params[0] if params and params[0] is not None else 1
+            count = 1 if not params or _is_unspecified(params[0]) \
+                else _lisp_number(params[0])
             cursor.idx = max(0, cursor.idx - count)
         else:
             # Go forwards
-            count = params[0] if params and params[0] is not None else 1
+            count = 1 if not params or _is_unspecified(params[0]) \
+                else _lisp_number(params[0])
             cursor.idx = min(len(cursor.args), cursor.idx + count)
         return ('', pos)
 
@@ -3207,18 +3315,32 @@ def _format_directive(control_string, cursor, pos, emitted=None):
         # ~? - Recursive processing
         # The next arg is a format string, and the one after is args for it
         fmt_str = get_arg()
-        if at_flag:
-            # ~@? shares the outer argument stream: the recursive format
-            # consumes from the same cursor, and only what it actually uses
-            # is unavailable to directives that follow the ~? in the outer
-            # control string.
-            result = _format_process_cursor(str(fmt_str) if fmt_str else '', cursor)
-        else:
-            # ~? without @ takes its own separate argument list - not the
-            # outer cursor - so it gets a fresh, independent cursor.
-            fmt_args = get_arg()
-            sub_cursor = _FormatCursor(_format_args_list(fmt_args))
-            result = _format_process_cursor(str(fmt_str) if fmt_str else '', sub_cursor)
+        # A `~^` inside the sub-format terminates the ~? construct itself,
+        # not the control string that contains it (CLHS 22.3.9.2): "the
+        # string being processed will be terminated ... Processing then
+        # continues within the string containing the ~? directive at the
+        # point following that directive". Letting the escape propagate
+        # instead abandoned everything after the ~? as well
+        # (`format.^.?.1`'s "1Y2X3" came out as "1Y2"). A `~:^` -- whose
+        # only legal use is terminating a `~:{`/`~:@{` (X3J13
+        # FORMAT-COLON-UPARROW-SCOPE) -- keeps propagating outward.
+        try:
+            if at_flag:
+                # ~@? shares the outer argument stream: the recursive format
+                # consumes from the same cursor, and only what it actually uses
+                # is unavailable to directives that follow the ~? in the outer
+                # control string.
+                result = _format_process_cursor(str(fmt_str) if fmt_str else '', cursor)
+            else:
+                # ~? without @ takes its own separate argument list - not the
+                # outer cursor - so it gets a fresh, independent cursor.
+                fmt_args = get_arg()
+                sub_cursor = _FormatCursor(_format_args_list(fmt_args))
+                result = _format_process_cursor(str(fmt_str) if fmt_str else '', sub_cursor)
+        except _FormatEscape as esc:
+            if esc.terminate_outer:
+                raise
+            result = esc.partial
         return (result, pos)
 
     elif directive == '_':
@@ -3227,6 +3349,11 @@ def _format_directive(control_string, cursor, pos, emitted=None):
         # Resolved later, against a margin, by whichever `~<...~:>` encloses
         # this one -- or by `_format_process_with_tail` if none does -- since
         # only that point knows whether the surrounding material fits.
+        # With *PRINT-PRETTY* false the whole family is a no-op: every kind
+        # is a pretty-printing request, and even `~:@_`'s mandatory break
+        # must not fire (`format.:@_.4`'s "A A A A " with :pretty nil).
+        if not _printer._true(_printer.resolve_control('*PRINT-PRETTY*')):
+            return ('', pos)
         if colon_flag and at_flag:
             kind = 'mandatory'
         elif colon_flag:
@@ -3414,6 +3541,8 @@ def _format_directive(control_string, cursor, pos, emitted=None):
             items = _pp_bounded_list_elements(obj)
 
         sub_cursor = _FormatCursor(items)
+        global _FORMAT_SECTION_DEPTH
+        _FORMAT_SECTION_DEPTH += 1
         try:
             body_text = _format_process_cursor(body_src, sub_cursor)
         except _FormatEscape as esc:
@@ -3421,6 +3550,8 @@ def _format_directive(control_string, cursor, pos, emitted=None):
             # it ends the body, not the whole enclosing control string
             # (`format.logical-block.escape.1`/`.2`).
             body_text = esc.partial
+        finally:
+            _FORMAT_SECTION_DEPTH -= 1
 
         # ~:@> -- CLHS 22.3.5.2: "a fill-style conditional newline is
         # automatically inserted after each group of blanks immediately
@@ -3476,8 +3607,6 @@ def _format_directive(control_string, cursor, pos, emitted=None):
         
         # Shares the outer cursor: consumption is now exact (the cursor
         # tracks it directly), replacing the old inner.count('~') estimate.
-        inner_result = _format_process_cursor(inner, cursor)
-
         # Every variant converts through `_pp_case_convert`, which keeps its
         # hands off any unresolved pretty-printer sentinel in the body -- see
         # that function for what went wrong when they were converted too.
@@ -3493,6 +3622,19 @@ def _format_directive(control_string, cursor, pos, emitted=None):
         else:
             # ~( ... ~) - force everything to lower case
             convert = _ansi_lower
+
+        try:
+            inner_result = _format_process_cursor(inner, cursor)
+        except _FormatEscape as esc:
+            # CLHS 22.3.9.2: a `~^` inside a `~(` terminates the case
+            # conversion, but "all the commands up to the ~^ are properly
+            # ... case-converted" first, and "the outward search continues
+            # for a ~{ or ~< construct to be terminated" -- so the partial
+            # text is converted and the escape re-raised
+            # (`format.^.:(.1`'s "Xy" is "XY" converted, with the `~{`
+            # iteration stopping rather than continuing).
+            raise _FormatEscape(_pp_case_convert(esc.partial, convert),
+                                terminate_outer=esc.terminate_outer) from esc
 
         return (_pp_case_convert(inner_result, convert), end_pos)
     
@@ -3598,8 +3740,11 @@ def _format_directive(control_string, cursor, pos, emitted=None):
             # count of remaining arguments) takes the index from the prefix
             # parameter and consumes *no* argument. Unconditionally calling
             # get_arg() here both selected the wrong clause and stole an
-            # argument from whatever followed.
-            if params and params[0] is not None:
+            # argument from whatever followed. A `~V` parameter whose
+            # argument is NIL counts as "not supplied" (CLHS 22.3), so the
+            # index then comes from the argument list after all
+            # (`format.cond.14`'s `~v[...]` with NIL in the V slot).
+            if params and not _is_unspecified(params[0]):
                 idx = _lisp_number(params[0], -1)
             else:
                 idx = _lisp_number(get_arg(), -1)
@@ -3732,7 +3877,10 @@ def _format_directive(control_string, cursor, pos, emitted=None):
             # list, so it does not need this check.)
             if list_arg is not None and list_arg is not lisptype.NIL:
                 from .core import _consp_internal
-                if not _consp_internal(list_arg) and not isinstance(list_arg, (list, tuple, lisptype.LispString)):
+                # A string is a *vector*, not a list, and does not qualify
+                # (`format.{.error.3`'s "foo" must signal a type error, not
+                # iterate once over the string as a single "argument").
+                if not _consp_internal(list_arg) and not isinstance(list_arg, (list, tuple)):
                     raise lisptype.LispTypeError(
                         f"FORMAT: ~{{...~}} argument is not a list: "
                         f"{_write_object(list_arg, escape=True)}",
@@ -3755,11 +3903,23 @@ def _format_directive(control_string, cursor, pos, emitted=None):
         iterations = 0
 
         if colon_flag:
-            # ~:{...~} - each item is itself a list, and one pass is made per
-            # item with that sublist standing in as the whole argument stream.
-            for item in items:
+            # ~:{...~} / ~:@{...~} - each item is itself a list, and one pass
+            # is made per item with that sublist standing in as the whole
+            # argument stream. Each item must be a (proper) list -- CLHS
+            # 22.3.7.2 -- so a symbol, number, string or vector as an item is
+            # a TYPE-ERROR, not a one-element pass (`format.:{.error.1`/
+            # `.4`/`.5`, `format.:@{.error.1`-`.4`). Checked per item as the
+            # loop reaches it, not up front: `~v:@{`'s max-iterations bound
+            # may stop the iteration before the first non-list
+            # (`formatter.:@.10`'s trailing 'a 'b must survive).
+            last_index = len(items) - 1
+            for item_index, item in enumerate(items):
                 if max_iterations is not None and iterations >= max_iterations:
                     break
+                if at_flag:
+                    _check_format_sublist(item, '~:@{...~}')
+                else:
+                    _check_format_sublist(item, '~:{...~}')
                 iterations += 1
                 if isinstance(inner, tuple) and inner and inner[0] == '__function__':
                     # Empty body with a function (FORMATTER) control. Each
@@ -3780,7 +3940,8 @@ def _format_directive(control_string, cursor, pos, emitted=None):
                     # past the fill pointer would otherwise leak in).
                     result_parts.append(str(_get_oss(capture)))
                 else:
-                    sub_cursor = _FormatCursor(_format_args_list(item))
+                    sub_cursor = _FormatCursor(_format_args_list(item),
+                                               last_item=(item_index == last_index))
                     try:
                         result_parts.append(_format_process_cursor(inner, sub_cursor))
                     except _FormatEscape as esc:
@@ -3806,6 +3967,38 @@ def _format_directive(control_string, cursor, pos, emitted=None):
             item_list = list(items)
             if close_colon and not item_list:
                 item_list = [lisptype.NIL]
+            if at_flag and isinstance(inner, tuple) and inner and inner[0] == '__function__':
+                # ~@{~} with a function control: the control was consumed
+                # once, above, and now the SAME function is called per pass
+                # with (stream &rest args) over the *shared* outer argument
+                # stream. A function control reports what it consumed by its
+                # return value -- the tail of the arguments it was handed
+                # (CLHS FORMATTER: "returns any remaining arguments") -- so
+                # the cursor advances by exactly what it used, and whatever
+                # it left is still visible to directives after the ~}
+                # (`formatter.@{.13` requires 'foo to survive one pass of a
+                # control that ignores its arguments). An iteration whose
+                # body consumes nothing terminates (CLHS 22.3.7.3), which
+                # also bounds the loop.
+                from .streams import make_string_output_stream as _make_sos
+                from .streams import get_output_stream_string as _get_oss
+                while not (max_iterations is not None
+                           and iterations >= max_iterations):
+                    if not item_list:
+                        break
+                    iterations += 1
+                    capture = _make_sos()
+                    rest = cursor.remaining()
+                    tail = inner[1](capture, *rest)
+                    consumed = len(rest) - len(tail)
+                    result_parts.append(str(_get_oss(capture)))
+                    if consumed <= 0:
+                        break
+                    cursor.idx += consumed
+                    item_list = item_list[consumed:]
+                outer_consumed = len(items) - len(item_list)
+                cursor.idx += outer_consumed
+                return (''.join(result_parts), end_pos)
             while item_list:
                 if max_iterations is not None and iterations >= max_iterations:
                     break
@@ -3875,6 +4068,15 @@ def _format_directive(control_string, cursor, pos, emitted=None):
             should_escape = _lisp_number(supplied[0]) == _lisp_number(supplied[1])
         elif len(supplied) == 1:
             should_escape = _lisp_number(supplied[0]) == 0
+        elif colon_flag:
+            # ~:^ with no parameters, inside ~:{...~}/~:@{...~}: fires if
+            # and only if the sublist supplying the current step is the LAST
+            # one, and then terminates the entire iteration (CLHS 22.3.9.2;
+            # `format.:^.{.2`/`.3` pin both halves -- `~:{~:^~A~}` over four
+            # sublists prints the first three and drops the last). The
+            # per-pass cursor records which pass it is; on any other cursor
+            # the default (True) keeps ~:^ terminating, as it always did.
+            should_escape = cursor.last_item
         else:
             should_escape = cursor.remaining_count() <= 0
 
@@ -3885,12 +4087,18 @@ def _format_directive(control_string, cursor, pos, emitted=None):
         return ('', pos)
 
     elif directive == '\n':
-        # ~<newline> - Ignored newline
+        # ~<newline> - Ignored newline (CLHS 22.3.9.3). Plain: ignore the
+        # newline *and* any following non-newline whitespace. Colon: ignore
+        # the newline but leave following whitespace in place
+        # (`format.newline.2`'s "A X"). At: keep the newline but ignore
+        # following whitespace (`format.newline.3`'s "A\nX", not "A\n X").
         if at_flag:
-            # Keep the newline
+            while pos < len(control_string) and control_string[pos] in ' \t':
+                pos += 1
             return ('\n', pos)
+        elif colon_flag:
+            return ('', pos)
         else:
-            # Ignore newline and following whitespace
             while pos < len(control_string) and control_string[pos] in ' \t':
                 pos += 1
             return ('', pos)
@@ -3913,6 +4121,59 @@ def _format_directive(control_string, cursor, pos, emitted=None):
         else:
             result = '' if is_one else 's'
         return (result, pos)
+
+    elif directive == '/':
+        # ~/name/ - Call a function (CLHS 22.3.10). The name spans from
+        # here to the next `/`, and is parsed like a symbol: upcased
+        # (standard readtable case), and everything before the FIRST `:`
+        # is a package name (`:` and `::` are the same to the lookup --
+        # `format./.10`'s comment: "Single : doesn't mean it has to be
+        # exported" -- so FIND-SYMBOL's internal-symbols-too semantics is
+        # the rule), everything after it the symbol name, which may itself
+        # contain colons (`format./.11`'s |FUNCTION:FOR::FORMAT:SLASH:11|).
+        # Without a prefix the name is looked up in the current package.
+        #
+        # The function is called as (function stream arg colon at . params)
+        # -- every prefix parameter, specified or not, passed on positionally
+        # (`format./.19`'s `~v,v,v,v,v,v,v,v,v,v@/` hands ten of them over).
+        slash = control_string.find('/', pos)
+        if slash == -1:
+            raise lisptype.LispError(
+                "FORMAT: unterminated ~/ directive (no closing /)")
+        name_text = control_string[pos:slash]
+        pos = slash + 1
+        if not name_text:
+            raise lisptype.LispError("FORMAT: ~/ directive requires a function name")
+        if ':' in name_text:
+            package_text, symbol_text = name_text.split(':', 1)
+            # A `::` prefix is the two-colon marker, not part of the symbol
+            # name: strip the second colon, leaving any FURTHER colons in
+            # place (`format./.11`'s symbol name contains `::` itself).
+            if symbol_text.startswith(':'):
+                symbol_text = symbol_text[1:]
+        else:
+            package_text, symbol_text = None, name_text
+        if package_text is None:
+            from .utilities_symbols import get_current_package
+            package = get_current_package()
+        else:
+            package = lisptype.find_package(package_text.upper())
+            if package is None:
+                raise lisptype.LispError(
+                    f"FORMAT: ~/{name_text}/ names no package {package_text.upper()!r}")
+        symbol, _status = package.find_symbol(symbol_text.upper())
+        if symbol is None:
+            raise lisptype.LispError(
+                f"FORMAT: ~/{name_text}/ names no symbol in package "
+                f"{getattr(package, 'name', package_text)}")
+        from .utilities_functions import symbol_function
+        function = symbol_function(symbol)
+        from .streams import make_string_output_stream as _make_sos
+        from .streams import get_output_stream_string as _get_oss
+        capture = _make_sos()
+        arg = get_arg()
+        function(capture, arg, colon_flag, at_flag, *params)
+        return (str(_get_oss(capture)), pos)
 
     else:
         # Unknown directive - just output the tilde and char
@@ -3971,6 +4232,56 @@ def _format_process(control_string, args):
     return _format_process_with_tail(control_string, args)[0]
 
 
+def _pp_resolve_bare_breaks(text):
+    """Resolve `~_`-family sentinels for a control string whose destination
+    is NOT a pretty-printing stream -- no `~<...~:>` block in the control
+    string and no `PPRINT-LOGICAL-BLOCK` frame around the call. Every kind,
+    `~:@_`'s `:mandatory` included, is a PPRINT-NEWLINE, and a
+    PPRINT-NEWLINE to a stream that is not pretty-printing does nothing
+    (CLHS 22.2.2; `format._.9` and `format.:_.7` with margin 4 must stay
+    flat, and so must `format.:@_.5`). The implicit-block resolution this
+    replaced computed a fit from the control string's own width against
+    `*print-right-margin*` and fired `:linear` breaks on that basis -- a
+    fit no real block ever determined.
+    """
+    for kind in ('linear', 'fill', 'miser', 'mandatory'):
+        text = text.replace(_PP_BREAK[kind], '')
+    text = _PP_INDENT_RE.sub('', text)
+    return _pp_strip_lit_space(text)
+
+
+def _emit_format_result(formatted, stream):
+    """Deliver a processed FORMAT result to `stream`.
+
+    When the destination is the current `PPRINT-LOGICAL-BLOCK`'s own buffer
+    -- `(format t ...)` / `(format s ...)` running inside the block's body --
+    and the result still carries unresolved `~_`/`~I` sentinels, the result
+    is forwarded as *tokens* into that buffer instead of being resolved
+    here: the block's flush (`_pp_render_block`) is the only place that
+    knows whether its breaks fire, and a `~_` the body emitted is the
+    block's own conditional newline (`format._.1`'s `(format t "B ~_")`
+    must break with the enclosing block, not resolve against a margin
+    guessed at format time).
+
+    Anywhere else the sentinels are resolved in place: only `~:@_` can
+    fire without an enclosing block (see `_pp_resolve_bare_breaks`).
+    """
+    if _PP_ANY_BREAK_OR_INDENT_RE.search(formatted):
+        frame = _current_pprint_frame_or_none()
+        if frame is not None and stream is frame.stream:
+            for token in _pp_tokenize(formatted):
+                if token[0] == 'text':
+                    # The literal-space brackets are FORMAT-engine
+                    # bookkeeping for `~<...~:>`'s auto-fill; a frame's
+                    # buffer holds plain text, so the brackets come off
+                    # here rather than leaking into the render.
+                    token = ('text', _pp_strip_lit_space(token[1]))
+                frame.stream.tokens.append(token)
+            return
+        formatted = _pp_resolve_bare_breaks(formatted)
+    write_text(formatted, stream)
+
+
 def _format_process_with_tail(control_string, args):
     """Like _format_process but also return the number of arguments consumed
     (i.e. the index of the first remaining argument)."""
@@ -3989,15 +4300,15 @@ def _format_process_with_tail(control_string, args):
         # escaping FORMAT as a Python exception (standing rule 2).
         result = esc.partial
 
-    # `~_`/`~I` bare at the top of a control string, with no enclosing
-    # `~<...~:>`, still resolve (CLHS restricts them only from appearing
-    # inside a plain `~<...~>` justification, not from needing one at all) --
-    # against an implicit block spanning the whole string. Every other
-    # result -- the overwhelming majority of FORMAT calls -- just needs its
-    # literal-space brackets (`_format_process_cursor`'s own bookkeeping)
-    # stripped back out.
+    # `~_`/`~I` bare at the top of a control string resolve here when no
+    # `PPRINT-LOGICAL-BLOCK` encloses the FORMAT call: only `~:@_` can fire,
+    # everything else is a no-op (`_pp_resolve_bare_breaks`). Inside one the
+    # sentinels are left for `_emit_format_result`, which either forwards
+    # them into that block's buffer as tokens (when the destination is the
+    # block's own stream) or resolves them the same bare way.
     if _PP_ANY_BREAK_OR_INDENT_RE.search(result):
-        result = _resolve_pretty_body(result, 0, '', '', False, False, allow_miser=False)
+        if _current_pprint_frame_or_none() is None:
+            result = _pp_resolve_bare_breaks(result)
     else:
         result = _pp_strip_lit_space(result)
     return result, cursor.idx
@@ -4072,12 +4383,16 @@ def format_fn(destination, control_string, *args):
         # designator `t` means `*TERMINAL-IO*` (CLHS 21.1.3). Printing to the
         # process's stdout instead meant `(format t ...)` escaped any
         # `(with-output-to-string (*standard-output*) ...)` around it.
-        write_text(formatted, lisptype.NIL)
+        _emit_format_result(formatted, resolve_output_stream(lisptype.NIL))
         return lisptype.NIL
     elif destination is None or destination is lisptype.NIL:
+        if _PP_ANY_BREAK_OR_INDENT_RE.search(formatted):
+            # A string result the caller keeps as data: any sentinels a
+            # frame-deferral left behind must not leak into it.
+            formatted = _pp_resolve_bare_breaks(formatted)
         return formatted
     else:
-        write_text(formatted, destination)
+        _emit_format_result(formatted, resolve_output_stream(destination))
         return lisptype.NIL
 
 
@@ -4095,7 +4410,10 @@ def formatter(control_string):
     def format_func(stream, *args):
         # Use internal processor to obtain remaining-args index (tail)
         formatted, consumed = _format_process_with_tail(control_string_str, args)
-        write_text(formatted, stream)
+        # `_emit_format_result` rather than `write_text`: a formatter called
+        # inside a `PPRINT-LOGICAL-BLOCK` body with `~_`/`~I` in its control
+        # string must hand its breaks to that block, exactly like FORMAT.
+        _emit_format_result(formatted, resolve_output_stream(stream))
         # Return the tail (remaining args) as a proper Lisp list -- a bare
         # Python list here is a second, incompatible list representation
         # (finding M), so `(equal (funcall fn stream ... 'a) '(a))` was

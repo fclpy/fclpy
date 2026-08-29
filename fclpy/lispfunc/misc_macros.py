@@ -442,6 +442,304 @@ def _print_for_output(form):
         frame.unwind()
 
 
+# =============================================================================
+# CLHS 3.2.4: the file compiler and MAKE-LOAD-FORM
+# =============================================================================
+# A CLOS instance appearing in a compiled file (as a `#.` read-time result,
+# say) cannot be printed as a literal: the file compiler must call
+# MAKE-LOAD-FORM on it and emit the creation form where the object appears
+# and the initialization form "as soon as possible after" it, with the
+# data-flow ordering CLHS 3.2.4 spells out. COMPILE-FILE used to print the
+# object through PRINT-OBJECT and hope it read back -- which is no round
+# trip at all (make-load-form.order.* are exactly the tests for this).
+
+_load_form_ref_counter = 0
+
+
+class _LoadFormExternalizer:
+    """One instance per COMPILE-FILE run.
+
+    Each externalized object gets one interned reference symbol (in
+    COMMON-LISP-USER, so the compiled file's own IN-PACKAGE forms cannot
+    change what it reads back as) bound to its creation form by a SETQ
+    emitted at the object's data-flow position. An initialization form is
+    emitted immediately after its creation when every object it references
+    is already bound, and otherwise waits in a FIFO queue that is retried
+    after every subsequent creation -- which is exactly CLHS 3.2.4's
+    "as soon as possible ... as determined by data flow" and reproduces
+    the orderings make-load-form-order.lsp pins, circular dependencies
+    included.
+    """
+
+    def __init__(self):
+        # id(object) -> [object, reference symbol, bound] -- bound is False
+        # until the reference's creation SETQ has actually been emitted. The
+        # distinction matters for a creation-dependency cycle broken by an
+        # initialization form: an init form may name an object whose
+        # reference symbol exists but is not yet bound, and emitting it then
+        # would read an unbound symbol at load time (make-load-form.order.8).
+        self._refs = {}
+        # FIFO of pending initialization forms: [owner id, reference symbol,
+        # untransformed form].
+        self._pending_inits = []
+        # ids of objects whose initialization form has been emitted. An
+        # initialization form F waits not only for every object it references
+        # to be *created*, but for those objects' own initialization forms to
+        # have run -- CLHS 3.2.4: "the initialization forms for those other
+        # objects are also evaluated before F whenever they do not depend on
+        # the object created or initialized by F" (make-load-form.order.12
+        # through .14 pin this topological order).
+        self._inits_emitted = set()
+
+    @staticmethod
+    def _is_symbol(form, name):
+        return (isinstance(form, lisptype.LispSymbol)
+                and form.name.upper() == name)
+
+    @staticmethod
+    def _cl_symbol(name):
+        return lisptype.COMMON_LISP_PACKAGE.intern_symbol(name)
+
+    def _walk_code(self, form, emitted, refs_only=False):
+        """Replace externalizable objects in `form` (recursively) with their
+        reference symbols. Returns the transformed form, or None when
+        `refs_only` is set and the form references an object that has no
+        reference yet (which is what keeps a pending initialization form
+        pending). A creation-form walk never runs with `refs_only`, so it
+        externalizes the objects it depends on -- CLHS 3.2.4's "the creation
+        forms for those other objects are evaluated before F".
+        """
+        import fclpy.classes as classes
+
+        if isinstance(form, classes.LispInstance):
+            entry = self._refs.get(id(form))
+            if entry is not None:
+                if refs_only and not entry[2]:
+                    return None
+                return entry[1]
+            if refs_only:
+                return None
+            return self._externalize(form, emitted)
+
+        if isinstance(form, lisptype.lispCons):
+            head = form.car
+            if self._is_symbol(head, 'QUOTE'):
+                payload = form.cdr.car if isinstance(form.cdr, lisptype.lispCons) else lisptype.NIL
+                return self._walk_quoted(form, payload, emitted, refs_only)
+            new_head = self._walk_code(head, emitted, refs_only)
+            if new_head is None:
+                return None
+            new_tail = self._walk_code(form.cdr, emitted, refs_only)
+            if new_tail is None:
+                return None
+            return lisptype.lispCons(new_head, new_tail)
+
+        return form
+
+    def _walk_quoted(self, quote_node, payload, emitted, refs_only):
+        """The payload of a (QUOTE ...) node.
+
+        An object here is a *constant* -- it cannot become a reference
+        symbol in place, so the whole QUOTE node is replaced by the
+        equivalent load-time expression: an object's reference symbol
+        (creating it first, exactly as a bare occurrence would --
+        CLHS 3.2.4's creation-dependency rule), a class object's
+        (FIND-CLASS 'name). Returns None when `refs_only` is set and the
+        payload references an object that has no reference yet -- which
+        keeps the whole enclosing initialization form pending.
+
+        An object nested *inside* a larger quoted tree would need the
+        tree rebuilt as construction code; that shape has no test
+        coverage and is left loud (standing rule 4) rather than silently
+        substituting a symbol for an object.
+        """
+        import fclpy.classes as classes
+
+        if isinstance(payload, classes.LispInstance):
+            entry = self._refs.get(id(payload))
+            if entry is not None:
+                if refs_only and not entry[2]:
+                    return None
+                return entry[1]
+            if refs_only:
+                return None
+            return self._externalize(payload, emitted)
+        if isinstance(payload, classes.LispClass):
+            return lisptype.lispCons(
+                self._cl_symbol('FIND-CLASS'),
+                lisptype.lispCons(
+                    lisptype.lispCons(self._cl_symbol('QUOTE'),
+                                      lisptype.lispCons(payload.name, lisptype.NIL)),
+                    lisptype.NIL))
+        self._reject_nested_instances(payload)
+        return quote_node
+
+    @staticmethod
+    def _reject_nested_instances(payload):
+        """Loud failure for an externalizable object buried inside a quoted
+        tree -- the shape that would need the constant rebuilt as
+        construction code."""
+        import fclpy.classes as classes
+
+        def scan(node):
+            if isinstance(node, classes.LispInstance):
+                raise lisptype.LispNotImplementedError(
+                    "COMPILE-FILE: object constant nested inside a quoted "
+                    "tree needs MAKE-LOAD-FORM construction-code rebuild")
+            if isinstance(node, lisptype.lispCons):
+                scan(node.car)
+                scan(node.cdr)
+        scan(payload)
+
+    def _externalize(self, obj, emitted):
+        """Bind `obj`'s reference to its creation form (emitting first
+        everything that form depends on), then its initialization form,
+        and return the reference symbol."""
+        from fclpy.printer import write_object
+        import fclpy.classes as classes
+
+        entry = self._refs.get(id(obj))
+        if entry is not None:
+            return entry[1]
+
+        global _load_form_ref_counter
+        _load_form_ref_counter += 1
+        ref = lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol(
+            "LOAD-FORM-%d" % _load_form_ref_counter)
+        self._refs[id(obj)] = [obj, ref, False]
+
+        gf = classes.ensure_generic_function(self._cl_symbol('MAKE-LOAD-FORM'))
+        result = classes.call_generic_function(gf, [obj])
+        if isinstance(result, lisptype.MultipleValues):
+            creation = result.values[0] if result.values else lisptype.NIL
+            initialization = (result.values[1]
+                              if len(result.values) > 1 else lisptype.NIL)
+        else:
+            creation, initialization = result, lisptype.NIL
+
+        creation_form = self._walk_code(creation, emitted)
+        emitted.append(lisptype.lispCons(
+            self._cl_symbol('SETQ'),
+            lisptype.lispCons(
+                ref,
+                lisptype.lispCons(creation_form, lisptype.NIL))))
+        self._refs[id(obj)][2] = True
+
+        if initialization is not lisptype.NIL and initialization is not None:
+            init_form = self._walk_code(initialization, emitted, refs_only=True)
+            if init_form is not None:
+                emitted.append(init_form)
+                self._inits_emitted.add(id(obj))
+            else:
+                self._pending_inits.append(
+                    [id(obj), ref, initialization])
+        else:
+            # No initialization form: nothing can later wait for it.
+            self._inits_emitted.add(id(obj))
+        return ref
+
+    def _init_ref_ids(self, initialization):
+        """The ids of every object the initialization form references."""
+        import fclpy.classes as classes
+
+        ids = set()
+
+        def scan(node):
+            if isinstance(node, classes.LispInstance):
+                ids.add(id(node))
+            elif isinstance(node, lisptype.lispCons):
+                if self._is_symbol(node.car, 'QUOTE'):
+                    payload = (node.cdr.car
+                               if isinstance(node.cdr, lisptype.lispCons)
+                               else lisptype.NIL)
+                    scan(payload)
+                    return
+                scan(node.car)
+                scan(node.cdr)
+        scan(initialization)
+        return ids
+
+    def _flush_pending(self, emitted):
+        """Emit pending initialization forms in their data-flow order.
+
+        A form is emitted when every object it references is bound *and*
+        none of those objects' own initialization forms is still pending
+        (the CLHS 3.2.4 rule quoted at _inits_emitted). FIFO order among
+        the eligible ones; if a reference cycle among initialization
+        forms would deadlock the scheduler, the cycle is broken by
+        emitting the first pending form whose references are all bound.
+        """
+        while self._pending_inits:
+            progress = False
+            for item in list(self._pending_inits):
+                owner_id, ref, initialization = item
+                ref_ids = self._init_ref_ids(initialization)
+                blocked = False
+                for rid in ref_ids:
+                    if rid == owner_id:
+                        continue
+                    entry = self._refs.get(rid)
+                    if entry is None or not entry[2]:
+                        blocked = True
+                        break
+                    if rid in (pid for pid, _, _ in self._pending_inits):
+                        blocked = True
+                        break
+                if blocked:
+                    continue
+                init_form = self._walk_code(initialization, emitted,
+                                            refs_only=True)
+                if init_form is None:
+                    # A reference became resolvable only now; retry the walk.
+                    continue
+                self._pending_inits.remove(item)
+                self._inits_emitted.add(owner_id)
+                emitted.append(init_form)
+                progress = True
+            if not progress:
+                # Cycle break: one form whose references are all bound goes
+                # out of order rather than never.
+                for item in list(self._pending_inits):
+                    owner_id, ref, initialization = item
+                    ref_ids = self._init_ref_ids(initialization)
+                    if all(rid == owner_id
+                           or (self._refs.get(rid) is not None
+                               and self._refs[rid][2])
+                           for rid in ref_ids):
+                        init_form = self._walk_code(initialization, emitted,
+                                                    refs_only=True)
+                        if init_form is None:
+                            return
+                        self._pending_inits.remove(item)
+                        self._inits_emitted.add(owner_id)
+                        emitted.append(init_form)
+                        break
+                else:
+                    return
+
+    def externalize_top_level(self, form):
+        """The output forms for one top-level form: creation SETQs, any
+        initialization forms runnable so far, the transformed form itself,
+        then any initialization forms its objects made runnable."""
+        emitted = []
+        transformed = self._walk_code(form, emitted)
+        self._flush_pending(emitted)
+        return emitted + [transformed]
+
+
+def _externalize_load_forms(form, externalizer):
+    """The forms COMPILE-FILE writes for one top-level form, externalizing
+    objects through MAKE-LOAD-FORM (CLHS 3.2.4)."""
+    import fclpy.classes as classes
+
+    if not isinstance(form, (lisptype.lispCons, classes.LispInstance)):
+        # A symbol, number, string, ... prints readably as itself; only a
+        # whole-form object constant (never produced by the reader) or a
+        # form *containing* one needs the walk.
+        return [form]
+    return externalizer.externalize_top_level(form)
+
+
 @_registry.cl_function('COMPILE-FILE-PATHNAME')
 def compile_file_pathname(input_file, *, output_file=None, **kwargs):
     """The pathname COMPILE-FILE would write for `input_file` (CLHS 24.2).
@@ -545,21 +843,27 @@ def compile_file(input_file, *, output_file=None, verbose=lisptype.OMITTED,
         frame.bind(_cl('*READTABLE*'), get_current_readtable())
 
         state.handler_stack.append(diagnostics.cluster())
+        externalizer = _LoadFormExternalizer()
         try:
             eof = object()
             while True:
                 form = read_form(stream, lisptype.NIL, eof)
                 if form is eof:
                     break
+                # CLHS 3.2.4: objects in the form that need MAKE-LOAD-FORM
+                # are externalized before the form is written -- creation
+                # SETQs and runnable initialization forms precede it, the
+                # form's object constants become their reference symbols.
                 # Printed *before* its compile-time effects run, so every
                 # symbol is printed relative to the package current when the
                 # form was read -- which is the package the reader will be in
                 # when the output is loaded back, because the output's own
                 # IN-PACKAGE forms appear there in the same order.
-                text = _print_for_output(form)
-                printed_forms.append(text)
-                if print_p:
-                    write_text(text + "\n")
+                for output_form in _externalize_load_forms(form, externalizer):
+                    text = _print_for_output(output_form)
+                    printed_forms.append(text)
+                    if print_p:
+                        write_text(text + "\n")
                 for compile_time_form in _compile_time_forms(form):
                     lisp_eval(compile_time_form, state.current_environment)
         except ConditionException as exception:

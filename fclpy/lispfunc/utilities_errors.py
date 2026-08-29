@@ -320,10 +320,10 @@ def invalid_method_error(method, format_control, *format_args):
     raise lisptype.LispNotImplementedError('INVALID-METHOD-ERROR')
 
 
-@_registry.cl_function('PACKAGE-ERROR-PACKAGE')
-def package_error_package(condition):
-    """Get package from package error condition."""
-    return None
+# PACKAGE-ERROR-PACKAGE (CLHS 9.1.5) lives in misc_packages.py, which reads
+# the condition's :PACKAGE initarg. The stub that stood here returned Python
+# None and, by import order, shadowed the real implementation -- every
+# package-error-package.* test called a function that answered NIL.
 
 
 @_registry.cl_function('TYPE-ERROR-DATUM')

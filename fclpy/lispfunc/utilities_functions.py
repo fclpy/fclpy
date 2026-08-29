@@ -5,8 +5,8 @@ from fractions import Fraction
 import fclpy.lisptype as lisptype
 import fclpy.state as state
 from fclpy.lispfunc import registry as _registry
-from .core import car, cdr, _consp_internal
-from .sequence_protocol import build_sequence, seq_elements
+from .core import car, cdr, cons, _consp_internal
+from .sequence_protocol import build_sequence, seq_elements, list_elements as _list_elements
 
 
 def _function_spec_to_key(spec):
@@ -207,10 +207,15 @@ def compile_fn(name, definition=None):
         if env is None:
             env = lisptype.Environment()
             lispenv.current_environment = env
-        
+
         if definition is not None:
-            # Compile the provided definition (usually a lambda form)
-            # Evaluate it to get a function object
+            # Compile the provided definition (usually a lambda form).
+            # CLHS 3.2.2.1: the compiler expands compiler-macro calls in
+            # the definition before producing the function -- the macro
+            # function runs *now*, at compile time, and the compiled code
+            # evaluates its expansion (define-compiler-macro.1/.2: the
+            # expansion is embedded and *x* stays NIL at runtime).
+            definition = _expand_compiler_macro_calls(definition)
             result_fn = eval_lisp(definition, env)
         elif isinstance(name, lisptype.LispSymbol):
             # Look up the function by name and compile it
@@ -250,8 +255,229 @@ def macro_function(symbol, environment=None):
 
 @_registry.cl_function('COMPILER-MACRO-FUNCTION')
 def compiler_macro_function(name, environment=None):
-    """Get compiler macro function."""
-    return None
+    """COMPILER-MACRO-FUNCTION (CLHS 3.2.2.1): the compiler macro function
+    for `name` -- a symbol or a ``(setf symbol)`` function name -- or NIL.
+
+    The Python ``None`` this used to return was both the wrong *answer*
+    (NIL is the specified not-present answer) and a Python object surfacing
+    as a Lisp value (standing rule 2)."""
+    entry = _compiler_macro_registry.get(_ccm_key(name))
+    if entry is not None:
+        return entry
+    return lisptype.NIL
+
+
+@_registry.cl_function('(SETF COMPILER-MACRO-FUNCTION)')
+def set_compiler_macro_function(fn, name):
+    """(SETF COMPILER-MACRO-FUNCTION) (CLHS 5.1.3)."""
+    key = _ccm_key(name)
+    if fn is lisptype.NIL or fn is None:
+        _compiler_macro_registry.pop(key, None)
+    else:
+        _compiler_macro_registry[key] = fn
+    return fn
+
+
+# The compiler macro function registry, keyed by canonical name string --
+# 'SYMBOL' or '(SETF SYMBOL)'. One home, shared by DEFINE-COMPILER-MACRO,
+# COMPILER-MACRO-FUNCTION and COMPILE's expansion pass.
+_compiler_macro_registry = {}
+
+
+def _ccm_key(name):
+    """Canonical registry key for a compiler-macro function name."""
+    if _consp_internal(name):
+        # A (setf symbol) function name.
+        parts = []
+        cur = name
+        while _consp_internal(cur):
+            part = car(cur)
+            parts.append(part.name.upper() if isinstance(part, lisptype.LispSymbol)
+                         else str(part).upper())
+            cur = cdr(cur)
+        return '(' + ' '.join(parts) + ')'
+    if isinstance(name, lisptype.LispSymbol):
+        return name.name.upper()
+    return str(name).upper()
+
+
+@_registry.cl_function('%DEFINE-COMPILER-MACRO')
+def define_compiler_macro(name, lambda_list, *body):
+    """The runtime half of DEFINE-COMPILER-MACRO (CLHS 3.2.2.1): build the
+    macro function from the macro lambda list (&whole/&environment included,
+    via the one macro binder) and install it as `name`'s compiler macro
+    function. `name` is a symbol or a ``(setf symbol)`` form."""
+    import fclpy.state as state
+    from .evaluation_special_forms import _create_macro_function
+
+    if _consp_internal(name):
+        parts = []
+        cur = name
+        while _consp_internal(cur):
+            parts.append(car(cur))
+            cur = cdr(cur)
+        debug_name = parts[-1] if parts else lisptype.LispSymbol('SETF')
+    else:
+        debug_name = name
+
+    fn = _create_macro_function(debug_name, lambda_list, _cons_from_list(body), env=state.current_environment)
+    _compiler_macro_registry[_ccm_key(name)] = fn
+    # A leading docstring is this compiler macro's documentation
+    # (CLHS 3.2.2.1), stored separately from the function documentation a
+    # DEFUN on the same name writes (define-compiler-macro.5/.6).
+    if body and isinstance(body[0], (str, lisptype.LispString)) \
+            and isinstance(name, lisptype.LispSymbol):
+        name.plist['COMPILER-MACRO-DOCUMENTATION'] = str(body[0])
+    return name
+
+
+def _cons_from_list(items):
+    """A Lisp list from a Python sequence -- the one shape this module's
+    form walkers and definers build."""
+    result = lisptype.NIL
+    for item in reversed(items):
+        result = lisptype.lispCons(item, result)
+    return result
+
+
+def _expand_compiler_macro_calls(form, notinline=()):
+    """Walk `form` replacing calls whose operator (or ``(setf op)`` place
+    function) has a compiler macro function with that macro's expansion --
+    what COMPILE must do before evaluating a lambda definition (CLHS
+    3.2.2.1's file-compiler contract, applied to fclpy's compile-as-eval).
+
+    A compiler macro declines by returning its own &whole form; the walk
+    keeps the original call then. ``(declare (notinline f))`` suppresses
+    expansion for `f` (define-compiler-macro.7).
+    """
+    if not _consp_internal(form):
+        return form
+
+    head = car(form)
+    if isinstance(head, lisptype.LispSymbol):
+        head_name = head.name.upper()
+        if head_name == 'QUOTE':
+            return form
+        if head_name == 'DECLARE':
+            return form
+
+        new_notinline = set(notinline)
+        # Declarations in the body of a lambda/let-ish form extend the
+        # suppressed set for the remainder of this walk.
+        if head_name in ('LAMBDA',):
+            body_items = []
+            cur = cdr(form)
+            while _consp_internal(cur):
+                item = car(cur)
+                if _consp_internal(item) and isinstance(car(item), lisptype.LispSymbol) \
+                        and car(item).name.upper() == 'DECLARE':
+                    for spec in _list_elements(cdr(item)):
+                        if _consp_internal(spec) and not _consp_internal(car(spec)) \
+                                and isinstance(car(spec), lisptype.LispSymbol) \
+                                and car(spec).name.upper() == 'NOTINLINE':
+                            for fname in _list_elements(cdr(spec)):
+                                new_notinline.add(_ccm_key(fname))
+                body_items.append(item)
+                cur = cdr(cur)
+            return lisptype.lispCons(head, _cons_from_list(
+                [_expand_compiler_macro_calls(item, new_notinline) for item in body_items]))
+
+        if head_name not in new_notinline and head_name not in _SPECIAL_OPERATORS_NO_CCM:
+            entry = _compiler_macro_registry.get(head_name)
+            if entry is not None:
+                expansion = _call_ccm(entry, form, [cdr(form)])
+                if expansion is not None and not _same_form_p(expansion, form):
+                    return _expand_compiler_macro_calls(expansion, notinline)
+
+        if head_name == 'SETF' and not _consp_internal(head):
+            # A compiler macro on a (setf f) function name applies to the
+            # SETF form `(setf (f args...) newval)` (define-compiler-
+            # macro.4). Only the single-place form is handled here; the
+            # multi-place shape has no test coverage and is left alone.
+            place = car(cdr(form))
+            value_form = car(cdr(cdr(form)))
+            tail_ok = _consp_internal(cdr(cdr(form))) and cdr(cdr(cdr(form))) is lisptype.NIL
+            if (_consp_internal(place) and isinstance(car(place), lisptype.LispSymbol)
+                    and tail_ok):
+                fn_name = cons(lisptype.LispSymbol('SETF'),
+                               _cons_from_list([car(place)]))
+                key = _ccm_key(fn_name)
+                entry = _compiler_macro_registry.get(key)
+                if entry is not None and key not in {n.strip('()') for n in notinline}:
+                    # The compiler macro's lambda list binds (newval args...)
+                    # -- the newvalue form first, then the place's arguments
+                    # -- and its &whole is the whole SETF form.
+                    raw_args = cons(value_form, cdr(place))
+                    expansion = _call_ccm(entry, form, [raw_args])
+                    if expansion is not None and not _same_form_p(expansion, form):
+                        return _expand_compiler_macro_calls(expansion, notinline)
+
+    if _consp_internal(head):
+        # A (setf f) place call inside a SETF: (SETF (F args...) newval).
+        head_name = head.car.name.upper() if isinstance(head.car, lisptype.LispSymbol) else ''
+        if head_name == 'SETF':
+            place = cadr(form)
+            if _consp_internal(place) and isinstance(car(place), lisptype.LispSymbol):
+                fn_name = cons(lisptype.LispSymbol('SETF'),
+                               _cons_from_list([car(place)]))
+                key = _ccm_key(fn_name)
+                entry = _compiler_macro_registry.get(key)
+                if entry is not None and key.strip('()') not in {n.strip('()') for n in notinline}:
+                    # The compiler macro for a (setf f) function name is
+                    # called with the whole SETF form; its lambda list binds
+                    # (newval args...).
+                    expansion = _call_ccm(entry, form, [cdr(form)])
+                    if expansion is not None and not _same_form_p(expansion, form):
+                        return _expand_compiler_macro_calls(expansion, notinline)
+
+    new_head = _expand_compiler_macro_calls(head, notinline) if _consp_internal(head) else head
+    new_tail = _expand_compiler_macro_calls(cdr(form), notinline)
+    return lisptype.lispCons(new_head, new_tail)
+
+
+# Operators whose call sites never take a compiler macro (they are special
+# forms; CLHS 3.2.2.1's "not shadowed" clause covers the rest).
+_SPECIAL_OPERATORS_NO_CCM = {
+    'QUOTE', 'IF', 'SETQ', 'SETF', 'PSETF', 'PROGN', 'LET', 'LET*', 'COND',
+    'WHEN', 'UNLESS', 'AND', 'OR', 'BLOCK', 'RETURN-FROM', 'CATCH', 'THROW',
+    'TAGBODY', 'GO', 'UNWIND-PROTECT', 'FUNCTION', 'MACROLET', 'FLET',
+    'LABELS', 'DECLAIM', 'DEFMACRO', 'DEFUN', 'DEFVAR', 'DEFPARAMETER',
+    'PROGV', 'LOCALLY', 'EVAL-WHEN', 'THE', 'LOAD-TIME-VALUE',
+}
+
+
+def _call_ccm(fn, whole_form, raw_args_lists):
+    """Call a compiler macro function the way the evaluator calls macro
+    functions: the &whole form first when the binder wants it, the call
+    arguments, then the environment when the binder wants it. The caller
+    passes the *unevaluated* argument lists; `raw_args_lists` here is a
+    list whose single element is the arg cons."""
+    args = []
+    cur = raw_args_lists[0] if raw_args_lists else lisptype.NIL
+    while _consp_internal(cur):
+        args.append(car(cur))
+        cur = cdr(cur)
+    call_args = []
+    if getattr(fn, '__expects_whole__', False):
+        call_args.append(whole_form)
+    call_args.extend(args)
+    if getattr(fn, '__expects_environment__', False):
+        import fclpy.state as state
+        call_args.append(state.current_environment)
+    try:
+        return fn(*call_args)
+    except TypeError:
+        return fn(*args)
+
+
+def _same_form_p(a, b):
+    """EQ for atoms/symbols, structural identity for conses -- enough to
+    detect a compiler macro declining by returning its own &whole form."""
+    if a is b:
+        return True
+    if _consp_internal(a) and _consp_internal(b):
+        return _same_form_p(car(a), car(b)) and _same_form_p(cdr(a), cdr(b))
+    return False
 
 
 ## `MACROLET` is a special form handled by the evaluator; do not
@@ -276,11 +502,12 @@ def symbol_macrolet(definitions, *body):
     return result
 
 
-## `DEFINE-COMPILER-MACRO` is a special form handled by the evaluator;
-## do not register it as a regular function here.
-def define_compiler_macro(name, lambda_list, *body):
-    """Define compiler macro (stub kept for reference)."""
-    return name
+## `DEFINE-COMPILER-MACRO` the *macro* is registered above, beside
+## COMPILER-MACRO-FUNCTION; its expander (in evaluation_special_forms.py)
+## quotes the definition into a call to %DEFINE-COMPILER-MACRO, the runtime
+## half registered above. The stub that stood here returned the name and
+## registered nothing, so every compiler-macro test failed on a missing
+## facility rather than a wrong answer.
 
 
 # --- Function introspection ---

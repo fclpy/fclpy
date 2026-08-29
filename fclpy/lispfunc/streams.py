@@ -110,6 +110,17 @@ class Stream:
             return True
         if not getattr(self.file_obj, 'seekable', lambda: False)():
             return True
+        if self.binary:
+            # A binary stream's pushback slot holds *characters*, and no
+            # binary read path ever pops from it -- a byte read here would
+            # be lost, which is exactly how a concatenated stream's
+            # exhaustion check used to swallow the first byte of every
+            # constituent. Probe with a *relative* seek back instead, which
+            # is one byte in every unit system whatever the element width.
+            if self.file_obj.read(1):
+                self.file_obj.seek(-1, 1)
+                return True
+            return False
         char = self.file_obj.read(1)
         if char:
             self._pending.append(char)
@@ -123,6 +134,14 @@ class Stream:
         nothing read at all -- `missing_newline_p` is true exactly when the
         stream ended before a newline was seen, which READ-LINE must return
         as its second value.
+
+        OPEN no longer translates newlines (`newline=''` -- the translation
+        is what made byte positions disagree with FILE-STRING-LENGTH), so a
+        line terminator is recognized here instead: `\\n`, and a `\\r` that
+        this platform's files carry as part of a CRLF break (a lone `\\r`
+        ends the line too, matching the universal-newline behaviour the
+        translation used to provide). A character seen past a lone `\\r`
+        goes back on the pushback stack, so the next read resumes there.
         """
         if not self.open_p:
             raise lisptype.LispStreamError(stream=self, message=f"Stream {self.name} is closed")
@@ -135,6 +154,13 @@ class Stream:
             self.position += 1
             if first == '\n':
                 return ('', False)
+            if first == '\r':
+                follow = self.file_obj.read(1)
+                if follow == '\n':
+                    self.position += 1
+                elif follow:
+                    self._pending.append(follow)
+                return ('', False)
             chars.append(first)
 
         while True:
@@ -146,6 +172,14 @@ class Stream:
                 return (''.join(chars), True)
             self.position += 1
             if char == '\n':
+                return (''.join(chars), False)
+            if char == '\r':
+                follow = self.file_obj.read(1)
+                if follow == '\n':
+                    self.position += 1
+                    return (''.join(chars), False)
+                if follow:
+                    self._pending.append(follow)
                 return (''.join(chars), False)
             chars.append(char)
     
@@ -163,7 +197,31 @@ class Stream:
         
         self.position += len(text)
         return text
-    
+
+    def read_byte_element(self):
+        """Read one element of this stream's own binary content (CLHS 21.2).
+
+        The one binary-read primitive: `read_char` decodes text, this decodes
+        `byte_width` raw bytes exactly the way WRITE-BYTE encoded them. It
+        answers `None` at end of file -- the caller (READ-BYTE in io_read.py,
+        READ-SEQUENCE below) decides between signalling END-OF-FILE and
+        returning an eof-value, and a *composite* stream overrides it so the
+        advance-across-constituents rule (ConcatenatedStream) and the echo
+        rule (EchoStream) hold for every binary reader, READ-SEQUENCE
+        included -- which otherwise read straight off `file_obj` and quietly
+        bypassed both.
+        """
+        if not self.open_p:
+            raise lisptype.LispStreamError(
+                stream=self, message=f"Stream {self.name} is closed")
+        if self.direction not in ('input', 'io'):
+            raise lisptype.LispStreamError(
+                stream=self, message=f"Stream {self.name} is not open for input")
+        raw = self.file_obj.read(self.byte_width)
+        if not raw or len(raw) < self.byte_width:
+            return None
+        return int.from_bytes(raw, 'big', signed=self.byte_signed)
+
     def write_char(self, char):
         """Write a single character."""
         if not self.open_p:
@@ -287,6 +345,36 @@ def _normalize_open_keyword(value):
     return value
 
 
+class _BinaryElementPosition:
+    """A raw binary file object whose `tell`/`seek` answer in *elements*.
+
+    CLHS 21.2: FILE-POSITION's position "is specified in units of elements"
+    -- for a stream whose element type is `(unsigned-byte 16)`, after one
+    element the position is 1, not the 2 bytes Python's own `tell` reports.
+    FILE-POSITION (io_write.py) reads the position off
+    `stream.file_obj.tell()`/`seek()` directly, so this is where the unit
+    translation has to live: it wraps the raw binary object OPEN produced
+    and rescales only absolute positioning (whence 0) by `byte_width`; every
+    other operation -- read, write, fileno, flush, relative seeks -- passes
+    through untouched, so WRITE-BYTE/READ-BYTE keep their byte-level view.
+    """
+
+    def __init__(self, raw, byte_width):
+        self._raw = raw
+        self._width = byte_width
+
+    def tell(self):
+        return self._raw.tell() // self._width
+
+    def seek(self, offset, whence=0):
+        if whence == 0:
+            return self._raw.seek(offset * self._width)
+        return self._raw.seek(offset, whence)
+
+    def __getattr__(self, name):
+        return getattr(self._raw, name)
+
+
 def _classify_element_type(element_type):
     """Decide whether an OPEN `:element-type` names a character stream or a
     binary one, and if binary, how many bytes one element occupies on disk.
@@ -388,7 +476,16 @@ def open_file(filename, *, direction='input', element_type='character',
     if_exists = _normalize_open_keyword(if_exists)
     if_does_not_exist = _normalize_open_keyword(if_does_not_exist)
     is_binary, byte_width, byte_signed = _classify_element_type(element_type)
-    open_kwargs = {} if is_binary else {'encoding': 'utf-8'}
+    # `newline=''` -- no newline translation in either direction. Python's
+    # default translates '\n' to os.linesep on write (two bytes on Windows),
+    # which makes the file's byte positions disagree with the character
+    # positions FILE-POSITION reports and FILE-STRING-LENGTH is checked
+    # against (FILE-STRING-LENGTH.1/.2: `(= (+ pos1 len) pos2)` fails exactly
+    # at #\Newline). The ansi-test sources are LF-only and the tokenizer
+    # treats any stray '\r' as whitespace, so nothing reading a file through
+    # OPEN depends on the translation. LOAD/COMPILE-FILE open their files
+    # directly (misc_macros.py) and are untouched by this.
+    open_kwargs = {} if is_binary else {'encoding': 'utf-8', 'newline': ''}
 
     # Resolve the filename through `pathnames.resolve_filespec`, the one place
     # a pathname designator becomes an OS path. OPEN carried the fifth copy of
@@ -510,6 +607,9 @@ def open_file(filename, *, direction='input', element_type='character',
         return signal_file_error(
             pathname_from_namestring(filename),
             "OPEN: cannot open " + filename + ": " + str(error))
+    if is_binary:
+        # Positions answer in elements (CLHS FILE-POSITION), bytes otherwise.
+        file_obj = _BinaryElementPosition(file_obj, byte_width)
     stream = Stream(filename, file_obj, direction, element_type)
     stream.binary = is_binary
     stream.byte_width = byte_width
@@ -699,14 +799,17 @@ def read_sequence(sequence, stream, *, start=0, end=None):
     position = start
     if getattr(stream, 'binary', False):
         # A binary stream's elements are integers, not CHARACTERs -- read
-        # `byte_width` raw bytes per element (the same encoding WRITE-BYTE
-        # used) rather than going through `read_char`, which assumes a
-        # decoded-text `file_obj`.
+        # one element at a time through `read_byte_element`, the same
+        # primitive READ-BYTE uses, rather than going through `read_char`
+        # (which assumes decoded text) or this function's own `file_obj`
+        # access (which read *through* a composite stream's current
+        # constituent, so a concatenated stream never advanced and an echo
+        # stream never echoed -- MAKE-CONCATENATED-STREAM.22/.23/.24 and
+        # MAKE-ECHO-STREAM.9).
         while position < end:
-            raw = stream.file_obj.read(stream.byte_width)
-            if not raw or len(raw) < stream.byte_width:
+            value = stream.read_byte_element()
+            if value is None:
                 break
-            value = int.from_bytes(raw, 'big', signed=stream.byte_signed)
             seq_set(sequence, position, value, "READ-SEQUENCE")
             position += 1
         return position
@@ -796,17 +899,32 @@ class StringInputStream(Stream):
         text that this class's `read_char`/`peek_char`/`unread_char`
         never touch -- interleaving the two would desynchronize them.
         Returns `(text, missing_newline_p)`, or `None` at end of file.
+
+        Like the base method, this recognizes a CRLF pair (and a lone
+        `\\r`) as the line break, matching `Stream.read_line`'s
+        universal-newline behaviour -- the two must agree or a string
+        stream and a file stream answer differently for the same text.
         """
         if self.position >= len(self.string):
             return None
-        newline_at = self.string.find('\n', self.position)
-        if newline_at == -1:
-            text = self.string[self.position:]
-            self.position = len(self.string)
-            return (text, True)
-        text = self.string[self.position:newline_at]
-        self.position = newline_at + 1
-        return (text, False)
+        index = self.position
+        while index < len(self.string):
+            char = self.string[index]
+            if char == '\n':
+                text = self.string[self.position:index]
+                self.position = index + 1
+                return (text, False)
+            if char == '\r':
+                text = self.string[self.position:index]
+                if index + 1 < len(self.string) and self.string[index + 1] == '\n':
+                    self.position = index + 2
+                else:
+                    self.position = index + 1
+                return (text, False)
+            index += 1
+        text = self.string[self.position:]
+        self.position = len(self.string)
+        return (text, True)
 
     def __repr__(self):
         return f"<StringInputStream pos={self.position} len={len(self.string)}>"
@@ -865,18 +983,30 @@ class StringOutputStream(Stream):
     def get_string(self):
         """Get the accumulated string and clear the buffer.
 
-        The returned `LispString` carries the stream's element-type so
-        `array-element-type` answers the right type even when the stream
-        accumulated no characters (a `nil` element-type yields a
-        zero-length `LispString` whose `array-element-type` is `NIL`,
-        per CLHS 21.2.1).
+        The returned `LispString` carries the stream's element-type *as the
+        upgraded array element type* (`arrays.upgraded_element_type`): an
+        array's element type is its upgraded type (CLHS 15.1.2.1), and the
+        rest of the implementation answers array type questions by
+        identity against the canonical `CHARACTER_TYPE`/`NIL_TYPE`/`BIT_TYPE`
+        sentinels. Handing the requested designator through raw -- a Python
+        `'character'` string, or the `BASE-CHAR` symbol
+        WITH-OUTPUT-TO-STRING.8 passes -- made every `(typep result
+        'simple-base-string)` NIL while `(typep (make-string n)
+        'simple-base-string)` was T, because MAKE-STRING stores no
+        element-type and lands on the canonical sentinel.
+
+        A `nil` element-type yields a zero-length `LispString` whose
+        `array-element-type` is `NIL`, per CLHS 21.2.1's "can hold no
+        elements" rule.
         """
+        from .arrays import upgraded_element_type
         value = self._buffer.getvalue()
         # Reset the buffer for continued use
         self._buffer.seek(0)
         self._buffer.truncate(0)
         self.position = 0
-        return lisptype.LispString(value, element_type=self._requested_element_type)
+        return lisptype.LispString(
+            value, element_type=upgraded_element_type(self._requested_element_type))
     
     def peek_string(self):
         """Get the accumulated string without clearing the buffer."""
@@ -1031,24 +1161,32 @@ def make_string_input_stream(string, start=0, end=lisptype.OMITTED):
 
 
 @_registry.cl_function('MAKE-STRING-OUTPUT-STREAM')
-def make_string_output_stream(element_type='character'):
-    """Create a string output stream.
-    
-    Creates an output stream that accumulates characters written to it.
-    Use GET-OUTPUT-STREAM-STRING to retrieve the accumulated string.
-    
+def make_string_output_stream(*, element_type=lisptype.OMITTED):
+    """Create a string output stream (CLHS 21.2).
+
+    The ANSI lambda list is `(make-string-output-stream &key element-type)`,
+    so `element_type` is keyword-only and defaults to the *omitted* sentinel
+    -- not `None` -- because NIL is itself a meaningful answer here (CLHS
+    21.2.1: an element-type of NIL makes a stream "which can hold no
+    elements"). As a plain defaulted positional, `(make-string-output-stream
+    nil)` bound the element type to NIL instead of signalling the
+    PROGRAM-ERROR MAKE-STRING-OUTPUT-STREAM.ERROR.1 requires, and
+    `split_keyword_args` could not tell a positional from a keyword value.
+
     Args:
         element_type: Type of stream elements (default 'character')
-    
+
     Returns:
         A StringOutputStream object
-    
+
     Example:
         (let ((s (make-string-output-stream)))
           (write-char #\\H s)
           (write-string \"ello\" s)
           (get-output-stream-string s))  ; Returns \"Hello\"
     """
+    if element_type is lisptype.OMITTED:
+        element_type = 'character'
     return StringOutputStream(element_type)
 
 
@@ -1130,6 +1268,45 @@ def _require_output_stream(stream, who):
             expected_type='(SATISFIES OUTPUT-STREAM-P)', actual_value=stream)
 
 
+class _CompositeFileObject:
+    """The raw `file_obj` view of a two-way/echo stream.
+
+    A composite is open for *both* directions, but its two sides are
+    different raw file objects -- so no single one of them can be `the`
+    file_obj. io_write.py's WRITE-BYTE lands on `stream.file_obj.write`,
+    io_read.py's READ-BYTE falls back to `stream.file_obj.read` when a
+    stream's own read_byte answered None (end of file), and each must reach
+    the *right* side: reads to `input_stream`, writes to `output_stream`.
+    Giving the composite the input side outright is what made every write
+    raise Python's ``UnsupportedOperation: write`` (MAKE-TWO-WAY-STREAM.12/
+    .13, MAKE-ECHO-STREAM.15/.16); giving it the output side made the
+    end-of-file fallback read a write-only file. Seeking/telling stays on
+    the input side, where the read cursor lives.
+    """
+
+    def __init__(self, input_stream, output_stream):
+        self._input = input_stream
+        self._output = output_stream
+
+    def read(self, *args):
+        return self._input.file_obj.read(*args)
+
+    def write(self, data):
+        return self._output.file_obj.write(data)
+
+    def seek(self, *args):
+        return self._input.file_obj.seek(*args)
+
+    def tell(self):
+        return self._input.file_obj.tell()
+
+    def flush(self):
+        return self._output.file_obj.flush()
+
+    def __getattr__(self, name):
+        return getattr(self._input.file_obj, name)
+
+
 class TwoWayStream(Stream):
     """CLHS 21.1.2: reads through `input_stream`, writes through `output_stream`."""
 
@@ -1170,6 +1347,12 @@ class TwoWayStream(Stream):
         """Delegate to input stream."""
         return getattr(self.input_stream, 'byte_signed', False)
 
+    @property
+    def file_obj(self):
+        """The two-sided raw view (see `_CompositeFileObject`): reads land
+        on the input side, writes on the output side."""
+        return _CompositeFileObject(self.input_stream, self.output_stream)
+
     def read_char(self):
         self._ensure_open()
         return self.input_stream.read_char()
@@ -1187,6 +1370,15 @@ class TwoWayStream(Stream):
     def read_line(self):
         self._ensure_open()
         return self.input_stream.read_line()
+
+    def read_byte_element(self):
+        """Read one element from the input side (CLHS 21.1.2)."""
+        self._ensure_open()
+        return self.input_stream.read_byte_element()
+
+    def read_byte(self):
+        """READ-BYTE's hook (io_read.py prefers a stream's own method)."""
+        return self.read_byte_element()
 
     def write_char(self, char):
         self._ensure_open()
@@ -1241,8 +1433,10 @@ class EchoStream(Stream):
 
     @property
     def file_obj(self):
-        """Delegate to input stream for read operations."""
-        return self.input_stream.file_obj if hasattr(self.input_stream, 'file_obj') else None
+        """The two-sided raw view (see `_CompositeFileObject`) -- same
+        shape as TwoWayStream's: a direct write to an echo-stream goes to
+        `output_stream`, reads come from `input_stream`."""
+        return _CompositeFileObject(self.input_stream, self.output_stream)
 
     @property
     def binary(self):
@@ -1291,25 +1485,37 @@ class EchoStream(Stream):
                 return (''.join(chars), True)
             if char == '\n':
                 return (''.join(chars), False)
+            if char == '\r':
+                # CRLF pair (or lone CR) ends the line, per Stream.read_line.
+                follow = self.read_char()
+                if follow is not None and follow != '\n':
+                    self.unread_char(follow)
+                return (''.join(chars), False)
             chars.append(char)
 
-    def read_byte(self):
-        """Read a byte from input and echo it to output."""
+    def read_byte_element(self):
+        """Read one element from the input side, echoing it (CLHS 21.1.2).
+
+        The composite override of the one binary-read primitive: every byte
+        actually read is echoed to `output_stream` through WRITE-BYTE --
+        through the same primitive READ-SEQUENCE uses, so a binary
+        READ-SEQUENCE over an echo stream echoes too, which is what
+        MAKE-ECHO-STREAM.9 checks and what the previous `file_obj`-direct
+        read quietly skipped.
+        """
         self._ensure_open()
-        # Read the byte from the input stream's file_obj
-        if self.binary and self.input_stream.file_obj:
-            raw = self.input_stream.file_obj.read(self.byte_width)
-            if raw and len(raw) == self.byte_width:
-                byte_val = int.from_bytes(raw, 'big', signed=self.byte_signed)
-                # Echo to output stream (unless it's unechoed)
-                if self._unechoed > 0:
-                    self._unechoed -= 1
-                else:
-                    # Use WRITE-BYTE on output_stream to echo the byte
-                    from . import io_write
-                    io_write.write_byte(byte_val, self.output_stream)
-                return byte_val
-        return None
+        value = self.input_stream.read_byte_element()
+        if value is not None:
+            if self._unechoed > 0:
+                self._unechoed -= 1
+            else:
+                from .io_write import write_byte as _write_byte
+                _write_byte(value, self.output_stream)
+        return value
+
+    def read_byte(self):
+        """READ-BYTE's hook (io_read.py prefers a stream's own method)."""
+        return self.read_byte_element()
 
     def write_char(self, char):
         self._ensure_open()
@@ -1418,21 +1624,39 @@ class ConcatenatedStream(Stream):
                 return (''.join(chars), True)
             if char == '\n':
                 return (''.join(chars), False)
+            if char == '\r':
+                # CRLF pair (or lone CR) ends the line, per Stream.read_line.
+                follow = self.read_char()
+                if follow is not None and follow != '\n':
+                    self.unread_char(follow)
+                return (''.join(chars), False)
             chars.append(char)
 
-    def read_byte(self):
-        """Read a byte from the current constituent stream."""
+    def read_byte_element(self):
+        """Read one element through the constituents (CLHS 21.1.2).
+
+        The composite override of the one binary-read primitive: an
+        exhausted constituent is skipped *permanently* -- the same
+        advance rule read_char obeys, which the previous direct
+        `current.file_obj` access never implemented, so a concatenated
+        stream signalled END-OF-FILE (or answered a short vector) as soon
+        as its first constituent ran out.
+        """
         self._ensure_open()
-        current = self._current()
-        if current and self.binary:
-            if hasattr(current, 'read_byte') and callable(getattr(current, 'read_byte')):
-                return current.read_byte()
-            # Fall back to direct file_obj access on current stream
-            if current.file_obj:
-                raw = current.file_obj.read(current.byte_width)
-                if raw and len(raw) == current.byte_width:
-                    return int.from_bytes(raw, 'big', signed=current.byte_signed)
-        return None
+        while True:
+            current = self._current()
+            if current is None:
+                return None
+            value = current.read_byte_element()
+            if value is not None:
+                return value
+            # `listen()` said this constituent had data, but a whole
+            # element did not fit -- skip it for good, never revisit it.
+            self._index += 1
+
+    def read_byte(self):
+        """READ-BYTE's hook (io_read.py prefers a stream's own method)."""
+        return self.read_byte_element()
 
     def close(self):
         self.open_p = False

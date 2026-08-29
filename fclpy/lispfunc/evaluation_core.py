@@ -1173,23 +1173,33 @@ def eval(form, env=None):
                             # bytespec / start / end subforms are still
                             # evaluated here.
                             if op_name in ('LDB', 'MASK-FIELD') and _consp_internal(place_args) and _consp_internal(cdr(place_args)):
+                                # CLHS 5.1.1.1/5.1.2: the bytespec's
+                                # subforms, then the inner place's subforms
+                                # (evaluated once, left to right, when
+                                # `_place_accessor` builds its closures),
+                                # and only then the newvalue form --
+                                # `ldb.place.order.1`/`mask-field.place.order.1`
+                                # count each subform. The storing form's
+                                # primary value is the store value itself
+                                # (newfield, unmasked -- `ldb.place.1`
+                                # expects -1 back), not the inner place's
+                                # new value.
                                 bytespec_value = eval(car(place_args), env)
-                                new_val = eval(value_form, env)
                                 inner_getter, inner_setter = _es_forms._place_accessor(
                                     car(cdr(place_args)), env)
+                                new_val = eval(value_form, env)
+                                size, pos = bytespec_value
+                                current = inner_getter()
                                 if op_name == 'LDB':
-                                    size, pos = bytespec_value
                                     mask = (1 << size) - 1
-                                    current = inner_getter()
-                                    result = inner_setter(
+                                    inner_setter(
                                         (current & ~(mask << pos))
                                         | ((new_val & mask) << pos))
                                 else:
-                                    size, pos = bytespec_value
                                     mask = ((1 << size) - 1) << pos
-                                    current = inner_getter()
-                                    result = inner_setter(
+                                    inner_setter(
                                         (current & ~mask) | (new_val & mask))
+                                result = new_val
                                 args = cdr(cdr(args))
                                 continue
                             if op_name == 'SUBSEQ' and _consp_internal(place_args):
@@ -1311,13 +1321,24 @@ def eval(form, env=None):
                                     # SLOT-VALUE's reader then never sees.
                                     from .misc_clos import set_slot_value
                                     set_slot_value(result, obj, slot_name)
-                                elif hasattr(obj, 'set_slot'):
-                                    obj.set_slot(slot_name, result)
-                                elif hasattr(obj, '__dict__'):
-                                    slot_key = slot_name.name if isinstance(slot_name, lisptype.LispSymbol) else str(slot_name)
-                                    obj.__dict__[slot_key] = result
                                 else:
-                                    raise lisptype.LispError("SETF SLOT-VALUE: cannot set slot")
+                                    # CLHS 4.3.7: a generalized instance of a
+                                    # built-in class has no accessible slots.
+                                    # Without this guard the `__dict__`
+                                    # fallback below silently wrote a Python
+                                    # attribute on any non-instance with one
+                                    # (a package, a pathname, ...) --
+                                    # slot-value.error.6 walks the built-in
+                                    # mini-universe asserting the error.
+                                    from .misc_clos import _signal_builtin_slot_access
+                                    _signal_builtin_slot_access(obj, 'SETF SLOT-VALUE')
+                                    if hasattr(obj, 'set_slot'):
+                                        obj.set_slot(slot_name, result)
+                                    elif hasattr(obj, '__dict__'):
+                                        slot_key = slot_name.name if isinstance(slot_name, lisptype.LispSymbol) else str(slot_name)
+                                        obj.__dict__[slot_key] = result
+                                    else:
+                                        raise lisptype.LispError("SETF SLOT-VALUE: cannot set slot")
                             elif op_name == 'NTH':
                                 n = eval_args[0]
                                 lst = eval_args[1]
@@ -2083,17 +2104,6 @@ def eval(form, env=None):
                 
                 # Return the access-fn symbol as specified by ANSI CL
                 return access_fn
-            elif operator.name == 'DEFINE-COMPILER-MACRO':
-                # (DEFINE-COMPILER-MACRO name lambda-list &body body)
-                # Arguments should NOT be evaluated - just return the name
-                args = cdr(form)
-                if args is None or args == lisptype.NIL:
-                    raise lisptype.LispError("DEFINE-COMPILER-MACRO requires a name")
-                
-                name = car(args)
-                # Store compiler macro info if needed (stub for now)
-                # Return the name symbol as specified by ANSI CL
-                return name
             elif operator.name == 'DEFINE-CONDITION':
                 return eval_define_condition(form, env)
             elif operator.name == 'DEFTYPE':
