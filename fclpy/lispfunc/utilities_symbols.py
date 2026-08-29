@@ -182,7 +182,6 @@ def gensym(*args):
 
 
 # --- Package operations ---
-@_registry.cl_function('*PACKAGE*')
 def get_current_package():
     """Get the value of *PACKAGE* (current package)."""
     return state.current_package_value()

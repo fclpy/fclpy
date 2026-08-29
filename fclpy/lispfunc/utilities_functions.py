@@ -14,15 +14,29 @@ def _function_spec_to_key(spec):
     the environment/registry: a plain symbol as-is, or a (SETF name) list
     to the same synthetic "(SETF NAME)" symbol DEFUN uses to store setf
     functions. Returns None if spec isn't a recognizable function name.
+    
+    Valid forms are:
+    - A symbol (any symbol)
+    - A proper list (SETF symbol) with exactly two elements
+    
+    Invalid forms (return None):
+    - Non-symbol, non-list values
+    - Improper lists like (SETF symbol . extra)
+    - Lists with wrong head or structure like (setf) or (SETF symbol extra)
     """
     if isinstance(spec, lisptype.LispSymbol):
         return spec
     if _consp_internal(spec):
         head = car(spec)
         rest = cdr(spec)
-        if (isinstance(head, lisptype.LispSymbol) and head.name == 'SETF'
-                and _consp_internal(rest) and isinstance(car(rest), lisptype.LispSymbol)):
-            return lisptype.LispSymbol(f"(SETF {car(rest).name})")
+        if isinstance(head, lisptype.LispSymbol) and head.name == 'SETF':
+            # rest must be (symbol) - a cons cell with a symbol as head and NIL as tail
+            if _consp_internal(rest):
+                name_sym = car(rest)
+                name_rest = cdr(rest)
+                # Check that name is a symbol and rest is NIL (proper list with 2 elements)
+                if isinstance(name_sym, lisptype.LispSymbol) and name_rest is lisptype.NIL:
+                    return lisptype.LispSymbol(f"(SETF {name_sym.name})")
     return None
 
 
@@ -33,31 +47,24 @@ def fboundp(symbol):
 
     Returns T if the symbol has a global function definition, NIL otherwise.
     Accepts either a plain symbol or a (SETF name) function-name designator.
+    Signals TYPE-ERROR if the argument is not a valid function name.
     """
     key = _function_spec_to_key(symbol)
     if key is None:
-        if isinstance(symbol, str):
-            key = lisptype.LispSymbol(symbol.upper())
-        else:
-            return lisptype.NIL
-    symbol = key
-
+        # Invalid function name - must be a symbol or (SETF symbol)
+        raise lisptype.LispTypeError(
+            f"FBOUNDP: {symbol!r} is not a function name",
+            expected_type='(OR SYMBOL (CONS (EQL SETF) (CONS SYMBOL NULL)))',
+            actual_value=symbol)
 
     # Check in current environment's function bindings
     env = state.current_environment
-    if env is not None:
-        func = env.find_func(symbol)
+    while env is not None:
+        func = env.find_func(key)
         if func is not None:
             return lisptype.T
-    
-    # Check in function registry
-    try:
-        py_name = _registry.get_function_py_name(symbol.name)
-        if py_name:
-            return lisptype.T
-    except Exception:
-        pass
-    
+        env = getattr(env, 'parent', None)
+
     return lisptype.NIL
 
 
@@ -107,16 +114,28 @@ def fdefinition(symbol):
 
     Looks up the symbol in the current environment's function bindings.
     Accepts either a plain symbol or a (SETF name) function-name
-    designator. Signals error if the symbol is not fbound.
+    designator. Signals TYPE-ERROR if the argument is not a valid function name,
+    and UNDEFINED-FUNCTION if the symbol is not fbound.
     """
-    symbol = _function_spec_to_key(symbol) or lisptype.LispSymbol(str(symbol))
+    key = _function_spec_to_key(symbol)
+    if key is None:
+        # Invalid function name - must be a symbol or (SETF symbol)
+        raise lisptype.LispTypeError(
+            f"FDEFINITION: {symbol!r} is not a function name",
+            expected_type='(OR SYMBOL (CONS (EQL SETF) (CONS SYMBOL NULL)))',
+            actual_value=symbol)
+
     env = state.current_environment
-    if env is None:
-        raise lisptype.LispNotImplementedError("FDEFINITION: no environment")
-    func = env.find_func(symbol)
-    if func is None:
-        raise lisptype.LispNotImplementedError("FDEFINITION: undefined function")
-    return func
+    while env is not None:
+        func = env.find_func(key)
+        if func is not None:
+            return func
+        env = getattr(env, 'parent', None)
+
+    # Symbol is not fbound - signal UNDEFINED-FUNCTION
+    from .evaluation_core import ConditionException
+    cond = lisptype.UndefinedFunction(name=symbol)
+    raise ConditionException(cond, recoverable=False)
 
 
 @_registry.cl_function('SYMBOL-FUNCTION')

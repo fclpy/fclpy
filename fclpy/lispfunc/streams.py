@@ -1110,7 +1110,7 @@ class TwoWayStream(Stream):
         self.input_stream = input_stream
         self.output_stream = output_stream
         self.name = "<two-way-stream>"
-        self.file_obj = None
+        self._file_obj = None
         self.direction = 'io'
         self.element_type = input_stream.element_type
         self.open_p = True
@@ -1120,6 +1120,26 @@ class TwoWayStream(Stream):
     def _ensure_open(self):
         if not self.open_p:
             raise lisptype.LispStreamError(stream=self, message=f"Stream {self.name} is closed")
+
+    @property
+    def file_obj(self):
+        """Delegate to input stream for read operations."""
+        return self.input_stream.file_obj if hasattr(self.input_stream, 'file_obj') else None
+
+    @property
+    def binary(self):
+        """Delegate to input stream."""
+        return getattr(self.input_stream, 'binary', False)
+
+    @property
+    def byte_width(self):
+        """Delegate to input stream."""
+        return getattr(self.input_stream, 'byte_width', None)
+
+    @property
+    def byte_signed(self):
+        """Delegate to input stream."""
+        return getattr(self.input_stream, 'byte_signed', False)
 
     def read_char(self):
         self._ensure_open()
@@ -1178,7 +1198,7 @@ class EchoStream(Stream):
         self.input_stream = input_stream
         self.output_stream = output_stream
         self.name = "<echo-stream>"
-        self.file_obj = None
+        self._file_obj = None
         self.direction = 'io'
         self.element_type = input_stream.element_type
         self.open_p = True
@@ -1189,6 +1209,26 @@ class EchoStream(Stream):
     def _ensure_open(self):
         if not self.open_p:
             raise lisptype.LispStreamError(stream=self, message=f"Stream {self.name} is closed")
+
+    @property
+    def file_obj(self):
+        """Delegate to input stream for read operations."""
+        return self.input_stream.file_obj if hasattr(self.input_stream, 'file_obj') else None
+
+    @property
+    def binary(self):
+        """Delegate to input stream."""
+        return getattr(self.input_stream, 'binary', False)
+
+    @property
+    def byte_width(self):
+        """Delegate to input stream."""
+        return getattr(self.input_stream, 'byte_width', None)
+
+    @property
+    def byte_signed(self):
+        """Delegate to input stream."""
+        return getattr(self.input_stream, 'byte_signed', False)
 
     def read_char(self):
         self._ensure_open()
@@ -1223,6 +1263,24 @@ class EchoStream(Stream):
             if char == '\n':
                 return (''.join(chars), False)
             chars.append(char)
+
+    def read_byte(self):
+        """Read a byte from input and echo it to output."""
+        self._ensure_open()
+        # Read the byte from the input stream's file_obj
+        if self.binary and self.input_stream.file_obj:
+            raw = self.input_stream.file_obj.read(self.byte_width)
+            if raw and len(raw) == self.byte_width:
+                byte_val = int.from_bytes(raw, 'big', signed=self.byte_signed)
+                # Echo to output stream (unless it's unechoed)
+                if self._unechoed > 0:
+                    self._unechoed -= 1
+                else:
+                    # Use WRITE-BYTE on output_stream to echo the byte
+                    from . import io_write
+                    io_write.write_byte(byte_val, self.output_stream)
+                return byte_val
+        return None
 
     def write_char(self, char):
         self._ensure_open()
@@ -1259,7 +1317,7 @@ class ConcatenatedStream(Stream):
         self.streams = list(constituents)
         self._index = 0
         self.name = "<concatenated-stream>"
-        self.file_obj = None
+        self._file_obj = None
         self.direction = 'input'
         self.element_type = self.streams[0].element_type if self.streams else 'character'
         self.open_p = True
@@ -1269,6 +1327,30 @@ class ConcatenatedStream(Stream):
     def _ensure_open(self):
         if not self.open_p:
             raise lisptype.LispStreamError(stream=self, message=f"Stream {self.name} is closed")
+
+    @property
+    def file_obj(self):
+        """Delegate to current stream's file_obj."""
+        current = self._current()
+        return current.file_obj if current and hasattr(current, 'file_obj') else None
+
+    @property
+    def binary(self):
+        """Delegate to current stream."""
+        current = self._current()
+        return getattr(current, 'binary', False) if current else False
+
+    @property
+    def byte_width(self):
+        """Delegate to current stream."""
+        current = self._current()
+        return getattr(current, 'byte_width', None) if current else None
+
+    @property
+    def byte_signed(self):
+        """Delegate to current stream."""
+        current = self._current()
+        return getattr(current, 'byte_signed', False) if current else False
 
     def _current(self):
         """The constituent to read from next, skipping exhausted ones, or
@@ -1309,6 +1391,20 @@ class ConcatenatedStream(Stream):
                 return (''.join(chars), False)
             chars.append(char)
 
+    def read_byte(self):
+        """Read a byte from the current constituent stream."""
+        self._ensure_open()
+        current = self._current()
+        if current and self.binary:
+            if hasattr(current, 'read_byte') and callable(getattr(current, 'read_byte')):
+                return current.read_byte()
+            # Fall back to direct file_obj access on current stream
+            if current.file_obj:
+                raw = current.file_obj.read(current.byte_width)
+                if raw and len(raw) == current.byte_width:
+                    return int.from_bytes(raw, 'big', signed=current.byte_signed)
+        return None
+
     def close(self):
         self.open_p = False
         return lisptype.T
@@ -1335,6 +1431,27 @@ class BroadcastStream(Stream):
     def _ensure_open(self):
         if not self.open_p:
             raise lisptype.LispStreamError(stream=self, message=f"Stream {self.name} is closed")
+
+    @property
+    def binary(self):
+        """Delegate to first stream if present, else False."""
+        if self.streams:
+            return getattr(self.streams[0], 'binary', False)
+        return False
+
+    @property
+    def byte_width(self):
+        """Delegate to first stream if present, else None."""
+        if self.streams:
+            return getattr(self.streams[0], 'byte_width', None)
+        return None
+
+    @property
+    def byte_signed(self):
+        """Delegate to first stream if present, else False."""
+        if self.streams:
+            return getattr(self.streams[0], 'byte_signed', False)
+        return False
 
     def write_char(self, char):
         self._ensure_open()

@@ -287,10 +287,35 @@ def write_char(character, stream=None):
     return character
 
 
+def _string_to_text(string, what='WRITE-STRING'):
+    """Extract text from a string or string-like object.
+
+    Handles LispString, plain str, lists/tuples of Characters, and character arrays.
+    """
+    if isinstance(string, lisptype.LispString):
+        return ''.join(string)
+    if isinstance(string, str):
+        return string
+    if isinstance(string, (list, tuple)) and all(isinstance(c, lisptype.Character) for c in string):
+        return ''.join(c.char for c in string)
+    from . import arrays as _arrays
+    if isinstance(string, _arrays.LispArray) and _arrays.array_rank_of(string) == 1:
+        et = _arrays.element_type_of(string)
+        et_name = et.name if isinstance(et, lisptype.LispSymbol) else str(et)
+        if et_name.upper() in ('CHARACTER', 'BASE-CHAR', 'STANDARD-CHAR', 'NIL'):
+            from .sequence_protocol import seq_elements
+            chars = seq_elements(string, what)
+            return ''.join(c.char if isinstance(c, lisptype.Character) else str(c)
+                           for c in chars)
+    raise lisptype.LispTypeError(
+        f"{what}: argument must be a string, not {_write_object(string, escape=True)}",
+        expected_type='STRING', actual_value=string)
+
+
 @_registry.cl_function('WRITE-STRING')
-def write_string(string, stream=None, start=0, end=None):
+def write_string(string, stream=None, *, start=0, end=None):
     """Write a string's characters to a stream, without escapes (CLHS 21.2)."""
-    text = str(string)
+    text = _string_to_text(string, 'WRITE-STRING')
     if end is None or end is lisptype.NIL:
         end = len(text)
     write_text(text[start:end], stream)
@@ -298,9 +323,9 @@ def write_string(string, stream=None, start=0, end=None):
 
 
 @_registry.cl_function('WRITE-LINE')
-def write_line(string, stream=None, start=0, end=None):
+def write_line(string, stream=None, *, start=0, end=None):
     """WRITE-STRING followed by a newline (CLHS 21.2)."""
-    text = str(string)
+    text = _string_to_text(string, 'WRITE-LINE')
     if end is None or end is lisptype.NIL:
         end = len(text)
     write_text(text[start:end] + '\n', stream)
@@ -1575,7 +1600,14 @@ def _capitalize_words(s):
     at_word_start = True
     for ch in s:
         if ch.isalpha():
-            result.append(ch.upper() if at_word_start else ch.lower())
+            if at_word_start:
+                # Capitalize: use uppercase if it's a single character
+                uppered = ch.upper()
+                result.append(uppered if len(uppered) == 1 else ch)
+            else:
+                # Lowercase: use lowercase if it's a single character
+                lowered = ch.lower()
+                result.append(lowered if len(lowered) == 1 else ch)
             at_word_start = False
         else:
             result.append(ch)
@@ -1596,10 +1628,14 @@ def _capitalize_first_word(s):
     for ch in s:
         if ch.isalpha():
             if not capitalized_any and at_word_start:
-                result.append(ch.upper())
+                # Capitalize: use uppercase if it's a single character
+                uppered = ch.upper()
+                result.append(uppered if len(uppered) == 1 else ch)
                 capitalized_any = True
             else:
-                result.append(ch.lower())
+                # Lowercase: use lowercase if it's a single character
+                lowered = ch.lower()
+                result.append(lowered if len(lowered) == 1 else ch)
             at_word_start = False
         else:
             result.append(ch)
@@ -2126,6 +2162,37 @@ def _pp_indent_sentinel(relative_to, n):
 def _pp_strip_lit_space(text):
     """Remove the literal-space bracketing, leaving the spaces themselves."""
     return text.replace(_PP_LIT_SPACE_OPEN, '').replace(_PP_LIT_SPACE_CLOSE, '')
+
+
+def _ansi_lower(text):
+    """Convert text to lowercase using ANSI character semantics.
+
+    Unlike Python's str.lower(), this preserves individual character boundaries:
+    if a character's lowercase form would be multiple characters (e.g., ß -> ss,
+    or U+0130 -> i with combining dot), the character is left unchanged instead.
+    This matches CHAR-DOWNCASE behavior (CLHS 13.1.1).
+    """
+    result = []
+    for char in text:
+        lowered = char.lower()
+        # Only apply lowercase if it's still a single character
+        result.append(lowered if len(lowered) == 1 else char)
+    return ''.join(result)
+
+
+def _ansi_upper(text):
+    """Convert text to uppercase using ANSI character semantics.
+
+    Unlike Python's str.upper(), this preserves individual character boundaries:
+    if a character's uppercase form would be multiple characters, the character
+    is left unchanged instead. This matches CHAR-UPCASE behavior (CLHS 13.1.1).
+    """
+    result = []
+    for char in text:
+        uppered = char.upper()
+        # Only apply uppercase if it's still a single character
+        result.append(uppered if len(uppered) == 1 else char)
+    return ''.join(result)
 
 
 def _pp_case_convert(text, convert):
@@ -3101,7 +3168,7 @@ def _format_directive(control_string, cursor, pos, emitted=None):
         # that function for what went wrong when they were converted too.
         if colon_flag and at_flag:
             # ~:@( ... ~) - force everything to upper case
-            convert = str.upper
+            convert = _ansi_upper
         elif colon_flag:
             # ~:( ... ~) - capitalize each word
             convert = _capitalize_words
@@ -3110,7 +3177,7 @@ def _format_directive(control_string, cursor, pos, emitted=None):
             convert = _capitalize_first_word
         else:
             # ~( ... ~) - force everything to lower case
-            convert = str.lower
+            convert = _ansi_lower
 
         return (_pp_case_convert(inner_result, convert), end_pos)
     

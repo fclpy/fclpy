@@ -943,7 +943,6 @@ def floating_point_underflow_type():
 
 
 # --- Type designators from ANSI target list ---
-@_registry.cl_function('BIT-VECTOR')
 def bit_vector_type():
     """Get BIT-VECTOR type designator."""
     return 'BIT-VECTOR'
@@ -979,7 +978,6 @@ def simple_error_type():
     return 'SIMPLE-ERROR'
 
 
-@_registry.cl_function('CLASS')
 def class_type():
     """Get CLASS type designator."""
     return 'CLASS'
@@ -1039,37 +1037,31 @@ def multiple_value_call(function, *forms):
 
 
 # --- System limits and constants ---
-@_registry.cl_function('ARRAY-DIMENSION-LIMIT')
 def array_dimension_limit():
     """Maximum array dimension."""
     return 1024
 
 
-@_registry.cl_function('ARRAY-RANK-LIMIT')
 def array_rank_limit():
     """Maximum array rank."""
     return 8
 
 
-@_registry.cl_function('ARRAY-TOTAL-SIZE-LIMIT')
 def array_total_size_limit():
     """Maximum total array size."""
     return 1024 * 1024
 
 
-@_registry.cl_function('CALL-ARGUMENTS-LIMIT')
 def call_arguments_limit():
     """Maximum function arguments."""
     return 64
 
 
-@_registry.cl_function('MULTIPLE-VALUES-LIMIT')
 def multiple_values_limit():
     """Maximum multiple values."""
     return 64
 
 
-@_registry.cl_function('CHAR-CODE-LIMIT')
 def char_code_limit():
     """Maximum character code."""
     return 1114112

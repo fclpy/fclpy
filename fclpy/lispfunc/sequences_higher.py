@@ -3,7 +3,7 @@
 from .core import cons, car, cdr, atom
 from . import registry as _registry
 import fclpy.lisptype as lisptype
-from .arrays import make_array
+from .arrays import make_array, LispArray
 from .sequences_search import (
     _make_matcher, _coerce_function_designator, _lisp_truthy,
 )
@@ -177,15 +177,52 @@ def map_into(result_sequence, function, *sequences):
     Writes through the protocol's element store, so the destination may be a
     list, a vector or a string. With no source sequences the function is
     called once per element of the destination.
+
+    For sequences with a fill pointer, updates the fill pointer to the number
+    of elements written.
     """
     function = _coerce_function_designator(function)
-    limit = seq_length(result_sequence, 'MAP-INTO')
+
+    # Determine the capacity: for arrays with fill pointers, use the actual
+    # capacity, not the fill-pointer-respecting length
+    capacity = seq_length(result_sequence, 'MAP-INTO')
+    if isinstance(result_sequence, LispArray) and result_sequence.fill_pointer is not None:
+        # Use the total_size (capacity) rather than fill-pointer-respecting length
+        capacity = result_sequence.total_size
+    elif isinstance(result_sequence, lisptype.LispString) and result_sequence.fill_pointer is not None:
+        # Use the backing storage length, not the fill-pointer-respecting length
+        capacity = len(result_sequence._data)
+
+    # Determine how many elements to map
     if sequences:
-        rows = _parallel_elements(sequences, 'MAP-INTO')[:limit]
+        rows = _parallel_elements(sequences, 'MAP-INTO')[:capacity]
     else:
-        rows = [[] for _ in range(limit)]
-    for index, args in enumerate(rows):
-        seq_set(result_sequence, index, function(*args), 'MAP-INTO')
+        rows = [[] for _ in range(capacity)]
+
+    # Map elements. For sequences with a fill pointer, we need to write directly
+    # to the underlying storage to avoid hitting the fill-pointer-respecting access.
+    if isinstance(result_sequence, LispArray) and result_sequence.fill_pointer is not None:
+        # Write directly to the array's data storage
+        for index, args in enumerate(rows):
+            result_sequence.row_major_set(index, function(*args))
+    elif isinstance(result_sequence, lisptype.LispString) and result_sequence.fill_pointer is not None:
+        # Write directly to the string's underlying data storage, converting Characters to str
+        for index, args in enumerate(rows):
+            value = function(*args)
+            if isinstance(value, lisptype.Character):
+                value = value.char
+            result_sequence._data[index] = value
+    else:
+        # Use seq_set for other sequences
+        for index, args in enumerate(rows):
+            seq_set(result_sequence, index, function(*args), 'MAP-INTO')
+
+    # Update fill pointer if the sequence has one
+    if isinstance(result_sequence, LispArray) and result_sequence.fill_pointer is not None:
+        result_sequence.fill_pointer = len(rows)
+    elif isinstance(result_sequence, lisptype.LispString) and result_sequence.fill_pointer is not None:
+        result_sequence.fill_pointer = len(rows)
+
     return result_sequence
 
 

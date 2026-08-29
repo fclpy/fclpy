@@ -33,7 +33,12 @@ def _irrational(real_fn, complex_fn, x):
     if isinstance(x, complex):
         return complex_fn(x)
     try:
-        return real_fn(x)
+        result = real_fn(x)
+        # Preserve integer type for integer zeros: if x is an integer 0
+        # and result is 0.0, return 0 instead to maintain type consistency
+        if isinstance(x, int) and result == 0.0 and x == 0:
+            return 0
+        return result
     except ValueError:
         return complex_fn(complex(x))
 

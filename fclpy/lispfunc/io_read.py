@@ -225,9 +225,16 @@ def read_byte(stream, eof_error_p=True, eof_value=None):
     """
     target = resolve_input_stream(stream)
     if isinstance(target, Stream) and target.binary:
-        raw = target.file_obj.read(target.byte_width)
-        if raw and len(raw) == target.byte_width:
-            return int.from_bytes(raw, 'big', signed=target.byte_signed)
+        # Use stream's read_byte method if available (e.g., for composite streams)
+        if hasattr(target, 'read_byte') and callable(getattr(target, 'read_byte')):
+            result = target.read_byte()
+            if result is not None:
+                return result
+        # Fall back to direct file_obj access
+        if target.file_obj:
+            raw = target.file_obj.read(target.byte_width)
+            if raw and len(raw) == target.byte_width:
+                return int.from_bytes(raw, 'big', signed=target.byte_signed)
     if _supplied_true(eof_error_p):
         raise lisptype.LispEndOfFileError(target, "READ-BYTE")
     return eof_value

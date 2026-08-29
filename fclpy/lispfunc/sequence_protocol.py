@@ -360,6 +360,32 @@ _VECTOR_TYPES = frozenset((
 _CHARACTER_ELEMENT_TYPES = frozenset(('CHARACTER', 'BASE-CHAR', 'STANDARD-CHAR', 'EXTENDED-CHAR'))
 
 
+def _is_bit_element_type(designator):
+    """Check if a type designator represents a bit element type.
+
+    BIT is (UNSIGNED-BYTE 1), so (VECTOR (UNSIGNED-BYTE 1)) is a bit vector.
+    """
+    # Simple symbol case
+    name = _type_name(designator) if not isinstance(designator, (lisptype.lispCons, list, tuple)) else None
+    if name == 'BIT':
+        return True
+
+    # Compound type case: check if it's (UNSIGNED-BYTE 1)
+    if isinstance(designator, (lisptype.lispCons, list, tuple)):
+        try:
+            elements = seq_elements(designator, '')
+            if len(elements) >= 2:
+                head = _type_name(elements[0]) if not isinstance(elements[0], (lisptype.lispCons, list, tuple)) else None
+                if head == 'UNSIGNED-BYTE':
+                    # Second element should be 1
+                    size_elem = elements[1]
+                    if size_elem == 1 or (isinstance(size_elem, int) and size_elem == 1):
+                        return True
+        except:
+            pass
+    return False
+
+
 def _type_name(designator):
     """The name of a type designator that is a symbol, string, or Python type."""
     if isinstance(designator, lisptype.LispSymbol):
@@ -376,8 +402,10 @@ def _type_name(designator):
         return 'VECTOR'
     # CLHS 4.2.3: a *class object* is a type specifier, and MAKE-SEQUENCE is
     # routinely handed one (`(make-sequence (class-of v) 1)`). Its name is the
-    # type it denotes.
+    # type it denotes. A class's name is a LispSymbol, not a string.
     name = getattr(designator, 'name', None)
+    if isinstance(name, lisptype.LispSymbol):
+        return name.name.upper()
     return name.upper() if isinstance(name, str) else None
 
 
@@ -438,7 +466,11 @@ def parse_sequence_type(result_type, what='sequence function'):
         return ('LIST', size, element_type)
     if name in _STRING_TYPES or element_type in _CHARACTER_ELEMENT_TYPES:
         return ('STRING', size, element_type)
-    if name in _BIT_VECTOR_TYPES or element_type == 'BIT':
+    # Check if element_type is 'BIT' or if it's a compound type like (UNSIGNED-BYTE 1)
+    # (which represents a bit element type)
+    is_bit = (element_type == 'BIT' or
+              (isinstance(rest, list) and len(rest) > 0 and _is_bit_element_type(rest[0])))
+    if name in _BIT_VECTOR_TYPES or is_bit:
         return ('BIT-VECTOR', size, element_type)
     if name in _VECTOR_TYPES:
         return ('VECTOR', size, element_type)
