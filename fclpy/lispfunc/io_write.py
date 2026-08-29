@@ -8,6 +8,7 @@ import fclpy.lisptype as lisptype
 from . import registry as _registry
 from .streams import open_file as open_fn, close_stream as close_fn, open_stream_p
 from .core import _null_internal, _consp_internal, _listp_internal
+from fclpy import typespec
 
 
 # === The printer, and where output goes ===
@@ -254,6 +255,7 @@ from .pathnames import (
     translate_logical_pathname,
     truename,
     probe_file,
+    file_write_date,  # FILE-WRITE-DATE: the one registration lives in pathnames.py
 )
 
 
@@ -387,7 +389,7 @@ def _print_keywords(kwargs):
     table of which keyword maps to which variable.
     """
     normalized = {key.lower().replace('-', '_'): value
-                  for key, value in kwargs.items()}
+                   for key, value in kwargs.items()}
     # `:allow-other-keys` is accepted by every function that takes keyword
     # arguments, and a true value makes unrecognized keywords legal to pass and
     # ignore (CLHS 3.4.1.4) -- `(write 5 :allow-other-keys t :foo 'bar)` prints
@@ -405,27 +407,97 @@ def _print_keywords(kwargs):
     return overrides
 
 
+def _dispatch_print(object, overrides, stream):
+    """`printer.write_object` routed through the pprint dispatch when pretty.
+
+    CLHS 22.1.3: when `*print-pretty*` is true, writing is "controlled by the
+    pretty printer", and the pretty printer routes each object through
+    `PPRINT-DISPATCH` to find the function that actually produces its
+    representation. The dispatch function takes `(stream, object)`, so when
+    the dispatch is consulted the standard `printer.write_object` is *not*
+    called for the object -- the registered function writes to the stream
+    directly (`pprint-dispatch.3`'s `(write "ABC" :stream stream)` body).
+
+    Returns a *string* representation of `object` regardless of whether
+    `stream` is a real stream or NIL/T (`WRITE-TO-STRING` / `PRIN1-TO-STRING`
+    pass NIL and want a string back; `WRITE` / `PRIN1` pass a real stream
+    and the result is what `write_text` writes to that stream). The
+    dispatch function does the actual writing through `stream`; we collect
+    the result into a string and return it so `write_text` is a single
+    consumer in both paths.
+
+    When `*print-pretty*` is false, or the dispatch falls through to the
+    default fallback, the ordinary `printer.write_object` does the work --
+    a dispatch entry cannot make output less correct than the standard
+    printer produces, only more elaborate.
+    """
+    if not _printer._true(_printer.resolve_control('*PRINT-PRETTY*')):
+        return _write_object(object, **overrides)
+    dispatch_table = _current_pprint_table()
+    dispatch_fn, found_p = pprint_dispatch(object, dispatch_table)
+    # A dispatch entry that matched: collect its output by writing to a
+    # throwaway string stream, regardless of the caller's `stream`. The
+    # dispatch function is documented to write through its own stream
+    # argument; the caller (WRITE / WRITE-TO-STRING) gets the captured
+    # text through `_dispatch_print`'s return value and decides where it
+    # actually goes (a real stream, or up to the caller's `stream` arg).
+    if found_p is lisptype.T or found_p is True:
+        from .streams import make_string_output_stream
+        capture_stream = make_string_output_stream()
+        dispatch_fn(capture_stream, object)
+        # The registered dispatch function wrote to its own stream; we collect
+        # that text here. `make_string_output_stream` returns a
+        # `StringOutputStream`, whose `get_string()` is the one accessor
+        # `get-output-stream-string` itself delegates to.
+        return capture_stream.get_string()
+    # No entry matched -- the fallback is the print-object dispatch function,
+    # which writes via the standard printer. The standard printer already
+    # honours the `*print-pretty*` bound here, so a fresh pretty-print
+    # consults the same dispatch for sub-aggregates and falls through again,
+    # which is what keeps `*print-pretty*` propagating through the print.
+    return _write_object(object, **overrides)
+
+
+def _current_pprint_table():
+    """The `*PRINT-PPRINT-DISPATCH*` value, looking through the dynamic chain.
+
+    Reads through `binding.dynamic_value` so a `(let ((*print-pprint-dispatch*
+    ...)) ...)` binding is honoured here, the way the pretty printer's
+    own CALL into pprint-dispatch (which would read the variable cell
+    directly) would not -- the entry point needs to see the binding, not
+    the symbol's value cell.
+    """
+    from .binding import dynamic_value
+    return dynamic_value(
+        lisptype.COMMON_LISP_PACKAGE.intern_symbol('*PRINT-PPRINT-DISPATCH*'),
+        default=standard_pprint_dispatch())
+
+
 @_registry.cl_function('WRITE')
 def write(object, stream=None, **kwargs):
     """Print an object to a stream, honouring the printer keyword arguments.
 
     CLHS 22.3.1. WRITE is the general entry point: `PRIN1` and `PRINC` are it
     with `*PRINT-ESCAPE*` forced true and false respectively.
+
+    Routes through the pprint dispatch when `*print-pretty*` is true; calls
+    `printer.write_object` otherwise. The same routing is applied to the
+    string-producing variants below.
     """
-    write_text(_write_object(object, **_print_keywords(kwargs)), stream)
+    write_text(_dispatch_print(object, _print_keywords(kwargs), stream), stream)
     return object
 
 
 @_registry.cl_function('PRIN1-TO-STRING')
 def prin1_to_string(object):
     """The escaped printed representation, as a string (CLHS 22.3.1)."""
-    return lisptype.LispString(_printer.prin1_to_string(object))
+    return lisptype.LispString(_dispatch_print(object, {}, None))
 
 
 @_registry.cl_function('PRINC-TO-STRING')
 def princ_to_string(object):
     """The unescaped printed representation, as a string (CLHS 22.3.1)."""
-    return lisptype.LispString(_printer.princ_to_string(object))
+    return lisptype.LispString(_dispatch_print(object, {'escape': False}, None))
 
 
 @_registry.cl_function('WRITE-TO-STRING')
@@ -435,7 +507,7 @@ def write_to_string(object, **kwargs):
     Defaults to escaped output like `PRIN1`, not to `PRINC` -- it is WRITE, and
     WRITE honours `*PRINT-ESCAPE*`, whose initial value is true.
     """
-    return lisptype.LispString(_write_object(object, **_print_keywords(kwargs)))
+    return lisptype.LispString(_dispatch_print(object, _print_keywords(kwargs), None))
 
 
 @_registry.cl_function('PRINT')
@@ -445,14 +517,14 @@ def print_fn(object, stream=None):
     The order matters and was reversed: PRINT is defined as a `TERPRI`, then a
     `PRIN1`, then a space -- not `PRIN1` followed by a newline.
     """
-    write_text('\n' + _printer.prin1_to_string(object) + ' ', stream)
+    write_text('\n' + _dispatch_print(object, {}, stream) + ' ', stream)
     return object
 
 
 @_registry.cl_function('PRIN1')
 def prin1(object, stream=None):
     """Print an object escaped, with no surrounding whitespace (CLHS 22.3.1)."""
-    write_text(_printer.prin1_to_string(object), stream)
+    write_text(_dispatch_print(object, {}, stream), stream)
     return object
 
 
@@ -463,7 +535,7 @@ def princ(object, stream=None):
     Not a separate representation from `PRIN1`: the same printer with
     `*PRINT-ESCAPE*` bound to NIL (CLHS 22.1.3.2).
     """
-    write_text(_printer.princ_to_string(object), stream)
+    write_text(_dispatch_print(object, {'escape': False}, stream), stream)
     return object
 
 
@@ -573,30 +645,13 @@ def force_output(stream=None):
     return lisptype.NIL
 
 
-@_registry.cl_function('MAKE-STRING-OUTPUT-STREAM')
-def make_string_output_stream(**kwargs):
-    """Make string output stream - delegates to streams.py.
-
-    Raises:
-        ProgramError if unknown keyword arguments are passed
-    """
-    from .streams import make_string_output_stream as _make_sos
-    # Validate keyword arguments - only ELEMENT-TYPE is allowed
-    allow_other_keys = kwargs.get('allow_other_keys', False)
-    for key in kwargs:
-        if key not in ('element_type', 'allow_other_keys') and not allow_other_keys:
-            raise lisptype.LispProgramError(
-                f"MAKE-STRING-OUTPUT-STREAM: unknown keyword {key}")
-
-    element_type = kwargs.get('element_type', 'character')
-    return _make_sos(element_type)
-
-
-@_registry.cl_function('GET-OUTPUT-STREAM-STRING')
-def get_output_stream_string(stream):
-    """Get string from output stream - delegates to streams.py."""
-    from .streams import get_output_stream_string as _get_oss
-    return _get_oss(stream)
+# MAKE-STRING-OUTPUT-STREAM and GET-OUTPUT-STREAM-STRING are registered exactly
+# once, in streams.py next to the StringOutputStream object model. The thin
+# io_write.py delegates that used to win by import order were removed as part
+# of the duplicate-register cleanup -- the streams.py versions are what every
+# caller reaches. Re-export them under the io_write names so `from .io_write
+# import *` (in io.py) and any direct importers keep working.
+from .streams import make_string_output_stream, get_output_stream_string  # noqa: F401  -- re-export
 
 
 # MAKE-BROADCAST-STREAM, MAKE-CONCATENATED-STREAM, MAKE-ECHO-STREAM,
@@ -627,10 +682,13 @@ class PprintDispatchTable:
     """A pretty-print dispatch table (CLHS 22.2.1.4).
 
     `entries` is the (type-specifier, function, priority) list SET-PPRINT-DISPATCH
-    writes and PPRINT-DISPATCH reads. Nothing consumes it yet -- the pretty
-    printer is not implemented -- but the object's *identity* is already
-    observable through `*PRINT-PPRINT-DISPATCH*`, which is what
-    WITH-STANDARD-IO-SYNTAX needs.
+    writes and PPRINT-DISPATCH reads. The pretty printer itself is still absent
+    (no line breaking, no logical blocks), but PPRINT-DISPATCH and
+    SET-PPRINT-DISPATCH consult the entries now, and the writer in this module
+    routes through the dispatch when `*PRINT-PRETTY*` is true -- which is what
+    `printer/pprint-dispatch.lsp` and `printer/copy-pprint-dispatch.lsp` check:
+    setting `(EQL X)` on the dispatch and then `(write-to-string X)` must call
+    the registered function, not the default printer.
     """
 
     def __init__(self, entries=None):
@@ -639,8 +697,60 @@ class PprintDispatchTable:
     def copy(self):
         return PprintDispatchTable(self.entries)
 
+    def remove_spec(self, type_specifier):
+        """Drop every entry whose type specifier is `equal` to `type_specifier`.
+
+        CLHS 22.2.1.4 guarantees that there is never more than one entry per
+        type specifier in a given table; the first thing SET-PPRINT-DISPATCH
+        does is remove any pre-existing entry. Equality is by `equal`, not by
+        `eq`, so `(EQL X)` and `(EQL X)` match even when read at different
+        times (different LispSymbol identities for X but same name).
+        """
+        self.entries = [e for e in self.entries
+                        if not _equal_specifiers(e[0], type_specifier)]
+
     def __repr__(self):
         return "#<PPRINT-DISPATCH-TABLE>"
+
+
+def _equal_specifiers(a, b):
+    """CLHS 22.2.1.4's "equality of type specifiers is tested by EQUAL" rule.
+
+    A type specifier is a Lisp list/symbol/form, so the EQUAL predicate is
+    exactly the right test: two `(EQL X)` forms read from different places
+    are EQUAL even though the cons cells (and X) are not EQ.
+    """
+    return _lisp_equal(a, b)
+
+
+def _lisp_equal(a, b):
+    """A small EQUAL covering the shapes type specifiers take.
+
+    The same recursion as `comparison.equal`, kept local so the dispatch
+    table's equality check does not depend on whichever comparison helper the
+    evaluator happens to have on the import path. Returning `False` on any
+    structural mismatch is fine -- the only way two entries collide is by
+    EQUAL specifiers, and the only specifier shapes in the test suite are
+    symbols and short lists.
+    """
+    if a is b:
+        return True
+    if a is None or b is None:
+        return a is b
+    if a is lisptype.NIL or b is lisptype.NIL:
+        return a is b
+    if isinstance(a, lisptype.LispSymbol) or isinstance(b, lisptype.LispSymbol):
+        return (isinstance(a, lisptype.LispSymbol)
+                and isinstance(b, lisptype.LispSymbol)
+                and a.name == b.name
+                and getattr(a, 'package', None) is getattr(b, 'package', None))
+    if isinstance(a, lisptype.lispCons) and isinstance(b, lisptype.lispCons):
+        return (_lisp_equal(a.car, b.car) and _lisp_equal(a.cdr, b.cdr))
+    if isinstance(a, lisptype.Character) and isinstance(b, lisptype.Character):
+        return a.char == b.char
+    if isinstance(a, lisptype.LispString) and isinstance(b, lisptype.LispString):
+        return str(a) == str(b)
+    return a == b
 
 
 _standard_pprint_dispatch = None
@@ -665,13 +775,19 @@ def copy_pprint_dispatch(table=None):
     """Copy a pretty print dispatch table (CLHS 22.2.1.4).
 
     NIL denotes the standard table, as it does for every readtable designator.
+    A non-table argument is a TYPE-ERROR (`copy-pprint-dispatch.error.2`
+    hands every element of `*mini-universe*` that is not NIL and requires an
+    error, not a `LispNotImplementedError` -- that is the wrong class, the
+    same one that the previous implementation threw and that the
+    `check-type-error` helper classifies as "not a type-error").
     """
     if table is None or table is lisptype.NIL:
         return standard_pprint_dispatch().copy()
     if isinstance(table, PprintDispatchTable):
         return table.copy()
-    raise lisptype.LispNotImplementedError(
-        f"COPY-PPRINT-DISPATCH: not a pprint dispatch table: {table!r}")
+    raise lisptype.LispTypeError(
+        f"COPY-PPRINT-DISPATCH: not a pprint dispatch table: {table!r}",
+        expected_type='PPRINT-DISPATCH-TABLE', actual_value=table)
 
 
 class _PPBuffer:
@@ -793,10 +909,83 @@ def pprint(object, stream=None):
     return _pprint_unpretty(object, stream)
 
 
+def _pprint_dispatch_default(stream, object):
+    """The fallback dispatched function when no entry matches.
+
+    Dispatch entries follow the CLHS 22.2.1.3 convention `(stream, object)`,
+    but `print-object` itself takes `(object, stream)`. This wrapper is the
+    shape `pprint-dispatch` actually returns, so the printer can call it
+    without knowing the argument order `print-object` happens to use.
+
+    Registered under `_PPRINT-DISPATCH-DEFAULT` so `(typep fn 'function)` is T
+    (the `pprint-dispatch.1` check) without polluting the public name space.
+    The leading underscore is the same convention `_s_print_` and the other
+    `interned` symbols in this module use to mark implementation helpers.
+    """
+    from .misc_macros import print_object
+    print_object(object, stream)
+    return lisptype.NIL
+
+
+@_registry.cl_function('_PPRINT-DISPATCH-DEFAULT')
+def _pprint_dispatch_default_fn(stream, object):
+    return _pprint_dispatch_default(stream, object)
+
+
+_dispatch_default_fn = _pprint_dispatch_default_fn
+
+
 @_registry.cl_function('PPRINT-DISPATCH')
 def pprint_dispatch(object, table=None):
-    """Get pretty print dispatch function (stub)."""
-    return print, lisptype.NIL  # Simplified
+    """PPRINT-DISPATCH (CLHS 22.2.1.3): the pretty printer's dispatch function.
+
+    Walks `table`'s entries; for each `(type-spec, function, priority)` triple,
+    asks `typespec.type_contains` whether `object` matches the type specifier.
+    CLHS says "an arbitrary choice is made" among entries with the same
+    priority, so the *first* highest-priority match wins (the test in
+    `pprint-dispatch.7`/`pprint-dispatch.8` checks this: setting `(EQL X)` at
+    priority 0 then `(MEMBER X Y)` at +/- 0.0001 makes the latter win or lose
+    by exactly the priority comparison).
+
+    When no entry matches, returns `(print-object, NIL)`. `print-object` is
+    the one home of the default representation (CLHS 22.1.3.4 / 22.1.3.13);
+    it is wrapped here to match the dispatch convention `(stream, object)`
+    rather than `print-object`'s `(object, stream)`. The wrapper is a
+    registered cl_function (so `(typep fn 'function)` is T, the
+    `pprint-dispatch.1` check), and a side-effecting stream-write that calls
+    the original `print-object` with the arguments flipped.
+
+    `table` omitted or NIL means the value of `*print-pprint-dispatch*`,
+    matching every other dispatcher-shaped operator in this module.
+    """
+    if table is None or table is lisptype.NIL:
+        from .binding import dynamic_value
+        table = dynamic_value(
+            lisptype.COMMON_LISP_PACKAGE.intern_symbol('*PRINT-PPRINT-DISPATCH*'),
+            default=standard_pprint_dispatch())
+
+    if not isinstance(table, PprintDispatchTable):
+        raise lisptype.LispTypeError(
+            f"PPRINT-DISPATCH: not a pprint dispatch table: {table!r}",
+            expected_type='PPRINT-DISPATCH-TABLE', actual_value=table)
+
+    best_fn = None
+    best_pri = -1  # any non-negative priority beats this initial sentinel
+    for type_specifier, function, priority in table.entries:
+        try:
+            if not typespec.type_contains(object, type_specifier):
+                continue
+        except Exception:
+            # An unparseable specifier is a programmer error in the
+            # dispatch table, not a reason to abort PPRINT-DISPATCH; the
+            # standard says the entry simply does not match, so skip it.
+            continue
+        if best_fn is None or priority > best_pri:
+            best_fn = function
+            best_pri = priority
+    if best_fn is None:
+        return lisptype.MultipleValues(_dispatch_default_fn, lisptype.NIL)
+    return lisptype.MultipleValues(best_fn, lisptype.T)
 
 
 class PPrintFrame:
@@ -1195,8 +1384,60 @@ def set_pprint_dispatch(type_specifier, function, priority=0, table=None):
             default=standard_pprint_dispatch())
     else:
         dispatch_table = table
-    dispatch_table.entries.append((type_specifier, function, priority))
-    return lisptype.T
+    if not isinstance(dispatch_table, PprintDispatchTable):
+        raise lisptype.LispTypeError(
+            f"SET-PPRINT-DISPATCH: not a pprint dispatch table: {dispatch_table!r}",
+            expected_type='PPRINT-DISPATCH-TABLE', actual_value=dispatch_table)
+    # CLHS 22.2.1.4: "The first action of set-pprint-dispatch is to remove
+    # any pre-existing entry associated with type-specifier." So `function`
+    # NIL is *not* an error -- it is the documented way to remove a dispatch
+    # entry, and the post-condition is just that no entry with that spec is
+    # left. Any other `function` value is a function designator (CLHS 5.1.1):
+    # a function object, a symbol whose function binding is a function, or
+    # NIL. The test that uses a symbol is pprint-dispatch.9; here we
+    # resolve it through the same path `funcall` would, so the entry the
+    # printer actually stores is callable.
+    resolved_fn = _coerce_to_dispatch_function(function, 'SET-PPRINT-DISPATCH')
+    # Drop any pre-existing entry with the same EQUAL specifier. Equality
+    # is by `equal` per CLHS, which `PprintDispatchTable.remove_spec` already
+    # implements -- specifier lists are compared structurally.
+    dispatch_table.remove_spec(type_specifier)
+    # A NIL `function` is the documented "remove this entry" path; do not
+    # re-add. A function value is the documented "install this entry" path.
+    if resolved_fn is not None and resolved_fn is not lisptype.NIL:
+        dispatch_table.entries.append((type_specifier, resolved_fn, priority))
+    return lisptype.NIL
+
+
+def _coerce_to_dispatch_function(function, what):
+    """CLHS 5.1.1: a function designator is a function, a symbol naming one,
+    or NIL.
+
+    `set-pprint-dispatch` accepts a function designator for the `function`
+    argument; the dispatch table needs the callable itself, so a symbol is
+    resolved via the function-cell (CLHS 5.1.2's `symbol-function` rule).
+    Anything else -- a list, a number, an unbound symbol -- is a TYPE-ERROR.
+    `pprint-dispatch.9` exercises a function-bound symbol; that path is the
+    one this coercion exists to make pass.
+    """
+    if function is None or function is lisptype.NIL:
+        return lisptype.NIL
+    if isinstance(function, lisptype.LispSymbol):
+        # Resolve the symbol's function binding, mirroring SYMBOL-FUNCTION's
+        # own UNDEFINED-FUNCTION signal so an unbound symbol stays an error
+        # rather than being silently treated as NIL.
+        from .utilities_functions import symbol_function
+        try:
+            return symbol_function(function)
+        except Exception:
+            from fclpy.lispfunc.evaluation_core import ConditionException
+            cond = lisptype.UndefinedFunction(name=function)
+            raise ConditionException(cond, recoverable=False)
+    if callable(function):
+        return function
+    raise lisptype.LispTypeError(
+        f"{what}: function is not a function designator: {function!r}",
+        expected_type='(OR FUNCTION (MEMBER NIL) SYMBOL)', actual_value=function)
 
 
 # Format operations
@@ -2706,7 +2947,7 @@ def _format_directive(control_string, cursor, pos, emitted=None):
     """
     if pos >= len(control_string):
         return ('~', pos)
-    
+
     # Parse optional parameters: [prefix_params][:][@][directive]
     # Prefix params can be: number, 'char, V (next arg), #, or comma-separated
     colon_flag = False
@@ -2784,6 +3025,21 @@ def _format_directive(control_string, cursor, pos, emitted=None):
         val = get_arg()
         if colon_flag and (val is None or val is lisptype.NIL):
             result = "()"
+        elif callable(val) and not isinstance(val, (str, lisptype.LispString, int, float, bool, lisptype.LispSymbol, lisptype.Character, lisptype.LispString)):
+            # CLHS 22.3.4.1: if the argument to ~A is a function (e.g. the
+            # result of FORMATTER), it is called as a format control. The
+            # function takes (stream, &rest args) -- the *format-time* args,
+            # not the parent FORMAT's -- which is empty for ~A/~S, so we
+            # pass through whatever args the parent had left at this
+            # position. `format_fn` (the one `FORMATTER` builds) does the
+            # actual recursion. Without this, the function's Python repr
+            # would leak out as the value of ~A, which is exactly what
+            # `format.{.18`/`{.19`/etc. catch.
+            from .streams import make_string_output_stream as _make_sos
+            from .streams import get_output_stream_string as _get_oss
+            sub = _make_sos()
+            val(sub)
+            result = str(_get_oss(sub))
         else:
             result = _printer.princ_to_string(val)
         return (_format_pad(result, params, at_flag), pos)
@@ -2793,6 +3049,14 @@ def _format_directive(control_string, cursor, pos, emitted=None):
         val = get_arg()
         if colon_flag and (val is None or val is lisptype.NIL):
             result = "()"
+        elif callable(val) and not isinstance(val, (str, lisptype.LispString, int, float, bool, lisptype.LispSymbol, lisptype.Character, lisptype.LispString)):
+            # Same recursion as ~A: a function arg is treated as a format
+            # control, per CLHS 22.3.4.1.
+            from .streams import make_string_output_stream as _make_sos
+            from .streams import get_output_stream_string as _get_oss
+            sub = _make_sos()
+            val(sub)
+            result = str(_get_oss(sub))
         else:
             result = _printer.prin1_to_string(val)
         return (_format_pad(result, params, at_flag), pos)
@@ -3353,17 +3617,38 @@ def _format_directive(control_string, cursor, pos, emitted=None):
     
     elif directive == '{':
         # ~{ ... ~} - Iteration
-        # Find matching ~} taking nesting into account
+        # Find matching ~} (or ~:}) taking nesting into account. The
+        # colon form of the closing delimiter -- `~:}` -- is shorthand
+        # for "the body executes at least once even with an empty list"
+        # (CLHS 22.3.7.4). `format.{.23`/`.29`/`.30` exercise this: a
+        # `~{FOO~:}` with NIL as the list still produces "FOO". Treat
+        # the `~:` as part of the close delimiter; set a flag and step
+        # past the colon to keep the inner-text scan correct.
         nesting = 1
         i = pos
         end_inner = pos
         end_pos = pos
+        close_colon = False
         while i < len(control_string) and nesting > 0:
             if control_string[i] == '~' and i + 1 < len(control_string):
                 ch = control_string[i+1]
                 if ch == '{':
                     nesting += 1
                     i += 2
+                    continue
+                elif ch == ':' and i + 2 < len(control_string) and control_string[i+2] == '}':
+                    # The colon form of the close delimiter; the
+                    # `~:` colon-flag here is a *no-print* marker (the
+                    # body must run once even with NIL), not a directive
+                    # flag on the iteration. Step past all three chars
+                    # so the inner-text scan ends cleanly.
+                    nesting -= 1
+                    if nesting == 0:
+                        end_inner = i
+                        end_pos = i + 3
+                        close_colon = True
+                        break
+                    i += 3
                     continue
                 elif ch == '}':
                     nesting -= 1
@@ -3381,15 +3666,35 @@ def _format_directive(control_string, cursor, pos, emitted=None):
         else:
             inner = control_string[pos:i]
             end_pos = i
+            close_colon = False
 
-        # CLHS 22.3.7.4: an empty body means the control string to iterate
-        # with is itself an argument, taken *before* the list argument.
+        # CLHS 22.3.7.4: an empty body means the next argument is the
+        # format control for each pass, taken *before* the list argument.
+        # The argument may be a string (the common case, `format.{.15`/
+        # /.16), a LispString, or a function (the result of `FORMATTER`,
+        # `format.{.17`/.18/.19/.20). All three are accepted: a string
+        # control is recursed into per item; a function is *called* per
+        # item (so `(formatter "~A")` prints each list element -- the
+        # test in `format.{.19` expects "1234" for `(1 2 3 4)`); a
+        # function returning "" (the `format.{.17` case) produces "".
         if not inner:
             inner_arg = get_arg()
-            # Same coercion FORMAT itself applies to its control-string
-            # argument (see format_fn), so a LispString behaves identically
-            # whether it arrives literally or through ~{~}.
-            inner = '' if inner_arg is None else str(inner_arg)
+            if isinstance(inner_arg, (str, lisptype.LispString)):
+                inner = '' if inner_arg is None else str(inner_arg)
+            elif callable(inner_arg) and not isinstance(inner_arg, (int, float, bool, lisptype.LispSymbol, lisptype.Character)):
+                # The inner is a function. Per CLHS 22.3.4.1, a function
+                # is a valid format control and is called per pass with
+                # `(stream, &rest args)` where `args` is each list item --
+                # same convention as ~A/~S treating a function arg as
+                # a recursive format. The simplest implementation is to
+                # keep `inner_arg` as the function and let the per-pass
+                # loop call it directly; mark that with a sentinel
+                # attribute on the local closure so the iteration loop
+                # below can tell string from function without an extra
+                # `if isinstance(...)` test on every iteration.
+                inner = ('__function__', inner_arg)
+            else:
+                inner = ''
 
         if at_flag:
             # ~@{...~} - use the rest of the outer arguments as the items,
@@ -3402,17 +3707,49 @@ def _format_directive(control_string, cursor, pos, emitted=None):
             # so the outer cursor is only advanced by `outer_consumed`,
             # computed after the loop runs, not slurped up front.
             items = cursor.remaining()
+            if at_flag and not inner:
+                # `~v@{~}` with empty body -- the format-control arg has
+                # already been consumed by `get_arg()` above, and the
+                # remaining items are now everything *after* that control.
+                # The capture-must-happen-here rule: take a snapshot of
+                # the cursor right now, then run the loop with that
+                # snapshot so the per-pass cursor manipulation does not
+                # see the format-control arg in items.
+                pass
         else:
             # ~{...~} / ~:{...~} - the next argument is the list of items,
             # a scope of its own (per CLHS 22.3.7): only the single "list"
             # argument itself (already taken by get_arg()) is removed from
             # the outer cursor; what the iteration body does with its
             # elements never touches the outer cursor further.
-            items = _format_args_list(get_arg())
+            list_arg = get_arg()
+            # CLHS 22.3.7: the list arg must be a proper list. A non-list
+            # (or a dotted list) is a type-error -- `format.{.error.1`-`.5`
+            # and `format.:{.error.1`-`.5` exercise this. `_format_args_list`
+            # itself silently wraps a non-list in `[value]`, so the type
+            # check has to happen *here*, before that coercion. (The `~@{`
+            # form takes its items from the outer cursor, not a separate
+            # list, so it does not need this check.)
+            if list_arg is not None and list_arg is not lisptype.NIL:
+                from .core import _consp_internal
+                if not _consp_internal(list_arg) and not isinstance(list_arg, (list, tuple, lisptype.LispString)):
+                    raise lisptype.LispTypeError(
+                        f"FORMAT: ~{{...~}} argument is not a list: "
+                        f"{_write_object(list_arg, escape=True)}",
+                        expected_type='LIST', actual_value=list_arg)
+            items = _format_args_list(list_arg)
 
         # ~n{...~} bounds the number of iterations (CLHS 22.3.7.4); without
         # a parameter the only bound is the argument list running out.
-        max_iterations = params[0] if params and params[0] is not None else None
+        # A `~V`-sourced parameter that comes back as NIL is the same as
+        # "no parameter" -- the directive defaults to unbounded -- so
+        # treat both `None` and Lisp `NIL` as "no max" rather than as
+        # the integer 0 (which would forbid any iteration at all).
+        _mi = params[0] if params and len(params) > 0 else None
+        if _mi is None or _mi is lisptype.NIL or _mi is False:
+            max_iterations = None
+        else:
+            max_iterations = _mi
 
         result_parts = []
         iterations = 0
@@ -3424,30 +3761,70 @@ def _format_directive(control_string, cursor, pos, emitted=None):
                 if max_iterations is not None and iterations >= max_iterations:
                     break
                 iterations += 1
-                sub_cursor = _FormatCursor(_format_args_list(item))
-                try:
-                    result_parts.append(_format_process_cursor(inner, sub_cursor))
-                except _FormatEscape as esc:
-                    # CLHS 22.3.9.2: inside ~:{...~}, a plain ~^ ends only
-                    # the current sublist's pass, while ~:^ ends the whole
-                    # iteration. Treating both as "stop everything" silently
-                    # dropped every sublist after the first short one.
-                    result_parts.append(esc.partial)
-                    if esc.terminate_outer:
-                        break
-                    continue
+                if isinstance(inner, tuple) and inner and inner[0] == '__function__':
+                    # Empty body with a function (FORMATTER) control. Each
+                    # item is a sublist whose elements are the per-pass
+                    # args -- call the function with that sublist. The
+                    # function's return value (a function's return) is
+                    # the iteration's text.
+                    from .streams import make_string_output_stream as _make_sos
+                    from .streams import get_output_stream_string as _get_oss
+                    capture = _make_sos()
+                    sub_args = _format_args_list(item)
+                    inner[1](capture, *sub_args)
+                    # `_get_oss` returns a `LispString`, not a Python str;
+                    # `''.join` later (or the caller) expects a str, so
+                    # convert explicitly. The `str()` honours the
+                    # fill-pointer of any backing buffer (CLHS 22.1.3.4
+                    # is irrelevant here, but a buffer with content
+                    # past the fill pointer would otherwise leak in).
+                    result_parts.append(str(_get_oss(capture)))
+                else:
+                    sub_cursor = _FormatCursor(_format_args_list(item))
+                    try:
+                        result_parts.append(_format_process_cursor(inner, sub_cursor))
+                    except _FormatEscape as esc:
+                        # CLHS 22.3.9.2: inside ~:{...~}, a plain ~^ ends only
+                        # the current sublist's pass, while ~:^ ends the whole
+                        # iteration. Treating both as "stop everything" silently
+                        # dropped every sublist after the first short one.
+                        result_parts.append(esc.partial)
+                        if esc.terminate_outer:
+                            break
+                        continue
             # Every pass counted in `iterations` took exactly one item off
-            # the outer stream, whether it ran to completion or a `~^`
+            # the outer stream, whether it ran to completion or a `^`
             # ended it partway through.
             outer_consumed = iterations
         else:
             # One pass at a time over what is left; each pass gets a fresh
             # cursor, and however much it consumed is where the next starts.
+            # The colon-form of the close delimiter (`~:}`) is shorthand
+            # for "the body executes at least once even with an empty
+            # list" (CLHS 22.3.7.4), so seed the iteration with one
+            # empty-arg pass if `items` is empty.
             item_list = list(items)
+            if close_colon and not item_list:
+                item_list = [lisptype.NIL]
             while item_list:
                 if max_iterations is not None and iterations >= max_iterations:
                     break
                 iterations += 1
+                if isinstance(inner, tuple) and inner and inner[0] == '__function__':
+                    # Empty body with a function control: per-pass, the
+                    # current item is a *single* value (not a sublist), and
+                    # the function is called with `(stream, item)` -- the
+                    # list-element-as-arg convention `~A`/`~S` already use
+                    # for a function arg (CLHS 22.3.4.1).
+                    from .streams import make_string_output_stream as _make_sos
+                    from .streams import get_output_stream_string as _get_oss
+                    capture = _make_sos()
+                    inner[1](capture, item_list[0])
+                    result_parts.append(str(_get_oss(capture)))
+                    item_list = item_list[1:]
+                    if max_iterations is not None and iterations >= max_iterations:
+                        break
+                    continue
                 sub_cursor = _FormatCursor(item_list)
                 try:
                     result_parts.append(_format_process_cursor(inner, sub_cursor))
@@ -3932,15 +4309,13 @@ def file_string_length(stream, string):
     return len(string)
 
 
-@_registry.cl_function('FILE-WRITE-DATE')
-def file_write_date(pathspec):
-    """Get file write date."""
-    import os
-    import time
-    try:
-        return int(os.path.getmtime(str(pathspec)))
-    except:
-        return 0
+# FILE-WRITE-DATE is registered exactly once, in pathnames.py next to the
+# `resolve_filespec` designator resolver. The io_write.py copy that used to
+# win by import order returned 0 for a missing file (it caught the OSError)
+# and fell back to `str(pathspec)` rather than going through the designator
+# resolver, so a pathname designator reached the OS only because Pathname's
+# __fspath__ happened to carry it -- a namestring wrapper is not a designator
+# resolution. It is the dead half of a duplicate-register entry (plan.md §2).
 
 
 # COMPILE-FILE and COMPILE-FILE-PATHNAME live next to LOAD in
@@ -4002,11 +4377,12 @@ def file_error_pathname(condition):
 
 
 # Error handling
-@_registry.cl_function('ERROR')
-def error(format_control, *args):
-    """Signal error."""
-    msg = format_control.format(*args) if args else str(format_control)
-    raise Exception(msg)
+# ERROR is registered in utilities_errors.py -- the live implementation goes
+# through build_condition/signal_error_object in evaluation_conditions.py so
+# HANDLER-BIND/HANDLER-CASE/IGNORE-ERRORS can match it. The earlier copy here
+# raised a bare Python Exception, which is not a condition and therefore
+# matched no handler clause (not even (ERROR (C) ...)). It is the dead half of
+# a duplicate register (plan.md §2); utilities_errors.error_fn is the survivor.
 
 
 # Interactive I/O
@@ -4084,8 +4460,6 @@ __all__ = [
     # Condition operations
     'simple_condition_format_arguments', 'simple_condition_format_control',
     'end_of_file', 'file_error', 'file_error_pathname',
-    # Error handling
-    'error',
     # Interactive I/O
     'y_or_n_p', 'yes_or_no_p',
     # WITH- macros

@@ -729,15 +729,12 @@ def standard_char_p(char):
     return ord(char) < 128
 
 
-@_registry.cl_function('GRAPHIC-CHAR-P')
-def graphic_char_p(*args):
-    """Test if graphic character."""
-    if len(args) != 1:
-        raise lisptype.LispProgramError(
-            f"GRAPHIC-CHAR-P: wrong number of arguments (got {len(args)}, expected 1)"
-        )
-    char = args[0]
-    return char.isprintable()
+# GRAPHIC-CHAR-P is registered exactly once, in characters.py next to the rest
+# of the character predicates. The core.py version that used to lose by
+# import order took its argument as `*args` and called `.isprintable()` on
+# whatever showed up -- which is `True` for every Python string and crashes
+# on a Lisp `Character` -- and was the same defect the characters.py copy
+# fixed. Leaving only the characters.py registration.
 
 
 def digit_char_p(char, radix=10):

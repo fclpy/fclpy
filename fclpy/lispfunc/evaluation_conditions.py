@@ -418,6 +418,28 @@ def make_condition_of_type(type_designator, arguments):
         condition_class = _condition_class_for_name(type_designator.name)
         if condition_class is None:
             return None
+    elif _consp_internal(type_designator):
+        # A compound condition type specifier (CLHS 9.1.2.1's
+        # "condition type specifier" is not restricted to a bare name).
+        # CLHS does not say which instance a compound specifier builds --
+        # ansi-test marks make-condition.3/.4 `:ansi-spec-problem` for
+        # exactly that -- so this is a documented implementation-defined
+        # choice: build an instance of the *first* component that names a
+        # known condition type. For an OR the result genuinely satisfies
+        # the specifier (an instance of a disjunct is an instance of the
+        # OR); for an AND that is not decidable in general, and the
+        # ansi-test's own subtypep guards accept the first-conjunct build.
+        # Anything else still falls through to the caller's error, and a
+        # component that names no known type keeps the designator unknown.
+        head = car(type_designator)
+        head_name = head.name if isinstance(head, (lisptype.LispSymbol, lisptype.lispKeyword)) else None
+        if head_name in ('OR', 'AND'):
+            for item in _lisp_list_items(cdr(type_designator)):
+                if isinstance(item, (lisptype.LispSymbol, lisptype.lispKeyword)):
+                    built = make_condition_of_type(item, arguments)
+                    if built is not None:
+                        return built
+        return None
     else:
         return None
 
@@ -889,10 +911,37 @@ def _signal_warning_object(condition):
 
 
 def signal_warning(datum, arguments):
-    """WARN's runtime behavior given an unevaluated (DATUM &rest ARGUMENTS)
+    """WARN's runtime behavior given an evaluated (DATUM &rest ARGUMENTS)
     condition designator: build it (`build_condition`, the same dispatch
-    ERROR/CERROR/SIGNAL use) and delegate to `_signal_warning_object`."""
+    ERROR/CERROR/SIGNAL use), validate it (CLHS 9.2), delegate to
+    `_signal_warning_object`.
+
+    Two validations the tests pin, both CLHS 9.2's "is signaled of type
+    type-error" clauses:
+    * the condition WARN signals must actually be a WARNING -- the symbol
+      datums `CONDITION`/`SIMPLE-CONDITION` name *types* that are not
+      warnings (warn.12/.13), and instances of CONDITION/
+      SIMPLE-CONDITION/SIMPLE-ERROR are not warnings either (warn.16/.17/
+      .18). Previously such a datum was signaled as-is: a non-warning
+      condition offered to WARNING handlers, which no conforming program
+      could be expected to handle.
+    * a condition *instance* datum takes no format arguments -- the
+      initargs were already fixed when MAKE-CONDITION built it (warn.14).
+    The TYPE-ERROR goes through `signal_error_object`, so it is a real
+    signaled condition: `signals-error` sees it, and a caller's handler
+    could catch it.
+    """
     condition = build_condition(datum, arguments, lisptype.SimpleWarning)
+    if not isinstance(condition, lisptype.Warning):
+        signal_error_object(lisptype.TypeError(
+            datum=condition,
+            expected_type='warning',
+            message=f"WARN: the condition designated is not a warning: {condition}"))
+    if isinstance(datum, lisptype.Condition) and arguments:
+        signal_error_object(lisptype.TypeError(
+            datum=datum,
+            expected_type='format-control',
+            message=f"WARN: format arguments were supplied with a condition datum: {datum}"))
     return _signal_warning_object(condition)
 
 
@@ -1712,15 +1761,38 @@ def eval_handler_bind(form, env):
 def _run_handler_case_clause(clause, condition, env):
     """Evaluate one HANDLER-CASE clause body, binding its optional variable to
     the condition. Runs after unwinding, with the handlers disestablished.
+
+    The clause's variable binding is an implicit LET over the body, so a
+    body-level ``(declare (special var))`` must make it bind the symbol's
+    value cell for the clause's extent -- handler-case.11 binds the condition
+    to a special ``*C*`` exactly this way and then reads it from a helper
+    called outside the binding form. The binding therefore goes through
+    `BindingFrame` with the clause body in hand, the same question every
+    other binding form asks, rather than a bare lexical `add_variable`.
     """
     from .evaluation_core import eval
+    from .binding import BindingFrame
 
     var_list = car(cdr(clause))
     clause_body = cdr(cdr(clause))
 
     new_env = lisptype.Environment(parent=env)
     if _consp_internal(var_list):
-        new_env.add_variable(car(var_list), condition)
+        var = car(var_list)
+        frame = BindingFrame(new_env, body=clause_body, bound_vars=[var],
+                             defer_free_declarations=True)
+        with frame:
+            frame.bind(var, condition)
+            # No init forms are evaluated in this environment, so the free
+            # declarations (if any) can be installed immediately after the
+            # parameters are bound, mirroring make_ordinary_function's order.
+            frame.install_free_declarations()
+            result = lisptype.NIL
+            body = clause_body
+            while _consp_internal(body):
+                result = eval(car(body), new_env)
+                body = cdr(body)
+            return result
 
     result = lisptype.NIL
     while _consp_internal(clause_body):
@@ -1738,6 +1810,10 @@ def eval_handler_case(form, env):
     Evaluates expression. If a condition of one of the specified types is
     signaled, the stack unwinds back to this form and the matching clause's
     body is evaluated, with `var` (if given) bound to the condition.
+
+    A `(:no-error lambda-list body*)` clause is the success path (CLHS 9.5.2):
+    when the expression returns normally, the clause is called as an ordinary
+    function of the expression's *values*. See `_run_no_error_clause`.
 
     Implementation: HANDLER-CASE establishes a handler cluster like
     HANDLER-BIND does, whose handlers immediately transfer control back here
@@ -1761,23 +1837,32 @@ def eval_handler_case(form, env):
     tag = HandlerCaseTag()
     handlers = []
     clause_list = []
+    no_error_clause = None
     current = clauses
     while _consp_internal(current):
         clause = car(current)
         if _consp_internal(clause):
-            clause_list.append(clause)
+            head = car(clause)
+            if lisptype.is_keyword(head) and head.name == 'NO-ERROR':
+                # Not a handler: the success-path clause. It must not appear
+                # in `clause_list` -- the THROW/ConditionException backstops
+                # below match against that list, and a :no-error clause is
+                # not a handler for anything (CLHS 9.5.2).
+                no_error_clause = clause
+            else:
+                clause_list.append(clause)
 
-            def make_handler(the_clause):
-                def transfer(condition):
-                    raise HandlerCaseTransfer(tag, the_clause, condition)
-                return transfer
+                def make_handler(the_clause):
+                    def transfer(condition):
+                        raise HandlerCaseTransfer(tag, the_clause, condition)
+                    return transfer
 
-            handlers.append((car(clause), make_handler(clause)))
+                handlers.append((head, make_handler(clause)))
         current = cdr(current)
 
     try:
         with _HandlerCluster(handlers):
-            return eval(expression, env)
+            result = eval(expression, env)
     except HandlerCaseTransfer as transfer:
         if transfer.tag is not tag:
             # Belongs to an enclosing HANDLER-CASE; let it through.
@@ -1814,6 +1899,38 @@ def eval_handler_case(form, env):
             if _condition_matches(car(clause), condition):
                 return _run_handler_case_clause(clause, condition, env)
         raise
+    else:
+        # Success: the handlers of THIS form are disestablished (the `with`
+        # has exited) before the :no-error clause runs, so an error the
+        # :no-error body signals escapes to enclosing handlers instead of
+        # being caught by this form's own clauses -- handler-case.25.
+        if no_error_clause is not None:
+            return _run_no_error_clause(no_error_clause, result, env)
+        return result
+
+
+def _run_no_error_clause(clause, values, env):
+    """Evaluate HANDLER-CASE's :no-error clause (CLHS 9.5.2).
+
+    The clause is an ordinary function of the protected form's *values*: it
+    is built by `make_ordinary_function` -- the one ordinary-lambda-list
+    constructor -- so a wrong value count is a PROGRAM-ERROR exactly as it is
+    for any call (handler-case.23/.24), and &aux parameters and free special
+    declarations behave exactly as they do in any lambda (handler-case.29).
+    Calling through `funcall` is what turns the binder's arity
+    `LispProgramError` into the PROGRAM-ERROR condition the test observes.
+    """
+    from .evaluation_core import funcall
+    from .evaluation_special_forms import make_ordinary_function
+
+    var_list = car(cdr(clause))
+    body = cdr(cdr(clause))
+    fn = make_ordinary_function(var_list, body, env)
+    if isinstance(values, lisptype.MultipleValues):
+        args = list(values.values)
+    else:
+        args = [values]
+    return funcall(fn, *args)
 
 
 def eval_ignore_errors(form, env):

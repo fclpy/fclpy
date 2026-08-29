@@ -479,9 +479,18 @@ def rationalp(obj):
 # Complex number operations
 @_registry.cl_function('IMAGPART')
 def imagpart(number):
-    """Return imaginary part of complex number."""
+    """Return imaginary part of complex number.
+
+    For a real, the imaginary part is 0 (CLHS 12.1.5.3). The *type* of that 0
+    is not specified, but `imagpart.4` compares it to `(* 0 x)`, and the
+    product is float when `x` is float, so imagpart must match. Returning
+    0.0 for float `x` is the only way `(eql (imagpart x) (* 0 x))` holds
+    across the mixed `*reals*` set the test feeds us.
+    """
     if isinstance(number, complex):
         return number.imag
+    if isinstance(number, float):
+        return 0.0
     return 0
 
 

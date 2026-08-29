@@ -462,6 +462,12 @@ def element_type_of(value):
     if isinstance(value, LispArray):
         return value.element_type
     if isinstance(value, (lisptype.LispString, str)):
+        # A LispString may have been constructed with an explicit element-type
+        # (e.g. by a string-output stream with `:element-type nil`); honor it
+        # before falling back to CHARACTER. A bare Python `str` has no such
+        # attribute and stays CHARACTER.
+        if isinstance(value, lisptype.LispString) and value.element_type is not None:
+            return value.element_type
         return CHARACTER_TYPE
     _require_array(value, 'ARRAY-ELEMENT-TYPE')
     return T_TYPE

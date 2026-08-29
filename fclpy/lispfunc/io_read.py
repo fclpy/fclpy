@@ -469,11 +469,12 @@ def read_preserving_whitespace(stream=None, eof_error_p=True, eof_value=None, re
                             "READ-PRESERVING-WHITESPACE", preserve_whitespace=True)
 
 
-@_registry.cl_function('MAKE-STRING-INPUT-STREAM')
-def make_string_input_stream(string, start=0, end=None):
-    """Make string input stream - delegates to streams.py."""
-    from .streams import make_string_input_stream as _make_sis
-    return _make_sis(string, start, end)
+# MAKE-STRING-INPUT-STREAM is registered exactly once, in streams.py next to
+# the StringInputStream object model. The thin io_read.py delegate that used
+# to compete for the name is removed (standing rule 3 -- two registrations
+# mean import order, not correctness, decides which runs). Re-exported here so
+# `from .io_read import *` importers keep working.
+from .streams import make_string_input_stream  # noqa: F401  -- re-export
 
 
 # Every operator below resolves its readtable argument through the one

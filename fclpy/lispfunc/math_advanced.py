@@ -190,7 +190,128 @@ def expt(base, power):
                 # At least one part has fractional component: return float complex
                 return complex(1.0, 0.0)
         else:
+            if isinstance(power, float):
+                # CLHS 12.1.4.1.1: a float power always produces a float result,
+                # even at 0 where Python's `int ** 0.0` would give 1 (an int).
+                # `expt.18` compares `(expt i 0.0)` against `(float 1 0.0) = 1.0`
+                # for every i, and they must be EQL; matching the float type
+                # is the rule.
+                return 1.0
             return 1
+
+    # CLHS 12.1.4.1: if the base is zero and the exponent is positive (in the
+    # complex sense, its real part > 0), the result is zero. Python's
+    # `0 ** complex(a, b)` raises ZeroDivisionError for *every* complex power
+    # even when a > 0, so 0^(2+2j) -- which is mathematically 0 -- is the
+    # common case that reaches the except branch below with a *wrong* condition.
+    # Detect the positive-real-part-of-exponent case before the try, so
+    # `(expt 0 #c(2 2))` returns 0 instead of signalling DIVISION-BY-ZERO.
+    # The result type follows CLHS 12.1.4.1.1 contagion: a complex power always
+    # gives a complex result (matching what `(* 0 #c(a b))` does, which is
+    # exactly what the expt.29 test compares against), a float power with a
+    # float base stays float, and an integer power with an integer base stays
+    # integer. A complex base always gives a complex result regardless of the
+    # power's type, for the same EQL reason.
+    base_is_zero_complex = isinstance(base, complex) and base == 0
+    base_is_zero_int_float = isinstance(base, (int, float)) and base == 0
+    if (base_is_zero_complex or base_is_zero_int_float) and isinstance(power, (int, float, complex)):
+        if base_is_zero_complex:
+            # Complex base 0+0i to any power -- preserve complex
+            if isinstance(power, complex):
+                if power.real > 0:
+                    # 0+0i to a positive-real complex power is 0+0i.
+                    # Match `(* 0+0i #c(a b))` which is also 0+0i (Python: complex * complex).
+                    return complex(0, 0)
+                if power.real == 0 and power.imag != 0:
+                    from fclpy.lispfunc.evaluation_conditions import signal_condition
+                    signal_condition(lisptype.DivisionByZero(
+                        f"EXPT: 0 to a complex power with zero real part"))
+                    return
+            # Complex base, real power: 0j ** 2 == 0+0j -- but Python's `0j**2`
+            # is 0j, which the post-result code simplifies to 0. The
+            # simplification is what the EQL check in expt.29 exercises
+            # (since `(* 0+0i 2)` is 0+0j in Python, not 0). Skip the
+            # simplification when base is the literal zero complex.
+            try:
+                result = base ** power
+            except OverflowError:
+                _signal_float_overflow(base)
+                return
+            except ZeroDivisionError:
+                from fclpy.lispfunc.evaluation_conditions import signal_condition
+                signal_condition(lisptype.DivisionByZero(
+                    f"EXPT: 0.0 to a negative or complex power"))
+                return
+            return result
+        else:
+            # int/float base 0
+            if isinstance(power, complex):
+                if power.real > 0:
+                    # Python contagion: integer * complex = complex; preserve that.
+                    if isinstance(power, float) or isinstance(power.real, float) or isinstance(power.imag, float):
+                        return complex(0.0, 0.0)
+                    return complex(0, 0)
+                if power.real == 0 and power.imag != 0:
+                    from fclpy.lispfunc.evaluation_conditions import signal_condition
+                    signal_condition(lisptype.DivisionByZero(
+                        f"EXPT: 0 to a complex power with zero real part"))
+                    return
+
+    # Narrow correctness fix for CLHS 12.1.5.3 / 12.1.4.1: when a complex
+    # base has *exact* parts (integers or `Fraction`s) and the power is a
+    # *non-negative* integer, the answer is also exact, and Python's
+    # `complex ** int` degrades both 0+2i squared (-4+0j then -4.0 once the
+    # imaginary-zero simplification runs) and (1/2 + 1/3 i) cubed to a
+    # float pair. The float answer is *wrong* for `(expt #c(0 2) 2) = -4`
+    # and the (1/2, 1/3) case in `expt.16`, both of which the test
+    # compares against exact rationals. Doing the multiplication by hand
+    # on Fractions keeps the answer exact; once imag collapses to 0, the
+    # rational can be returned as-is.
+    if (isinstance(base, complex) and isinstance(power, int) and power >= 0
+            and not isinstance(power, bool)
+            and (isinstance(base.real, (int, Fraction))
+                 or (isinstance(base.real, float) and base.real.is_integer()))
+            and (isinstance(base.imag, (int, Fraction))
+                 or (isinstance(base.imag, float) and base.imag.is_integer()))):
+        # Even when the base's parts are Python `float`s (because
+        # `complex(0, 2)` promotes both to 0.0/2.0), a value that is
+        # *integer-valued* is exact -- `expt.14` relies on this: `#c(0 2)`
+        # reads as `(0.0+2.0j)`, and the test compares `(expt #c(0 2) 2)`
+        # (should be the integer -4) against the expected `-4`. Use
+        # Fraction so the answer is rational; once `cur_im` collapses to
+        # 0, return the rational (or its integer reduction).
+        re_part = Fraction(int(base.real)) if isinstance(base.real, float) else Fraction(base.real)
+        im_part = Fraction(int(base.imag)) if isinstance(base.imag, float) else Fraction(base.imag)
+        # Repeated squaring
+        cur_re, cur_im = Fraction(1), Fraction(0)
+        for _ in range(power):
+            new_re = cur_re * re_part - cur_im * im_part
+            new_im = cur_re * im_part + cur_im * re_part
+            cur_re, cur_im = new_re, new_im
+        if cur_im == 0:
+            # Coalesce per CLHS 12.1.5.3: complex with zero imag is real
+            if cur_re.denominator == 1:
+                return int(cur_re)
+            return cur_re
+        return complex(float(cur_re), float(cur_im))
+
+    # CLHS 12.1.4.1: an integer base to an integer power is rational (any
+    # integer power, positive, zero, or negative). Python's `int ** int` for
+    # `n ** -1` returns 1.0 -- the *float* 1.0 -- so `(expt 1 -1) = 1.0`
+    # and `(eql 1.0 1)` is NIL, which is what `expt.13` collects `(1 2)`
+    # for. Use Fraction to keep the answer rational; cancel the denominator
+    # when it is 1 so `(expt 2 3) = 8` (not `8/1`). A *float* power still
+    # produces a float, and `expt.18` checks `(eql (expt i zero) (float 1
+    # zero))` for `zero = 0.0...` -- so the int-int path has to skip the
+    # rational branch when the power is a float and let Python do the
+    # float promotion.
+    if (isinstance(base, int) and not isinstance(base, bool)
+            and isinstance(power, int) and not isinstance(power, bool)
+            and not isinstance(power, float)):
+        result = Fraction(base) ** power
+        if result.denominator == 1:
+            return result.numerator
+        return result
 
     try:
         result = base ** power

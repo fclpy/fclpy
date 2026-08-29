@@ -813,19 +813,34 @@ class StringInputStream(Stream):
 
 
 class StringOutputStream(Stream):
-    """Output stream that writes to a string."""
-    
+    """Output stream that writes to a string (CLHS 21.2).
+
+    `:element-type` may be a subtype of `character` (e.g. `character`,
+    `base-char`) or `nil` -- a `nil` element-type means the stream cannot hold
+    any characters (writes are no-ops) and `get-output-stream-string` returns a
+    zero-length `LispString` whose element-type is `nil`, per CLHS 21.2.1's
+    "can hold no elements" rule. The element-type is propagated onto the
+    returned LispString so `array-element-type` answers the right type
+    regardless of how many characters have been accumulated.
+    """
+
     def __init__(self, element_type='character'):
         """Create a string output stream.
-        
+
         Args:
-            element_type: Type of elements ('character' or 'base-char')
+            element_type: 'character', 'base-char', or nil (no elements)
         """
         self._buffer = _io.StringIO()
+        self._requested_element_type = element_type
         super().__init__("<string-output-stream>", self._buffer, 'output', element_type)
-    
+
     def write_char(self, char):
         """Write a single character to the stream."""
+        if self._requested_element_type is None or self._requested_element_type is lisptype.NIL:
+            # CLHS 21.2: ":element-type nil" means the stream can hold no
+            # elements, so writes are no-ops (the position is unchanged too,
+            # matching a zero-width stream).
+            return char
         if isinstance(char, lisptype.Character):
             char = chr(char.code)
         elif not isinstance(char, str) or len(char) != 1:
@@ -833,9 +848,11 @@ class StringOutputStream(Stream):
         self._buffer.write(char)
         self.position += 1
         return char
-    
+
     def write_sequence(self, sequence):
         """Write a string or sequence to the stream."""
+        if self._requested_element_type is None or self._requested_element_type is lisptype.NIL:
+            return sequence
         if isinstance(sequence, str):
             self._buffer.write(sequence)
             self.position += len(sequence)
@@ -844,15 +861,22 @@ class StringOutputStream(Stream):
             self._buffer.write(text)
             self.position += len(text)
         return sequence
-    
+
     def get_string(self):
-        """Get the accumulated string and clear the buffer."""
+        """Get the accumulated string and clear the buffer.
+
+        The returned `LispString` carries the stream's element-type so
+        `array-element-type` answers the right type even when the stream
+        accumulated no characters (a `nil` element-type yields a
+        zero-length `LispString` whose `array-element-type` is `NIL`,
+        per CLHS 21.2.1).
+        """
         value = self._buffer.getvalue()
         # Reset the buffer for continued use
         self._buffer.seek(0)
         self._buffer.truncate(0)
         self.position = 0
-        return value
+        return lisptype.LispString(value, element_type=self._requested_element_type)
     
     def peek_string(self):
         """Get the accumulated string without clearing the buffer."""

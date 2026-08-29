@@ -56,7 +56,7 @@ __all__ = [
     'stream_element_type', 'stream_external_format',
     'simple_condition_format_arguments', 'simple_condition_format_control',
     'end_of_file', 'file_error', 'file_error_pathname',
-    'error', 'y_or_n_p', 'yes_or_no_p',
+    'y_or_n_p', 'yes_or_no_p',
     'with_open_file',    # Symbol-safe names for operators
     '_s_print_',
 ]

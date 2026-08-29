@@ -188,7 +188,12 @@ class TestErrorWithFormatterDoesNotCrash:
     def test_format_with_function_control_string_and_nil_destination(self, env):
         result = eval_string(
             "(let ((fmt (formatter \"hi\"))) (format nil fmt))", env)
-        assert isinstance(result, str)
+        # FORMAT to a NIL destination returns a string. It used to return a
+        # bare Python `str` (standing rule 2: a Python object appearing as a
+        # Lisp value is a bug); the string-output stream model now returns
+        # the LispString CLHS 21.2 requires, so assert on Lisp string-ness
+        # and content rather than on the Python type.
+        assert isinstance(result, lisptype.LispString) and str(result) == "hi"
 
 
 class TestLoopAsSynonym:

@@ -926,7 +926,25 @@ def slot_value(instance, slot_name):
     returning `(values 1 2 3)`) is reduced to its primary value here, the
     same rule `primary_value` applies at every other single-value context.
     """
-    if not isinstance(instance, classes.LispInstance):
+    if isinstance(instance, classes.LispInstance):
+        pass  # ordinary CLOS path below
+    elif isinstance(instance, lisptype.Condition) and _condition_slot_table(type(instance)):
+        # A DEFINE-CONDITION-created instance: CLHS 9.1/9.4 make condition
+        # classes standard-objects with slot-value-readable slots, and
+        # restart-case.37 exercises exactly that (a HANDLER-BIND handler
+        # reading a condition's slot). The condition object model stores
+        # slot values in `Condition._slots` with the merged slot table on
+        # the class, so `slot-value` reads through the same table the
+        # :READER accessors use. Built-in conditions carry no slot table
+        # and keep the type-error below -- they have no user slots.
+        name = _slot_name_str(slot_name)
+        if name in _condition_slot_table(type(instance)):
+            value = instance.get_slot(name)
+            return value if value is not None else lisptype.NIL
+        raise lisptype.LispTypeError(
+            f"SLOT-VALUE: the slot {name} is not defined for {type(instance).__name__}",
+            expected_type='slot-name', actual_value=slot_name)
+    else:
         raise lisptype.LispTypeError(f"SLOT-VALUE: not an instance: {instance}")
     _update_if_obsolete(instance)
     name = _slot_name_str(slot_name)
@@ -953,6 +971,20 @@ def slot_value(instance, slot_name):
         return lisptype.primary_value(classes.call_generic_function(
             _protocol_gf('SLOT-UNBOUND'), [cls, instance, slot_name]))
     return instance.slot_values[name]
+
+
+def _condition_slot_table(condition_class):
+    """The merged DEFINE-CONDITION slot table for a condition class, or None.
+
+    Lazy bridge to `evaluation_conditions._condition_all_slots` -- the slot
+    model's one home -- kept a function so the import stays inside the call
+    (evaluation_conditions and misc_clos reference each other's registries).
+    """
+    from .evaluation_conditions import _condition_all_slots
+    try:
+        return _condition_all_slots(condition_class)
+    except AttributeError:
+        return None
 
 
 @_registry.cl_function('(SETF SLOT-VALUE)')

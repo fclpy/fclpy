@@ -2522,8 +2522,26 @@ def eval_loop(form, env):
             for spec, value in zip(group, values):
                 _bind_varspec(frame, spec['var'], value)
 
+        # CLHS 6.1.2.1: the for-as clauses are initialized *sequentially* --
+        # each driver's FROM/TO/BY forms are evaluated while the PRECEDING
+        # drivers' variables are already bound, because a later clause may
+        # read one of them (=.6: `for i from 5 to 10000 by 17 for j from 2
+        # to i by 19`). `_init_driver` evaluates the forms, so each driver's
+        # variable must be bound before the next driver is initialized.
+        # `for =` is excluded: its init form keeps evaluating where it always
+        # did, on the first in-loop bind, because that is after the INTO
+        # bindings (CLHS 6.1.1.7) and its current timing is what the suite
+        # passes with. `_bound_at_init` tells the in-loop bind to skip the
+        # first pass for these drivers -- re-binding them would be harmless
+        # for every kind except `for =`, whose step form must not run early.
+        # A driver that starts exhausted (an empty list, an empty table)
+        # binds nothing here and the loop exits before the body, exactly as
+        # when the first binding happened inside the while.
         for d in iteration_drivers:
             _init_driver(loop_env, d)
+            if d['kind'] != 'for-equals' and _driver_has_value(d):
+                _bind_driver(frame, d)
+                d['_bound_at_init'] = True
 
         # INTO names a variable local to the loop (CLHS 6.1.3), so bind it
         # through the frame: the accumulation must not assign through to an
@@ -2556,7 +2574,14 @@ def eval_loop(form, env):
                     # variable its own driver supplies -- (loop for x = 1 then (* 2 x)
                     # while (< x 20) ...) -- so testing first sees either an unbound
                     # variable on the first iteration or a stale one thereafter.
+                    # A driver bound at init (`_bound_at_init`, popped here) skips
+                    # exactly its first bind: its variable already holds the value
+                    # its own init produced, and re-binding a `for =` driver on the
+                    # first iteration would evaluate the *step* form and clobber
+                    # that value with the second one.
                     for d in iteration_drivers:
+                        if d.pop('_bound_at_init', False):
+                            continue
                         _bind_driver(frame, d)
 
                     if _termination_break(loop_env, after_body=False):
