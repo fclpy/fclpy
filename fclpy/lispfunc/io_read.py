@@ -74,19 +74,31 @@ def streamp(obj):
 
 @_registry.cl_function('INPUT-STREAM-P')
 def input_stream_p(stream):
-    """INPUT-STREAM-P: can `stream` be used for input (CLHS 21.1)?"""
-    if isinstance(stream, Stream):
-        return lisptype.lisp_bool(stream.direction in ('input', 'io'))
-    return lisptype.NIL
+    """INPUT-STREAM-P: can `stream` be used for input (CLHS 21.1)?
+
+    Raises:
+        LispTypeError if stream is not a stream
+    """
+    if not isinstance(stream, Stream):
+        raise lisptype.LispTypeError(
+            f"INPUT-STREAM-P: not a stream: {stream!r}",
+            expected_type='STREAM', actual_value=stream)
+    return lisptype.lisp_bool(stream.direction in ('input', 'io'))
 
 
 @_registry.cl_function('INTERACTIVE-STREAM-P')
 def interactive_stream_p(stream):
-    """INTERACTIVE-STREAM-P: is `stream` connected to an interactive terminal (CLHS 21.1)?"""
-    if isinstance(stream, Stream):
-        isatty = getattr(stream.file_obj, 'isatty', None)
-        return lisptype.lisp_bool(bool(isatty and isatty()))
-    return lisptype.NIL
+    """INTERACTIVE-STREAM-P: is `stream` connected to an interactive terminal (CLHS 21.1)?
+
+    Raises:
+        LispTypeError if stream is not a stream
+    """
+    if not isinstance(stream, Stream):
+        raise lisptype.LispTypeError(
+            f"INTERACTIVE-STREAM-P: not a stream: {stream!r}",
+            expected_type='STREAM', actual_value=stream)
+    isatty = getattr(stream.file_obj, 'isatty', None)
+    return lisptype.lisp_bool(bool(isatty and isatty()))
 
 
 class _StreamFileAdapter:
@@ -222,8 +234,17 @@ def read_byte(stream, eof_error_p=True, eof_value=None):
     per element instead of unconditionally one -- the previous version
     always read a single byte, which was wrong for any element type wider
     than 8 bits (`(unsigned-byte 12)`, `(unsigned-byte 100)`, ...).
+
+    Raises:
+        LispTypeError if stream is not a stream
     """
-    target = resolve_input_stream(stream)
+    # stream is required, so it must be a stream (not NIL or T)
+    if not isinstance(stream, Stream):
+        raise lisptype.LispTypeError(
+            f"READ-BYTE: not a stream: {stream!r}",
+            expected_type='STREAM', actual_value=stream)
+
+    target = stream
     if isinstance(target, Stream) and target.binary:
         # Use stream's read_byte method if available (e.g., for composite streams)
         if hasattr(target, 'read_byte') and callable(getattr(target, 'read_byte')):
@@ -279,11 +300,15 @@ def peek_char(peek_type=None, stream=None, eof_error_p=True, eof_value=None, rec
                 return lisptype.Character(ch)
             _consume()
     elif _supplied_true(peek_type):
+        # Get current readtable to check syntax types
+        readtable = _rt.get_current_readtable()
         while True:
             ch = _peek()
             if ch is None:
                 return _eof()
-            if not ch.isspace():
+            # Check if character is NOT whitespace according to the readtable's syntax types
+            syntax = readtable.syntax_type(ch)
+            if syntax != _rt.SYNTAX_WHITESPACE:
                 return lisptype.Character(ch)
             _consume()
     else:
@@ -314,7 +339,18 @@ def listen(stream=None):
 
 @_registry.cl_function('CLEAR-INPUT')
 def clear_input(stream=None):
-    """CLEAR-INPUT: discard any buffered input (CLHS 21.2)."""
+    """CLEAR-INPUT: discard any buffered input (CLHS 21.2).
+
+    Raises:
+        LispTypeError if stream is not a stream, NIL, or T
+    """
+    # Accept NIL, T, or a stream; anything else is an error
+    if stream is not None and stream is not True and stream is not lisptype.NIL and stream is not lisptype.T:
+        if not isinstance(stream, Stream):
+            raise lisptype.LispTypeError(
+                f"CLEAR-INPUT: not a stream: {stream!r}",
+                expected_type='(OR STREAM (MEMBER NIL T))', actual_value=stream)
+
     target = resolve_input_stream(stream)
     if isinstance(target, Stream):
         target._pending = []

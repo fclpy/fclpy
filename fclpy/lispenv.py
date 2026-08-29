@@ -90,6 +90,52 @@ def setup_standard_environment():
         _registry = None
 
     if _registry:
+        # Clean up incorrectly registered constants and type specifiers. These
+        # should be variables, not functions. They were mistakenly decorated
+        # with @cl_function in misc_macros.py, math_advanced.py,
+        # utilities_functions.py, and misc_clos.py.
+        _type_and_const_symbols_to_remove = {
+            # Type specifiers (should be variables, not functions)
+            'FIXNUM', 'KEYWORD', 'INTEGER', 'DOUBLE-FLOAT', 'SINGLE-FLOAT',
+            'SHORT-FLOAT', 'EXTENDED-CHAR', 'HASH-TABLE', 'GENERIC-FUNCTION',
+            'FILE-STREAM', 'FILE-ERROR', 'END-OF-FILE', 'FLOATING-POINT-INEXACT',
+            'FLOATING-POINT-INVALID-OPERATION', 'FLOATING-POINT-OVERFLOW',
+            'FLOATING-POINT-UNDERFLOW', 'SIMPLE-BIT-VECTOR', 'SIMPLE-VECTOR',
+            'SIMPLE-STRING', 'TYPE-ERROR', 'SIMPLE-ERROR', 'METHOD-COMBINATION',
+            'TYPE', 'NIL', 'T',
+            # Type/class names (should be class objects, not functions)
+            'BUILT-IN-CLASS', 'STANDARD-CLASS', 'STANDARD-OBJECT',
+            'STRUCTURE-CLASS', 'STRUCTURE-OBJECT',
+            # Constants (should be variables, not functions)
+            'MOST-POSITIVE-FIXNUM', 'MOST-NEGATIVE-FIXNUM', 'PI',
+            'LEAST-POSITIVE-DOUBLE-FLOAT', 'LEAST-NEGATIVE-DOUBLE-FLOAT',
+            'MOST-POSITIVE-DOUBLE-FLOAT', 'MOST-NEGATIVE-DOUBLE-FLOAT',
+            'LEAST-POSITIVE-SHORT-FLOAT', 'LEAST-NEGATIVE-SHORT-FLOAT',
+            'MOST-POSITIVE-SHORT-FLOAT', 'MOST-NEGATIVE-SHORT-FLOAT',
+            'LEAST-POSITIVE-SINGLE-FLOAT', 'LEAST-NEGATIVE-SINGLE-FLOAT',
+            'MOST-POSITIVE-SINGLE-FLOAT', 'MOST-NEGATIVE-SINGLE-FLOAT',
+            'LEAST-POSITIVE-LONG-FLOAT', 'LEAST-NEGATIVE-LONG-FLOAT',
+            'MOST-POSITIVE-LONG-FLOAT', 'MOST-NEGATIVE-LONG-FLOAT',
+            'LEAST-POSITIVE-NORMALIZED-DOUBLE-FLOAT', 'LEAST-NEGATIVE-NORMALIZED-DOUBLE-FLOAT',
+            'LEAST-POSITIVE-NORMALIZED-LONG-FLOAT', 'LEAST-NEGATIVE-NORMALIZED-LONG-FLOAT',
+            'LEAST-POSITIVE-NORMALIZED-SHORT-FLOAT', 'LEAST-NEGATIVE-NORMALIZED-SHORT-FLOAT',
+            'LEAST-POSITIVE-NORMALIZED-SINGLE-FLOAT', 'LEAST-NEGATIVE-NORMALIZED-SINGLE-FLOAT',
+            # Limit constants (should be variables, not functions)
+            'ARRAY-DIMENSION-LIMIT', 'ARRAY-RANK-LIMIT', 'ARRAY-TOTAL-SIZE-LIMIT',
+            'CALL-ARGUMENTS-LIMIT', 'CHAR-CODE-LIMIT', 'MULTIPLE-VALUES-LIMIT',
+            # Declaration identifiers (should not be functions)
+            'DYNAMIC-EXTENT', 'FTYPE', 'NOTINLINE', 'INLINE', 'OPTIMIZE',
+            'SPECIAL', 'LAMBDA-LIST-KEYWORDS', 'LAMBDA-PARAMETERS-LIMIT',
+            'IGNORABLE', 'IGNORE',
+        }
+        for _sym_to_remove in _type_and_const_symbols_to_remove:
+            if _sym_to_remove in _registry.function_registry:
+                del _registry.function_registry[_sym_to_remove]
+            # Also clean from special_registry if present (declaration keywords,
+            # etc. that were misregistered as special operators)
+            if _sym_to_remove in _registry.special_registry:
+                del _registry.special_registry[_sym_to_remove]
+
         # Functions - intern into COMMON-LISP (exported) only when the name
         # is one of the 978 canonical ANSI symbols; everything else the
         # registry auto-discovered (implementation helpers, dead/duplicate

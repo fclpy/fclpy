@@ -3,10 +3,13 @@
 import functools
 from .core import cons, car, cdr, atom, _consp_internal
 from . import registry as _registry
-from .arrays import LispArray, nonnegative_integer as _nonnegative_integer
+from .arrays import (
+    LispArray, nonnegative_integer as _nonnegative_integer,
+    _check_other_keys as _check_sequence_other_keys
+)
 from .sequence_protocol import (
     seq_elements, seq_length, bounding_indices, make_lisp_list, rebuild_like,
-    build_sequence, seq_set, list_cells, list_elements, list_tail,
+    build_sequence, seq_set, list_cells, list_elements, list_tail, _type_name,
 )
 from .sequences_search import _coerce_function_designator, _lisp_truthy
 import fclpy.lisptype as lisptype
@@ -22,6 +25,9 @@ from .core import _null_internal, _listp_internal
 # 2026-08-15 full run wedged at 27GB with no diagnostic, and no in-evaluator
 # loop watchdog can see it because it is a single call, not an iteration.
 CONSTRUCTIBLE_LIMIT = 1 << 30
+
+# Sentinel for optional arguments
+_UNSUPPLIED = object()
 
 
 def _check_constructible(size, what):
@@ -460,13 +466,17 @@ def make_list(size, *, initial_element=None):
 
 
 @_registry.cl_function('MAKE-SEQUENCE')
-def make_sequence(sequence_type, size, **kwargs):
+def make_sequence(sequence_type, size, *, initial_element=_UNSUPPLIED,
+                  allow_other_keys=None, **other_keys):
     """Create a sequence of the given type and size (CLHS 17.3).
 
     The type was previously compared against the *lower-case Python strings*
     `'list'`/`'vector'`/`'string'`, which no Lisp type designator ever is, so
     every branch fell through to the same Python list.
     """
+    # Validate keywords
+    _check_sequence_other_keys(other_keys, allow_other_keys, 'MAKE-SEQUENCE')
+
     if isinstance(size, lisptype.lispCons):
         size = size.car
     # Same defect as MAKE-LIST: `[x] * int(size)` is an unbounded allocation
@@ -475,8 +485,22 @@ def make_sequence(sequence_type, size, **kwargs):
     _check_constructible(size, 'MAKE-SEQUENCE')
     from .sequence_protocol import parse_sequence_type
     kind, _size, _element_type = parse_sequence_type(sequence_type, 'MAKE-SEQUENCE')
-    initial_element = kwargs.get('initial_element', None)
-    if initial_element is None:
+
+    # Validate type constraints: NULL can only have length 0, CONS must have length > 0
+    if kind == 'LIST':
+        # Check for NULL type constraint
+        if _type_name(sequence_type) == 'NULL' and size > 0:
+            raise lisptype.LispTypeError(
+                f"MAKE-SEQUENCE: cannot create a sequence of type NULL with size {size}",
+                expected_type="NIL", actual_value=size)
+        # Check for CONS type constraint
+        if _type_name(sequence_type) == 'CONS' and size == 0:
+            raise lisptype.LispTypeError(
+                f"MAKE-SEQUENCE: cannot create a sequence of type CONS with size 0",
+                expected_type="CONS (non-empty)", actual_value=size)
+
+    # Determine initial element
+    if initial_element is _UNSUPPLIED:
         # CLHS leaves the contents unspecified without :initial-element; a
         # string must still be filled with characters rather than NIL.
         initial_element = lisptype.Character(' ') if kind == 'STRING' else (

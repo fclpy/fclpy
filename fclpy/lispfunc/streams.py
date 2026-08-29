@@ -668,7 +668,7 @@ def set_stream_position(stream, position):
 
 
 @_registry.cl_function('READ-SEQUENCE')
-def read_sequence(sequence, stream, start=0, end=None):
+def read_sequence(sequence, stream, *, start=0, end=None):
     """READ-SEQUENCE: fill `sequence` elementwise from `stream` (CLHS 21.2).
 
     Routed through `seq_length`/`bounding_indices`/`seq_set` -- the one
@@ -724,16 +724,21 @@ def read_sequence(sequence, stream, start=0, end=None):
 @_registry.cl_function('OPEN-STREAM-P')
 def open_stream_p(stream):
     """Test if a stream is open.
-    
+
     Args:
         stream: Stream to test
-    
+
     Returns:
         T if open, NIL otherwise
+
+    Raises:
+        LispTypeError if stream is not a stream
     """
-    if isinstance(stream, Stream):
-        return lisptype.lisp_bool(stream.is_open())
-    return lisptype.NIL
+    if not isinstance(stream, Stream):
+        raise lisptype.LispTypeError(
+            f"OPEN-STREAM-P: not a stream: {stream!r}",
+            expected_type='STREAM', actual_value=stream)
+    return lisptype.lisp_bool(stream.is_open())
 
 
 # String Stream Classes for Task 8.8

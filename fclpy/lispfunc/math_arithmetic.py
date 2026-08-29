@@ -751,6 +751,8 @@ def mask_field(bytespec, integer):
 @_registry.cl_function('=')
 def _s_eq_(*args):
     """Numeric equality operator (=)."""
+    if len(args) == 0:
+        raise lisptype.LispProgramError("= requires at least one argument")
     if len(args) < 2:
         return lisptype.T
     # Validate all args are numbers
@@ -763,6 +765,8 @@ def _s_eq_(*args):
 @_registry.cl_function('<')
 def _s_lt_(*args):
     """Less than operator (<)."""
+    if len(args) == 0:
+        raise lisptype.LispProgramError("< requires at least one argument")
     if len(args) < 2:
         return lisptype.T
     # Validate all args are real numbers
@@ -777,6 +781,8 @@ def _s_lt_(*args):
 @_registry.cl_function('>')
 def _s_gt_(*args):
     """Greater than operator (>)."""
+    if len(args) == 0:
+        raise lisptype.LispProgramError("> requires at least one argument")
     if len(args) < 2:
         return lisptype.T
     # Validate all args are real numbers
@@ -791,6 +797,8 @@ def _s_gt_(*args):
 @_registry.cl_function('<=')
 def _s_lt__s_eq_(*args):
     """Less than or equal operator (<=)."""
+    if len(args) == 0:
+        raise lisptype.LispProgramError("<= requires at least one argument")
     if len(args) < 2:
         return lisptype.T
     # Validate all args are real numbers
@@ -805,6 +813,8 @@ def _s_lt__s_eq_(*args):
 @_registry.cl_function('>=')
 def _s_gt__s_eq_(*args):
     """Greater than or equal operator (>=)."""
+    if len(args) == 0:
+        raise lisptype.LispProgramError(">= requires at least one argument")
     if len(args) < 2:
         return lisptype.T
     # Validate all args are real numbers
@@ -819,6 +829,8 @@ def _s_gt__s_eq_(*args):
 @_registry.cl_function('/=')
 def _s_slash__s_eq_(*args):
     """Not equal operator (/=)."""
+    if len(args) == 0:
+        raise lisptype.LispProgramError("/= requires at least one argument")
     if len(args) < 2:
         return lisptype.T
     for i in range(len(args)):
@@ -923,14 +935,12 @@ def _s_one_s_minus_(x):
 # `(typep most-positive-fixnum 'fixnum)` must be true -- so a literal in this
 # file is a second home for one fact, and the *third* copy (a local
 # `2**29 - 1` inside `comparison.typep`) is what made that form answer NIL.
-@_registry.cl_function('MOST-POSITIVE-FIXNUM')
 def most_positive_fixnum():
     """Most positive fixnum (CLHS 12.1.1.1)."""
     from fclpy.typespec import MOST_POSITIVE_FIXNUM
     return MOST_POSITIVE_FIXNUM
 
 
-@_registry.cl_function('MOST-NEGATIVE-FIXNUM')
 def most_negative_fixnum():
     """Most negative fixnum (CLHS 12.1.1.1)."""
     from fclpy.typespec import MOST_NEGATIVE_FIXNUM

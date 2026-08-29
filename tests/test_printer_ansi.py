@@ -131,7 +131,11 @@ class TestPrintEscape:
     @pytest.mark.parametrize('form,prin1_out,princ_out', [
         ('"ab"', '"ab"', 'ab'),
         (r'#\a', r'#\a', 'a'),
-        (r'#\Space', r'#\Space', ' '),
+        # Space prints bare under PRIN1 too (CLHS 22.1.3.2, ansi-test
+        # printer/print-characters.lsp PRINT.CHAR.3/.4) -- it is the one
+        # standard character name excluded from the "must use the named
+        # form" rule.
+        (r'#\Space', '#\\ ', ' '),
         (':foo', ':FOO', 'FOO'),
     ])
     def test_escape_distinguishes_prin1_from_princ(self, form, prin1_out, princ_out):

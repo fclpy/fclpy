@@ -518,19 +518,20 @@ CHARACTER_NAMES = {
 def character_name(char):
     """The printed name of `char` after ``#\\``.
 
-    CHARACTER_NAMES takes priority over ``isprintable()`` — CLHS assigns
-    Space (among others) a standard name, and Python's ``str.isprintable()``
-    considers the ASCII space printable, so checking printability first
-    printed a bare space after ``#\\`` instead of ``Space``. ``#\\ `` does not
-    read back reliably (the reader sees a character literal immediately
-    followed by whitespace), which is exactly the regression this order
-    prevents.
+    ``isprintable()`` takes priority over ``CHARACTER_NAMES`` for every name
+    except Newline. `printer/print-characters.lsp`'s `PRINT.CHAR.3`/`.4`/`.9`
+    (under ``*print-readably*`` NIL, CLHS 22.1.3.6's non-readable mode, where
+    the printer is explicitly *not* required to produce something that reads
+    back) print Space as a bare space -- `"#\\ "` -- not `#\\Space`, and
+    `.3`'s loop over `+base-chars+` explicitly excludes `#\\Space` from the
+    "named form required" check. Newline is the one exception CLHS still
+    names explicitly (`.5`/`.9`), so it keeps its standard name even though
+    Python considers it non-printable anyway.
     """
-    if char in CHARACTER_NAMES:
-        return CHARACTER_NAMES[char]
-    # Printable characters with no standard name are printed directly.
     if char.isprintable():
         return char
+    if char in CHARACTER_NAMES:
+        return CHARACTER_NAMES[char]
     # Fallback for non-printable characters without standard names is
     # implementation-defined; we use Unicode hex notation. This cannot be read
     # back, so it violates *PRINT-READABLY*, which is handled in _write_character.
@@ -1004,6 +1005,29 @@ def _write_hash_table(value, ctx):
     return f'#<HASH-TABLE :TEST {value.test} :COUNT {value.count()}>'
 
 
+def _write_random_state(value, ctx):
+    """Print a random state, readably if possible.
+
+    CLHS does not specify a readable syntax for random states, but the ANSI
+    test suite expects them to be printable and readable. We represent them
+    as quoted tuples that can be used as the seed argument to MAKE-RANDOM-STATE.
+    """
+    # Under readably, try to make it readable
+    if ctx.readably:
+        try:
+            state = value.getstate()
+            # state is a tuple of (index, tuple-of-values)
+            # Write as: #.(MAKE-RANDOM-STATE '(state-tuple...))
+            state_form = _write(list(state), ctx, 1)
+            return f"#.(MAKE-RANDOM-STATE '{state_form})"
+        except (AttributeError, TypeError, ValueError):
+            # Fallback if we can't get the state
+            pass
+
+    # Unreadable form
+    return f'#<RANDOM-STATE {id(value):x}>'
+
+
 def _unreadable(value, kind):
     """An ``#<...>`` representation for an object with no readable syntax.
 
@@ -1105,6 +1129,10 @@ def _write(value, ctx, depth):
     from fclpy.lispfunc.pathnames import Pathname
     if isinstance(value, Pathname):
         return '#P' + _write_string(value.namestring(), ctx.with_escape(True))
+
+    from fclpy.lispfunc.utilities_system import RandomState
+    if isinstance(value, RandomState):
+        return _write_random_state(value, ctx)
 
     if isinstance(value, lisptype.Restart):
         # CLHS 9.1: under PRINC (escape false), a restart's printed

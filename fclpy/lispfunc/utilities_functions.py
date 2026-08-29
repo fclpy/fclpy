@@ -538,12 +538,9 @@ def coerce(object, result_type):
         if head_name == 'COMPLEX':
             if isinstance(object, complex):
                 return object
-            elif isinstance(object, float):
-                # Only floats become complex with an imaginary part
+            elif isinstance(object, (float, int, Fraction)):
+                # Convert to complex: integer/float/ratio become complex with imaginary part 0
                 return complex(object, 0)
-            elif isinstance(object, (int, Fraction)):
-                # Integers and ratios stay as-is (they are already valid COMPLEX)
-                return object
             else:
                 raise lisptype.LispTypeError(f"COERCE: cannot convert to COMPLEX",
                                             expected_type=result_type,
@@ -609,16 +606,13 @@ def coerce(object, result_type):
                                         expected_type="FLOAT",
                                         actual_value=object)
 
-    # COMPLEX - convert to complex number (floats only; ints/ratios stay as-is)
+    # COMPLEX - convert to complex number
     if type_name == 'COMPLEX':
         if isinstance(object, complex):
             return object
-        elif isinstance(object, float):
+        elif isinstance(object, (float, int, Fraction)):
+            # Convert to complex: integer/float/ratio become complex with imaginary part 0
             return complex(object, 0)
-        elif isinstance(object, (int, Fraction)):
-            # Integers and ratios are valid COMPLEX (with imaginary part 0),
-            # but COERCE does not change their representation
-            return object
         else:
             raise lisptype.LispTypeError(f"COERCE: cannot convert to COMPLEX",
                                         expected_type="COMPLEX",

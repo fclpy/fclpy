@@ -589,10 +589,11 @@ class Tokenizer:
             while self._peek() and self._peek().isalpha():
                 char_str += self._advance()
         else:
-            # Single-character literal (e.g. #\\A, #\\|)
-            # Do not accept whitespace or delimiter as the character
-            if next_ch.isspace():
-                raise ValueError(f"Malformed character literal (whitespace) at line {start_line}, col {start_col}")
+            # Single-character literal (e.g. #\A, #\|, #\ (space), #\5).
+            # CLHS 2.4.8: a non-alphabetic character immediately after the
+            # backslash is always read as-is, whitespace included -- #\<space>
+            # is exactly the syntax printer/print-characters.lsp's PRINT.CHAR.4
+            # requires PRIN1 to produce for the space character.
             char_str += self._advance()
 
         return Token(TokenType.CHARACTER, char_str, start_line, start_col)

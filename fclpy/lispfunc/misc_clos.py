@@ -811,27 +811,22 @@ def class_name(class_obj):
 # The generic function dispatch mechanism makes it callable for SETF forms.
 
 
-@_registry.cl_function('BUILT-IN-CLASS')
 def built_in_class():
     return lisptype.T
 
 
-@_registry.cl_function('STANDARD-CLASS')
 def standard_class():
     return lisptype.T
 
 
-@_registry.cl_function('STANDARD-OBJECT')
 def standard_object():
     return lisptype.T
 
 
-@_registry.cl_function('STRUCTURE-CLASS')
 def structure_class():
     return lisptype.NIL
 
 
-@_registry.cl_function('STRUCTURE-OBJECT')
 def structure_object():
     return lisptype.NIL
 

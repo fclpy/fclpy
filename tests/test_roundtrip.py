@@ -165,10 +165,14 @@ class TestRoundTripCharacters:
         assert isinstance(reread, Character)
     
     def test_roundtrip_character_space(self):
-        """Test roundtrip of space character."""
+        """Space prints bare (`#\\ `, CLHS 22.1.3.2 / ansi-test PRINT.CHAR.4),
+        not as `#\\Space` -- and the bare form reads back to the same
+        character (CLHS 2.4.8: a non-alphabetic character right after `#\\`,
+        whitespace included, stands for itself)."""
         obj, printed, reread = RoundTripTestCase.test_roundtrip("#\\Space")
         assert obj.char == " "
-        assert printed == "#\\Space"
+        assert printed == "#\\ "
+        assert reread.char == " "
     
     def test_roundtrip_character_newline(self):
         """Test roundtrip of newline character."""

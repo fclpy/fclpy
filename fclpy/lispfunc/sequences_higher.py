@@ -317,9 +317,10 @@ def mapl(function, *lists):
 
 
 @_registry.cl_function('REDUCE')
-def reduce_fn(function, sequence, key=None, from_end=None, start=None, end=None, initial_value=None, **kwargs):
+def reduce_fn(function, sequence, *, key=None, from_end=None, start=None, end=None,
+              initial_value=None, allow_other_keys=None, **other_keys):
     """Reduce sequence using function.
-    
+
     Args:
         function: The function to apply
         sequence: The sequence to reduce
@@ -329,9 +330,10 @@ def reduce_fn(function, sequence, key=None, from_end=None, start=None, end=None,
         end: Ending index (default length)
         initial_value: Initial value for accumulator
     """
-    # Handle keyword args that might be passed as :initial-value etc.
-    if 'initial-value' in kwargs:
-        initial_value = kwargs['initial-value']
+    # Validate keywords
+    from .arrays import _check_other_keys as _check_reduce_other_keys
+    _check_reduce_other_keys(other_keys, allow_other_keys, 'REDUCE')
+
     has_initial = initial_value is not None
 
     function = _coerce_function_designator(function)

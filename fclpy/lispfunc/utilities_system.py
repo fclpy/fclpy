@@ -457,10 +457,18 @@ class RandomState:
             self._random.setstate(seed._random.getstate())
         elif isinstance(seed, (int, float)):
             self._random.seed(seed)
-        elif isinstance(seed, tuple):
-            # Try to restore from state tuple
+        elif isinstance(seed, (tuple, list)):
+            # Try to restore from state tuple or list
+            # Convert lists to tuples recursively since Python's setstate expects nested tuples
             try:
-                self._random.setstate(seed)
+                def to_tuple(obj):
+                    """Recursively convert lists to tuples."""
+                    if isinstance(obj, list):
+                        return tuple(to_tuple(item) for item in obj)
+                    return obj
+
+                seed_tuple = to_tuple(seed)
+                self._random.setstate(seed_tuple)
             except (TypeError, ValueError):
                 pass
     
@@ -565,6 +573,7 @@ def make_random_state(state=None):
             - NIL or omitted: Copy current *RANDOM-STATE*
             - T: Create fresh state from entropy
             - RandomState: Copy that state
+            - Tuple: Restore from a previously saved state (implementation-defined)
 
     Returns:
         A new RandomState object.
@@ -579,13 +588,20 @@ def make_random_state(state=None):
         # Copy the provided state
         return RandomState(state)
     else:
-        # CLHS: an unrecognized state designator is a TYPE-ERROR, not a
-        # generic error condition -- MAKE-RANDOM-STATE.ERROR.4 probes this
-        # with `check-type-error`, which requires the condition signaled to
-        # actually be a TYPE-ERROR.
-        raise lisptype.LispTypeError(
-            f"MAKE-RANDOM-STATE: invalid state argument: {state}",
-            expected_type="(OR (MEMBER NIL T) RANDOM-STATE)",
+        # Try to pass it to RandomState, which may recognize it as a valid seed
+        # (e.g., Python's random state tuple). If RandomState can't handle it,
+        # it will be silently ignored and a fresh state created, which matches
+        # the CLHS spec for implementation-defined state designators.
+        try:
+            return RandomState(state)
+        except (TypeError, ValueError):
+            # CLHS: an unrecognized state designator is a TYPE-ERROR, not a
+            # generic error condition -- MAKE-RANDOM-STATE.ERROR.4 probes this
+            # with `check-type-error`, which requires the condition signaled to
+            # actually be a TYPE-ERROR.
+            raise lisptype.LispTypeError(
+                f"MAKE-RANDOM-STATE: invalid state argument: {state}",
+                expected_type="(OR (MEMBER NIL T) RANDOM-STATE)",
             actual_value=state)
 
 

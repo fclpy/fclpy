@@ -858,7 +858,6 @@ def integer_type():
     return 'INTEGER'
 
 
-@_registry.cl_function('FIXNUM')
 def fixnum_type():
     """Get FIXNUM type designator."""
     return 'FIXNUM'

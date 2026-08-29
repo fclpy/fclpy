@@ -1190,23 +1190,35 @@ def eval(form, env=None):
                                 # (SETF (ELT seq i) val) - works on lists and vectors
                                 seq = eval(car(place_args), env)
                                 idx = eval(car(cdr(place_args)), env)
+                                try:
+                                    idx = int(idx)
+                                except (ValueError, TypeError):
+                                    raise lisptype.LispTypeError(
+                                        f"SETF ELT: index must be an integer",
+                                        expected_type="INTEGER", actual_value=idx)
                                 if _consp_internal(seq):
                                     # List - walk to nth element
                                     current = seq
                                     for _ in range(idx):
                                         if not _consp_internal(current):
-                                            raise lisptype.LispError("SETF ELT: index out of bounds")
+                                            raise lisptype.LispTypeError(
+                                                f"SETF ELT: index {idx} is out of bounds",
+                                                expected_type=f"valid list index", actual_value=idx)
                                         current = cdr(current)
                                     if _consp_internal(current):
                                         current.car = result
                                     else:
-                                        raise lisptype.LispError("SETF ELT: index out of bounds")
+                                        raise lisptype.LispTypeError(
+                                            f"SETF ELT: index {idx} is out of bounds",
+                                            expected_type=f"valid list index", actual_value=idx)
                                 else:
                                     # Vector/array/LispString - use indexing
                                     try:
                                         seq[idx] = result
                                     except (TypeError, IndexError) as e:
-                                        raise lisptype.LispError(f"SETF ELT: {e}")
+                                        raise lisptype.LispTypeError(
+                                            f"SETF ELT: {e}",
+                                            expected_type="valid sequence index", actual_value=idx)
                             elif op_name == 'GETHASH':
                                 # Through the hash table's own write primitive,
                                 # which is what consults the table's test.

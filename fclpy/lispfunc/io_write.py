@@ -259,17 +259,37 @@ from .pathnames import (
 
 @_registry.cl_function('CLEAR-OUTPUT')
 def clear_output(stream=None):
-    """Clear output from stream."""
-    return None
+    """CLEAR-OUTPUT: discard buffered output (CLHS 21.2).
+
+    Raises:
+        LispTypeError if stream is not a stream, NIL, or T
+    """
+    from .streams import Stream
+    # Accept NIL, T, or a stream; anything else is an error
+    if stream is not None and stream is not True and stream is not lisptype.NIL and stream is not lisptype.T:
+        if not isinstance(stream, Stream):
+            raise lisptype.LispTypeError(
+                f"CLEAR-OUTPUT: not a stream: {stream!r}",
+                expected_type='(OR STREAM (MEMBER NIL T))', actual_value=stream)
+
+    # For now, this is a no-op - output goes directly to Python's file object
+    # with its own buffering that we don't control at the Lisp level
+    return lisptype.NIL
 
 
 @_registry.cl_function('OUTPUT-STREAM-P')
 def output_stream_p(stream):
-    """OUTPUT-STREAM-P: can `stream` be used for output (CLHS 21.1)?"""
+    """OUTPUT-STREAM-P: can `stream` be used for output (CLHS 21.1)?
+
+    Raises:
+        LispTypeError if stream is not a stream
+    """
     from .streams import Stream
-    if isinstance(stream, Stream):
-        return lisptype.lisp_bool(stream.direction in ('output', 'io'))
-    return lisptype.NIL
+    if not isinstance(stream, Stream):
+        raise lisptype.LispTypeError(
+            f"OUTPUT-STREAM-P: not a stream: {stream!r}",
+            expected_type='STREAM', actual_value=stream)
+    return lisptype.lisp_bool(stream.direction in ('output', 'io'))
 
 
 # OPEN-STREAM-P is streams.py's, not registered a second time here: that
@@ -512,8 +532,18 @@ def finish_output(stream=None):
     `streams/open.lsp`'s OPEN.66/OPEN.67/OPEN.OUTPUT.30/OPEN.IO.30 do:
     write to `s`, `(finish-output s)`, then `(open s :direction :input)` and
     expect to read what was just written.
+
+    Raises:
+        LispTypeError if stream is not a stream, NIL, or T
     """
     from .streams import Stream
+    # Accept NIL, T, or a stream; anything else is an error
+    if stream is not None and stream is not True and stream is not lisptype.NIL and stream is not lisptype.T:
+        if not isinstance(stream, Stream):
+            raise lisptype.LispTypeError(
+                f"FINISH-OUTPUT: not a stream: {stream!r}",
+                expected_type='(OR STREAM (MEMBER NIL T))', actual_value=stream)
+
     target = resolve_output_stream(stream)
     if isinstance(target, Stream):
         target.flush()
@@ -525,8 +555,18 @@ def force_output(stream=None):
     """FORCE-OUTPUT (CLHS 21.2): initiate output without necessarily
     waiting for it to complete. This implementation has no asynchronous
     I/O, so there is nothing weaker than FINISH-OUTPUT to do here.
+
+    Raises:
+        LispTypeError if stream is not a stream, NIL, or T
     """
     from .streams import Stream
+    # Accept NIL, T, or a stream; anything else is an error
+    if stream is not None and stream is not True and stream is not lisptype.NIL and stream is not lisptype.T:
+        if not isinstance(stream, Stream):
+            raise lisptype.LispTypeError(
+                f"FORCE-OUTPUT: not a stream: {stream!r}",
+                expected_type='(OR STREAM (MEMBER NIL T))', actual_value=stream)
+
     target = resolve_output_stream(stream)
     if isinstance(target, Stream):
         target.flush()
@@ -535,8 +575,19 @@ def force_output(stream=None):
 
 @_registry.cl_function('MAKE-STRING-OUTPUT-STREAM')
 def make_string_output_stream(**kwargs):
-    """Make string output stream - delegates to streams.py."""
+    """Make string output stream - delegates to streams.py.
+
+    Raises:
+        ProgramError if unknown keyword arguments are passed
+    """
     from .streams import make_string_output_stream as _make_sos
+    # Validate keyword arguments - only ELEMENT-TYPE is allowed
+    allow_other_keys = kwargs.get('allow_other_keys', False)
+    for key in kwargs:
+        if key not in ('element_type', 'allow_other_keys') and not allow_other_keys:
+            raise lisptype.LispProgramError(
+                f"MAKE-STRING-OUTPUT-STREAM: unknown keyword {key}")
+
     element_type = kwargs.get('element_type', 'character')
     return _make_sos(element_type)
 
@@ -3874,6 +3925,10 @@ def file_string_length(stream, string):
     from .streams import BroadcastStream
     if isinstance(stream, BroadcastStream) and not stream.streams:
         return 1
+    # Handle Character objects (which represent a single character)
+    if isinstance(string, lisptype.Character):
+        return 1
+    # Handle Python strings and sequences
     return len(string)
 
 

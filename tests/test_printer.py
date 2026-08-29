@@ -187,10 +187,11 @@ class TestPrintCharacters:
         assert result == "#\\A"
     
     def test_print_character_space(self):
-        """Test printing space character."""
+        """Space prints bare under PRIN1, not as ``#\\Space`` (CLHS 22.1.3.2,
+        ansi-test printer/print-characters.lsp PRINT.CHAR.3/.4)."""
         char = Character(" ")
         result = prin1(char)
-        assert result == "#\\Space"
+        assert result == "#\\ "
     
     def test_print_character_newline(self):
         """Test printing newline character."""
