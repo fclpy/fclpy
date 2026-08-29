@@ -366,7 +366,7 @@ def make_instance(class_spec, *args, **kwargs):
         else:
             i += 1
 
-    gf = classes.ensure_generic_function(lisptype.py_str_to_sym('MAKE-INSTANCE'))
+    gf = classes.ensure_generic_function(lisptype.COMMON_LISP_PACKAGE.intern_symbol('MAKE-INSTANCE'))
     return classes.call_generic_function(gf, [class_designator] + initargs)
 
 

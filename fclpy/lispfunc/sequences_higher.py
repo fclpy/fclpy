@@ -5,7 +5,7 @@ from . import registry as _registry
 import fclpy.lisptype as lisptype
 from .arrays import make_array, LispArray
 from .sequences_search import (
-    _make_matcher, _coerce_function_designator, _lisp_truthy,
+    _make_matcher, _coerce_function_designator, _lisp_truthy, _call_checked,
 )
 from .sequence_protocol import (
     seq_elements as _cons_to_list, bounding_indices, make_lisp_list, build_sequence,
@@ -107,15 +107,49 @@ def _parallel_list_elements(lists, what):
     return [[column[i] for column in columns] for i in range(limit)]
 
 
+def _check_function_designator_type(value, what):
+    """CLHS 14.2: a function designator is a SYMBOL or a FUNCTION.
+
+    EVERY/SOME accept a function designator and CLHS requires a TYPE-ERROR (not
+    a PROGRAM-ERROR) for one of the wrong type, e.g. `(every 1 '(a b c))` --
+    1 is an INTEGER, not a function designator. The default ``coerce_to_function``
+    raises a PROGRAM-ERROR ("not callable"), which used to fail `every.error.1`
+    and `some.error.1` (and the matching `notany`/`notevery` ERROR.1 tests).
+    Symbols are still resolved through the function namespace by the caller;
+    this check only rejects things that are neither callable nor a symbol.
+    """
+    if value is None or value is lisptype.NIL:
+        # NIL is the "no function" designator for OTHER sequence operators
+        # (FIND/SORT :test-not nil), but EVERY/SOME always require a real
+        # designator -- they have no "no predicate" default. So a bare NIL
+        # here is just the wrong type, not "default", and is signalled.
+        pass
+    elif isinstance(value, lisptype.LispSymbol):
+        return
+    elif callable(value):
+        return
+    raise lisptype.LispTypeError(
+        f"{what}: {value!r} is not a function designator",
+        expected_type="FUNCTION", actual_value=value)
+
+
 # Predicate tests on sequences
 @_registry.cl_function('EVERY')
 def every(predicate, *sequences):
-    """True if the predicate holds for every set of corresponding elements.
+    """True if the predicate holds for every set of corresponding elements (CLHS 17.3).
 
-    The predicate is a function *designator* and its answer is a Lisp truth
-    value; testing it with a bare `if` made a returned NIL -- a Python-truthy
-    object -- count as true.
+    The lambda list is ``(function &rest sequences+)``: at least one sequence
+    is required, so ``(every #'null)`` is a PROGRAM-ERROR (``every.error.9``)
+    rather than vacuously T. The predicate is a function *designator*; testing
+    it with a bare `if` made a returned NIL -- a Python-truthy object -- count
+    as true. The check is split into a type check (TYPE-ERROR for a non-designator
+    like ``(every 1 ...)``) and the callable resolution, so ``every.error.1``/
+    ``.10`` and the matching SOME/NOTANY/NOTEVERY tests pass.
     """
+    if not sequences:
+        raise lisptype.LispProgramError(
+            "EVERY: at least one sequence argument is required")
+    _check_function_designator_type(predicate, 'EVERY')
     predicate = _coerce_function_designator(predicate)
     for args in _parallel_elements(sequences, 'EVERY'):
         if not _lisp_truthy(predicate(*args)):
@@ -127,7 +161,14 @@ def every(predicate, *sequences):
 def some(predicate, *sequences):
     """The first true value the predicate returns, or NIL (CLHS 17.3).
 
-    SOME returns the *value* of the predicate, not T."""
+    SOME returns the *value* of the predicate, not T. Like EVERY, the lambda
+    list is ``(function &rest sequences+)`` -- ``(some #'null)`` is a
+    PROGRAM-ERROR (``some.error.9``), and a non-designator predicate raises
+    a TYPE-ERROR (``some.error.1``/``.10``)."""
+    if not sequences:
+        raise lisptype.LispProgramError(
+            "SOME: at least one sequence argument is required")
+    _check_function_designator_type(predicate, 'SOME')
     predicate = _coerce_function_designator(predicate)
     for args in _parallel_elements(sequences, 'SOME'):
         value = predicate(*args)
@@ -138,13 +179,21 @@ def some(predicate, *sequences):
 
 @_registry.cl_function('NOTEVERY')
 def notevery(predicate, *sequences):
-    """Test if predicate is false for some element."""
+    """True if the predicate is false for some element (CLHS 17.3)."""
+    if not sequences:
+        raise lisptype.LispProgramError(
+            "NOTEVERY: at least one sequence argument is required")
+    _check_function_designator_type(predicate, 'NOTEVERY')
     return lisptype.lisp_bool(not _lisp_truthy(every(predicate, *sequences)))
 
 
 @_registry.cl_function('NOTANY')
 def notany(predicate, *sequences):
-    """Test if predicate is false for all elements."""
+    """True if the predicate is false for every element (CLHS 17.3)."""
+    if not sequences:
+        raise lisptype.LispProgramError(
+            "NOTANY: at least one sequence argument is required")
+    _check_function_designator_type(predicate, 'NOTANY')
     return lisptype.lisp_bool(not _lisp_truthy(some(predicate, *sequences)))
 
 
@@ -159,7 +208,16 @@ def map_fn(result_type, function, *sequences):
     `(map 'string #'char-upcase "abc")` fell into an `else` that returned the
     Python list of results -- a vector -- and every non-list request was
     wrong. A NIL specifier means "for effect", and MAP then returns NIL.
+
+    The lambda list is ``(result-type function &rest sequences+)``: at least
+    one sequence is required, so ``(map 'list #'null)`` is a PROGRAM-ERROR
+    (``map.error.6``). The function is a function *designator*; a
+    non-designator raises a TYPE-ERROR (the same rule EVERY/SOME use).
     """
+    if not sequences:
+        raise lisptype.LispProgramError(
+            "MAP: at least one sequence argument is required")
+    _check_function_designator_type(function, 'MAP')
     function = _coerce_function_designator(function)
     results = [function(*args) for args in _parallel_elements(sequences, 'MAP')]
     if result_type is None or result_type is lisptype.NIL:
@@ -343,7 +401,13 @@ def reduce_fn(function, sequence, *, key=None, from_end=None, start=None, end=No
     start, end = bounding_indices(len(py_seq), start, end, 'REDUCE')
     py_seq = py_seq[start:end]
     if key is not None:
-        py_seq = [key(item) for item in py_seq]
+        # Reduce's :key is called in a single-value context, so reduce the
+        # result of each call to its primary value (the same way FIND/COUNT
+        # and the other :key sites do via `_call_checked`). Without this a key
+        # like `#'(lambda (x) (floor x 2))` returned a `MultipleValues`
+        # wrapper and the reduction compared wrappers.
+        py_seq = [lisptype.primary_value(_call_checked(key, item, caller_name=':KEY'))
+                  for item in py_seq]
 
     if not py_seq:
         # CLHS 17.3: with no elements and no :initial-value, the function is

@@ -114,6 +114,24 @@ def _call_checked(fn, *call_args, caller_name='sequence function'):
         raise
 
 
+def _apply_key(key, element):
+    """Apply a :key designator to `element`, returning the *primary* value.
+
+    Every -IF / -IF-NOT predicate and every `:key` site in the sequence
+    family has to read its key in a single-value context, and the user-defined
+    function is called as a Python callable here. Without the
+    `lisptype.primary_value` reduction, a key like
+    `#'(lambda (c) (read-from-string (string c)))` returns a `MultipleValues`
+    wrapper and the predicate sees a wrapper instead of the keyed value --
+    `find-if-string.3a` and `find-if-not-string.3a` observed exactly that.
+    `key` may be `None` (no :key supplied), in which case `element` is
+    returned unchanged.
+    """
+    if key is None:
+        return element
+    return _call_checked(key, element, caller_name=':KEY')
+
+
 def _make_matcher(test=None, test_not=None, key=None, key_item=False):
     """Build a `matcher(item, candidate)` implementing CLHS 17.2.1's
     two-argument test protocol in one place.
@@ -260,6 +278,36 @@ def with_sequence_protocol(sequence, start=0, end=None, key=None, test=None, tes
     return iterate(sequence, start, end, key, test, test_not)
 
 
+def _unpack_seq_kwargs(kwargs, what, *, with_count=False, with_from_end=True):
+    """Read the shared CLHS 17.2.1 keyword set of every scan-style sequence op.
+
+    Returns a dict with the recognized keys, having already rejected any
+    others as a PROGRAM-ERROR (unless `:allow-other-keys` is true). The
+    callers that took `**kwargs` accepted any keyword -- recognized or not --
+    and silently dropped them, which is the opposite of CLHS 3.4.1.4
+    (`find.error.7`/`.8`, `count.error.6`/`.7`/`.10`).
+
+    NIL/None is the "leftmost :allow-other-keys wins" sentinel: a later T does
+    not override an earlier NIL, matching `count.error.10` directly.
+    """
+    allowed = {'test', 'test_not', 'key', 'start', 'end'}
+    if with_from_end:
+        allowed.add('from_end')
+    if with_count:
+        allowed.add('count')
+    if 'allow_other_keys' in kwargs:
+        allow = kwargs.pop('allow_other_keys')
+        if allow not in (None, lisptype.NIL, False):
+            return kwargs
+    # No `:allow-other-keys`, or it was NIL/None: reject anything unknown.
+    bad = [k for k in kwargs if k not in allowed]
+    if bad:
+        names = ', '.join(sorted(k.replace('_', '-') for k in bad))
+        raise lisptype.LispProgramError(
+            f"{what}: unrecognized keyword argument(s): {names}")
+    return kwargs
+
+
 def _scan(sequence, kwargs, what):
     """The (elements, indices) a CLHS scanning function should visit.
 
@@ -297,6 +345,7 @@ def find(item, sequence, **kwargs):
     Honours :key, :test, :test-not, :start, :end and :from-end through the
     shared scan and the shared matcher.
     """
+    _unpack_seq_kwargs(kwargs, 'FIND')
     elements, indices = _scan(sequence, kwargs, 'FIND')
     matcher = _scan_matcher(kwargs)
     for i in indices:
@@ -308,12 +357,13 @@ def find(item, sequence, **kwargs):
 @_registry.cl_function('FIND-IF')
 def find_if(predicate, sequence, **kwargs):
     """The first element satisfying `predicate` (CLHS 17.3)."""
+    _unpack_seq_kwargs(kwargs, 'FIND-IF', with_count=False)
     elements, indices = _scan(sequence, kwargs, 'FIND-IF')
     key = _scan_key(kwargs)
     predicate = _coerce_function_designator(predicate)
     for i in indices:
         element = elements[i]
-        if _lisp_truthy(predicate(key(element) if key else element)):
+        if _lisp_truthy(predicate(_apply_key(key, element))):
             return element
     return lisptype.NIL
 
@@ -321,12 +371,13 @@ def find_if(predicate, sequence, **kwargs):
 @_registry.cl_function('FIND-IF-NOT')
 def find_if_not(predicate, sequence, **kwargs):
     """The first element failing `predicate` (CLHS 17.3)."""
+    _unpack_seq_kwargs(kwargs, 'FIND-IF-NOT', with_count=False)
     elements, indices = _scan(sequence, kwargs, 'FIND-IF-NOT')
     key = _scan_key(kwargs)
     predicate = _coerce_function_designator(predicate)
     for i in indices:
         element = elements[i]
-        if not _lisp_truthy(predicate(key(element) if key else element)):
+        if not _lisp_truthy(predicate(_apply_key(key, element))):
             return element
     return lisptype.NIL
 
@@ -334,6 +385,7 @@ def find_if_not(predicate, sequence, **kwargs):
 @_registry.cl_function('POSITION')
 def position(item, sequence, **kwargs):
     """The index of the first element matching `item` (CLHS 17.3)."""
+    _unpack_seq_kwargs(kwargs, 'POSITION')
     elements, indices = _scan(sequence, kwargs, 'POSITION')
     matcher = _scan_matcher(kwargs)
     for i in indices:
@@ -345,12 +397,13 @@ def position(item, sequence, **kwargs):
 @_registry.cl_function('POSITION-IF')
 def position_if(predicate, sequence, **kwargs):
     """The index of the first element satisfying `predicate` (CLHS 17.3)."""
+    _unpack_seq_kwargs(kwargs, 'POSITION-IF', with_count=False)
     elements, indices = _scan(sequence, kwargs, 'POSITION-IF')
     key = _scan_key(kwargs)
     predicate = _coerce_function_designator(predicate)
     for i in indices:
         element = elements[i]
-        if _lisp_truthy(predicate(key(element) if key else element)):
+        if _lisp_truthy(predicate(_apply_key(key, element))):
             return i
     return lisptype.NIL
 
@@ -358,12 +411,13 @@ def position_if(predicate, sequence, **kwargs):
 @_registry.cl_function('POSITION-IF-NOT')
 def position_if_not(predicate, sequence, **kwargs):
     """The index of the first element failing `predicate` (CLHS 17.3)."""
+    _unpack_seq_kwargs(kwargs, 'POSITION-IF-NOT', with_count=False)
     elements, indices = _scan(sequence, kwargs, 'POSITION-IF-NOT')
     key = _scan_key(kwargs)
     predicate = _coerce_function_designator(predicate)
     for i in indices:
         element = elements[i]
-        if not _lisp_truthy(predicate(key(element) if key else element)):
+        if not _lisp_truthy(predicate(_apply_key(key, element))):
             return i
     return lisptype.NIL
 
@@ -371,6 +425,7 @@ def position_if_not(predicate, sequence, **kwargs):
 @_registry.cl_function('COUNT')
 def count(item, sequence, **kwargs):
     """How many elements match `item` (CLHS 17.3)."""
+    _unpack_seq_kwargs(kwargs, 'COUNT', with_count=True)
     elements, indices = _scan(sequence, kwargs, 'COUNT')
     matcher = _scan_matcher(kwargs)
     return sum(1 for i in indices if matcher(item, elements[i]))
@@ -379,11 +434,12 @@ def count(item, sequence, **kwargs):
 @_registry.cl_function('COUNT-IF')
 def count_if(predicate, sequence, **kwargs):
     """How many elements satisfy `predicate` (CLHS 17.3)."""
+    _unpack_seq_kwargs(kwargs, 'COUNT-IF', with_count=True)
     elements, indices = _scan(sequence, kwargs, 'COUNT-IF')
     key = _scan_key(kwargs)
     predicate = _coerce_function_designator(predicate)
     return sum(1 for i in indices
-               if _lisp_truthy(predicate(key(elements[i]) if key else elements[i])))
+               if _lisp_truthy(predicate(_apply_key(key, elements[i]))))
 
 
 @_registry.cl_function('COUNT-IF-NOT')
@@ -393,11 +449,12 @@ def count_if_not(predicate, sequence, **kwargs):
     This one ignored :start/:end entirely, so a bounded count answered for
     the whole sequence.
     """
+    _unpack_seq_kwargs(kwargs, 'COUNT-IF-NOT', with_count=True)
     elements, indices = _scan(sequence, kwargs, 'COUNT-IF-NOT')
     key = _scan_key(kwargs)
     predicate = _coerce_function_designator(predicate)
     return sum(1 for i in indices
-               if not _lisp_truthy(predicate(key(elements[i]) if key else elements[i])))
+               if not _lisp_truthy(predicate(_apply_key(key, elements[i]))))
 
 
 def _two_sequence_matcher(kwargs):
@@ -432,9 +489,33 @@ def _two_sequence_bounds(sequence1, sequence2, kwargs, what):
     return left, right, start1, end1, start2, end2
 
 
+def _unpack_two_seq_kwargs(kwargs, what, *, with_from_end=True):
+    """Validate the keyword set of a two-sequence scan operator (MISMATCH, SEARCH).
+
+    Same contract as `_unpack_seq_kwargs` for the single-sequence case: an
+    unrecognized keyword is a PROGRAM-ERROR unless `:allow-other-keys` is
+    true, with the leftmost `:allow-other-keys` argument winning
+    (`mismatch.error.10`/`count.error.10`).
+    """
+    allowed = {'test', 'test_not', 'key', 'start1', 'end1', 'start2', 'end2'}
+    if with_from_end:
+        allowed.add('from_end')
+    if 'allow_other_keys' in kwargs:
+        allow = kwargs.pop('allow_other_keys')
+        if allow not in (None, lisptype.NIL, False):
+            return kwargs
+    bad = [k for k in kwargs if k not in allowed]
+    if bad:
+        names = ', '.join(sorted(k.replace('_', '-') for k in bad))
+        raise lisptype.LispProgramError(
+            f"{what}: unrecognized keyword argument(s): {names}")
+    return kwargs
+
+
 @_registry.cl_function('SEARCH')
 def search(sequence1, sequence2, **kwargs):
     """The index in `sequence2` of a subsequence matching `sequence1`."""
+    _unpack_two_seq_kwargs(kwargs, 'SEARCH')
     left, right, start1, end1, start2, end2 = _two_sequence_bounds(
         sequence1, sequence2, kwargs, 'SEARCH')
     matcher = _two_sequence_matcher(kwargs)
@@ -456,7 +537,21 @@ def mismatch(sequence1, sequence2, **kwargs):
     CLHS 17.3: the index is relative to `sequence1` as a whole, not to its
     bounded subsequence, and under `:from-end` it is *one plus* the index of
     the rightmost difference. NIL means the bounded subsequences match.
+
+    The from-end walk uses the LAST `shared` elements of each sequence, paired
+    positionally, and proceeds right-to-left. When the walk finds a mismatch,
+    the result is `end1 - offset + 1` (the absolute position in `sequence1`
+    of the failing element, plus one). When the walk completes without a
+    mismatch and the sequences are the same length, NIL is returned (the
+    bounded subsequences are equal). Otherwise, when one sequence is
+    shorter, the walk has covered all of it but stopped one element past
+    where the longer sequence "has more on the left": the result is the
+    rightmost position of the longer sequence not yet examined -- the
+    from-end analog of the from-start rule "if one sequence is shorter, the
+    result is the length of the shorter sequence" (`mismatch-vector.23`
+    test 6, `mismatch-list.17`).
     """
+    _unpack_two_seq_kwargs(kwargs, 'MISMATCH')
     left, right, start1, end1, start2, end2 = _two_sequence_bounds(
         sequence1, sequence2, kwargs, 'MISMATCH')
     matcher = _two_sequence_matcher(kwargs)
@@ -467,7 +562,14 @@ def mismatch(sequence1, sequence2, **kwargs):
         for offset in range(1, shared + 1):
             if not matcher(left[end1 - offset], right[end2 - offset]):
                 return end1 - offset + 1
-        return lisptype.NIL if width1 == width2 else start1 + shared
+        if width1 == width2:
+            return lisptype.NIL
+        # The from-end walk covered `shared` positions and matched all of
+        # them. The "excess" of the longer sequence sits on the *left* of
+        # its bounded sub-sequence; the result is the rightmost position of
+        # that excess, since the next from-end step would have compared it
+        # with an element that does not exist in the shorter sequence.
+        return end2 - shared - 1 if width1 < width2 else end1 - shared - 1
     for offset in range(shared):
         if not matcher(left[start1 + offset], right[start2 + offset]):
             return start1 + offset
@@ -511,7 +613,7 @@ def member_if(predicate, list_seq, *, key=None):
     predicate = _coerce_function_designator(predicate)
     return _member_tail(
         list_seq,
-        lambda element: _lisp_truthy(predicate(key(element) if key else element)),
+        lambda element: _lisp_truthy(predicate(_apply_key(key, element))),
         'MEMBER-IF')
 
 
@@ -522,7 +624,7 @@ def member_if_not(predicate, list_seq, *, key=None):
     predicate = _coerce_function_designator(predicate)
     return _member_tail(
         list_seq,
-        lambda element: not _lisp_truthy(predicate(key(element) if key else element)),
+        lambda element: not _lisp_truthy(predicate(_apply_key(key, element))),
         'MEMBER-IF-NOT')
 
 

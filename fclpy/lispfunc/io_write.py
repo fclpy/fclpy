@@ -192,7 +192,7 @@ def print_unreadable_prefix(object, stream, type_p):
     """
     from .binding import dynamic_value
     from .evaluation_conditions import signal_error_object
-    readably = dynamic_value(lisptype.py_str_to_sym('*PRINT-READABLY*'))
+    readably = dynamic_value(lisptype.COMMON_LISP_PACKAGE.intern_symbol('*PRINT-READABLY*'))
     if lisptype.is_truthy(readably):
         return signal_error_object(lisptype.PrintNotReadable(object=object))
     write_text('#<', stream)

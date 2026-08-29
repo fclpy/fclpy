@@ -61,7 +61,32 @@ def with_pprint_logical_block(stream_object_options, *body):
 
 @_registry.cl_function('COMPLEX')
 def complex_fn(realpart, imagpart=0):
-    """Create complex number."""
+    """Create complex number (CLHS 12.1.5.1).
+
+    Coalescing: a *rational* imag part of 0 returns the real part
+    itself (`(complex 1/3 0)` is `1/3`, `(complex 3 0)` is `3`). A
+    *float* imag part of 0 does *not* coalesce -- `(complex 0 0.0)` is
+    `#C(0.0 0.0)`, a complex, and the imag-part rule of `complex.4`
+    expects `x` back from `(imagpart (complex 0 x))` to be the same
+    float. A real arg with a non-zero imag returns a complex; the
+    parts keep the type they had on the way in -- `(complex 3 4)` is
+    a complex whose real is `3` and imag is `4`, not `(3.0+4.0j)`,
+    so `(eql (realpart (complex 3 4)) 3)` is T (complex.1, realpart.1/
+    .2/.3). If either arg is a float, the result's parts are floats
+    and the result is a complex (complex.5's type-contagion rule).
+    """
+    from fclpy.lispfunc.math_arithmetic import LispComplex, _make_lisp_complex
+    from fractions import Fraction
+    # Coalesce: a *rational* imag of 0 returns the rational real; a
+    # *float* imag of 0 stays a complex, because complex.4 compares
+    # `(float 0 x)` against `(realpart (complex 0 x))` and that has
+    # to round-trip the float type.
+    if imagpart == 0 and not isinstance(imagpart, float) and \
+            isinstance(realpart, (int, Fraction)):
+        return realpart
+    # Both rationals (no float): a LispComplex with int/rational parts.
+    if isinstance(realpart, (int, Fraction)) and isinstance(imagpart, (int, Fraction)):
+        return LispComplex(realpart, imagpart)
     return complex(realpart, imagpart)
 
 
@@ -607,7 +632,7 @@ def describe(object, stream=None):
 
     target = resolve_output_stream(stream)
     classes.call_generic_function(
-        classes.ensure_generic_function(lisptype.py_str_to_sym('DESCRIBE-OBJECT')),
+        classes.ensure_generic_function(lisptype.COMMON_LISP_PACKAGE.intern_symbol('DESCRIBE-OBJECT')),
         [object, target])
     return lisptype.MultipleValues()
 
@@ -725,6 +750,10 @@ def get(*args):
     """Get property from property list.
 
     Signature: (GET SYMBOL INDICATOR &OPTIONAL DEFAULT)
+    `symbol` must be a Lisp symbol; `indicator` is unrestricted.
+    Signals a TYPE-ERROR if `symbol` is not a symbol, which the
+    `get.error.4`/`get.error.5` tests collect over the ansi-test
+    mini-universe and require to be raised for every non-symbol.
     Supports SYMBOL.plist stored as a Python dict or a Lisp cons-list.
     """
     if len(args) < 2 or len(args) > 3:
@@ -732,10 +761,14 @@ def get(*args):
             f"GET: wrong number of arguments (got {len(args)}, expected 2-3)"
         )
     symbol = args[0]
+    if not lisptype.is_symbol(symbol):
+        raise lisptype.LispTypeError(
+            f"GET: {symbol!r} is not a symbol",
+            expected_type='SYMBOL', actual_value=symbol)
     indicator = args[1]
     default = args[2] if len(args) == 3 else lisptype.NIL
 
-    # Retrieve plist from symbol (if available)
+    # Retrieve plist from symbol
     plist = getattr(symbol, 'plist', lisptype.NIL)
 
     # If stored as a Python dict, use direct lookup

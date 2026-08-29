@@ -6,7 +6,7 @@ import fclpy.lisptype as lisptype
 from .sequences_search import (
     iterate, _seq_length, _seq_to_list, _make_matcher, _coerce_function_designator,
     _lisp_truthy, _rebuild_sequence, _matched_positions, _two_sequence_matcher,
-    _alist_pairs, _pair_key, _call_checked,
+    _alist_pairs, _pair_key, _call_checked, _apply_key,
 )
 from .sequence_protocol import bounding_indices as _bounding_indices
 
@@ -65,7 +65,7 @@ def remove_if(test, sequence, **kwargs):
 
     doomed = _matched_positions(
         start, end, from_end, kwargs.get('count', None),
-        lambda i: _lisp_truthy(test(key(elements[i]) if key else elements[i])),
+        lambda i: _lisp_truthy(test(_apply_key(key, elements[i]))),
     )
 
     result = [x for i, x in enumerate(elements) if i not in doomed]
@@ -93,7 +93,7 @@ def remove_if_not(test, sequence, **kwargs):
 
     doomed = _matched_positions(
         start, end, from_end, kwargs.get('count', None),
-        lambda i: not _lisp_truthy(test(key(elements[i]) if key else elements[i])),
+        lambda i: not _lisp_truthy(test(_apply_key(key, elements[i]))),
     )
 
     result = [x for i, x in enumerate(elements) if i not in doomed]
@@ -205,7 +205,7 @@ def substitute_if(newitem, test, sequence, **kwargs):
 
     chosen = _matched_positions(
         start, end, from_end, kwargs.get('count', None),
-        lambda i: _lisp_truthy(test(key(elements[i]) if key else elements[i])),
+        lambda i: _lisp_truthy(test(_apply_key(key, elements[i]))),
     )
 
     result = [newitem if i in chosen else x for i, x in enumerate(elements)]
@@ -228,7 +228,7 @@ def substitute_if_not(newitem, test, sequence, **kwargs):
 
     chosen = _matched_positions(
         start, end, from_end, kwargs.get('count', None),
-        lambda i: not _lisp_truthy(test(key(elements[i]) if key else elements[i])),
+        lambda i: not _lisp_truthy(test(_apply_key(key, elements[i]))),
     )
 
     result = [newitem if i in chosen else x for i, x in enumerate(elements)]
@@ -304,7 +304,7 @@ def nsubstitute_if(newitem, test, sequence, **kwargs):
 
     chosen = _matched_positions(
         start, end, from_end, kwargs.get('count', None),
-        lambda i: _lisp_truthy(test(key(elements[i]) if key else elements[i])),
+        lambda i: _lisp_truthy(test(_apply_key(key, elements[i]))),
     )
     return _apply_nsubstitution(sequence, newitem, chosen)
 
@@ -321,7 +321,7 @@ def nsubstitute_if_not(newitem, test, sequence, **kwargs):
 
     chosen = _matched_positions(
         start, end, from_end, kwargs.get('count', None),
-        lambda i: not _lisp_truthy(test(key(elements[i]) if key else elements[i])),
+        lambda i: not _lisp_truthy(test(_apply_key(key, elements[i]))),
     )
     return _apply_nsubstitution(sequence, newitem, chosen)
 

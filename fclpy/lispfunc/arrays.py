@@ -724,7 +724,7 @@ def _check_other_keys(other_keys, allow_other_keys, what):
 
 
 @_registry.cl_function('MAKE-ARRAY')
-def make_array(dimensions, element_type=_UNSUPPLIED, initial_element=_UNSUPPLIED,
+def make_array(dimensions, *, element_type=_UNSUPPLIED, initial_element=_UNSUPPLIED,
                initial_contents=_UNSUPPLIED, adjustable=None, fill_pointer=None,
                displaced_to=None, displaced_index_offset=None,
                allow_other_keys=None, **other_keys):
@@ -734,6 +734,15 @@ def make_array(dimensions, element_type=_UNSUPPLIED, initial_element=_UNSUPPLIED
     `:element-type` (which decides the representation), `:displaced-to` (which
     makes the result share the target's storage rather than copy it) and
     `:displaced-index-offset`.
+
+    Every keyword after `dimensions` is keyword-only in the Python signature
+    so the registry reads this as the ANSI `&key` set. With any of them
+    positional, the lambda-list shape was indistinguishable from `&optional`
+    and the conformance checks in CLHS 3.4.1.4/3.5.1.5 could not run at
+    all -- `(make-array '(10) :allow-other-keys t '#:bad t)` bound the gensym
+    into `:initial-element` and a stray `T` overflowed into nothing, and
+    `(make-array '(10) 1 2)` silently answered a vector of 2s instead of
+    raising the PROGRAM-ERROR an extra positional argument requires.
     """
     _check_other_keys(other_keys, allow_other_keys, 'MAKE-ARRAY')
     dims = _dimensions_argument(dimensions)

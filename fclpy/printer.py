@@ -234,7 +234,8 @@ class PrintContext:
 
     __slots__ = ('escape', 'base', 'radix', 'case', 'level', 'length',
                  'array', 'gensym', 'readably', 'pretty', 'circle',
-                 'in_progress', 'budget')
+                 'in_progress', 'budget', 'circle_map', 'next_label',
+                 'label_seen')
 
     def __init__(self, **overrides):
         unknown = set(overrides) - set(WRITE_KEYWORD_VARIABLES)
@@ -253,6 +254,17 @@ class PrintContext:
         # the same counter by reference rather than getting a fresh one.
         self.in_progress = set()
         self.budget = [PRINT_BUDGET]
+
+        # `*PRINT-CIRCLE*` labelling. `circle_map` is `id(obj) -> label` for
+        # every aggregate that is shared or part of a cycle; `next_label` is
+        # the next free label number. `label_seen` records which labels have
+        # already been printed (so `#N=` is emitted only the first time the
+        # object is seen, and `#N#` on every subsequent visit). The map is
+        # populated by `_compute_circle_map` when the context is built and
+        # *only* when `circle` is true; the print path then consults it.
+        self.circle_map = {}
+        self.next_label = 1
+        self.label_seen = set()
 
         self.escape = _true(value_of('escape'))
         self.radix = _true(value_of('radix'))
@@ -326,13 +338,205 @@ class PrintContext:
 
 
 class _Unsupplied:
-    """Distinguishes ``:escape nil`` from ``:escape`` not being passed."""
+    """Distinguishes ``:escape nil`` from ``:escape` not being passed."""
 
     def __repr__(self):
         return '#<unsupplied>'
 
 
 _UNSUPPLIED = _Unsupplied()
+
+
+# ---------------------------------------------------------------------------
+# *PRINT-CIRCLE* label assignment
+# ---------------------------------------------------------------------------
+
+def _aggregate_pieces(value):
+    """The sub-objects of an aggregate that the circle pre-pass must traverse.
+
+    Returns an iterable of objects to recurse into, or `None` for objects that
+    are not aggregates (atoms, strings, characters, numbers, etc.). This is the
+    one place a type decides "is this an aggregate" for the purposes of
+    ``*PRINT-CIRCLE*`` -- keeping it here means the print dispatcher and the
+    pre-pass cannot disagree on what counts.
+    """
+    if isinstance(value, lispCons):
+        return (value.car, value.cdr)
+    if isinstance(value, (list, tuple)):
+        return value
+    from fclpy.lispfunc.arrays import LispArray
+    if isinstance(value, LispArray):
+        # Walk every element the array exposes through `__getitem__`. The
+        # `range(total_size)` formulation was wrong for fill-pointered and
+        # displaced arrays: their `len()` is the live element count, not
+        # the product of dimensions, and the two diverge for those
+        # representations (`lispfunc/arrays.py`'s `LispArray.__getitem__`
+        # bounds the index on `len(self)`).
+        return [value[i] for i in range(len(value))]
+    from fclpy.classes import LispInstance
+    if isinstance(value, LispInstance):
+        return list(value.slot_values.values())
+    return None
+
+
+def _is_aggregate(value):
+    """True when `value` is a cons/vector/array/structure -- an object whose
+    body the printer walks and emits a matching ``(``...``)`` for.
+
+    The aggregate cases prepend the ``#N=`` label themselves; atoms do not
+    need a body-walk, so the prefix is added here in `_write` for the
+    shared-atom case. Without the split, a shared aggregate that contained
+    only atoms would get the label twice (once from `_write` for its body,
+    once from `_write_cons` for its parenthesised form).
+    """
+    if isinstance(value, lispCons):
+        return True
+    if isinstance(value, (list, tuple)):
+        return True
+    from fclpy.lispfunc.arrays import LispArray
+    if isinstance(value, LispArray):
+        return True
+    from fclpy.classes import LispInstance
+    if isinstance(value, LispInstance):
+        return True
+    return False
+
+
+def _compute_circle_map(value, ctx):
+    """Populate `ctx.circle_map` with labels for every shared/cyclic aggregate.
+
+    The standard ``*PRINT-CIRCLE*`` algorithm: a depth-first walk of the
+    object graph, recording the path of aggregates currently being printed
+    (an `id`-keyed stack) and a per-object visit count for non-path visits.
+    An object gets a label if it is reached twice (i.e. shared in a DAG) or
+    if it is on the current path and a self/ancestor is reached again
+    (i.e. it is part of a cycle). Atoms are never labelled.
+
+    The pass is bounded by `ctx.budget` so a deeply cyclic graph cannot make
+    it run forever; once the budget is exhausted, no further objects are
+    labelled, and the print falls back to ``...`` for the unlabelled cycle
+    paths -- which is the same elision ``*PRINT-LENGTH*`` uses.
+
+    The shape of the graph: a cons is visited by recursing into its `car`
+    and `cdr`, a vector/list/tuple by recursing into each element. The
+    cycle case is when one of those sub-objects is the visited aggregate
+    itself or any other aggregate on the current DFS path -- both of which
+    the path-stack set catches.
+
+    **Atoms can be shared too** (a gensym appears twice in the same cons
+    graph, e.g. ``print.cons.5``/``.6``). Atoms are not recursed into, but
+    the *first* pass over a shared atom's two parent aggregates still gives
+    it a count of 2, which is enough to assign a label -- so we visit the
+    root's *transitive* sub-objects here, including atoms, even though the
+    recursive descent stops at aggregates.
+
+    **Why the count is per-parent, not per-visit.** A cdr chain visits
+    every cons in the chain from the same parent (its predecessor), so
+    each cons has one *incoming pointer* from that predecessor alone. An
+    object with a single incoming pointer is not "shared" in the sense
+    ``*PRINT-CIRCLE*`` cares about, even if it is visited many times. The
+    earlier algorithm counted visits globally and labelled any object
+    visited more than once, which over-labelled the conses *inside* a
+    shared cons (`print.cons.6`'s `(list s1 s2 s1 s2)`: every cell inside
+    `s1`/`s2` would be re-walked, and the re-walks from different paths
+    made the inner conses look "shared"). Here `visit` tracks, per object,
+    the *set* of parent objects that reached it, and only labels when that
+    set is bigger than one (or when the parent is the object itself,
+    which is the self-cycle case).
+    """
+    parents_of = {}  # `id(obj) -> {id(parent), ...}` for aggregates
+    atom_counts = {}  # `id(obj) -> int` for atoms (no per-parent filter)
+    on_path = set()
+    path_stack = []
+    map_ = ctx.circle_map
+    next_label = [1]
+
+    def visit(obj, parent):
+        if ctx.budget[0] <= 0:
+            return
+        if obj is None or obj is lisptype.NIL:
+            return
+        # Atoms and non-aggregates: a simple visit count. A gensym that is
+        # the car and cdr of the same cons (e.g. ``(cons s s)`` in
+        # `print.cons.5`) is "shared" -- it appears twice in the printed
+        # output -- so the count must fire on a single parent pointing at
+        # the same atom twice. The per-parent rule below is only for
+        # aggregates, where walking a cdr chain visits each cell from the
+        # same predecessor.
+        if isinstance(obj, (bool, int, float, complex, str, bytes, Character,
+                            LispString, LispSymbol, lispKeyword, type, Fraction)):
+            key = id(obj)
+            atom_counts[key] = atom_counts.get(key, 0) + 1
+            if atom_counts[key] > 1 and key not in map_:
+                map_[key] = next_label[0]
+                next_label[0] += 1
+            return
+        pieces = _aggregate_pieces(obj)
+        if pieces is None:
+            return
+        key = id(obj)
+        if key in on_path:
+            # A back-edge: `obj` is already on the current DFS path, so
+            # labelling it makes the cycle print as `#1=(... . #1#)` rather
+            # than as `...`. The *entry* of the cycle (the cell whose
+            # cdr/sub contains a back-edge to itself or an ancestor) is
+            # already on the path -- but the *target* of the back-edge is
+            # also where the label is needed, because the back-edge itself
+            # is the cycle point.
+            if key not in map_:
+                map_[key] = next_label[0]
+                next_label[0] += 1
+            return
+        ps = parents_of.setdefault(key, set())
+        if parent is not None:
+            ps.add(id(parent))
+        if len(ps) > 1 and key not in map_:
+            # Reached from two or more distinct parents off the path:
+            # genuinely shared. The two parents must be *different* objects
+            # (cd(id(parent))-incoming-edge from the same parent, even via
+            # different paths, is not "shared" in the user's sense).
+            map_[key] = next_label[0]
+            next_label[0] += 1
+        on_path.add(key)
+        path_stack.append(obj)
+        ctx.budget[0] -= 1
+        try:
+            for sub in pieces:
+                if sub is obj:
+                    # Direct self-cycle (e.g. `(setf (cdr a) a)`). Label
+                    # the parent so the cycle point has its own `#N=`.
+                    if key not in map_:
+                        map_[key] = next_label[0]
+                        next_label[0] += 1
+                    continue
+                if sub is None or sub is lisptype.NIL:
+                    continue
+                visit(sub, obj)
+        finally:
+            path_stack.pop()
+            on_path.discard(key)
+
+    visit(value, None)
+    ctx.next_label = next_label[0]
+
+
+def _circle_prefix(value, ctx):
+    """The ``#N=`` or ``#N#`` to emit for `value`, or ``''``.
+
+    For a labelled value, emits ``#N=`` the first time it is seen and
+    ``#N#`` on every subsequent visit; for an unlabelled value emits
+    nothing. Tracks seen-labels on the context so the first-vs-subsequent
+    decision is one integer set lookup rather than re-walking the graph.
+    """
+    if not ctx.circle:
+        return ''
+    label = ctx.circle_map.get(id(value))
+    if label is None:
+        return ''
+    if label in ctx.label_seen:
+        return f'#{label}#'
+    ctx.label_seen.add(label)
+    return f'#{label}='
 
 
 # ---------------------------------------------------------------------------
@@ -805,6 +1009,13 @@ def _in_progress(value, ctx, writer, depth):
     reference on purpose, so a ``~A`` nested inside a ``~S`` shares the path
     rather than starting a fresh one and re-entering the cycle.
 
+    When `*PRINT-CIRCLE*` is true, the pre-pass has already assigned a label
+    to every shared/cyclic aggregate; if this object is one of them and we
+    are seeing it again, the elision must be the label ``#N#`` rather than
+    the ``...`` that means "I gave up" -- they are not interchangeable
+    (``print.cons.5`'s ``#1#`` would fail round-trip if it read back as
+    ``...``).
+
     **Cutting cycles is still not a termination proof, so there is also a
     budget.** Cycles removed, the traversal enumerates *simple paths*, and a
     twenty-node graph of out-degree two has exponentially many of them --
@@ -817,6 +1028,12 @@ def _in_progress(value, ctx, writer, depth):
     """
     key = id(value)
     if key in ctx.in_progress:
+        # Re-entry into an object already being printed. With
+        # `*PRINT-CIRCLE*` this is exactly the cycle case the pre-pass
+        # labelled; emit the back-reference rather than the lossy `...`.
+        label = ctx.circle_map.get(key)
+        if label is not None:
+            return f'#{label}#'
         return '...'
     if ctx.budget[0] <= 0:
         return '...'
@@ -848,9 +1065,27 @@ def _write_cons(value, ctx, depth):
     a tail legitimately **shared** between two lists still prints at both
     occurrences. A cutoff on the element *count* would instead have truncated
     every long proper list.
+
+    With ``*PRINT-CIRCLE*``, the back-edge that closes the chain emits the
+    matching ``#N#`` rather than ``...`` so the output reads back as the
+    original object (``print.cons.7`'s ``#1=(17 . #1#)``).
     """
     if _level_exceeded(ctx, depth):
         return '#'
+    # Emit the ``#N=`` label for this cons *before* walking its cdr chain:
+    # the chain's back-edge adds the same label to `label_seen` and emits
+    # the matching ``#N#``, and ``#N=`` must come first so a reader can
+    # associate them. ``_circle_prefix`` itself adds to `label_seen` -- so
+    # we compute the prefix string here, then walk, then prepend.
+    #
+    # **A back-reference means "don't walk again"** -- the body has already
+    # been emitted under the matching ``#N=`` somewhere up the call stack,
+    # so a second walk would print the same elements twice. (`print.cons.6`'s
+    # `(list s1 s2 s1 s2)`: the second `s1` should be ``#1#``, not another
+    # ``(1 2)``.)
+    prefix = _circle_prefix(value, ctx)
+    if prefix and not prefix.endswith('='):
+        return prefix
     parts = []
     current = value
     seen = set()
@@ -870,9 +1105,21 @@ def _write_cons(value, ctx, depth):
             parts.append(_write(current, ctx, depth + 1))
             break
         if id(current) in seen:
-            parts.append('...')
+            # Back-edge closing the chain. Under `*PRINT-CIRCLE*` the pre-pass
+            # labelled every cycle entry; this is the back-reference, not
+            # the lossy `...` truncation `*PRINT-LENGTH*` uses. The label was
+            # already added to `label_seen` by `_circle_prefix` at the top
+            # of this call, so the matching back-reference here is `#N#`
+            # rather than `#N=`. A back-edge is also a dotted terminator:
+            # the cdr is a cons, not NIL, so the syntax requires a `.`
+            # between the last element and the back-reference.
+            label = ctx.circle_map.get(id(current))
+            if label is not None:
+                parts.append(f'. #{label}#')
+            else:
+                parts.append('...')
             break
-    return '(' + ' '.join(parts) + ')'
+    return prefix + '(' + ' '.join(parts) + ')'
 
 
 def _vector_elements(value):
@@ -908,7 +1155,7 @@ def _write_vector(value, ctx, depth):
             parts.append('...')
             break
         parts.append(_write(element, ctx, depth + 1))
-    return '#(' + ' '.join(parts) + ')'
+    return _circle_prefix(value, ctx) + '#(' + ' '.join(parts) + ')'
 
 
 def _write_bit_vector(value, ctx):
@@ -961,7 +1208,7 @@ def _write_array(value, ctx, depth):
     # A zero dimension needs no special case: `range(0)` is empty, so a
     # dimension of length 0 yields `()` and the shape still prints -- e.g. a
     # 2x0 array as `#2A(() ())`.
-    return f'#{value.rank}A' + nested([], 0)
+    return _circle_prefix(value, ctx) + f'#{value.rank}A' + nested([], 0)
 
 
 def _write_structure(value, ctx, depth):
@@ -1067,40 +1314,63 @@ def _write(value, ctx, depth):
         # stack: an unhandled RecursionError here kills an entire ANSI run.
         return '...'
 
+    # A shared atom (most often a gensym, e.g. ``print.cons.5``/``.6``) needs
+    # its ``#N=``/``#N#`` label before its body. The aggregate cases
+    # (``_write_cons`` / `_write_vector` / `_write_array` / `_write_structure`)
+    # handle their own prefix, so skip those branches to avoid emitting the
+    # label twice on a shared aggregate that contains only atoms.
+    if ctx.circle and not _is_aggregate(value):
+        prefix = _circle_prefix(value, ctx)
+        if prefix and not prefix.endswith('='):
+            # The label was already emitted (a back-reference) -- return it
+            # as-is, the actual body of this object is not printed again.
+            return prefix
+    else:
+        prefix = ''
+
+    def _emit(s):
+        """Prefix an atom's printed body with its ``#N=`` label, if any.
+
+        Used for every dispatch branch below that handles an atom (symbol,
+        number, character, string, etc.) -- the aggregate branches call
+        their own writers and prepend their own labels.
+        """
+        return prefix + s
+
     # NIL, in each of the forms it takes.
     if value is None or value is lisptype.NIL or isinstance(value, lispNull):
-        return _apply_print_case('NIL', ctx)
+        return _emit(_apply_print_case('NIL', ctx))
     if value is lisptype.T:
-        return _apply_print_case('T', ctx)
+        return _emit(_apply_print_case('T', ctx))
     if value is True:
-        return _apply_print_case('T', ctx)
+        return _emit(_apply_print_case('T', ctx))
     if value is False:
-        return _apply_print_case('NIL', ctx)
+        return _emit(_apply_print_case('NIL', ctx))
 
     if isinstance(value, lispKeyword):
-        return _write_symbol(value, ctx)
+        return _emit(_write_symbol(value, ctx))
     if isinstance(value, LispSymbol):
-        return _write_symbol(value, ctx)
+        return _emit(_write_symbol(value, ctx))
 
     if isinstance(value, Character):
-        return _write_character(value, ctx)
+        return _emit(_write_character(value, ctx))
     if isinstance(value, LispString):
-        return _write_string(value, ctx)
+        return _emit(_write_string(value, ctx))
     if isinstance(value, str):
         # A bare Python `str` is a string here. A length-1 `str` is *also* used
         # as a character in places; that ambiguity belongs to the string
         # representation split (plan.md finding I / M9), and guessing
         # "length 1 means character" here would print `(string #\a)` as `#\a`.
-        return _write_string(value, ctx)
+        return _emit(_write_string(value, ctx))
 
     if isinstance(value, int):
-        return _write_integer(value, ctx)
+        return _emit(_write_integer(value, ctx))
     if isinstance(value, Fraction):
-        return _write_ratio(value, ctx)
+        return _emit(_write_ratio(value, ctx))
     if isinstance(value, float):
-        return _write_float(value, ctx)
+        return _emit(_write_float(value, ctx))
     if isinstance(value, complex):
-        return _write_complex(value, ctx)
+        return _emit(_write_complex(value, ctx))
 
     if isinstance(value, lispCons):
         return _in_progress(value, ctx, _write_cons, depth)
@@ -1192,6 +1462,17 @@ def write_object(value, ctx=None, **overrides):
     elif overrides:
         raise lisptype.LispError(
             "write_object: pass either a PrintContext or keyword overrides")
+    # `*PRINT-CIRCLE*` requires a labelling pre-pass over the object graph
+    # before printing starts, so the print path knows which objects to mark
+    # with ``#N=``/``#N#``. The pass is O(|reachable|) in the worst case and
+    # is bounded by the same budget the print path uses, so a cyclic graph
+    # cannot make it run forever either.
+    if ctx.circle and not ctx.circle_map:
+        _compute_circle_map(value, ctx)
+        # Seed `next_label` from the map so the print path can hand out fresh
+        # labels if it ever needs to (currently it does not -- every label is
+        # assigned up front).
+        ctx.next_label = max(ctx.circle_map.values(), default=0) + 1
     return _write(value, ctx, 0)
 
 

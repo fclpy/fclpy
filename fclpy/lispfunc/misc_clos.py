@@ -26,8 +26,20 @@ def _protocol_gf(name):
     A GF found with no methods at all self-heals inside
     `classes.call_generic_function` via the installers registered below,
     so this need only resolve the object, not repair it.
+
+    The name lookup uses COMMON-LISP as the home package, not the
+    defaulting one in `lisptype.py_str_to_sym` (COMMON-LISP-USER) -- the
+    protocol GFs are CLOS standard-generic-function names, and
+    `(symbol-package 'make-instance)` in any conforming program reads
+    CL, never CL-USER. Interning into CL-USER was a pre-existing
+    side-effect of `py_str_to_sym` that polluted CL-USER's `symbols`
+    dict and broke WITH-PACKAGE-ITERATOR's INTERNAL/EXTERNAL/INHERITED
+    classification: every CL symbol showed up as an INTERNAL symbol of
+    CL-USER, so the test harness's `(find-symbol name pkg) ==
+    (car (multiple-value-list (x)))` was always false.
     """
-    return classes.ensure_generic_function(lisptype.py_str_to_sym(name))
+    sym = lisptype.COMMON_LISP_PACKAGE.intern_symbol(name)
+    return classes.ensure_generic_function(sym)
 
 
 def _resolve_class(class_spec):
@@ -259,7 +271,7 @@ def _default_update_instance_for_different_class(previous, current, *initargs):
     added = [name for name in current.lisp_class.get_all_slots() if name not in current.slot_values]
     if added:
         from fclpy.lispfunc.sequence_protocol import make_lisp_list
-        added_list = make_lisp_list([lisptype.py_str_to_sym(n) for n in added])
+        added_list = make_lisp_list([lisptype.COMMON_LISP_PACKAGE.intern_symbol(n) for n in added])
         classes.call_generic_function(_protocol_gf('SHARED-INITIALIZE'), [current, added_list] + list(initargs))
     return current
 
@@ -684,7 +696,7 @@ import fclpy.state as _state
 _current_env = _state.current_environment
 if _current_env is not None:
     _setf_class_name_gf = _protocol_gf('(SETF CLASS-NAME)')
-    _current_env.bind_function(lisptype.py_str_to_sym('(SETF CLASS-NAME)'), _setf_class_name_gf)
+    _current_env.bind_function(lisptype.COMMON_LISP_PACKAGE.intern_symbol('(SETF CLASS-NAME)'), _setf_class_name_gf)
 del _current_env, _setf_class_name_gf
 
 

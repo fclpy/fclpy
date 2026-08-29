@@ -41,7 +41,19 @@ def _string_characters(obj):
         return obj
     if _arrays.is_array(obj) and _arrays.array_rank_of(obj) == 1:
         element_type = _arrays.element_type_of(obj)
-        if element_type is _arrays.CHARACTER_TYPE or element_type is _arrays.NIL_TYPE:
+        # `:allow-nil-arrays` and `:nil-vectors-are-strings` are mutually
+        # exclusive flags in ansi-test: some tests treat a rank-1 array
+        # with element-type NIL as a vector (and demand `#()`-style
+        # vector comparison), others treat it as a string (and demand
+        # `""`-style string comparison). Both must pass. The path that
+        # both share is the *empty* case -- an array with no elements
+        # is equally well an empty vector and an empty string, and a
+        # nil array of zero length is what both views have in common.
+        # A non-empty nil array is not a string: a string is an array
+        # of CHARACTERs and a CHARACTER is disjoint from NIL, so
+        # requiring at least one element keeps the two views apart
+        # while still serving the empty cases.
+        if element_type is _arrays.CHARACTER_TYPE:
             chars = []
             for e in _arrays.array_elements(obj):
                 if isinstance(e, lisptype.Character):
@@ -51,6 +63,11 @@ def _string_characters(obj):
                 else:
                     return None
             return ''.join(chars)
+        if element_type is _arrays.NIL_TYPE:
+            elements = _arrays.array_elements(obj)
+            if not elements:
+                return ''
+            return None
     return None
 
 
@@ -178,15 +195,24 @@ def equal(obj1, obj2):
     if p1 or p2:
         return lisptype.lisp_bool(p1 and p2 and obj1 == obj2)
 
-    # Lists and tuples
+    # Lists and tuples -- CLHS 5.3: EQUAL descends into lists, not vectors.
+    # Python `list` covers *both* here, so the explicit disambiguation is
+    # required: a `#(...)` literal that comes back as a Python `list` is a
+    # vector, not a list, and `(vector 1 2 3) = (vector 1 2 3)` is *not*
+    # EQUAL (CLHS 5.3; `equal.4` pins this). The character/string check
+    # above is what already separated a length-1 Python `str` from a
+    # character, and `is_vector` here is the array side of the same line.
     if isinstance(obj1, (list, tuple)) and isinstance(obj2, (list, tuple)):
+        from .sequence_protocol import is_vector
+        if is_vector(obj1) or is_vector(obj2):
+            return lisptype.NIL
         if len(obj1) != len(obj2):
             return lisptype.NIL
         for x, y in zip(obj1, obj2):
             if equal(x, y) != lisptype.T:
                 return lisptype.NIL
         return lisptype.T
-    
+
     return lisptype.NIL
 
 
@@ -195,7 +221,29 @@ def equalp(obj1, obj2):
     """Test for liberal equality."""
     if equal(obj1, obj2) == lisptype.T:
         return lisptype.T
-    
+
+    # CLHS 5.3: EQUALP walks the spine of two conses the way EQUAL does, but
+    # with EQUALP on the cars -- `(equalp '(#\a #\b) '(#\A #\B))` is T
+    # because EQUALP compares characters case-insensitively, while EQUAL on
+    # the cars returns NIL (case-sensitive). EQUALP's aggregate descent must
+    # therefore mirror EQUAL's cdr-iteration; the loop below is a copy of
+    # `equal`'s structure with the recursive call changed to `equalp`.
+    if consp(obj1) and consp(obj2):
+        while True:
+            if equalp(car(obj1), car(obj2)) != lisptype.T:
+                return lisptype.NIL
+            obj1, obj2 = cdr(obj1), cdr(obj2)
+            if not (consp(obj1) and consp(obj2)):
+                break
+        # Spines may have terminated together (both NIL) or one may still be a
+        # cons; the latter is a length mismatch, which is not EQUALP.
+        if consp(obj1) or consp(obj2):
+            return lisptype.NIL
+        # Fall through: the lists have the same length and per-element EQUALP
+        # pairs. Check the atoms (NIL/NIL here) once more with the rest of the
+        # EQUALP rules below.
+        return equalp(obj1, obj2)
+
     # Numbers - allow type coercion
     if isinstance(obj1, (int, float, complex)) and isinstance(obj2, (int, float, complex)):
         return lisptype.lisp_bool(obj1 == obj2)
@@ -212,6 +260,38 @@ def equalp(obj1, obj2):
     if isinstance(obj1, lisptype.Character) and isinstance(obj2, lisptype.Character):
         return lisptype.lisp_bool(obj1.char.upper() == obj2.char.upper())
     if isinstance(obj1, lisptype.Character) or isinstance(obj2, lisptype.Character):
+        return lisptype.NIL
+
+    # Vectors -- CLHS 5.3: two arrays are EQUALP if they have the same
+    # dimensions and EQUALP elements. Which *Python* container holds those
+    # elements is not part of the question, and testing `isinstance(x, list)`
+    # made it part of the question: a `#(...)` literal is an
+    # `AdjustableVector` while `(vector ...)` and every rebuilt sequence
+    # result is a Python `list`, so the same vector built two ways was never
+    # EQUALP to itself (plan.md Finding M). Try the vector branch *before*
+    # the string check below so an empty array with element-type NIL
+    # (which `_string_characters` would misclassify as the empty string)
+    # and an empty `""` (a string, not a vector) each take the branch
+    # their actual type names: the array reaches T via element-wise
+    # comparison, the string via the string branch.
+    from .sequence_protocol import is_vector, seq_elements
+    if is_vector(obj1) and is_vector(obj2):
+        left, right = seq_elements(obj1), seq_elements(obj2)
+        if len(left) != len(right):
+            return lisptype.NIL
+        for x, y in zip(left, right):
+            if equalp(x, y) != lisptype.T:
+                return lisptype.NIL
+        return lisptype.T
+    # One side is a vector, the other is not -- an array and a string
+    # are not EQUALP unless the string is a rank-1 character array (then
+    # both go through `_string_characters` below). Bail out so the
+    # asymmetric string check below can do the right thing.
+    if is_vector(obj1) or is_vector(obj2):
+        s1 = _string_characters(obj1)
+        s2 = _string_characters(obj2)
+        if s1 is not None and s2 is not None:
+            return lisptype.lisp_bool(s1.upper() == s2.upper())
         return lisptype.NIL
 
     s1 = _string_characters(obj1)
@@ -573,7 +653,16 @@ def typep(object, type_specifier):
         condition_class = _condition_class_for_name(type_name)
         if isinstance(condition_class, type):
             return lisptype.lisp_bool(isinstance(object, condition_class))
-        return lisptype.NIL
+        # A non-condition-type specifier (ATOM, STANDARD-OBJECT, TYPES.9A's
+        # full cross-product of CL type names): a condition instance is a
+        # standard-object, an atom, a t, and every other type the type
+        # lattice puts above it. Returning NIL here would silently tell
+        # ansi-test's TYPES.9A that no condition is an atom, and the same
+        # for the ~70 other names the test iterates over. Fall through to
+        # the type-name branches below so a condition gets the same answer
+        # `(type-of cond)` would for any other object of the same shape --
+        # which is what makes TYPES.9A's "if (subtypep T1 T2) then
+        # (typep x T1) implies (typep x T2)" hold.
 
     # Check for built-in types
     if type_name == 'T':
@@ -667,7 +756,18 @@ def typep(object, type_specifier):
         # for a Method object at all and fell through to the final NIL.
         return lisptype.lisp_bool(isinstance(object, classes.Method))
     elif type_name == 'STANDARD-OBJECT' or type_name == 'INSTANCE':
-        return lisptype.lisp_bool(isinstance(object, classes.LispInstance))
+        # CLHS 4.3.7/7.1.2: the standardized STANDARD-OBJECT subclasses
+        # include condition, class, method, generic-function, structure-object
+        # (CLHS figure 4.3) -- so a condition instance IS a standard-object,
+        # which the narrow `LispInstance` check silently answered NIL for,
+        # breaking ansi-test's TYPES.9A for every supertype query naming
+        # STANDARD-OBJECT, INSTANCE, METHOD, STANDARD-METHOD, ...
+        # Built-in classes like NUMBER and CHARACTER are NOT standard-object
+        # subclasses (CLHS 4.2), and this check correctly still answers NIL
+        # for them. The typespec lattice already classifies conditions as
+        # standard-objects; this brings the TYPEP ladder in line with it.
+        return lisptype.lisp_bool(
+            isinstance(object, (classes.LispInstance, lisptype.Condition)))
     elif _arrays.is_array_type_name(type_name):
         # CLHS 15.1: a string *is* a vector and every vector is an array, so
         # these cannot be separate `isinstance` tests; they are one question
@@ -722,6 +822,16 @@ def typep(object, type_specifier):
     elif type_name == 'LOGICAL-PATHNAME':
         from .pathnames import Pathname
         return lisptype.lisp_bool(isinstance(object, Pathname) and object.logical)
+    elif type_name == 'PACKAGE':
+        # Asked of the same object model PACKAGEP answers for, so the
+        # predicate and the type specifier cannot disagree. Without this
+        # branch TYPEP fell through to the CLOS `find_class` lookup
+        # below, which requires a `classes.LispInstance` -- a `Package`
+        # is never one, so `(typep p 'package)` was NIL even though
+        # `(packagep p)` was T, and `check-type-predicate` for PACKAGEP
+        # collected that as a mismatch on every Package object in the
+        # universe.
+        return lisptype.lisp_bool(isinstance(object, lisptype.Package))
     elif type_name in ('STREAM', 'TWO-WAY-STREAM', 'ECHO-STREAM',
                        'CONCATENATED-STREAM', 'BROADCAST-STREAM',
                        'SYNONYM-STREAM', 'STRING-STREAM', 'FILE-STREAM'):
@@ -734,9 +844,21 @@ def typep(object, type_specifier):
         from .streams import stream_type_matches
         return lisptype.lisp_bool(stream_type_matches(object, type_name))
     elif type_name == 'BOOLEAN':
-        # In Common Lisp, BOOLEAN is equivalent to (OR NULL (EQL T))
-        # i.e., only NIL and T are booleans
-        return lisptype.lisp_bool(object is lisptype.NIL or isinstance(object, lisptype.lispNull) or object is lisptype.T)
+        # In Common Lisp, BOOLEAN is equivalent to (OR NULL (EQL T)) -- only
+        # NIL and T are booleans, by identity (CLHS 4.2). fclpy's NIL has
+        # three Python spellings (None, the lisptype.NIL singleton, and the
+        # interned LispSymbol whose value is the empty list), and the
+        # symbol-NIL is the same Lisp object as the value-NIL via EQ. The
+        # earlier `object is lisptype.NIL` test (Python identity) was too
+        # narrow: a quoted `'NIL` from the suite's `(loop for x in
+        # *universe*)` is the symbol itself, not the singleton, and silently
+        # failed BOOLEAN-TYPE.3. Match `null`'s own notion of "null"
+        # (`object == lisptype.NIL`) so the predicate and the type specifier
+        # agree about what NIL is -- otherwise `(is-t-or-nil 'nil)` and
+        # `(typep 'nil 'boolean)` would answer differently for the same
+        # value, which is exactly the test's invariant.
+        return lisptype.lisp_bool(
+            null(object) == lisptype.T or object is lisptype.T)
     else:
         # Try to find a user-defined class with this name
         try:
@@ -825,6 +947,16 @@ def type_of(object):
         # generic branch would otherwise answer the wrong, less-specific
         # "FUNCTION" for it.
         return lisptype.LispSymbol('STANDARD-GENERIC-FUNCTION')
+    elif isinstance(object, lisptype.Package):
+        # `Package` is its own CLHS 4.2.3 type: `(type-of p)` must be
+        # `PACKAGE` (then `CLASS-OF` looks it up in the registry, finding
+        # the standard-class installed by `_init_builtin_classes`) rather
+        # than falling through to `T`. Without this branch every Package
+        # object answered `(class-of p) => T, t` -- so `(typep p 'package)`
+        # was NIL even though `(packagep p)` was T, and the harness's
+        # `check-type-predicate` collected that contradiction as a
+        # mismatch.
+        return lisptype.LispSymbol('PACKAGE')
     elif callable(object):
         return lisptype.LispSymbol('FUNCTION')
     else:

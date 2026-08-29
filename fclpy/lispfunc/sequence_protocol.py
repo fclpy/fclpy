@@ -351,12 +351,22 @@ def rebuild_like(original, elements):
 # Sequence type designators, normalized to the kind of sequence they name.
 # CLHS 4.2.3/15.1.2.2: LIST and CONS name lists; VECTOR and its subtypes name
 # vectors; STRING/BIT-VECTOR are vectors with a constrained element type.
-_LIST_TYPES = frozenset(('LIST', 'CONS', 'NULL'))
+# NULL is *not* here -- it is the type NIL, the empty sequence, not a list
+# type that can have elements. `parse_sequence_type` recognizes it and returns
+# `('NIL', ...)` so a non-empty result under NULL is a TYPE-ERROR
+# (`merge.error.6`).
+_LIST_TYPES = frozenset(('LIST', 'CONS'))
 _STRING_TYPES = frozenset(('STRING', 'SIMPLE-STRING', 'BASE-STRING', 'SIMPLE-BASE-STRING'))
 _BIT_VECTOR_TYPES = frozenset(('BIT-VECTOR', 'SIMPLE-BIT-VECTOR'))
 _VECTOR_TYPES = frozenset((
-    'VECTOR', 'SIMPLE-VECTOR', 'ARRAY', 'SIMPLE-ARRAY', 'SEQUENCE',
+    'VECTOR', 'SIMPLE-VECTOR', 'ARRAY', 'SIMPLE-ARRAY',
 )) | _STRING_TYPES | _BIT_VECTOR_TYPES
+# Abstract types per CLHS 14.1: a class with at least one subclass that has
+# no direct instances. The implementations (LIST, VECTOR, ...) belong here,
+# but `SEQUENCE`, `ARRAY`, and `T` are abstract and cannot be used as the
+# `result-type` of MAKE-SEQUENCE / MAP / CONCATENATE / MERGE -- `concatenate
+# 'sequence ...)` must signal a TYPE-ERROR (`concatenate.error.1`).
+_ABSTRACT_RESULT_TYPES = frozenset(('SEQUENCE', 'ARRAY', 'T'))
 _CHARACTER_ELEMENT_TYPES = frozenset(('CHARACTER', 'BASE-CHAR', 'STANDARD-CHAR', 'EXTENDED-CHAR'))
 
 
@@ -440,8 +450,24 @@ def parse_sequence_type(result_type, what='sequence function'):
         raise lisptype.LispTypeError(
             f"{what}: {result_type!r} is not a sequence type specifier",
             expected_type="sequence type specifier", actual_value=result_type)
-    if name == 'NIL':
+    if name == 'NIL' or name == 'NULL':
         return ('NIL', None, None)
+    # A union result type like `(or (vector t 10) (vector t 5))` is a CLHS
+    # `type-union`; each branch names a legal sequence type. Pick the first
+    # branch whose `kind` and `element_type` match a recognised sequence
+    # type -- MAP, CONCATENATE and MAKE-SEQUENCE all accept a union when
+    # each branch is itself a sequence type specifier (`map.48`). The caller
+    # decides later whether the constructed sequence satisfies the size
+    # constraints; here we just decode the branch.
+    if name == 'OR':
+        for branch in rest:
+            branch_kind, branch_size, branch_et = parse_sequence_type(
+                branch, what)
+            if branch_kind != 'NIL':
+                return (branch_kind, branch_size, branch_et)
+        raise lisptype.LispTypeError(
+            f"{what}: {result_type!r} does not name a sequence type",
+            expected_type="LIST, VECTOR, STRING, or BIT-VECTOR", actual_value=result_type)
 
     element_type = None
     size = None
@@ -473,6 +499,16 @@ def parse_sequence_type(result_type, what='sequence function'):
     if name in _BIT_VECTOR_TYPES or is_bit:
         return ('BIT-VECTOR', size, element_type)
     if name in _VECTOR_TYPES:
+        # A bare `ARRAY` or `T` or `SEQUENCE` is an abstract class; reject
+        # it as the *result type* of MAKE-SEQUENCE / MAP / CONCATENATE.
+        # In a *compound* specifier like `(ARRAY CHARACTER (5))` it is the
+        # head of a concrete type, which is fine.
+        if name in _ABSTRACT_RESULT_TYPES and not rest:
+            raise lisptype.LispTypeError(
+                f"{what}: {result_type!r} is an abstract type and cannot "
+                f"name a result sequence",
+                expected_type="concrete sequence type specifier",
+                actual_value=result_type)
         return ('VECTOR', size, element_type)
     raise lisptype.LispTypeError(
         f"{what}: {result_type!r} does not name a sequence type",
@@ -494,6 +530,22 @@ def build_sequence(result_type, elements, what='sequence function'):
     kind, size, _element_type = parse_sequence_type(result_type, what)
     elements = list(elements)
     if size is not None and size != len(elements):
+        # A union result type may match either of several sizes; if the
+        # first branch didn't match, walk the others to find one that does.
+        # (CLHS permits `(or (vector t 10) (vector t 5))` for a 5-element
+        # result -- `map.48`.)
+        if (isinstance(result_type, (lisptype.lispCons, list, tuple))
+                and len(elements) > 0):
+            head_elts = seq_elements(result_type, what)
+            if (head_elts and _type_name(head_elts[0]) == 'OR'
+                    and len(head_elts) > 1):
+                for branch in head_elts[1:]:
+                    try:
+                        bkind, bsize, _ = parse_sequence_type(branch, what)
+                        if bsize is None or bsize == len(elements):
+                            return build_sequence(branch, elements, what)
+                    except lisptype.LispTypeError:
+                        continue
         raise lisptype.LispTypeError(
             f"{what}: result of length {len(elements)} does not match "
             f"the length {size} required by {result_type!r}",

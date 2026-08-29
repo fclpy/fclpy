@@ -171,14 +171,24 @@ def eval_psetq(form, env):
 
     Syntax: (PSETQ var1 val1 var2 val2 ...)
 
-    Like SETQ, but all value-forms are evaluated first (left to right,
-    using the OLD values of any vars they reference), and only then are
-    all the vars assigned. Always returns NIL.
+    Like SETQ, but every *form in source order* (the value-form, then the
+    next var's place subforms) is evaluated before any assignment. A
+    var naming a symbol-macro (e.g. via SYMBOL-MACROLET) is assigned
+    through its expansion: a chain of symbol-macros resolves to the
+    underlying variable, a CAR/CDR form is mutated in place, and a more
+    complex expansion is handed to `_place_accessor` so the assignment
+    lands exactly where the expansion points
+    (`psetq.4`/`psetq.5`/`psetq.7`). Without the L-R interleaving,
+    `psetq.7` was resolving both x and y's `AREF` place first (i
+    incremented twice), then evaluating both value-forms (i incremented
+    twice more) -- the standard's L-R order has place, value, place,
+    value, so each symbol-macro's `INCF` runs *between* value reads and
+    yields the (aref a 1)=2, (aref a 3)=4 the test expects.
     """
     from .evaluation_core import eval
 
     args = cdr(form)
-    pairs = []
+    pairs = []  # (var, value_form)
 
     while _consp_internal(args) and _consp_internal(cdr(args)):
         var = car(args)
@@ -187,11 +197,74 @@ def eval_psetq(form, env):
         if not isinstance(var, lisptype.LispSymbol):
             raise lisptype.LispNotImplementedError("PSETQ: variable must be a symbol")
 
-        pairs.append((var, eval(value_form, env)))
+        pairs.append((var, value_form))
         args = cdr(cdr(args))
 
-    for var, value in pairs:
-        env.set_variable(var, value)
+    # CLHS 5.1.3 + 5.1.1.1: in source order, evaluate each var's
+    # symbol-macro expansion (the "place" part), then the value-form,
+    # then the next var's place, and so on -- *not* all places first
+    # then all values. Materialise place closures as we go so the next
+    # value-form reads the side effects of the previous place
+    # resolution, then read each value-form, then assign the matching
+    # place closure with that value.
+    value_results = []
+    place_setters = []  # parallel to value_results
+
+    for var, value_form in pairs:
+        expansion = env.get_symbol_macro(var)
+        setter = None
+        if expansion is None:
+            setter = ('var', var)
+        elif isinstance(expansion, lisptype.LispSymbol):
+            place = expansion
+            while isinstance(place, lisptype.LispSymbol):
+                deeper = env.get_symbol_macro(place)
+                if deeper is None:
+                    break
+                place = deeper
+            if isinstance(place, lisptype.LispSymbol):
+                setter = ('var', place)
+            else:
+                try:
+                    _g, _s = _place_accessor(place, env)
+                    setter = ('accessor', _s)
+                except lisptype.LispError:
+                    setter = None
+        elif _consp_internal(expansion) and isinstance(car(expansion), lisptype.LispSymbol):
+            op_name = car(expansion).name
+            place_args = cdr(expansion)
+            if op_name in ('CAR', 'CDR') and _consp_internal(place_args):
+                target = eval(car(place_args), env)
+                if _consp_internal(target):
+                    setter = ('cell', target, op_name == 'CAR')
+                else:
+                    setter = None
+            else:
+                try:
+                    _g, _s = _place_accessor(expansion, env)
+                    setter = ('accessor', _s)
+                except lisptype.LispError:
+                    setter = None
+        place_setters.append(setter)
+        # Evaluate the value-form *now* (after this place's subforms,
+        # before the next place's) -- `psetq.7` is the canonical test.
+        value_results.append(eval(value_form, env))
+
+    for setter, value in zip(place_setters, value_results):
+        if setter is None:
+            continue
+        kind = setter[0]
+        if kind == 'cell':
+            target = setter[1]
+            is_car = setter[2]
+            if is_car:
+                target.car = value
+            else:
+                target.cdr = value
+        elif kind == 'var':
+            env.set_variable(setter[1], value)
+        elif kind == 'accessor':
+            setter[1](value)
 
     return lisptype.NIL
 
@@ -4299,6 +4372,16 @@ def _place_accessor(place_form, env):
                 if not _consp_internal(cell):
                     raise lisptype.LispError(f"{op_name} place: index out of bounds")
                 return (lambda: cell.car, lambda v: _setattr_return(cell, 'car', v))
+            # CLHS 13.1.4: CHAR/SCHAR yield a CHARACTER, not a 1-char
+            # string. `LispString.__getitem__` returns a Python `str`
+            # (sequences need to be hashable etc.); a place accessor
+            # must preserve the type the test harness compares against
+            # -- otherwise `rotatef.18`/`rotatef.22` see `"b"` where
+            # they expected `#\b`.
+            if isinstance(seq, lisptype.LispString):
+                def _char_get():
+                    return lisptype.Character(seq[idx])
+                return (_char_get, lambda v: _setitem_return(seq, idx, v))
             return (lambda: seq[idx], lambda v: _setitem_return(seq, idx, v))
 
         if op_name == 'SYMBOL-VALUE' and _consp_internal(place_args):

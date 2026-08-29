@@ -80,35 +80,43 @@ def eval_return_from(form, env):
 
 
 @_registry.cl_macro('RETURN', documentation='RETURN macro: exits innermost NIL block')
-def return_macro_expander(*args):
+def return_macro_expander(*args, **kwargs):
     """RETURN macro expander: converts (RETURN [value]) to (RETURN-FROM NIL [value])
-    
-    RETURN is equivalent to RETURN-FROM with NIL as the block name.
-    Macro arguments: optional value form)
+
+    RETURN is equivalent to RETURN-FROM with the block name NIL. The
+    macro function's signature accepts the raw args of the macro call
+    plus, when invoked through the macro-expander path, a trailing
+    environment arg (recognised via `__expects_environment__`).
+
+    A direct call (no environment arg) is a PROGRAM-ERROR
+    (`return.error.1`/`.2`/`.3`). The fall-back path in
+    `evaluation_core` re-calls with fewer args on a Python
+    `TypeError`, so the condition must be raised *inside* the macro
+    function, not as a bare `TypeError` reaching a Lisp value.
     """
-    # Validate argument count (0 or 1 argument)
-    if len(args) > 1:
+    if not args or not isinstance(args[-1], lisptype.Environment):
+        # Direct call without an environment arg is a PROGRAM-ERROR.
         raise lisptype.LispProgramError(
-            message=f"RETURN macro takes 0 or 1 argument, got {len(args)}"
-        )
-    
-    # Build expansion: (RETURN-FROM NIL [value])
-    if args:
-        # (RETURN value) -> (RETURN-FROM NIL value)
-        value_form = args[0]
+            message=("RETURN: macro function must be called via the "
+                     "macro-expander (form &environment env)"))
+    # Real macro call: pop the trailing env arg. The remaining
+    # `raw_args` are the unevaluated value-form (zero or one arg).
+    raw_args = args[:-1]
+    if len(raw_args) == 0:
+        # `(RETURN)` -- (RETURN-FROM NIL)
+        return lisptype.lispCons(
+            lisptype.LispSymbol('RETURN-FROM'),
+            lisptype.lispCons(lisptype.NIL, lisptype.NIL))
+    if len(raw_args) == 1:
+        # `(RETURN value)` -- (RETURN-FROM NIL value)
         return lisptype.lispCons(
             lisptype.LispSymbol('RETURN-FROM'),
             lisptype.lispCons(
                 lisptype.NIL,
-                lisptype.lispCons(value_form, lisptype.NIL)
-            )
-        )
-    else:
-        # (RETURN) -> (RETURN-FROM NIL)
-        return lisptype.lispCons(
-            lisptype.LispSymbol('RETURN-FROM'),
-            lisptype.lispCons(lisptype.NIL, lisptype.NIL)
-        )
+                lisptype.lispCons(raw_args[0], lisptype.NIL)))
+    raise lisptype.LispProgramError(
+        message="RETURN: too many arguments")
+return_macro_expander.__expects_environment__ = True
 
 
 def eval_catch(form, env):

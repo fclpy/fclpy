@@ -567,25 +567,35 @@ class Package(lispT):
     
     def find_symbol(self, name):
         """Find a symbol in this package.
-        
+
         Returns a tuple of (symbol, status) where status is one of:
         - ':INTERNAL' if symbol exists in this package but not exported
         - ':EXTERNAL' if symbol exists in this package and is exported
         - ':INHERITED' if symbol is inherited from a used package
         - (None, None) if symbol not found
-        
-        Args:
-            name: Symbol name to search for
-            
-        Returns:
-            Tuple of (LispSymbol or None, status string or None)
+
+        `name` is a *string designator* (CLHS 11.2): a string, a symbol,
+        a character, or a specialized character array. The
+        `find-symbol.17`-.21` family pass displaced, fill-pointered, and
+        adjustable arrays whose `.upper()`-equivalent is the same as
+        the simple "FOO" string the symbol is stored under; before
+        normalizing, `self.symbols.get(displaced_array)` answered NIL
+        because the key is a plain `str` and the designator is not.
         """
+        from .lispfunc.comparison import _string_characters
+        normalized = _string_characters(name)
+        if normalized is not None:
+            name = normalized
+        elif isinstance(name, (lisptype.lispKeyword, lisptype.LispSymbol)):
+            name = name.name
+        elif isinstance(name, lisptype.Character):
+            name = name.char
         # First check this package's own symbols
         symbol = self.symbols.get(name, None)
         if symbol is not None:
             status = ':EXTERNAL' if name in self.external_symbols else ':INTERNAL'
             return (symbol, status)
-        
+
         # Check inherited symbols from used packages
         for used_pkg in getattr(self, 'use_packages', []):
             # Handle both Package objects and package names
@@ -597,7 +607,7 @@ class Package(lispT):
                     sym = used_pkg.symbols.get(name)
                     if sym is not None:
                         return (sym, ':INHERITED')
-        
+
         return (None, None)
     
     def export_symbol(self, name):

@@ -565,44 +565,36 @@ def random(limit, state=None):
 
 
 @_registry.cl_function('MAKE-RANDOM-STATE')
-def make_random_state(state=None):
-    """Make random state object.
+def make_random_state(state=lisptype.OMITTED):
+    """Make random state object (CLHS 12.1.4 MAKE-RANDOM-STATE).
 
     Args:
         state: Controls how to initialize:
             - NIL or omitted: Copy current *RANDOM-STATE*
             - T: Create fresh state from entropy
             - RandomState: Copy that state
-            - Tuple: Restore from a previously saved state (implementation-defined)
 
     Returns:
         A new RandomState object.
+
+    The argument is restricted to NIL, T, or a random-state (CLHS 12.1.4
+    says a non-nil/non-t/non-random-state designator is a TYPE-ERROR, not
+    a seed). The previous implementation handed every other value to
+    Python's `RandomState` as a seed, so `(make-random-state 0)` and
+    `(make-random-state 1.5)` silently answered a state object instead of
+    signalling, and MAKE-RANDOM-STATE.ERROR.4 (`check-type-error`) saw
+    them as successes.
     """
-    if state is None or state is lisptype.NIL:
-        # Copy the default random state
+    if state is lisptype.OMITTED or state is None or state is lisptype.NIL:
         return RandomState(current_random_state())
-    elif state is True or state is lisptype.T:
-        # Create a truly random new state
+    if state is True or state is lisptype.T:
         return RandomState(True)
-    elif isinstance(state, RandomState):
-        # Copy the provided state
+    if isinstance(state, RandomState):
         return RandomState(state)
-    else:
-        # Try to pass it to RandomState, which may recognize it as a valid seed
-        # (e.g., Python's random state tuple). If RandomState can't handle it,
-        # it will be silently ignored and a fresh state created, which matches
-        # the CLHS spec for implementation-defined state designators.
-        try:
-            return RandomState(state)
-        except (TypeError, ValueError):
-            # CLHS: an unrecognized state designator is a TYPE-ERROR, not a
-            # generic error condition -- MAKE-RANDOM-STATE.ERROR.4 probes this
-            # with `check-type-error`, which requires the condition signaled to
-            # actually be a TYPE-ERROR.
-            raise lisptype.LispTypeError(
-                f"MAKE-RANDOM-STATE: invalid state argument: {state}",
-                expected_type="(OR (MEMBER NIL T) RANDOM-STATE)",
-            actual_value=state)
+    raise lisptype.LispTypeError(
+        f"MAKE-RANDOM-STATE: invalid state argument: {state!r}",
+        expected_type="(OR (MEMBER NIL T) RANDOM-STATE)",
+        actual_value=state)
 
 
 @_registry.cl_function('RANDOM-STATE-P')

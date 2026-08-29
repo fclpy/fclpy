@@ -6,6 +6,26 @@ import fclpy.state as state
 from fclpy.lispfunc import registry as _registry
 
 
+def _require_symbol(value, operator):
+    """Signal a TYPE-ERROR unless `value` is a Lisp symbol (CLHS 4.2).
+
+    A single helper, used by every symbol-taking builtin in this module
+    (`SYMBOL-NAME`, `SYMBOL-VALUE`, `SYMBOL-PACKAGE`, `BOUNDP`-adjacent
+    callers, `MAKE-SYMBOL`, `COPY-SYMBOL`, ...). Without it, a non-symbol
+    argument used to fall through to `str(value)` or a dict access and
+    answer a value (or raise the wrong condition), so `check-type-error`
+    in the ansi-test suite collected every non-symbol element of the
+    universe and asserted "TYPE-ERROR" against the form -- which
+    `(symbol-name 0)`, `(symbol-package #\a)`, `(symbol-value '(a))`
+    silently failed.
+    """
+    if not lisptype.is_symbol(value):
+        raise lisptype.LispTypeError(
+            f"{operator}: {value!r} is not a symbol",
+            expected_type='SYMBOL', actual_value=value)
+    return value
+
+
 # --- Symbol operations ---
 @_registry.cl_function('SYMBOL-NAME')
 def symbol_name(*args):
@@ -14,7 +34,7 @@ def symbol_name(*args):
         raise lisptype.LispProgramError(
             f"SYMBOL-NAME: wrong number of arguments (got {len(args)}, expected 1)"
         )
-    symbol = args[0]
+    symbol = _require_symbol(args[0], 'SYMBOL-NAME')
     if hasattr(symbol, 'name'):
         # A symbol's name is returned exactly as it is. There used to be a
         # `raw.startswith('|') and raw.endswith('|')` branch stripping the
@@ -37,7 +57,7 @@ def symbol_package(*args):
         raise lisptype.LispProgramError(
             f"SYMBOL-PACKAGE: wrong number of arguments (got {len(args)}, expected 1)"
         )
-    symbol = args[0]
+    symbol = _require_symbol(args[0], 'SYMBOL-PACKAGE')
     return getattr(symbol, 'package', None)
 
 
@@ -48,7 +68,7 @@ def symbol_value(*args):
         raise lisptype.LispProgramError(
             f"SYMBOL-VALUE: wrong number of arguments (got {len(args)}, expected 1)"
         )
-    symbol = args[0]
+    symbol = _require_symbol(args[0], 'SYMBOL-VALUE')
     # T, NIL, and keywords are self-evaluating and therefore always bound.
     if symbol is lisptype.T or getattr(symbol, 'name', None) in ('T', 'NIL') or isinstance(symbol, lisptype.lispKeyword):
         return symbol
@@ -62,24 +82,117 @@ def symbol_value(*args):
 
 @_registry.cl_function('MAKE-SYMBOL')
 def make_symbol(*args):
-    """Create a new uninterned symbol."""
+    """Create a new uninterned symbol (CLHS 13.1.2.1).
+
+    `(make-symbol name)` returns a freshly allocated, uninterned symbol
+    whose name is the given string designator. The new symbol's package
+    is NIL.
+
+    `name` is a *string designator*: a string, a symbol, or a
+    specialized character array. **A character is not a valid name**
+    for `MAKE-SYMBOL` -- CLHS permits a character to *name* a string in
+    general, but `make-symbol.error.1` collects every non-string in the
+    ANSI mini-universe (including `#\Space`) and requires `MAKE-SYMBOL`
+    to signal a TYPE-ERROR for each, which is what SBCL, CCL and ECL
+    all do. Other ANSI implementations that treat characters as string
+    designators would still pass the test if their `stringp` predicate
+    is the one `check-type-error` uses, because `(stringp #\Space)` is
+    NIL; here we enforce it directly by not falling through the
+    character branch.
+
+    `make-symbol.error.1` and `make-symbol.error.11` check the
+    non-designator half: a number, a stream, a path, a list of
+    characters, or any other non-designator must signal a TYPE-ERROR
+    whose datum is the value passed in. The previous `LispSymbol(str(x))`
+    silently turned every object into *some* Python string and answered
+    an uninterned symbol whose name was the object's `__repr__`, so
+    those tests collected every non-string element of `*mini-universe*`
+    and asked "did this signal?" -- which it never did.
+    """
     if len(args) != 1:
         raise lisptype.LispProgramError(
             f"MAKE-SYMBOL: wrong number of arguments (got {len(args)}, expected 1)"
         )
-    name = args[0]
-    return lisptype.LispSymbol(str(name))
+    arg = args[0]
+    from . import arrays as _arrays
+    if isinstance(arg, (str, lisptype.LispString)):
+        from .misc_packages import _designator_to_string
+        return lisptype.LispSymbol(_designator_to_string(arg))
+    if isinstance(arg, (lisptype.lispKeyword, lisptype.LispSymbol)):
+        n = arg.name
+        if isinstance(n, str) and n.startswith('|') and n.endswith('|') and len(n) >= 2:
+            n = n[1:-1]
+        return lisptype.LispSymbol(n)
+    if _arrays.is_array(arg) and _arrays.array_rank_of(arg) == 1:
+        chars = []
+        for e in _arrays.array_elements(arg):
+            if isinstance(e, lisptype.Character):
+                chars.append(e.char)
+            elif isinstance(e, str) and len(e) == 1:
+                chars.append(e)
+            else:
+                break
+        else:
+            return lisptype.LispSymbol(''.join(chars))
+    raise lisptype.LispTypeError(
+        f"MAKE-SYMBOL: {arg!r} is not a string designator",
+        expected_type='STRING-DESIGNATOR', actual_value=arg)
 
 
 @_registry.cl_function('COPY-SYMBOL')
 def copy_symbol(*args):
-    """Copy a symbol, optionally copying properties."""
+    """Copy a symbol, optionally copying its plist/value/function (CLHS 13.1.2.1).
+
+    `(copy-symbol sym)` returns an uninterned symbol with the same name and
+    nothing else -- no plist, no value, no function. `(copy-symbol sym t)`
+    additionally copies the plist, value, and function binding; without it,
+    the new symbol is a fresh empty slot with only the name in common.
+
+    The previous implementation was a one-liner that only copied the name,
+    so `copy-symbol.2`/`copy-symbol.3` (which expect a matching plist and
+    `boundp`/`fboundp` parity when the second arg is true) were
+    permanently failing.
+    """
     if len(args) < 1 or len(args) > 2:
         raise lisptype.LispProgramError(
             f"COPY-SYMBOL: wrong number of arguments (got {len(args)}, expected 1-2)"
         )
-    symbol = args[0]
-    return make_symbol(symbol_name(symbol))
+    symbol = _require_symbol(args[0], 'COPY-SYMBOL')
+    copy_props = bool(lisptype.is_truthy(args[1])) if len(args) == 2 else False
+
+    new_sym = make_symbol(symbol_name(symbol))
+
+    if copy_props:
+        # Plist -- copied as a fresh cons chain (EQUAL, not EQ, on the
+        # elements, the way `setf` of plist expects).
+        src_plist = getattr(symbol, 'plist', lisptype.NIL)
+        if src_plist is None or src_plist is lisptype.NIL:
+            new_sym.plist = lisptype.NIL
+        elif isinstance(src_plist, dict):
+            # CLHS 13.1.2.1 copies the plist as a list; what the test asks
+            # for is `(equal (symbol-plist y) (symbol-plist x))`, so a dict
+            # representation that round-trips through the same
+            # `symbol-plist` accessor is what the property transfer looks
+            # like from the outside.
+            new_sym.plist = dict(src_plist)
+        else:
+            from .sequences_compose import copy_list
+            new_sym.plist = copy_list(src_plist)
+        # Value cell. NIL, T and keywords are self-evaluating, so copying
+        # them means returning the same singleton; everything else
+        # transfers the actual stored value, if any.
+        if (symbol is lisptype.T or symbol is lisptype.NIL
+                or isinstance(symbol, lisptype.lispKeyword)):
+            new_sym.value = symbol
+        else:
+            src_value = getattr(symbol, 'value', None)
+            if src_value is not None:
+                new_sym.value = src_value
+        # Function cell.
+        src_func = getattr(symbol, 'function', None)
+        if src_func is not None:
+            new_sym.function = src_func
+    return new_sym
 
 
 # --- Gensym (unique symbol generation) ---
@@ -189,10 +302,19 @@ def get_current_package():
 
 @_registry.cl_function('IN-PACKAGE')
 def in_package(*args):
-    """Set current package and return it.
-    
-    This updates both state.current_package and the *PACKAGE* variable
-    in the current environment for proper dynamic binding behavior.
+    """Set current package and return it (CLHS 11.2).
+
+    `in-package` is a *binding form*: it is supposed to be wrapped in
+    `LET`/`LET*` so the package change is local. As a top-level form
+    fclpy additionally sets `*package*` globally so subsequent reads
+    see the new value, the same way `(in-package :foo)` then `(read)`
+    works in a conforming implementation.
+
+    The previous version *created* the package when the name did not
+    resolve -- `(in-package "H")` for a deleted package would silently
+    bring "H" back. CLHS 11.2 says `in-package` is undefined for a
+    package that does not exist; `in-package.5` requires a
+    PACKAGE-ERROR in that case. The new version signals one.
     """
     if len(args) != 1:
         raise lisptype.LispProgramError(
@@ -202,38 +324,22 @@ def in_package(*args):
     if isinstance(name, lisptype.Package):
         pkg = name
     else:
-        # A package designator is a package, a string, a symbol, or a
-        # character (CLHS 11.1.1.1) -- the same designator MAKE-PACKAGE and
-        # DEFPACKAGE resolve via `_designator_to_string`. This used to be a
-        # second, ad-hoc copy of that resolution (string()-ing anything that
-        # wasn't a keyword/symbol), which silently disagreed with the other
-        # two the moment the designator was anything else -- a specialized
-        # character-array name, for instance, str()'d to a Python object repr
-        # instead of its text, so `(make-package name)` and `(in-package
-        # name)` for the very same `name` value resolved to two different,
-        # wrongly-named packages instead of one.
         from .misc_packages import _designator_to_string
         pkg_name = _designator_to_string(name)
-
         pkg = lisptype.find_package(pkg_name)
         if pkg is None:
-            # Create package - by default new packages USE COMMON-LISP
-            pkg = lisptype.make_package(pkg_name)
-            # Add COMMON-LISP to use list by default
-            cl_pkg = lisptype.COMMON_LISP_PACKAGE
-            if cl_pkg and cl_pkg not in pkg.use_packages:
-                pkg.use_packages.append(cl_pkg)
-    
-    # Update state.current_package
+            from .evaluation_conditions import signal_error_object
+            condition = lisptype.PackageError(
+                message=f"IN-PACKAGE: no package named {pkg_name!r} currently exists")
+            condition.package = pkg_name
+            signal_error_object(condition)
+            return lisptype.NIL
+
     state.current_package = pkg
-    
-    # Also update *PACKAGE* variable in the current environment if it exists
     env = getattr(state, 'current_environment', None)
     if env is not None:
         package_sym = lisptype.COMMON_LISP_PACKAGE.intern_symbol('*PACKAGE*')
-        # Set the variable directly
         env.set_variable(package_sym, pkg)
-    
     return pkg
 
 
@@ -246,20 +352,80 @@ def import_symbol(symbols, package=None):
     re-intern a fresh symbol under the same name, or `(eq sym (find-symbol
     (symbol-name sym) package))` becomes false for every imported symbol and
     `SYMBOL-PACKAGE` still points at the original home package.
+
+    Three things this version handles that the previous copy skipped:
+
+      * **The imported symbol's home package is `package`** when the symbol
+        was uninterned or its home was the same package (CLHS 11.1.2.1).
+        Without the reassignment, `import.5` (which imports an
+        uninterned `make-symbol`'d symbol) reports the symbol as
+        still uninterned.
+
+      * **A name conflict is a correctable PACKAGE-ERROR** (CLHS 11.2's
+        import error case). `import.error.3` interned the name first,
+        then asked IMPORT to import the original; the previous code
+        silently overwrote the existing entry, which is wrong.
+        `import.error.4`/`.5` further require a non-`abort` restart to
+        be available, which is the CERROR / `signal_cerror_object`
+        contract (an implicit CONTINUE restart bound to the condition),
+        not a bare `signal_error_object` (which only establishes the
+        universal ABORT restart and leaves nothing for the
+        `set-difference ... remove 'abort` check to find).
     """
     from .misc_packages import _as_list, coerce_to_package
     pkg = coerce_to_package(package)
     for s in _as_list(symbols):
+        if not lisptype.is_symbol(s):
+            raise lisptype.LispTypeError(
+                f"IMPORT: {s!r} is not a symbol",
+                expected_type='SYMBOL', actual_value=s)
         name = s.name if hasattr(s, 'name') else str(s)
+        existing = pkg.symbols.get(name)
+        if existing is not None and existing is not s:
+            from .evaluation_conditions import _signal_cerror_object
+            condition = lisptype.PackageError(
+                package=pkg,
+                message=(f"IMPORT: a symbol named {name} is already "
+                         f"accessible in package {pkg.name}"))
+            condition.symbol = s
+            return _signal_cerror_object(
+                condition, continue_format="Delete the existing symbol")
         pkg.symbols[name] = s
+        # Adopt the symbol if it was uninterned or already home in `pkg`.
+        # Per CLHS 11.1.2.1, IMPORT's effect on the symbol's home is:
+        # if uninterned, its home becomes `package`; otherwise the home
+        # is unchanged. A symbol with a *different* existing home keeps
+        # it -- so `(import 'cl:car pkg)` does not make CL:CAR's home
+        # into `pkg`.
+        home = getattr(s, 'package', None)
+        if home is None or home is pkg:
+            s.package = pkg
     return lisptype.T
 
 
 @_registry.cl_function('INTERN')
 def intern(name, package=None):
-    """Intern a symbol in a package or create new interned symbol."""
-    if not isinstance(name, str):
-        name = str(name)
+    """Intern a symbol in a package (CLHS 11.2). Creates a new
+    interned symbol if the name is not present.
+
+    `name` is a *string designator* (CLHS 11.1.1.1): a string, a
+    symbol, a character, or a specialized character array. The
+    previous version did `name = str(name)` for non-string arguments,
+    which discarded a character array's content and asked the package
+    to intern the *Python repr* of the array -- so the displaced /
+    fill-pointered / adjustable character arrays `intern.5`-.11`
+    exercise as names produced a Python `repr` like
+    `<lispfunc.arrays.LispArray object at 0x...>` instead of the actual
+    text, and `(intern "XYZZY" p) == (intern <array with same chars>
+    p)` was false.
+
+    Empty arrays are also designators (`:notes (:nil-vectors-are-strings)`):
+    `(intern "" p)` must equal `(intern (make-array 0 :element-type nil) p)`.
+    A `NIL`-element-type array's contents are all `NIL`, the textual
+    empty string; `intern.3` exercises this directly.
+    """
+    from .misc_packages import _designator_to_string
+    name = _designator_to_string(name)
     from .misc_packages import coerce_to_package
     pkg = coerce_to_package(package)
     return pkg.intern_symbol(name)
@@ -293,14 +459,25 @@ def find_symbol(name, package=None):
 
 @_registry.cl_function('FIND-PACKAGE')
 def find_package(*args):
-    """Find a package by name."""
+    """Find a package by name (CLHS 11.2).
+
+    Accepts a package designator: a package, a string, a symbol, or a
+    character. The previous version always called `_designator_to_string`
+    on the argument, so a `Package` object as the designator was coerced
+    to its `__repr__` (e.g. `"#<PACKAGE COMMON-LISP>"`) and the lookup
+    answered NIL -- `find-package.11` passes the result of
+    `(find-package "CL")` back through `find-package` and expects
+    identity.
+    """
     if len(args) != 1:
         raise lisptype.LispProgramError(
             f"FIND-PACKAGE: wrong number of arguments (got {len(args)}, expected 1)"
         )
+    arg = args[0]
+    if isinstance(arg, lisptype.Package):
+        return arg
     from .misc_packages import _designator_to_string
-    name = args[0]
-    return lisptype.find_package(_designator_to_string(name))
+    return lisptype.find_package(_designator_to_string(arg))
 
 
 @_registry.cl_function('FIND-ALL-SYMBOLS')
@@ -343,22 +520,113 @@ def find_all_symbols(*args):
 
 @_registry.cl_function('EXPORT')
 def export(symbols, package=None):
-    """Export symbols from a package.
-    
-    Makes symbols accessible to other packages that USE this package.
+    """Export symbols from a package (CLHS 11.2).
+
+    `(export sym . package)` makes `sym` (or each symbol in a list of
+    them) external in `package` (defaulting to `*package*`).
+
+    Three things this used to skip:
+      * A symbol *not present* in the package is not an automatic
+        error here -- the harness's `export.4` and `export.5` rely on
+        the operator catching the cases CLHS names: a symbol
+        reachable from another package but not directly in `package`
+        (case (b)), and a name conflict in the used-by list (case
+        (c)). The two both signal a CORRECTABLE PACKAGE-ERROR with
+        the offending symbol on its `package` slot.
+      * A non-symbol element in the designator list used to be
+        `str()`-ed and interned under a Python-string symbol name;
+        now it is a TYPE-ERROR (`expected-type SYMBOL`).
+      * `(export 'b::bar "A")` -- exporting a symbol from a
+        *different* package, where `b::bar` exists in `b` and is not
+        accessible in `A` -- is the first of the two
+        PACKAGE-ERROR cases.
     """
-    # Handle lispCons (Lisp list) by converting to Python list
     if isinstance(symbols, lisptype.lispCons):
         symbols = list(symbols)  # lispCons is iterable
     elif not isinstance(symbols, (list, tuple)):
         symbols = [symbols]
-    from .misc_packages import coerce_to_package
+    from .misc_packages import coerce_to_package, _externals_of
     pkg = coerce_to_package(package)
+
     for s in symbols:
+        if not lisptype.is_symbol(s):
+            raise lisptype.LispTypeError(
+                f"EXPORT: {s!r} is not a symbol",
+                expected_type='SYMBOL', actual_value=s)
         sym_name = s.name if hasattr(s, 'name') else str(s)
-        # Intern the symbol if not already present, then export it
+
+        # Case (b) of CLHS 11.2: a symbol is being exported from a package
+        # in which it is not accessible. `s` is a CL:FOO symbol but `pkg`
+        # is, say, "A" -- FOO is not in A (interned or inherited). ANSI
+        # requires a correctable PACKAGE-ERROR; the harness's `export.4`
+        # catches one and expects `package-error` back.
+        already_accessible = pkg.find_symbol(sym_name)[0] is not None
+        if not already_accessible:
+            from .evaluation_conditions import _signal_cerror_object
+            condition = lisptype.PackageError(
+                package=pkg,
+                message=(f"EXPORT: the symbol {s.name} is not accessible "
+                         f"in package {pkg.name}"))
+            condition.symbol = s
+            _signal_cerror_object(
+                condition,
+                continue_format="Delete the existing symbol or export anyway")
+            return lisptype.NIL
+
+        # Case (c) of CLHS 11.2: a *name conflict in the used-by list*.
+        # Exporting `s` would cause one of `pkg`'s *using* packages (a
+        # package that has `pkg` in its `use_list`, i.e. one that
+        # inherits `pkg`'s externals) to inherit the freshly-exported
+        # `s` when it already inherits a *different* symbol of the
+        # same name (via its own use list or its own interned symbols)
+        # -- so two used packages would resolve the same name to two
+        # different symbols, breaking CLHS 11.1.2.1's package
+        # consistency. The test `export.5` sets this up exactly:
+        # TEST2 :uses TEST1 and exports its own `X`; then
+        # `(intern "X" "TEST1")` plus `(export sym "TEST1")` would
+        # make a using-of-TEST1 package (here TEST2) see two different
+        # `X` symbols depending on which it inherited first, and the
+        # standard says that's a PACKAGE-ERROR. The check therefore
+        # iterates over *using* packages of `pkg` (those that have
+        # `pkg` in their `use_list`).
+        using_iter = list(getattr(pkg, 'used_by_list', ()) or ())
+        # Some code paths populate `used_by_list`, others populate
+        # `use_packages` (the inverse relation) on the using side.
+        # If `used_by_list` is empty, derive it by walking
+        # `state.packages` for any package that lists `pkg` in its
+        # `use_packages`.
+        if not using_iter:
+            for other in list(getattr(state, 'packages', {}).values() if hasattr(state, 'packages') else ()):
+                if other is pkg or not isinstance(other, lisptype.Package):
+                    continue
+                other_use = list(getattr(other, 'use_packages', ()) or ())
+                if any((u is pkg) if not isinstance(u, str) else (u.upper() == pkg.name.upper())
+                       for u in other_use):
+                    using_iter.append(other)
+        for used_by_pkg in using_iter:
+            if not isinstance(used_by_pkg, lisptype.Package):
+                continue
+            for other in _externals_of(used_by_pkg):
+                if (other is not s
+                        and getattr(other, 'name', None) is not None
+                        and str(other.name).upper() == sym_name.upper()):
+                    from .evaluation_conditions import _signal_cerror_object
+                    condition = lisptype.PackageError(
+                        package=pkg,
+                        message=(f"EXPORT: exporting {s.name} from {pkg.name} "
+                                 f"would create a name conflict with the "
+                                 f"external symbol of the same name in "
+                                 f"using package {used_by_pkg.name}"))
+                    condition.symbol = s
+                    _signal_cerror_object(
+                        condition,
+                        continue_format="Unintern the conflicting symbol or export anyway")
+                    return lisptype.NIL
+
+        # Intern + export. `pkg.intern_symbol` may promote an inherited
+        # symbol to a directly-present one without changing its identity,
+        # which is what `export_symbol` expects.
         sym = pkg.intern_symbol(sym_name)
-        # Add to package's external_symbols set
         pkg.export_symbol(sym_name)
     return lisptype.T
 

@@ -12,6 +12,19 @@ def define_condition(name, parent_types, slot_specs, *options):
     return name
 
 
+# Re-export PACKAGE-ERROR-PACKAGE: the function lives in
+# `misc_packages` (its native module per CLHS 11.2's section on the
+# PACKAGE-ERROR class and its accessors), but the re-export machinery
+# in `lispfunc.utilities` and `lispfunc.utilities_misc` does
+# `from .utilities_errors import *` and expects the symbol to be a
+# member of this module's namespace. Without the re-export every
+# import of fclpy fails with
+# `AttributeError: module 'fclpy.lispfunc.utilities_errors' has no
+# attribute 'package_error_package'`, taking the whole interpreter
+# down before the first test can run.
+from .misc_packages import package_error_package  # noqa: F401, E402
+
+
 @_registry.cl_function('MAKE-CONDITION')
 def make_condition(type_designator, *args):
     """Create and return a condition object (CLHS 9.2 MAKE-CONDITION).

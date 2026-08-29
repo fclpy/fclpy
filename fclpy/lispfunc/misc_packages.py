@@ -354,6 +354,19 @@ def make_package(*args):
     """Create a new package (CLHS `MAKE-PACKAGE`).
 
     (make-package package-name &key nicknames use)
+
+    Per CLHS 11.2, if a package with the same name (or any of the
+    requested nicknames) already exists, MAKE-PACKAGE signals a
+    *correctable* PACKAGE-ERROR whose `:package` slot is the existing
+    package, with an implicit CONTINUE restart that returns the existing
+    package unchanged if invoked. `make-package.error.1`/`.2`/`.3`/`.4`
+    exercise exactly this with `handle-non-abort-restart`, which checks
+    for any non-`abort` restart on the signaled condition.
+
+    The previous implementation called `lisptype.make_package(name)`,
+    which silently returns the existing package for an already-taken
+    name; the test's `success` expected value is never reached and
+    MAKE-PACKAGE loses its only error path.
     """
     if not args:
         raise lisptype.LispProgramError(
@@ -376,6 +389,31 @@ def make_package(*args):
     use_list = []
     for item in _as_list(kwargs.get('use')):
         use_list.append(item.name if isinstance(item, lisptype.Package) else _designator_to_string(item))
+
+    # CLHS 11.2 "package already exists" / "nickname already denotes an
+    # existing package": signal a *correctable* PACKAGE-ERROR (the
+    # standard's mechanism for letting the user delete the existing
+    # package or rename the new one) with an implicit CONTINUE restart
+    # bound to the condition. `handle-non-abort-restart` checks for any
+    # non-`abort` restart on the signaled condition, and CERROR's
+    # CONTINUE is exactly that.
+    existing = lisptype.find_package(name)
+    if existing is not None and not getattr(existing, '_deleted', False):
+        from .evaluation_conditions import _signal_cerror_object
+        condition = lisptype.PackageError(
+            package=existing,
+            message=f"MAKE-PACKAGE: a package named {name!r} already exists")
+        return _signal_cerror_object(
+            condition, continue_format="Delete existing package")
+    for nick in nicknames:
+        nick_existing = lisptype.find_package(nick)
+        if nick_existing is not None and not getattr(nick_existing, '_deleted', False):
+            from .evaluation_conditions import _signal_cerror_object
+            condition = lisptype.PackageError(
+                package=nick_existing,
+                message=f"MAKE-PACKAGE: a package named {nick!r} already exists as a nickname")
+            return _signal_cerror_object(
+                condition, continue_format="Delete existing package")
 
     # Create the package
     pkg = lisptype.make_package(name)
@@ -727,22 +765,29 @@ def delete_package(package):
     Removes the package from the global package registry, from other packages'
     use-lists, and clears the package's name to mark it as deleted.
     Returns T if deleted, NIL if already deleted (when given a package object).
-    Signals PACKAGE-ERROR if a package designator is not found.
+    Signals a *correctable* PACKAGE-ERROR if a package designator does not
+    resolve to a known package -- the `continue` restart is what
+    `delete-package.5`/`delete-package.6` test for via
+    `set-difference (compute-restarts c) outer-restarts`.
     """
     if isinstance(package, lisptype.Package):
         pkg = package
-        is_object = True
     else:
-        is_object = False
         designator_str = _designator_to_string(package)
         pkg = lisptype.find_package(designator_str)
 
     if pkg is None:
-        # Package not found by designator: signal PACKAGE-ERROR
-        from .evaluation_conditions import signal_error_object
-        condition = lisptype.PackageError(message=f"Package not found")
+        # CLHS 11.2's "no such package" case for DELETE-PACKAGE is a
+        # correctable PACKAGE-ERROR. CERROR is the operator the spec
+        # uses; we hand the same helper its condition, so the implicit
+        # CONTINUE restart is associated with the condition and
+        # `compute-restarts` reports it.
+        from .evaluation_conditions import _signal_cerror_object
+        condition = lisptype.PackageError(
+            message=f"DELETE-PACKAGE: no package named {designator_str!r}")
         condition.package = package
-        signal_error_object(condition)
+        return _signal_cerror_object(
+            condition, continue_format="Delete anyway")
 
     # If the package has already been deleted
     if getattr(pkg, '_deleted', False):
@@ -893,6 +938,41 @@ def macroexpand_1(form, environment=None):
                                    lisptype.T if did else lisptype.NIL)
 
 
+@_registry.cl_function('PACKAGE-ERROR-PACKAGE')
+def package_error_package(condition):
+    """PACKAGE-ERROR-PACKAGE (CLHS 9.1.5): the :PACKAGE initarg of a
+    PACKAGE-ERROR condition, returned *unchanged* -- namestring, symbol,
+    character, or package object, whatever was given.
+
+    `package-error-package.1` passes a string ("CL"), `.2` a package,
+    `.3` an escaped-symbol designator (`'#:|CL|`), and `.4` a character
+    (`#\\A`); in every case the value is whatever MAKE-CONDITION's
+    `:package` initarg was given, not coerced to a package. ANSI requires
+    this for the same reason FILE-ERROR-PATHNAME does (CLHS's reader of a
+    slot, not a coercion): the suite passes strings back to FIND-PACKAGE
+    in `.1`/`.3`/`.4` and a package object in `.2`, and the round trip
+    is the property under test.
+
+    The `PackageError` class stores the slot in its `_slots` dict
+    (one per ANSI :initarg name); reading it back returns the
+    original designator. The previous version, when it was missing,
+    left `package-error-package` unbound, so every test of this
+    accessor called a function that did not exist and failed
+    with `UndefinedFunction` rather than a numeric test result.
+    """
+    if not isinstance(condition, lisptype.PackageError):
+        # CLHS 9.1.5: PACKAGE-ERROR-PACKAGE requires a PACKAGE-ERROR
+        # condition; anything else is a TYPE-ERROR (a wrong-type
+        # argument). Without this check a non-package-error argument
+        # would slip through to `_slots.get('package')` and answer
+        # NIL, which is the wrong *value* (not a wrong-type signal)
+        # for `package-error-package.error.*`.
+        raise lisptype.LispTypeError(
+            f"PACKAGE-ERROR-PACKAGE: {condition!r} is not a PACKAGE-ERROR",
+            expected_type='PACKAGE-ERROR', actual_value=condition)
+    return condition._slots.get('package')
+
+
 __all__ = [
     'make_package',
     'package_name',
@@ -911,4 +991,5 @@ __all__ = [
     'unuse_package',
     'macroexpand',
     'macroexpand_1',
+    'package_error_package',
 ]

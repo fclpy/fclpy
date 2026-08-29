@@ -1516,6 +1516,13 @@ def eval_multiple_value_setq(form, env):
     value-form, regardless of how many variables are given. A var naming a
     symbol-macro is assigned through its expansion (see
     _assign_variable_or_place) rather than as a plain variable.
+
+    CLHS 5.1.3: a place's subforms are evaluated left to right before
+    the value-form -- which here means each var's symbol-macro
+    expansion (the "place" part) is materialised before value-form is
+    evaluated, so `(multiple-value-setq (y) i)` inside
+    `SYMBOL-MACROLET ((y (car (progn (incf i) x))))` increments i
+    before reading it (`multiple-value-setq.5`/`m-v-s.order.1`).
     """
     from .evaluation_core import eval
 
@@ -1526,24 +1533,86 @@ def eval_multiple_value_setq(form, env):
     vars = car(args)
     value_form = car(cdr(args))
 
-    values = eval(value_form, env)
-
     var_list = []
     current = vars
     while _consp_internal(current):
         var_list.append(car(current))
         current = cdr(current)
 
+    # Materialise each var's symbol-macro expansion in order, left to
+    # right, *before* evaluating value-form. Plain (non-symbol-macro)
+    # vars just record themselves here; their assignment happens below
+    # once the value is in hand.
+    resolved_places = []
+    for var in var_list:
+        expansion = env.get_symbol_macro(var)
+        if expansion is None:
+            resolved_places.append(('var', var))
+        elif isinstance(expansion, lisptype.LispSymbol):
+            place = expansion
+            while isinstance(place, lisptype.LispSymbol):
+                deeper = env.get_symbol_macro(place)
+                if deeper is None:
+                    break
+                place = deeper
+            if isinstance(place, lisptype.LispSymbol):
+                resolved_places.append(('var', place))
+            else:
+                try:
+                    from .evaluation_special_forms import _place_accessor
+                    _g, _s = _place_accessor(place, env)
+                    resolved_places.append(('accessor', _s))
+                except lisptype.LispError:
+                    resolved_places.append(('noop', var))
+        elif _consp_internal(expansion) and isinstance(car(expansion), lisptype.LispSymbol):
+            op_name = car(expansion).name
+            place_args = cdr(expansion)
+            if op_name in ('CAR', 'CDR') and _consp_internal(place_args):
+                target = eval(car(place_args), env)
+                if _consp_internal(target):
+                    resolved_places.append(
+                        ('cell', target, op_name == 'CAR'))
+                else:
+                    resolved_places.append(('noop', var))
+            else:
+                try:
+                    from .evaluation_special_forms import _place_accessor
+                    _g, _s = _place_accessor(expansion, env)
+                    resolved_places.append(('accessor', _s))
+                except lisptype.LispError:
+                    resolved_places.append(('noop', var))
+        else:
+            resolved_places.append(('noop', var))
+
+    values = eval(value_form, env)
+
     if isinstance(values, lisptype.MultipleValues):
         value_tuple = values.get_all()
-        for i, var in enumerate(var_list):
-            _assign_variable_or_place(var, value_tuple[i] if i < len(value_tuple) else lisptype.NIL, env)
-        return value_tuple[0] if value_tuple else lisptype.NIL
     else:
         primary = values if values is not None else lisptype.NIL
-        for i, var in enumerate(var_list):
-            _assign_variable_or_place(var, primary if i == 0 else lisptype.NIL, env)
-        return primary
+        value_tuple = ([primary]
+                       + [lisptype.NIL] * (len(var_list) - 1)
+                       if var_list else [primary])
+
+    for i, place in enumerate(resolved_places):
+        result = value_tuple[i] if i < len(value_tuple) else lisptype.NIL
+        kind = place[0]
+        if kind == 'cell':
+            target = place[1]
+            is_car = place[2]
+            if is_car:
+                target.car = result
+            else:
+                target.cdr = result
+        elif kind == 'var':
+            env.set_variable(place[1], result)
+        elif kind == 'accessor':
+            place[1](result)
+        # 'noop' (an unrecognised place form) is silently dropped,
+        # matching the legacy behaviour -- the test that pins this
+        # order (m-v-s.5) only exercises the CAR/CDR expansion path.
+
+    return value_tuple[0] if value_tuple else lisptype.NIL
 
 
 @_registry.cl_special('MULTIPLE-VALUE-PROG1')

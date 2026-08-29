@@ -80,7 +80,20 @@ def nreverse(sequence):
     Permitted to be non-destructive (CLHS only allows the argument to be
     destroyed, it does not require it), but the *type* of the result is not
     optional -- that comes from the shared rebuild.
+
+    For a `LispArray` (the representation of a vector with a fill pointer,
+    an element type, or some other array property), the reverse is done
+    in-place: the array's own storage is rewritten, and the array is
+    returned. That preserves its type so `(type-of x) == (type-of (nreverse x))`
+    for fill-pointered vectors (`nreverse-vector.5`/`.6`). A non-array
+    sequence uses the shared `rebuild_like`.
     """
+    if isinstance(sequence, LispArray):
+        elements = seq_elements(sequence, 'NREVERSE')
+        elements.reverse()
+        for index, item in enumerate(elements):
+            sequence[index] = item
+        return sequence
     return rebuild_like(sequence, list(reversed(seq_elements(sequence, 'NREVERSE'))))
 
 
@@ -224,7 +237,8 @@ def stable_sort(sequence, predicate, *, key=None):
 
 
 @_registry.cl_function('MERGE')
-def merge(result_type, sequence1, sequence2, predicate, key=None, **kwargs):
+def merge(result_type, sequence1, sequence2, predicate, key=None,
+          allow_other_keys=None, **other_keys):
     """Merge two ordered sequences into one of `result_type` (CLHS 17.3).
 
     CLHS: an element of `sequence2` is taken only when it *precedes* the
@@ -232,6 +246,7 @@ def merge(result_type, sequence1, sequence2, predicate, key=None, **kwargs):
     -- which is why the predicate is applied as `(predicate e2 e1)` and not
     the other way around.
     """
+    _check_sequence_other_keys(other_keys, allow_other_keys, 'MERGE')
     predicate = _coerce_function_designator(predicate)
     key = _coerce_function_designator(key)
     left = seq_elements(sequence1, 'MERGE')

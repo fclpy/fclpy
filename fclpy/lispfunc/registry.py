@@ -65,12 +65,25 @@ special_registry: Dict[str, RegistryEntry] = {}
 def _to_lisp_name(py_name: str) -> str:
     """Convert a Python identifier used in lispfunc modules to a Lisp name.
 
-    Uses the same py_str_to_sym helper in lisptype to ensure consistency.
-    Returns the upper-case string name, e.g. 'car' -> 'CAR', 'list_s_star_' -> 'LIST*'.
+    Returns the upper-case string name, e.g. 'car' -> 'CAR',
+    'list_s_star_' -> 'LIST*'. This is a *pure* name transformation --
+    earlier it called `lisptype.py_str_to_sym` (which interns the name into
+    COMMON-LISP-USER) for the side effect of `sym.name`, which had two
+    bad consequences: (a) every registered operator ended up interned as
+    an internal symbol of CL-USER with `package=COMMON-LISP-USER`, so
+    `(symbol-package 'car)` answered CL-USER instead of CL once any
+    function had been registered, and (b) `(find-symbol name pkg)` for
+    names like MAKE-INSTANCE / CAR / CADR / ... was then returning those
+    bogus CL-USER copies instead of the real CL symbols, breaking
+    WITH-PACKAGE-ITERATOR's `INTERNAL`/`EXTERNAL`/`INHERITED` checks
+    (every ANSI test that exercises CL-USER's symbol set).
     """
     try:
-        sym = lisptype.py_str_to_sym(py_name)
-        return sym.name
+        from fclpy.lisptype_basic import py_str_map
+        s = py_name.upper()
+        for pattern, replacement in py_str_map:
+            s = s.replace(pattern, replacement)
+        return s
     except Exception:
         return py_name.upper()
 

@@ -526,13 +526,19 @@ def remprop(*args):
     """Remove property from symbol.
 
     Returns T if an occurrence was removed, NIL otherwise. Supports dict
-    and lispCons plists.
+    and lispCons plists. Signals a TYPE-ERROR if `symbol` is not a
+    symbol (`remprop.error.4` exercises the entire ansi-test
+    mini-universe, so every non-symbol must raise).
     """
     if len(args) != 2:
         raise lisptype.LispProgramError(
             f"REMPROP: wrong number of arguments (got {len(args)}, expected 2)"
         )
     symbol, indicator = args
+    if not lisptype.is_symbol(symbol):
+        raise lisptype.LispTypeError(
+            f"REMPROP: {symbol!r} is not a symbol",
+            expected_type='SYMBOL', actual_value=symbol)
     plist = getattr(symbol, 'plist', lisptype.NIL)
     if plist is None or plist is lisptype.NIL:
         return lisptype.NIL

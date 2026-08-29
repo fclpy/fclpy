@@ -477,29 +477,224 @@ def rationalp(obj):
 
 
 # Complex number operations
+
+class LispComplex(complex):
+    """A complex number that remembers the type of its parts.
+
+    `complex(3, 4)` and `complex(3, 4.0)` both return a Python `complex`
+    with `real == 3.0` and `imag == 4.0` -- Python coerces int to float
+    on construction. CLHS 12.1.4.1 keeps the parts in the type they
+    arrived in: `(complex 3 4)` is a complex with int parts, `(complex
+    1/3 0)` collapses to a ratio, `(complex 0 0)` collapses to an
+    integer. `imagpart.1`/`2`/`3`, `realpart.1`/`2`/`3`, `complex.1`/`3`
+    and `*.9`/`*.10`/`/.6`/`/.9`/`/.10`/`/.11` all demand this directly,
+    by EQL against a number that the test wrote in source -- `(eql
+    (realpart (complex 3 4)) 3)` must be T, not NIL.
+
+    The class subclasses `complex` so the rest of the codebase -- the
+    printer (`printer._write_complex`), `isinstance(x, complex)` checks in
+    `comparison.py` and the hash tables, and the existing `+`/`-`/`*`/`/`
+    Python arithmetic -- keeps treating the result as a complex. The
+    original parts live in `_real`/`_imag`; `.real` and `.imag` are
+    overridden to return those, so anything that asks `x.real` or
+    `x.imag` (the printer, the existing `realpart`/`imagpart`, the
+    existing `*`/`/` complex arithmetic) gets the type-preserved value
+    back, not the float that Python's `complex` would have given it.
+    """
+    __slots__ = ('_real', '_imag')
+
+    def __new__(cls, realpart, imagpart):
+        instance = super().__new__(cls, realpart, imagpart)
+        instance._real = realpart
+        instance._imag = imagpart
+        return instance
+
+    @property
+    def real(self):
+        return self._real
+
+    @property
+    def imag(self):
+        return self._imag
+
+    def __repr__(self):
+        return f'#C({self._real} {self._imag})'
+
+
+def _is_lisp_complex(x):
+    """True only for `LispComplex`, not for plain Python `complex`."""
+    return isinstance(x, LispComplex)
+
+
+def _complex_parts(x):
+    """The real and imag parts of `x` as a (real, imag) pair.
+
+    Plain Python `complex` and `LispComplex` both have `.real`/`.imag`;
+    for anything else, the imag part is 0 and the real is `x` itself.
+    """
+    if isinstance(x, (LispComplex, complex)):
+        return x.real, x.imag
+    return x, 0
+
+
+def _make_lisp_complex(real, imag):
+    """Build a `LispComplex` unless `imag` is 0 and `real` is not a complex."""
+    if imag == 0 and not isinstance(real, (LispComplex, complex)):
+        return real
+    return LispComplex(real, imag)
+
+
+def _lisp_complex_wrap(real, imag, a, b):
+    """Build a `LispComplex` (or collapse to real) for the result of
+    `a OP b`, honoring both `complex.1`/`.3`'s rational-imag=0
+    coalescing rule and the *.3/+.3 rule that says a complex with a
+    zero imag stays a complex when either operand was a complex.
+    """
+    either_complex = isinstance(a, (LispComplex, complex)) or \
+                     isinstance(b, (LispComplex, complex))
+    if imag == 0 and not either_complex:
+        return real
+    return LispComplex(real, imag)
+
+
+def _exact_div(a, b):
+    """`a/b` as an exact rational (Fraction) when both are integers/Fractions,
+    otherwise fall back to Python division.
+    """
+    from fractions import Fraction
+    if b == 0:
+        from fclpy.lispfunc.evaluation_conditions import signal_condition
+        signal_condition(lisptype.DivisionByZero("DIVISION-BY-ZERO"))
+        return
+    if isinstance(a, int) and isinstance(b, int):
+        if a == 0:
+            return 0
+        if b == 1:
+            return a
+        return Fraction(a, b)
+    if isinstance(a, Fraction) or isinstance(b, Fraction):
+        return Fraction(a) / Fraction(b)
+    return a / b
+
+
+def _lisp_complex_add(a, b):
+    ar, ai = _complex_parts(a)
+    br, bi = _complex_parts(b)
+    new_real = ar + br
+    new_imag = ai + bi
+    return _lisp_complex_wrap(new_real, new_imag, a, b)
+
+
+def _lisp_complex_sub(a, b):
+    ar, ai = _complex_parts(a)
+    br, bi = _complex_parts(b)
+    new_real = ar - br
+    new_imag = ai - bi
+    return _lisp_complex_wrap(new_real, new_imag, a, b)
+
+
+def _lisp_complex_mul(a, b):
+    ar, ai = _complex_parts(a)
+    br, bi = _complex_parts(b)
+    new_real = ar * br - ai * bi
+    new_imag = ar * bi + ai * br
+    return _lisp_complex_wrap(new_real, new_imag, a, b)
+
+
+def _lisp_complex_div(a, b):
+    ar, ai = _complex_parts(a)
+    br, bi = _complex_parts(b)
+    if br == 0 and bi == 0:
+        from fclpy.lispfunc.evaluation_conditions import signal_condition
+        signal_condition(lisptype.DivisionByZero(f"DIVISION-BY-ZERO on complex /"))
+        return
+    both_complex = isinstance(a, (LispComplex, complex)) and \
+                   isinstance(b, (LispComplex, complex))
+    if bi == 0:
+        if not both_complex and ai == 0:
+            return _exact_div(ar, br)
+        if ai == 0:
+            return LispComplex(_exact_div(ar, br), 0)
+        return LispComplex(_exact_div(ar, br), _exact_div(ai, br))
+    if ai == 0 and not both_complex:
+        denom = br * br + bi * bi
+        return LispComplex(_exact_div(ar * br, denom),
+                           _exact_div(-ar * bi, denom))
+    denom = br * br + bi * bi
+    new_real = (ar * br + ai * bi)
+    new_imag = (ai * br - ar * bi)
+    return LispComplex(_exact_div(new_real, denom),
+                       _exact_div(new_imag, denom))
+
+
+def _lisp_complex_neg(a):
+    ar, ai = _complex_parts(a)
+    new_real = -ar
+    new_imag = -ai
+    # `(- #c(0 0))` returns a complex even when the result has imag 0:
+    # `(- (- #c(0 0)))` (minus.1) has to EQL `#c(0 0)`, not 0. The
+    # complex-coalescing rule (CLHS 12.1.5.1) is about COMPLEX's
+    # two-arg constructor, not about negation. For *plain* Python
+    # complex (the reader's `#c(...)` still returns those), the result
+    # is also a complex so `(- (- #c(0.0 0.0)))` round-trips.
+    if isinstance(a, (LispComplex, complex)):
+        if _is_lisp_complex(a):
+            return LispComplex(new_real, new_imag)
+        return complex(new_real, new_imag)
+    # Plain real
+    if new_imag == 0:
+        return new_real
+    return LispComplex(new_real, new_imag)
+
+
 @_registry.cl_function('IMAGPART')
 def imagpart(number):
-    """Return imaginary part of complex number.
+    """Return imaginary part of complex number (CLHS 12.1.5.3).
 
-    For a real, the imaginary part is 0 (CLHS 12.1.5.3). The *type* of that 0
-    is not specified, but `imagpart.4` compares it to `(* 0 x)`, and the
-    product is float when `x` is float, so imagpart must match. Returning
-    0.0 for float `x` is the only way `(eql (imagpart x) (* 0 x))` holds
-    across the mixed `*reals*` set the test feeds us.
+    For a real, the imag part is 0; the *type* of that 0 must match the
+    product `(* 0 x)` for the same `x`, otherwise `imagpart.4` (which
+    EQLs `(imagpart x)` against `(* 0 x)` for every `x` in `*reals*`)
+    fails. For a float, `(* 0 x)` is `0.0`; for a Fraction, it is
+    `Fraction(0, 1)`; for an int, it is `0`.
+
+    A non-number signals a TYPE-ERROR. The previous `imagpart` returned
+    `0` for everything that was neither a Python `complex` nor a float,
+    so `(imagpart 'foo)` silently answered `0` and `imagpart.error.3`
+    (a `check-type-error` probe) saw it as a success.
     """
+    if isinstance(number, LispComplex):
+        return number.imag
     if isinstance(number, complex):
         return number.imag
     if isinstance(number, float):
         return 0.0
-    return 0
+    if isinstance(number, int):
+        return 0
+    if isinstance(number, Fraction):
+        return Fraction(0, 1)
+    _ensure_number(number, 'IMAGPART')
 
 
 @_registry.cl_function('REALPART')
 def realpart(number):
-    """Return real part of complex number."""
+    """Return real part of complex number (CLHS 12.1.5.3).
+
+    A non-number signals a TYPE-ERROR. The previous `realpart` returned
+    the value itself for anything that was not a Python `complex`, so
+    `(realpart 'foo)` silently answered `FOO` and `realpart.error.3`
+    (a `check-type-error` probe) saw it as a success. The `complex`
+    branch is split between Python's `complex` and our own `LispComplex`
+    so a part that was held as an int/Fraction by the constructor is
+    returned as an int/Fraction, not as a float (`realpart.1`/`2`/`3`
+    EQL `(realpart (complex x 0))` against `x` for every `x` in `*reals*`).
+    """
+    if isinstance(number, LispComplex):
+        return number.real
     if isinstance(number, complex):
         return number.real
-    return number
+    if isinstance(number, (int, float, Fraction)):
+        return number
+    _ensure_number(number, 'REALPART')
 
 
 @_registry.cl_function('CONJUGATE')
@@ -855,19 +1050,30 @@ def _s_plus_(*args):
     """Addition operator (+)."""
     if not args:
         return 0
-    return sum(args)
+    result = args[0]
+    for x in args[1:]:
+        if isinstance(result, (LispComplex, complex)) or isinstance(x, (LispComplex, complex)):
+            result = _lisp_complex_add(result, x)
+        else:
+            result = result + x
+    return result
 
 
 @_registry.cl_function('-')
 def _s_minus_(*args):
     """Subtraction operator (-)."""
     if not args:
-        raise ValueError("- requires at least one argument")
+        raise lisptype.LispProgramError("- requires at least one argument")
     if len(args) == 1:
+        if isinstance(args[0], (LispComplex, complex)):
+            return _lisp_complex_neg(args[0])
         return -args[0]
     result = args[0]
     for x in args[1:]:
-        result -= x
+        if isinstance(result, (LispComplex, complex)) or isinstance(x, (LispComplex, complex)):
+            result = _lisp_complex_sub(result, x)
+        else:
+            result = result - x
     return result
 
 
@@ -878,7 +1084,10 @@ def _s_star_(*args):
         return 1
     result = args[0]
     for x in args[1:]:
-        result *= x
+        if isinstance(result, (LispComplex, complex)) or isinstance(x, (LispComplex, complex)):
+            result = _lisp_complex_mul(result, x)
+        else:
+            result = result * x
     return result
 
 
@@ -886,9 +1095,17 @@ def _s_star_(*args):
 def _s_slash_(*args):
     """Division operator (/).
 
-    When dividing integers, returns an exact ratio (Fraction) if result is not exact.
-    Automatically reduces fractions and normalizes signs.
+    When dividing integers, returns an exact ratio (Fraction) if result
+    is not exact. Automatically reduces fractions and normalizes signs.
     Signals DIVISION-BY-ZERO when dividing by zero.
+
+    Complex division: CLHS 12.1.5.2's formula `(a+bi)/c = (a+bi)/c` and
+    `(/ (complex a b)) = (complex a (-b)) / (a^2 + b^2)`. `/.6`, `/.9`,
+    `/.10` and `/.11` compare the result against `(complex (/ a m) (/
+    (- b) m))` where `m = a^2 + b^2` -- the parts must stay rational,
+    not float. `_lisp_complex_div` computes via the conjugate and
+    `_exact_div` so each part is a `Fraction` when the inputs are
+    integers and a `float` only when at least one input is a float.
     """
     from fractions import Fraction
 
@@ -899,15 +1116,17 @@ def _s_slash_(*args):
         if len(args) == 1:
             # Reciprocal: (/ x) = 1/x
             x = args[0]
+            if isinstance(x, (LispComplex, complex)):
+                return _lisp_complex_div(1, x)
             if isinstance(x, int) and x != 0:
                 return _canonicalize_rational(Fraction(1, x))
             return 1 / x
 
         result = args[0]
         for x in args[1:]:
-            # If both are integers and division is not exact, return a Fraction
-            if isinstance(result, int) and isinstance(x, int) and x != 0:
-                # Use Fraction for exact rational arithmetic
+            if isinstance(result, (LispComplex, complex)) or isinstance(x, (LispComplex, complex)):
+                result = _lisp_complex_div(result, x)
+            elif isinstance(result, int) and isinstance(x, int) and x != 0:
                 result = Fraction(result, x)
             elif isinstance(result, Fraction) and isinstance(x, int) and x != 0:
                 result = result / x
@@ -916,6 +1135,8 @@ def _s_slash_(*args):
             else:
                 result = result / x
 
+        if isinstance(result, (LispComplex, complex)):
+            return result
         return _canonicalize_rational(result)
     except ZeroDivisionError:
         # Signal DIVISION-BY-ZERO condition
@@ -928,12 +1149,16 @@ def _s_slash_(*args):
 @_registry.cl_function('1+')
 def _s_one_s_plus_(x):
     """Increment by one operator (1+)."""
+    if isinstance(x, (LispComplex, complex)):
+        return _lisp_complex_add(x, 1)
     return x + 1
 
 
 @_registry.cl_function('1-')
 def _s_one_s_minus_(x):
     """Decrement by one operator (1-)."""
+    if isinstance(x, (LispComplex, complex)):
+        return _lisp_complex_sub(x, 1)
     return x - 1
 
 
