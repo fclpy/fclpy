@@ -2971,6 +2971,216 @@ def eval_defconstant(form, env):
     return name
 
 
+def eval_deftype(form, env):
+    """Evaluate DEFTYPE (CLHS 4.2.3, 25.1.3): (DEFTYPE name lambda-list
+    &body body). Arguments are not evaluated -- the name is a symbol and
+    lambda-list/body are literal specification syntax, like DEFMACRO.
+
+    Stores a real *expander*, not the raw source. This dict used to hold
+    `lambda_list`/`body`/`env` and nothing anywhere read it, so a
+    DEFTYPE'd name was invisible to both TYPEP and SUBTYPEP --
+    `(deftype foo () '(integer 0 10))` succeeded and then
+    `(typep 5 'foo)` was NIL. The expander is built by the one
+    macro-lambda-list binder (CLHS 4.2.3: a deftype lambda list is a
+    macro lambda list, except that an omitted &OPTIONAL/&KEY parameter
+    defaults to `*` rather than NIL, which is what `unsupplied_default`
+    supplies). Reusing it is also what gives DEFTYPE &WHOLE, &REST,
+    &KEY, destructuring, the docstring and the implicit BLOCK that
+    `(return-from <type-name> ...)` needs -- all of which ansi-test's
+    deftype.9-.19 exercise.
+    """
+    args = cdr(form)
+    if args is None or args == lisptype.NIL:
+        raise lisptype.LispError("DEFTYPE requires a name")
+
+    name = car(args)
+    if not isinstance(name, lisptype.LispSymbol):
+        raise lisptype.LispError("DEFTYPE: name must be a symbol")
+
+    rest = cdr(args)
+    lambda_list = car(rest) if _consp_internal(rest) else lisptype.NIL
+    body = cdr(rest) if _consp_internal(rest) else lisptype.NIL
+
+    global_env = env
+    while global_env.parent is not None:
+        global_env = global_env.parent
+
+    if not hasattr(global_env, 'user_types'):
+        global_env.user_types = {}
+
+    wild = lisptype.COMMON_LISP_PACKAGE.intern('*')
+    expander = _create_macro_function(
+        name, lambda_list, body, env, unsupplied_default=wild)
+
+    # CLHS 25.1.3: a DEFTYPE body may open with a documentation string;
+    # `(documentation name 'type)` reads it back.
+    _type_doc, _type_decls, _type_forms = split_function_body(body)
+
+    global_env.user_types[name.name] = {
+        'name': name,
+        'lambda_list': lambda_list,
+        'body': body,
+        'env': env,          # Capture lexical environment
+        'expander': expander,
+        'documentation': str(_type_doc) if _type_doc else None,
+    }
+
+    return name
+
+
+def eval_defsetf(form, env):
+    """Evaluate DEFSETF (CLHS 5.1.2.3): defines how to SETF `access-fn`.
+
+    Short form:  (DEFSETF access-fn update-fn [documentation])
+    Long form:   (DEFSETF access-fn lambda-list (store-var...)
+                          [decl] [doc] form...)
+
+    Arguments are not evaluated -- they are symbol names and code
+    templates, stored in the global `setf_expanders` table SETF's own
+    expansion (`get_setf_expansion`) reads. Returns access-fn, as CLHS
+    specifies.
+    """
+    args = cdr(form)
+    if args is None or args == lisptype.NIL:
+        raise lisptype.LispError("DEFSETF requires arguments")
+
+    access_fn = car(args)
+    rest = cdr(args)
+
+    if not isinstance(access_fn, lisptype.LispSymbol):
+        raise lisptype.LispError("DEFSETF: access-fn must be a symbol")
+
+    if rest is None or rest == lisptype.NIL:
+        raise lisptype.LispError("DEFSETF requires at least two arguments")
+
+    second_arg = car(rest)
+    third_and_beyond = cdr(rest)
+
+    is_short_form = isinstance(second_arg, lisptype.LispSymbol)
+
+    global_env = env
+    while global_env.parent is not None:
+        global_env = global_env.parent
+
+    if not hasattr(global_env, 'setf_expanders'):
+        global_env.setf_expanders = {}
+
+    if is_short_form:
+        update_fn = second_arg
+        doc_string = None
+        if _consp_internal(third_and_beyond):
+            doc_form = car(third_and_beyond)
+            if isinstance(doc_form, str):
+                doc_string = doc_form
+
+        global_env.setf_expanders[access_fn.name] = {
+            'type': 'short',
+            'update_fn': update_fn,
+            'documentation': doc_string
+        }
+    else:
+        lambda_list = second_arg
+
+        if not _consp_internal(third_and_beyond):
+            raise lisptype.LispError("DEFSETF long form requires store variables")
+
+        store_vars = car(third_and_beyond)
+        body = cdr(third_and_beyond)
+
+        declarations = []
+        doc_string = None
+        actual_body = body
+
+        while _consp_internal(actual_body):
+            form_item = car(actual_body)
+            if _consp_internal(form_item):
+                op = car(form_item)
+                if isinstance(op, lisptype.LispSymbol) and op.name == 'DECLARE':
+                    declarations.append(form_item)
+                    actual_body = cdr(actual_body)
+                    continue
+            if isinstance(form_item, str) and doc_string is None:
+                doc_string = form_item
+                actual_body = cdr(actual_body)
+                continue
+            break
+
+        global_env.setf_expanders[access_fn.name] = {
+            'type': 'long',
+            'lambda_list': lambda_list,
+            'store_vars': store_vars,
+            'declarations': declarations,
+            'documentation': doc_string,
+            'body': actual_body,
+            'env': env  # Capture lexical environment
+        }
+
+    return access_fn
+
+
+def eval_define_setf_expander(form, env):
+    """Evaluate DEFINE-SETF-EXPANDER (CLHS 5.1.2.4):
+    (DEFINE-SETF-EXPANDER access-fn lambda-list
+                          [[declaration* | documentation]] form*)
+
+    Arguments are not evaluated. Stores the expander in the same global
+    `setf_expanders` table DEFSETF's long form uses, tagged 'expander'
+    since its lambda-list can take &ENVIRONMENT (the macro environment at
+    the SETF call site) where DEFSETF's cannot. Returns access-fn.
+    """
+    args = cdr(form)
+    if args is None or args == lisptype.NIL:
+        raise lisptype.LispError("DEFINE-SETF-EXPANDER requires arguments")
+
+    access_fn = car(args)
+    rest = cdr(args)
+
+    if not isinstance(access_fn, lisptype.LispSymbol):
+        raise lisptype.LispError("DEFINE-SETF-EXPANDER: access-fn must be a symbol")
+
+    if rest is None or rest == lisptype.NIL:
+        raise lisptype.LispError("DEFINE-SETF-EXPANDER requires a lambda-list")
+
+    lambda_list = car(rest)
+    body = cdr(rest)
+
+    global_env = env
+    while global_env.parent is not None:
+        global_env = global_env.parent
+
+    if not hasattr(global_env, 'setf_expanders'):
+        global_env.setf_expanders = {}
+
+    declarations = []
+    doc_string = None
+    actual_body = body
+
+    while _consp_internal(actual_body):
+        form_item = car(actual_body)
+        if _consp_internal(form_item):
+            op = car(form_item)
+            if isinstance(op, lisptype.LispSymbol) and op.name == 'DECLARE':
+                declarations.append(form_item)
+                actual_body = cdr(actual_body)
+                continue
+        if isinstance(form_item, str) and doc_string is None:
+            doc_string = form_item
+            actual_body = cdr(actual_body)
+            continue
+        break
+
+    global_env.setf_expanders[access_fn.name] = {
+        'type': 'expander',
+        'lambda_list': lambda_list,
+        'declarations': declarations,
+        'documentation': doc_string,
+        'body': actual_body,
+        'env': env  # Capture lexical environment
+    }
+
+    return access_fn
+
+
 def _defstruct_type_representation(type_option_form):
     """Resolve a DEFSTRUCT `:TYPE` option's value to CLHS 19.4.7's two
     representations: ``('list', None)`` or ``('vector', element-type-form)``,

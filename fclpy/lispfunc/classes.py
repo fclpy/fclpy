@@ -6,12 +6,23 @@ from fclpy.lisptype import LispProgramError
 from . import registry as _registry
 
 
-@_registry.cl_function('DEFCLASS')
 def defclass(name, direct_superclasses=None, slots=None, **options):
-    """DEFCLASS: Define a new class.
-    
+    """The class-construction primitive `evaluation_special_forms.eval_defclass`
+    (the real DEFCLASS macro's worker, `standard_macros.py`) calls with its
+    already-parsed arguments. Not registered as a Lisp-callable function
+    under 'DEFCLASS' -- it was previously, but that registration expected
+    already-*evaluated* arguments (a plain Python list of superclasses,
+    etc.), which is the wrong calling convention for the real macro's
+    unevaluated name/superclass-list/slot-spec syntax. It was invisible
+    only because the special-form ladder in evaluation_core.py used to
+    intercept every `(DEFCLASS ...)` form before this entry could ever be
+    reached; converting DEFCLASS into a real macro (M4) exposed it as a
+    live, wrong-calling-convention duplicate the instant the ladder branch
+    was deleted, per the standing rule 3 defect class described in
+    plan.md.
+
     Syntax: (DEFCLASS name (superclass*) (slot-spec*) option*)
-    
+
     Simplified version supporting:
     - Basic slot definitions with :initarg and :initform
     - Simple inheritance (single parent)

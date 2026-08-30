@@ -4954,9 +4954,15 @@ def format_fn(destination, control_string, *args):
         return lisptype.NIL
 
 
-@_registry.cl_function('FORMATTER')
+@_registry.cl_function('%FORMATTER')
 def formatter(control_string):
-    """Create formatter function (CLHS 22.3.1: (FORMATTER control-string)).
+    """Runtime primitive behind the `FORMATTER` macro (CLHS 22.3.1:
+    (FORMATTER control-string)). Registered under a private name because
+    `FORMATTER` itself is a macro: its control-string is the literal
+    string object appearing syntactically in the form, never evaluated
+    (that is *why* it is a macro rather than a function -- the string
+    must be known at macroexpansion time), and `standard_macros.py`'s
+    expander quotes it and calls this.
 
     Returns a function of (stream &rest args) -- the function-valued half of
     the "format control" designator FORMAT and ERROR/WARN/CERROR datums also

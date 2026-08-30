@@ -48,8 +48,7 @@ def ev(source):
 
 
 class TestOperatorsAreSpecialForms:
-    @pytest.mark.parametrize('name', ['CALL-METHOD', 'MAKE-METHOD',
-                                      'DEFINE-METHOD-COMBINATION'])
+    @pytest.mark.parametrize('name', ['CALL-METHOD', 'MAKE-METHOD'])
     def test_registered_once_as_a_special_operator(self, name):
         # Importing the modules that own them; the registries are populated at
         # import time and this file may be the first to ask.
@@ -60,11 +59,32 @@ class TestOperatorsAreSpecialForms:
             f"{name} is not registered as a special operator")
         assert name not in registry.function_registry, (
             f"{name} is *also* registered as a function. A function's operands "
-            f"are evaluated before it runs, which is wrong for all three: a "
-            f"method object, an unevaluated method body, and a combination "
-            f"definition respectively -- and whichever registration the "
-            f"environment bootstrap installs last silently wins "
-            f"(standing rule 3).")
+            f"are evaluated before it runs, which is wrong for both: a "
+            f"method object and an unevaluated method body respectively -- "
+            f"and whichever registration the environment bootstrap installs "
+            f"last silently wins (standing rule 3).")
+
+    def test_define_method_combination_is_a_real_macro(self):
+        """CLHS 7.6.6.2 heads DEFINE-METHOD-COMBINATION 'Macro', not
+        'Special Operator' -- unlike CALL-METHOD/MAKE-METHOD above, its
+        unevaluated-argument requirement is exactly what a macro already
+        gives for free (M4: standard_macros.py's `_reuse_definer`), so it
+        belongs in `function_registry` marked as a macro, not in
+        `special_registry`. The vestigial `cl_special` stub
+        (`evaluation_special_registrations.py`) is never reached by
+        `eval()` any more -- the same harmless leftover WHEN/UNLESS/PROG
+        keep beside their own macro registrations -- so its presence in
+        `special_registry` is not asserted here."""
+        import fclpy.lispfunc.standard_macros  # noqa: F401
+
+        entry = registry.function_registry.get('DEFINE-METHOD-COMBINATION')
+        assert entry is not None, (
+            "DEFINE-METHOD-COMBINATION is not registered as a function/macro")
+        assert getattr(entry.func, '__is_macro__', False), (
+            "DEFINE-METHOD-COMBINATION is registered in function_registry "
+            "but not marked as a macro -- its arguments (a lambda-list, "
+            "method-group specs, an unevaluated body) would be evaluated "
+            "as ordinary call arguments")
 
 
 class TestBuiltInCombinations:

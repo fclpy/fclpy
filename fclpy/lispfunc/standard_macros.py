@@ -1084,6 +1084,20 @@ def _lambda_expander(form, env):
     return _cons_from([_sym('FUNCTION'), form])
 
 
+@_standard_macro('FORMATTER')
+def _formatter_expander(form, env):
+    """(formatter control-string) -> (%formatter 'control-string) --
+    CLHS 22.3.1: FORMATTER is a macro, and control-string is the literal
+    object appearing in the form (never evaluated); quoting it here is
+    what keeps it that way across the macroexpansion boundary, matching
+    LAMBDA/IN-PACKAGE above."""
+    args = _form_args(form)
+    if len(args) != 1:
+        raise lisptype.LispProgramError(
+            "FORMATTER requires exactly one argument")
+    return _list(_sym('%FORMATTER'), _quoted(args[0]))
+
+
 @_standard_macro('IN-PACKAGE')
 def _in_package_expander(form, env):
     """(in-package name) -> (%in-package 'name) -- CLHS 11.2: IN-PACKAGE
@@ -1098,4 +1112,258 @@ def _in_package_expander(form, env):
         raise lisptype.LispProgramError(
             "IN-PACKAGE requires exactly one argument")
     return _list(_sym('%IN-PACKAGE'), _quoted(args[0]))
+
+
+def _build_prog_expansion(form, let_symbol_name):
+    """(prog[*] (var*) declare* body...) -> (block nil (let[*] (var*)
+    declare* (tagbody . body))) -- CLHS 5.3's own macro definition. Leading
+    `(DECLARE ...)` forms belong to the LET/LET*'s own bindings (e.g. to
+    mark a variable SPECIAL), not to the TAGBODY, so they are hoisted
+    ahead of it rather than left in the tagbody body, where DECLARE has no
+    meaning."""
+    args = cdr(form)
+    if not _consp_internal(args):
+        raise lisptype.LispProgramError(
+            f"{let_symbol_name} requires a variable list")
+    varlist = car(args)
+    body = cdr(args)
+
+    declare_forms = []
+    while _consp_internal(body):
+        candidate = car(body)
+        if (_consp_internal(candidate)
+                and isinstance(car(candidate), lisptype.LispSymbol)
+                and car(candidate).name == 'DECLARE'):
+            declare_forms.append(candidate)
+            body = cdr(body)
+        else:
+            break
+
+    tagbody_form = cons(_sym('TAGBODY'), body)
+    let_body = cons(tagbody_form, lisptype.NIL)
+    for declare_form in reversed(declare_forms):
+        let_body = cons(declare_form, let_body)
+    let_form = cons(_sym(let_symbol_name), cons(varlist, let_body))
+    return cons(_sym('BLOCK'), cons(lisptype.NIL, cons(let_form, lisptype.NIL)))
+
+
+@_standard_macro('PROG')
+def _prog_expander(form, env):
+    """(prog (var*) body...) -> (block nil (let (var*) (tagbody . body)))."""
+    return _build_prog_expansion(form, 'LET')
+
+
+@_standard_macro('PROG*')
+def _prog_star_expander(form, env):
+    """(prog* (var*) body...) -> (block nil (let* (var*) (tagbody . body)))."""
+    return _build_prog_expansion(form, 'LET*')
+
+
+def _build_package_iteration_expansion(form, kind_name):
+    """(do-symbols/do-external-symbols (var [package [result]]) declare*
+    . body) -> (dolist (var (%package-symbol-list package 'kind) result)
+    declare* . body). DOLIST already has the BindingFrame/implicit-NIL-
+    block iteration machinery this needs; reusing it here replaces two of
+    the three near-identical hand-rolled loops in
+    `evaluation_loops_conditionals.py` with the same one DOLIST already
+    exercises everywhere else. `package` stays an unevaluated form spliced
+    into the DOLIST list-form, so it is still evaluated exactly once, in
+    the outer (non-loop) environment, matching CLHS 6.1.2.1.7 -- the same
+    place DOLIST's own list-form is evaluated."""
+    args = cdr(form)
+    if not _consp_internal(args):
+        return lisptype.NIL
+    var_clause = car(args)
+    body = cdr(args)
+    if not _consp_internal(var_clause):
+        raise lisptype.LispNotImplementedError(
+            f"DO-{kind_name} requires a (var [package]) clause")
+    var = car(var_clause)
+    rest = cdr(var_clause)
+    package_form = car(rest) if _consp_internal(rest) else lisptype.NIL
+    result_form = (car(cdr(rest))
+                   if _consp_internal(rest) and _consp_internal(cdr(rest))
+                   else lisptype.NIL)
+    list_form = _list(_sym('%PACKAGE-SYMBOL-LIST'), package_form,
+                       _quoted(_sym(kind_name)))
+    dolist_clause = _list(var, list_form, result_form)
+    return cons(_sym('DOLIST'), cons(dolist_clause, body))
+
+
+@_standard_macro('DO-SYMBOLS')
+def _do_symbols_expander(form, env):
+    """(do-symbols (var [package [result]]) declare* . body) -- CLHS
+    6.1.2.1.7: iterates every symbol *accessible* in package (its own,
+    plus the externals of every package it uses)."""
+    return _build_package_iteration_expansion(form, 'SYMBOLS')
+
+
+@_standard_macro('DO-EXTERNAL-SYMBOLS')
+def _do_external_symbols_expander(form, env):
+    """(do-external-symbols (var [package [result]]) declare* . body) --
+    CLHS 6.1.2.1.7: iterates only the symbols package *exports*."""
+    return _build_package_iteration_expansion(form, 'EXTERNAL-SYMBOLS')
+
+
+@_registry.cl_function('%PACKAGE-SYMBOL-LIST')
+def _package_symbol_list_primitive(pkg_designator, kind):
+    """Runtime primitive behind DO-SYMBOLS/DO-EXTERNAL-SYMBOLS: the
+    package's symbol set named by `kind` ('SYMBOLS' or
+    'EXTERNAL-SYMBOLS'), as a proper Lisp list for DOLIST to walk. Reuses
+    `misc_packages.package_symbols`, the one enumerator LOOP's
+    `for x being the symbols of p` also goes through."""
+    from .misc_packages import package_symbols
+    kind_str = kind.name.lower() if isinstance(kind, lisptype.LispSymbol) else str(kind).lower()
+    result = lisptype.NIL
+    for sym in reversed(list(package_symbols(pkg_designator, kind_str))):
+        result = lisptype.lispCons(sym, result)
+    return result
+
+
+@_standard_macro('DO-ALL-SYMBOLS')
+def _do_all_symbols_expander(form, env):
+    """(do-all-symbols (var [result]) declare* . body) -> (dolist (var
+    (%all-symbols-list) result) declare* . body) -- CLHS 6.1.2.1.7:
+    iterates every symbol in every registered package (no package
+    argument, unlike its two siblings above)."""
+    args = cdr(form)
+    if not _consp_internal(args):
+        return lisptype.NIL
+    var_clause = car(args)
+    body = cdr(args)
+    if not _consp_internal(var_clause):
+        raise lisptype.LispNotImplementedError(
+            "DO-ALL-SYMBOLS requires a (var) clause")
+    var = car(var_clause)
+    result_form = (car(cdr(var_clause))
+                   if _consp_internal(cdr(var_clause)) else lisptype.NIL)
+    list_form = _list(_sym('%ALL-SYMBOLS-LIST'))
+    dolist_clause = _list(var, list_form, result_form)
+    return cons(_sym('DOLIST'), cons(dolist_clause, body))
+
+
+@_registry.cl_function('%ALL-SYMBOLS-LIST')
+def _all_symbols_list_primitive():
+    """Runtime primitive behind DO-ALL-SYMBOLS: every symbol in every
+    uniquely-registered package (`state.packages` holds the same package
+    under more than one name), as a proper Lisp list."""
+    unique_packages = {id(p): p for p in state.packages.values()}
+    all_syms = []
+    for pkg in unique_packages.values():
+        for sym in pkg.symbols.values():
+            all_syms.append(sym)
+    result = lisptype.NIL
+    for sym in reversed(all_syms):
+        result = lisptype.lispCons(sym, result)
+    return result
+
+
+@_standard_macro('DEFINE-MODIFY-MACRO')
+def _define_modify_macro_expander(form, env):
+    """(define-modify-macro name lambda-list function [doc]) -- CLHS
+    5.1.3: defines `name` as a macro such that `(name place arg*)` reads
+    place's old value, applies `function`, and stores the result back.
+
+    `eval_define_modify_macro` (evaluation_special_forms.py) already
+    builds and installs the resulting macro closure -- a Python closure
+    over the *lexical* environment DEFINE-MODIFY-MACRO was itself
+    evaluated in, for the new macro's own `&optional` default-value
+    forms -- which cannot be represented as a printable Lisp expansion
+    form the way WHEN/DECLAIM/... above are. Reusing that installer
+    directly here (rather than duplicating its ~90 lines to build an
+    equivalent expansion) is what replaced the old `operator.name ==
+    'DEFINE-MODIFY-MACRO'` ladder branch; only the trigger moved, from
+    the ladder to the macro path, so `(macro-function
+    'define-modify-macro)` is no longer NIL. The nominal expansion is
+    just `name` quoted, matching what DEFINE-MODIFY-MACRO CLHS-specifies
+    as its value."""
+    from .evaluation_special_forms import eval_define_modify_macro
+    name = eval_define_modify_macro(form, env)
+    return _quoted(name)
+
+
+def _reuse_definer(worker_name, module_name='evaluation_special_forms'):
+    """A macro expander that runs an existing `eval_defxxx(form, env)`
+    definer immediately (installing whatever it installs, in the exact
+    same `env` the evaluator would have handed the old ladder branch --
+    no fidelity is lost, since nothing here defers the work into a form
+    evaluated later) and quotes its CLHS-specified return value as the
+    nominal expansion. See `_define_modify_macro_expander` above for why
+    this is the right shape for a *definer*: its return value is always
+    a name (or similar small, side-effect-free datum), not the arbitrary,
+    possibly-effectful result of running a body -- the closure/lexical-
+    environment problem an expansion-form-building macro would otherwise
+    hit is exactly what installing immediately, rather than building a
+    form for later, sidesteps."""
+    def expander(form, env):
+        import importlib
+        worker_module = importlib.import_module(f'.{module_name}', package='fclpy.lispfunc')
+        worker = getattr(worker_module, worker_name)
+        return _quoted(worker(form, env))
+    expander.__name__ = worker_name
+    expander.__doc__ = f"Definer macro reusing `{worker_name}` -- see _reuse_definer."
+    return expander
+
+
+_standard_macro('DEFVAR')(_reuse_definer('eval_defvar'))
+_standard_macro('DEFPARAMETER')(_reuse_definer('eval_defparameter'))
+_standard_macro('DEFCONSTANT')(_reuse_definer('eval_defconstant'))
+_standard_macro('DEFUN')(_reuse_definer('eval_defun'))
+_standard_macro('DEFMACRO')(_reuse_definer('eval_defmacro'))
+# DEFCLASS/DEFGENERIC/DEFMETHOD return the class/generic-function/method
+# *object* (CLHS 7.7/7.7/7.6.2), not a name -- `_quoted` holds any Python
+# object as a literal just as well as a symbol, and the COMPILE-FILE
+# externalizer's `_walk_quoted` already has a dedicated branch for a
+# quoted `LispClass` payload (turns it into `(FIND-CLASS 'name)`), so this
+# is not a new shape for that path to handle.
+_standard_macro('DEFCLASS')(_reuse_definer('eval_defclass'))
+_standard_macro('DEFGENERIC')(_reuse_definer('eval_defgeneric'))
+_standard_macro('DEFMETHOD')(_reuse_definer('eval_defmethod'))
+_standard_macro('DEFINE-METHOD-COMBINATION')(_reuse_definer('eval_define_method_combination'))
+# eval_define_condition lives in evaluation_conditions.py, not
+# evaluation_special_forms.py -- the only one of this family that does.
+_standard_macro('DEFINE-CONDITION')(
+    _reuse_definer('eval_define_condition', module_name='evaluation_conditions'))
+_standard_macro('DEFTYPE')(_reuse_definer('eval_deftype'))
+_standard_macro('DEFSETF')(_reuse_definer('eval_defsetf'))
+_standard_macro('DEFINE-SETF-EXPANDER')(_reuse_definer('eval_define_setf_expander'))
+
+
+@_standard_macro('DEFINE-SYMBOL-MACRO')
+def _define_symbol_macro_expander(form, env):
+    """(define-symbol-macro symbol expansion) ->
+    (%define-symbol-macro 'symbol 'expansion) -- CLHS 24.2.2: establishes
+    a symbol macro with *global* scope (unlike SYMBOL-MACROLET's lexical
+    one), and `expansion` is never evaluated -- it is substituted
+    verbatim wherever `symbol` is referenced afterward, so it is quoted
+    here rather than passed through as code. There was no implementation
+    of this at all before (not a special form, not a macro, not even a
+    stub) -- `(define-symbol-macro x 1)` signalled UNDEFINED-FUNCTION."""
+    args = _form_args(form)
+    if len(args) != 2:
+        raise lisptype.LispProgramError(
+            "DEFINE-SYMBOL-MACRO requires exactly two arguments")
+    name, expansion = args
+    if not isinstance(name, lisptype.LispSymbol):
+        raise lisptype.LispProgramError(
+            "DEFINE-SYMBOL-MACRO: name must be a symbol")
+    return _list(_sym('%DEFINE-SYMBOL-MACRO'), _quoted(name), _quoted(expansion))
+
+
+@_registry.cl_function('%DEFINE-SYMBOL-MACRO')
+def _define_symbol_macro_primitive(name, expansion):
+    """Runtime primitive behind the `DEFINE-SYMBOL-MACRO` macro: installs
+    the symbol-macro in the *global* environment (CLHS 24.2.2 gives it
+    global scope, unlike SYMBOL-MACROLET), found by walking up from the
+    current environment the same way DEFVAR/DEFUN reach the global scope
+    to install a binding that must outlive the form that created it."""
+    env = state.current_environment
+    if env is None:
+        raise lisptype.LispError(
+            "DEFINE-SYMBOL-MACRO: no environment available")
+    global_env = env
+    while global_env.parent is not None:
+        global_env = global_env.parent
+    global_env.add_symbol_macro(name, expansion)
+    return name
 

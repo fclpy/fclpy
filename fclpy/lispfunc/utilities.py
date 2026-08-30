@@ -153,7 +153,6 @@ __all__ = [
     'slot_missing',
     'find_method',
     'remove_method',
-    'defmethod',
     'make_method',
     'method_function',
     'method_generic_function',

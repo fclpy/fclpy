@@ -1493,19 +1493,6 @@ def find_method(generic_function, qualifiers, specializers, errorp=True):
     return lisptype.NIL
 
 
-@_registry.cl_function('DEFMETHOD')
-def defmethod(name, *args):
-    """Never actually runs DEFMETHOD: the real implementation is
-    `evaluation_special_forms.eval_defmethod`, reached directly by
-    `evaluation_core.eval`'s special-form dispatch before any function
-    lookup happens, because DEFMETHOD's specialized-lambda-list and body
-    must not be evaluated as ordinary call arguments. This registration
-    exists only so `(fboundp 'defmethod)`/`SYMBOL-FUNCTION` see a binding,
-    matching DEFGENERIC/DEFCONSTANT/DEFPACKAGE/DEFSTRUCT's identical
-    placeholders in misc_macros.py."""
-    return name
-
-
 @_registry.cl_function('CLASS-PRECEDENCE-LIST')
 def class_precedence_list(class_obj):
     """CLASS-PRECEDENCE-LIST (CLHS 4.3.5 / 7.6.15): the class precedence
@@ -1868,7 +1855,6 @@ __all__ = [
     # Method operations
     'find_method',
     'remove_method',
-    'defmethod',
     'make_method',
     'method_function',
     'method_generic_function',

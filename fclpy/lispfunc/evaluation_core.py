@@ -911,12 +911,11 @@ def eval(form, env=None):
     """
     # Import special form handlers lazily to avoid circular imports
     from .evaluation_special_forms import (
-        eval_if, eval_setq, eval_defun, eval_defmacro, eval_macroexpand_1,
+        eval_if, eval_setq, eval_macroexpand_1,
         eval_macro_function, eval_lambda, eval_declare, eval_declaim,
-        eval_defvar, eval_defparameter, eval_defconstant, eval_defstruct,
+        eval_defstruct,
         eval_pop, eval_push, eval_pushnew, eval_remf,
         eval_incf, eval_decf,
-        eval_defclass, eval_defgeneric, eval_defmethod, eval_define_method_combination,
         eval_call_method, eval_make_method,
         eval_destructuring_bind, eval_rotatef, eval_pprint_logical_block
     )
@@ -926,9 +925,8 @@ def eval(form, env=None):
     )
     from .evaluation_loops_conditionals import (
         eval_cond, eval_case, eval_ccase, eval_and, eval_or,
-        eval_progn, eval_locally, eval_prog, eval_prog_star, eval_let, eval_letstar, eval_quasiquote,
+        eval_progn, eval_locally, eval_let, eval_letstar, eval_quasiquote,
         eval_loop, eval_eval_when, eval_do, eval_do_star, eval_dolist, eval_dotimes,
-        eval_do_symbols, eval_do_external_symbols, eval_do_all_symbols,
         eval_flet, eval_labels, eval_time,
         eval_ecase, eval_typecase, eval_etypecase, eval_ctypecase
     )
@@ -939,7 +937,6 @@ def eval(form, env=None):
         eval_with_condition_restarts,
         eval_multiple_value_call, eval_multiple_value_prog1,
         eval_handler_bind, eval_handler_case, eval_ignore_errors,
-        eval_define_condition
     )
     
     env = resolve_environment(env)
@@ -1643,9 +1640,6 @@ def eval(form, env=None):
                 return eval_progv(form, env)
             elif operator.name == 'MULTIPLE-VALUE-PROG1':
                 return eval_multiple_value_prog1(form, env)
-            elif operator.name == 'DEFINE-MODIFY-MACRO':
-                from . import evaluation_special_forms as _es_forms
-                return _es_forms.eval_define_modify_macro(form, env)
             elif operator.name == 'GET-SETF-EXPANSION':
                 from . import evaluation_special_forms as _es_forms
                 arg_forms = []
@@ -1668,43 +1662,21 @@ def eval(form, env=None):
                     store_form,
                     access_form,
                 )
-            elif operator.name == 'PROG':
-                return eval_prog(form, env)
-            elif operator.name == 'PROG*':
-                return eval_prog_star(form, env)
-            elif operator.name == 'DEFVAR':
-                return eval_defvar(form, env)
-            elif operator.name == 'DEFPARAMETER':
-                return eval_defparameter(form, env)
-            elif operator.name == 'DEFCONSTANT':
-                return eval_defconstant(form, env)
             elif operator.name == 'DEFSTRUCT':
                 return eval_defstruct(form, env)
             elif operator.name == 'DESTRUCTURING-BIND':
                 return eval_destructuring_bind(form, env)
-            elif operator.name == 'DEFCLASS':
-                return eval_defclass(form, env)
-            elif operator.name == 'DEFGENERIC':
-                return eval_defgeneric(form, env)
-            elif operator.name == 'DEFMETHOD':
-                return eval_defmethod(form, env)
-            elif operator.name == 'DEFINE-METHOD-COMBINATION':
-                return eval_define_method_combination(form, env)
             elif operator.name == 'CALL-METHOD':
                 return eval_call_method(form, env)
             elif operator.name == 'MAKE-METHOD':
                 return eval_make_method(form, env)
             elif operator.name == 'LOOP':
                 return eval_loop(form, env)
-            elif operator.name == 'DEFUN':
-                return eval_defun(form, env)
             elif operator.name == 'QUASIQUOTE':
                 return eval_quasiquote(form, env)
             elif operator.name == 'THE':
                 from .evaluation_special_forms import eval_the
                 return eval_the(form, env)
-            elif operator.name == 'DEFMACRO':
-                return eval_defmacro(form, env)
             elif operator.name == 'DECLARE':
                 return eval_declare(form, env)
             elif operator.name == 'PROCLAIM':
@@ -1762,12 +1734,6 @@ def eval(form, env=None):
                 return eval_dolist(form, env)
             elif operator.name == 'DOTIMES':
                 return eval_dotimes(form, env)
-            elif operator.name == 'DO-SYMBOLS':
-                return eval_do_symbols(form, env)
-            elif operator.name == 'DO-EXTERNAL-SYMBOLS':
-                return eval_do_external_symbols(form, env)
-            elif operator.name == 'DO-ALL-SYMBOLS':
-                return eval_do_all_symbols(form, env)
             elif operator.name == 'SYMBOL-MACROLET':
                 # (SYMBOL-MACROLET ((sym1 expansion1) (sym2 expansion2) ...) body-form...)
                 # Create symbol-macro bindings in a new environment and evaluate body
@@ -1912,214 +1878,6 @@ def eval(form, env=None):
                     return result
                 finally:
                     frame.unwind()
-            elif operator.name == 'DEFSETF':
-                # DEFSETF has two forms:
-                # Short form: (DEFSETF access-fn update-fn [documentation])
-                # Long form:  (DEFSETF access-fn lambda-list (store-var...) [decl] [doc] form...)
-                # Arguments should NOT be evaluated - they are symbol names and code templates
-                args = cdr(form)
-                if args is None or args == lisptype.NIL:
-                    raise lisptype.LispError("DEFSETF requires arguments")
-                
-                access_fn = car(args)
-                rest = cdr(args)
-                
-                if not isinstance(access_fn, lisptype.LispSymbol):
-                    raise lisptype.LispError("DEFSETF: access-fn must be a symbol")
-                
-                if rest is None or rest == lisptype.NIL:
-                    raise lisptype.LispError("DEFSETF requires at least two arguments")
-                
-                second_arg = car(rest)
-                third_and_beyond = cdr(rest)
-                
-                # Determine if short or long form based on second argument type
-                is_short_form = isinstance(second_arg, lisptype.LispSymbol)
-                
-                # Get or create the global setf-expanders storage
-                global_env = env
-                while global_env.parent is not None:
-                    global_env = global_env.parent
-                
-                if not hasattr(global_env, 'setf_expanders'):
-                    global_env.setf_expanders = {}
-                
-                if is_short_form:
-                    # Short form: (DEFSETF access-fn update-fn [documentation])
-                    update_fn = second_arg
-                    doc_string = None
-                    if _consp_internal(third_and_beyond):
-                        doc_form = car(third_and_beyond)
-                        if isinstance(doc_form, str):
-                            doc_string = doc_form
-                    
-                    # Store the setf expander info for later use by SETF macro
-                    global_env.setf_expanders[access_fn.name] = {
-                        'type': 'short',
-                        'update_fn': update_fn,
-                        'documentation': doc_string
-                    }
-                else:
-                    # Long form: (DEFSETF access-fn lambda-list (store-var...) [decl] [doc] form...)
-                    lambda_list = second_arg
-                    
-                    if not _consp_internal(third_and_beyond):
-                        raise lisptype.LispError("DEFSETF long form requires store variables")
-                    
-                    store_vars = car(third_and_beyond)
-                    body = cdr(third_and_beyond)
-                    
-                    # Parse optional declarations and docstring from body
-                    declarations = []
-                    doc_string = None
-                    actual_body = body
-                    
-                    while _consp_internal(actual_body):
-                        form_item = car(actual_body)
-                        if _consp_internal(form_item):
-                            op = car(form_item)
-                            if isinstance(op, lisptype.LispSymbol) and op.name == 'DECLARE':
-                                declarations.append(form_item)
-                                actual_body = cdr(actual_body)
-                                continue
-                        if isinstance(form_item, str) and doc_string is None:
-                            doc_string = form_item
-                            actual_body = cdr(actual_body)
-                            continue
-                        break
-                    
-                    # Store the setf expander info for long form
-                    global_env.setf_expanders[access_fn.name] = {
-                        'type': 'long',
-                        'lambda_list': lambda_list,
-                        'store_vars': store_vars,
-                        'declarations': declarations,
-                        'documentation': doc_string,
-                        'body': actual_body,
-                        'env': env  # Capture lexical environment
-                    }
-                
-                # Return the access-fn symbol as specified by ANSI CL
-                return access_fn
-            elif operator.name == 'DEFINE-SETF-EXPANDER':
-                # (DEFINE-SETF-EXPANDER access-fn lambda-list [[declaration* | documentation]] form*)
-                # This is a macro - arguments should NOT be evaluated
-                args = cdr(form)
-                if args is None or args == lisptype.NIL:
-                    raise lisptype.LispError("DEFINE-SETF-EXPANDER requires arguments")
-                
-                access_fn = car(args)
-                rest = cdr(args)
-                
-                if not isinstance(access_fn, lisptype.LispSymbol):
-                    raise lisptype.LispError("DEFINE-SETF-EXPANDER: access-fn must be a symbol")
-                
-                if rest is None or rest == lisptype.NIL:
-                    raise lisptype.LispError("DEFINE-SETF-EXPANDER requires a lambda-list")
-                
-                lambda_list = car(rest)
-                body = cdr(rest)
-                
-                # Get or create the global setf-expanders storage
-                global_env = env
-                while global_env.parent is not None:
-                    global_env = global_env.parent
-                
-                if not hasattr(global_env, 'setf_expanders'):
-                    global_env.setf_expanders = {}
-                
-                # Parse optional declarations and docstring from body
-                declarations = []
-                doc_string = None
-                actual_body = body
-                
-                while _consp_internal(actual_body):
-                    form_item = car(actual_body)
-                    if _consp_internal(form_item):
-                        op = car(form_item)
-                        if isinstance(op, lisptype.LispSymbol) and op.name == 'DECLARE':
-                            declarations.append(form_item)
-                            actual_body = cdr(actual_body)
-                            continue
-                    if isinstance(form_item, str) and doc_string is None:
-                        doc_string = form_item
-                        actual_body = cdr(actual_body)
-                        continue
-                    break
-                
-                # Store the setf expander info - similar to long-form DEFSETF
-                # but uses &ENVIRONMENT in the lambda list for macro environment
-                global_env.setf_expanders[access_fn.name] = {
-                    'type': 'expander',
-                    'lambda_list': lambda_list,
-                    'declarations': declarations,
-                    'documentation': doc_string,
-                    'body': actual_body,
-                    'env': env  # Capture lexical environment
-                }
-                
-                # Return the access-fn symbol as specified by ANSI CL
-                return access_fn
-            elif operator.name == 'DEFINE-CONDITION':
-                return eval_define_condition(form, env)
-            elif operator.name == 'DEFTYPE':
-                # (DEFTYPE name lambda-list &body body)
-                # Arguments should NOT be evaluated - the name is a symbol
-                args = cdr(form)
-                if args is None or args == lisptype.NIL:
-                    raise lisptype.LispError("DEFTYPE requires a name")
-                
-                name = car(args)
-                if not isinstance(name, lisptype.LispSymbol):
-                    raise lisptype.LispError("DEFTYPE: name must be a symbol")
-                
-                rest = cdr(args)
-                lambda_list = car(rest) if _consp_internal(rest) else lisptype.NIL
-                body = cdr(rest) if _consp_internal(rest) else lisptype.NIL
-
-                # Get or create the global types storage
-                global_env = env
-                while global_env.parent is not None:
-                    global_env = global_env.parent
-
-                if not hasattr(global_env, 'user_types'):
-                    global_env.user_types = {}
-
-                # Store a real *expander*, not the raw source.
-                #
-                # This dict used to hold `lambda_list`/`body`/`env` and nothing
-                # anywhere read it, so a DEFTYPE'd name was invisible to both
-                # TYPEP and SUBTYPEP -- `(deftype foo () '(integer 0 10))`
-                # succeeded and then `(typep 5 'foo)` was NIL. The expander is
-                # built by the one macro-lambda-list binder (CLHS 4.2.3: a
-                # deftype lambda list is a macro lambda list, except that an
-                # omitted &OPTIONAL/&KEY parameter defaults to `*` rather than
-                # NIL, which is what `unsupplied_default` supplies). Reusing it
-                # is also what gives DEFTYPE &WHOLE, &REST, &KEY,
-                # destructuring, the docstring and the implicit BLOCK that
-                # `(return-from <type-name> ...)` needs -- all of which
-                # ansi-test's deftype.9-.19 exercise.
-                from .evaluation_special_forms import _create_macro_function
-                wild = lisptype.COMMON_LISP_PACKAGE.intern('*')
-                expander = _create_macro_function(
-                    name, lambda_list, body, env, unsupplied_default=wild)
-
-                # CLHS 25.1.3: a DEFTYPE body may open with a documentation
-                # string; `(documentation name 'type)` reads it back.
-                from .evaluation_special_forms import split_function_body as _sfb
-                _type_doc, _type_decls, _type_forms = _sfb(body)
-
-                global_env.user_types[name.name] = {
-                    'name': name,
-                    'lambda_list': lambda_list,
-                    'body': body,
-                    'env': env,          # Capture lexical environment
-                    'expander': expander,
-                    'documentation': str(_type_doc) if _type_doc else None,
-                }
-
-                # Return the name symbol
-                return name
             elif operator.name == 'DEFPACKAGE':
                 # DEFPACKAGE's option clauses are literal data (CLHS 7.2), not
                 # forms to evaluate -- so this stays a special case in the

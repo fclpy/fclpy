@@ -1326,56 +1326,10 @@ def eval_prog2(form, env):
     return result
 
 
-def _eval_prog_impl(form, env, let_symbol_name):
-    """Shared PROG/PROG* implementation.
-
-    Per ANSI, (PROG (var*) body...) is equivalent to
-    (BLOCK NIL (LET (var*) (TAGBODY . body))), and PROG* is the same with
-    LET* instead of LET. Building that expansion and delegating to the
-    existing BLOCK/LET/LET*/TAGBODY handlers keeps binding, GO-tag, and
-    implicit-NIL-block semantics consistent with those special forms.
-    """
-    from .evaluation_core import eval
-
-    args = cdr(form)
-    if not _consp_internal(args):
-        raise lisptype.LispNotImplementedError(f"{let_symbol_name} requires a variable list")
-
-    varlist = car(args)
-    body = cdr(args)
-
-    # Leading (DECLARE ...) forms belong to the LET's own bindings (e.g. to
-    # mark a variable SPECIAL), not to the TAGBODY, so hoist them out of the
-    # tagbody body and place them directly in the LET body ahead of it.
-    declare_forms = []
-    while _consp_internal(body):
-        candidate = car(body)
-        if _consp_internal(candidate) and isinstance(car(candidate), lisptype.LispSymbol) and car(candidate).name == 'DECLARE':
-            declare_forms.append(candidate)
-            body = cdr(body)
-        else:
-            break
-
-    tagbody_form = cons(lisptype.LispSymbol('TAGBODY'), body)
-
-    # let_body = (declare1 declare2 ... tagbody_form)
-    let_body = cons(tagbody_form, lisptype.NIL)
-    for declare_form in reversed(declare_forms):
-        let_body = cons(declare_form, let_body)
-
-    let_form = cons(lisptype.LispSymbol(let_symbol_name), cons(varlist, let_body))
-    block_form = cons(lisptype.LispSymbol('BLOCK'), cons(lisptype.NIL, cons(let_form, lisptype.NIL)))
-    return eval(block_form, env)
-
-
-def eval_prog(form, env):
-    """Evaluate PROG special form: (BLOCK NIL (LET (var*) (TAGBODY . body)))."""
-    return _eval_prog_impl(form, env, 'LET')
-
-
-def eval_prog_star(form, env):
-    """Evaluate PROG* special form: (BLOCK NIL (LET* (var*) (TAGBODY . body)))."""
-    return _eval_prog_impl(form, env, 'LET*')
+# PROG/PROG* are now real macros -- see standard_macros.py's
+# `_build_prog_expansion` (CLHS 5.3's own expansion into BLOCK/LET[*]/
+# TAGBODY), which replaced the special-form version that used to live
+# here.
 
 
 def eval_time(form, env):
@@ -3030,154 +2984,11 @@ def eval_dotimes(form, env):
         return _run_with_nil_block(_loop)
 
 
-def eval_do_symbols(form, env):
-    """Evaluate DO-SYMBOLS special form.
-    
-    (DO-SYMBOLS (var [package [result-form]]) declaration* {tag | statement}*)
-    
-    Iterates over all symbols accessible in the package.
-    """
-    from .evaluation_core import eval
-    
-    args = cdr(form)
-    if not _consp_internal(args):
-        return lisptype.NIL
-    
-    # Parse (var [package [result-form]])
-    var_clause = car(args)
-    body = cdr(args)
-    
-    if not _consp_internal(var_clause):
-        raise lisptype.LispNotImplementedError("DO-SYMBOLS requires (var [package]) clause")
-    
-    var = car(var_clause)
-    rest = cdr(var_clause)
-    package_form = car(rest) if _consp_internal(rest) else lisptype.NIL
-    result_form = car(cdr(rest)) if _consp_internal(rest) and _consp_internal(cdr(rest)) else lisptype.NIL
-
-    # The symbols *accessible* in the package: its own plus the externals of
-    # every package it uses. Enumerated by the shared helper, which is also what
-    # LOOP's `for x being the symbols of p` uses -- the copy that used to live
-    # here read `external_symbols` straight off each entry of `use_list`, but
-    # that list holds package *names* as well as Package objects, so a string
-    # entry yielded the empty set and its symbols were silently skipped.
-    from .misc_packages import coerce_to_package, package_symbols
-    pkg = coerce_to_package(eval(package_form, env))
-
-    # Create loop environment
-    loop_env = lisptype.Environment(env)
-    frame = BindingFrame(loop_env, body=body, bound_vars=[var])
-    _, body = body_specials(body)
-    frame.bind(var, lisptype.NIL)
-
-    def _loop():
-        for sym in package_symbols(pkg, 'symbols'):
-            frame.bind(var, sym)
-            _exec_iteration_body(body, loop_env)
-
-        # Set var to NIL for result form
-        frame.bind(var, lisptype.NIL)
-        return eval(result_form, loop_env)
-
-    with frame:
-        return _run_with_nil_block(_loop)
-
-
-def eval_do_external_symbols(form, env):
-    """Evaluate DO-EXTERNAL-SYMBOLS special form.
-    
-    (DO-EXTERNAL-SYMBOLS (var [package [result-form]]) declaration* {tag | statement}*)
-    
-    Iterates over all external (exported) symbols in the package.
-    """
-    from .evaluation_core import eval
-    
-    args = cdr(form)
-    if not _consp_internal(args):
-        return lisptype.NIL
-    
-    # Parse (var [package [result-form]])
-    var_clause = car(args)
-    body = cdr(args)
-    
-    if not _consp_internal(var_clause):
-        raise lisptype.LispNotImplementedError("DO-EXTERNAL-SYMBOLS requires (var [package]) clause")
-    
-    var = car(var_clause)
-    rest = cdr(var_clause)
-    package_form = car(rest) if _consp_internal(rest) else lisptype.NIL
-    result_form = car(cdr(rest)) if _consp_internal(rest) and _consp_internal(cdr(rest)) else lisptype.NIL
-
-    # Same shared resolver and enumerator as DO-SYMBOLS and LOOP's
-    # for-as-package clause; only the symbol set differs.
-    from .misc_packages import coerce_to_package, package_symbols
-    pkg = coerce_to_package(eval(package_form, env))
-
-    # Create loop environment
-    loop_env = lisptype.Environment(env)
-    frame = BindingFrame(loop_env, body=body, bound_vars=[var])
-    _, body = body_specials(body)
-    frame.bind(var, lisptype.NIL)
-
-    def _loop():
-        for sym in package_symbols(pkg, 'external-symbols'):
-            frame.bind(var, sym)
-            _exec_iteration_body(body, loop_env)
-
-        # Set var to NIL for result form
-        frame.bind(var, lisptype.NIL)
-        return eval(result_form, loop_env)
-
-    with frame:
-        return _run_with_nil_block(_loop)
-
-
-def eval_do_all_symbols(form, env):
-    """Evaluate DO-ALL-SYMBOLS special form.
-    
-    (DO-ALL-SYMBOLS (var [result-form]) declaration* {tag | statement}*)
-    
-    Iterates over all symbols in all registered packages.
-    """
-    from .evaluation_core import eval
-    import fclpy.state as state
-    
-    args = cdr(form)
-    if not _consp_internal(args):
-        return lisptype.NIL
-    
-    # Parse (var [result-form])
-    var_clause = car(args)
-    body = cdr(args)
-    
-    if not _consp_internal(var_clause):
-        raise lisptype.LispNotImplementedError("DO-ALL-SYMBOLS requires (var) clause")
-    
-    var = car(var_clause)
-    result_form = car(cdr(var_clause)) if _consp_internal(cdr(var_clause)) else lisptype.NIL
-    
-    # Create loop environment
-    loop_env = lisptype.Environment(env)
-    frame = BindingFrame(loop_env, body=body, bound_vars=[var])
-    _, body = body_specials(body)
-    frame.bind(var, lisptype.NIL)
-
-    def _loop():
-        # Get all unique packages
-        unique_packages = {id(p): p for p in state.packages.values()}
-
-        # Iterate over all symbols in all packages
-        for pkg in unique_packages.values():
-            for name, sym in list(pkg.symbols.items()):
-                frame.bind(var, sym)
-                _exec_iteration_body(body, loop_env)
-
-        # Set var to NIL for result form
-        frame.bind(var, lisptype.NIL)
-        return eval(result_form, loop_env)
-
-    with frame:
-        return _run_with_nil_block(_loop)
+# DO-SYMBOLS/DO-EXTERNAL-SYMBOLS/DO-ALL-SYMBOLS are now real macros --
+# see standard_macros.py's `_build_package_iteration_expansion` and
+# `_do_all_symbols_expander`, which expand into DOLIST over a materialized
+# symbol list (CLHS 6.1.2.1.7) and replaced the three near-identical
+# hand-rolled loops that used to live here.
 
 
 @_registry.cl_special('LOOP-FINISH')
@@ -3210,8 +3021,5 @@ __all__ = [
     'eval_do_star',
     'eval_dolist',
     'eval_dotimes',
-    'eval_do_symbols',
-    'eval_do_external_symbols',
-    'eval_do_all_symbols',
     'eval_loop_finish',
 ]
