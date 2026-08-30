@@ -1530,8 +1530,24 @@ _standard_macro('HANDLER-CASE')(
 # pretty-printer's own engine, whose dynamic per-block state is
 # established by that engine rather than by a surrounding form.
 _standard_macro('DEFSTRUCT')(_reuse_definer('eval_defstruct'))
-_standard_macro('LOOP')(
-    _reuse_definer('eval_loop', module_name='evaluation_loops_conditionals'))
+# LOOP validates at expansion time before deferring: CLHS 6.1.1.7 pins the
+# duplicate-variable PROGRAM-ERROR to *macro expansion time* (LOOP.4.7/.4.8,
+# LOOP.5.ERROR.3/.4 macroexpand and expect the signal without evaluating),
+# and a pure deferral never parses, so it can never signal. The pre-check
+# (`validate_loop_form`, evaluation_loops_conditionals.py -- one name
+# extraction shared with the engine's own claim) runs here, and the
+# expansion stays the identical deferred form so evaluation is unchanged.
+_loop_deferred_expander = _reuse_definer('eval_loop',
+                                         module_name='evaluation_loops_conditionals')
+
+
+@_standard_macro('LOOP')
+def _loop_macro(form, env):
+    from .evaluation_loops_conditionals import validate_loop_form
+    validate_loop_form(form)
+    return _loop_deferred_expander(form, env)
+
+
 _standard_macro('PPRINT-LOGICAL-BLOCK')(
     _reuse_definer('eval_pprint_logical_block'))
 # DEFPACKAGE: the last of the three extracted ladder blocks, and the only

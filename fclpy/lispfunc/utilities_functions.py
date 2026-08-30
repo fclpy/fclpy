@@ -765,8 +765,26 @@ def coerce(object, result_type):
         if head_name == 'COMPLEX':
             if isinstance(object, complex):
                 return object
-            elif isinstance(object, (float, int, Fraction)):
-                # Convert to complex: integer/float/ratio become complex with imaginary part 0
+            # CLHS coerce: a rational coerced to COMPLEX is the rational
+            # itself -- a rational *is* a complex of zero imaginary part --
+            # so (coerce 0 'complex) answers the integer 0, not #C(0 0)
+            # (coerce.17-.19). With a compound part type the rational stays
+            # only when that part type admits it: (coerce 0
+            # '(complex short-float)) must upgrade to float parts, since the
+            # result has to be of the named type.
+            part_form = car(cdr(result_type))
+            if part_form is None or part_form is lisptype.NIL:
+                part_admits_rational = True
+            elif isinstance(part_form, lisptype.LispSymbol):
+                part_admits_rational = part_form.name.upper() in ('*',
+                                                                  'RATIONAL')
+            else:
+                part_admits_rational = False
+            if isinstance(object, float):
+                return complex(object, 0)
+            elif isinstance(object, (int, Fraction)):
+                if part_admits_rational:
+                    return object
                 return complex(object, 0)
             else:
                 raise lisptype.LispTypeError(f"COERCE: cannot convert to COMPLEX",
@@ -837,9 +855,14 @@ def coerce(object, result_type):
     if type_name == 'COMPLEX':
         if isinstance(object, complex):
             return object
-        elif isinstance(object, (float, int, Fraction)):
-            # Convert to complex: integer/float/ratio become complex with imaginary part 0
+        elif isinstance(object, float):
             return complex(object, 0)
+        elif isinstance(object, (int, Fraction)):
+            # CLHS coerce: a rational coerced to COMPLEX is the rational
+            # itself -- a rational is a complex of zero imaginary part, so
+            # (coerce 0 'complex) answers the integer 0, not #C(0 0)
+            # (coerce.17-.19). A float is not a rational and upgrades.
+            return object
         else:
             raise lisptype.LispTypeError(f"COERCE: cannot convert to COMPLEX",
                                         expected_type="COMPLEX",

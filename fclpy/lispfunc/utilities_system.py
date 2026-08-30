@@ -403,9 +403,26 @@ def long_site_name():
 
 # --- Environment and file access ---
 @_registry.cl_function('USER-HOMEDIR-PATHNAME')
-def user_homedir_pathname():
-    """Get user home directory."""
-    return os.path.expanduser("~")
+def user_homedir_pathname(host=None):
+    """USER-HOMEDIR-PATHNAME (CLHS 19.1.2): a *pathname* for the user's home
+    directory -- a directory pathname, so PATHNAME-NAME/TYPE/VERSION all
+    answer NIL (user-homedir-pathname.3-.5). This used to return the raw
+    Python home string, which PATHNAMEP rejected (user-homedir-pathname.2).
+
+    The optional `host` (CLHS: "a host designator... the default is the
+    value of *null-pathname*'s host-ish default"): only the local/unspecific
+    host is supported here, so a truthy host argument has no home directory
+    to offer and NIL is the conforming answer (user-homedir-pathname.7
+    accepts either NIL or a pathname); a wrong argument count is the
+    caller's PROGRAM-ERROR (user-homedir-pathname.error.1), as for any
+    function."""
+    if lisptype.is_truthy(host):
+        return lisptype.NIL
+    home = os.path.expanduser("~")
+    if not home.endswith(('/', '\\')):
+        home += os.sep
+    from .pathnames import pathname as _coerce_pathname
+    return _coerce_pathname(home)
 
 
 def get_env(name):

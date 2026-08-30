@@ -182,6 +182,80 @@ def _loop_varspec_names(varspec):
     return names
 
 
+def validate_loop_form(form):
+    """Expansion-time duplicate-variable pre-check (CLHS 6.1.1.7): "an error
+    of type program-error is signaled (at macro expansion time) if the same
+    variable is bound twice in any variable-binding clause of a single loop
+    expression."
+
+    The engine's `_claim_variables` enforces the same rule while the loop
+    parses at evaluation time; this pre-check exists because MACROEXPAND must
+    never run the program, yet the standard pins the PROGRAM-ERROR to
+    expansion time (LOOP.4.7/.4.8, LOOP.5.ERROR.3/.4 macroexpand and expect
+    the signal without ever evaluating the loop).
+
+    Deliberately a *conservative pre-check*, not a second parser: it claims
+    variables only from the token positions that are unambiguously binding
+    clauses at the top level of the clause list (FOR/AS and their AND-joined
+    subclauses, WITH), extracting names through the same `_loop_varspec_names`
+    the engine's claim uses, so there is exactly one name-extraction rule.
+    Anything the scan is unsure about is left for the engine's own check at
+    evaluation time."""
+    tokens = []
+    current = cdr(form) if _consp_internal(form) else lisptype.NIL
+    while _consp_internal(current):
+        tokens.append(car(current))
+        current = cdr(current)
+
+    def _keyword_name(tok):
+        name = getattr(tok, 'name', None)
+        return name.upper() if isinstance(name, str) else None
+
+    claimed = []
+
+    def _claim(spec):
+        for var_name in _loop_varspec_names(spec):
+            if var_name in claimed:
+                # ERROR semantics through the conditions system (not a bare
+                # LispProgramError raise): the macroexpansion-time signal
+                # must be a real program-error CONDITION so signals-error's
+                # handler and RT's own error handler match it by type.
+                from .evaluation_conditions import signal_error_object
+                signal_error_object(lisptype.ProgramError(
+                    message=f'LOOP binds {var_name} twice'))
+            claimed.append(var_name)
+
+    i = 0
+    n = len(tokens)
+    in_for_group = False
+    while i < n:
+        uname = _keyword_name(tokens[i])
+        if uname in ('FOR', 'AS'):
+            in_for_group = True
+            i += 1
+            if i < n:
+                _claim(tokens[i])
+                i += 1
+            continue
+        if in_for_group and uname == 'AND':
+            nxt = _keyword_name(tokens[i + 1]) if i + 1 < n else None
+            if nxt in ('FOR', 'AS'):
+                i += 1  # `and for x ...` spelling -- let the FOR branch claim
+                continue
+            i += 1
+            if i < n:
+                _claim(tokens[i])
+                i += 1
+            continue
+        if uname == 'WITH':
+            i += 1
+            if i < n:
+                _claim(tokens[i])
+                i += 1
+            continue
+        i += 1
+
+
 def _loop_type_spec(forms, index):
     """Consume the optional type-spec at forms[index] (CLHS 6.1.1.7).
 
