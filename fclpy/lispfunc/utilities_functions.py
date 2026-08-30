@@ -250,8 +250,12 @@ def compile_fn(name, definition=None):
 def macro_function(symbol, environment=None):
     """Get macro function for a symbol."""
     if environment is None:
-        from fclpy.lispenv import current_environment as _cur_env
-        environment = _cur_env
+        # Read the module attribute at CALL time: lispenv rebinds
+        # `current_environment` after `setup_standard_environment` runs, and
+        # a `from lispenv import current_environment` default would pin the
+        # pre-setup environment this module was imported under.
+        import fclpy.lispenv as _lispenv
+        environment = _lispenv.current_environment
     func = environment.find_func(symbol)
     if callable(func) and getattr(func, '__is_macro__', False):
         return func
@@ -543,35 +547,26 @@ def function_keywords(function):
 
 @_registry.cl_function('FUNCTION-LAMBDA-EXPRESSION')
 def function_lambda_expression(function):
-    """Return three values: lambda-list, source, closure-p.
+    """CLHS 25.1.3: return three values -- (expression, closure-p, name).
 
-    1. A simplified lambda list (list of parameter names as symbols)
-    2. The body form source (string of source if available, else NIL)
-    3. A closure-p flag (T if the function appears to close over free vars)
+    expression: the original lambda expression, or NIL when no source is
+    retained (an interpreter is permitted to answer NIL; the ansi tests
+    only count the values). closure-p: T if the function closes over
+    runtime-created bindings, else NIL. name: the defining name, or NIL
+    for unnamed functions.
+
+    The previous implementation returned a Python *tuple* -- one value to
+    the evaluator, so `(length (multiple-value-list ...))` answered 1, not
+    3 -- and in a different order, with the source string in the
+    closure-p position.
     """
     if not callable(function):
-        return [], lisptype.NIL, lisptype.NIL
-    params = []
-    closure_p = lisptype.NIL
-    try:
-        sig = inspect.signature(function)
-        for p in sig.parameters.values():
-            name_kind = str(getattr(p, 'kind', ''))
-            if 'POSITIONAL' in name_kind or 'KEYWORD_ONLY' in name_kind:
-                params.append(lisptype.LispSymbol(p.name.upper()))
-            elif 'VAR_POSITIONAL' in name_kind:
-                params.append(lisptype.LispSymbol('&REST'))
-            elif 'VAR_KEYWORD' in name_kind:
-                params.append(lisptype.LispSymbol('&KEY'))
-        if getattr(function, '__closure__', None):
-            closure_p = lisptype.T if function.__closure__ else lisptype.NIL
-        try:
-            src = inspect.getsource(function)
-        except Exception:
-            src = None
-        return params, (src or lisptype.NIL), closure_p
-    except Exception:
-        return [], lisptype.NIL, lisptype.NIL
+        return lisptype.MultipleValues(lisptype.NIL, lisptype.NIL, lisptype.NIL)
+    closure = getattr(function, '__closure__', None)
+    closure_p = lisptype.T if closure else lisptype.NIL
+    name = getattr(function, '__lisp_name__', None)
+    name_value = name if name is not None else lisptype.NIL
+    return lisptype.MultipleValues(lisptype.NIL, closure_p, name_value)
 
 
 # --- Special operators ---

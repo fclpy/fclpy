@@ -331,10 +331,19 @@ def _split_inferred_keywords(shape, values):
 
 
 class ReturnFromException(Exception):
-    """Exception raised by RETURN-FROM to exit a BLOCK."""
-    def __init__(self, tag, value):
+    """Exception raised by RETURN-FROM to exit a BLOCK.
+
+    `block_frame` is the lexically resolved target -- the
+    `evaluation_control_flow.BlockFrame` of the BLOCK the RETURN-FROM form
+    is textually nested in -- and the BLOCK that established it receives the
+    transfer by *identity*, not by name (BLOCK.10). NIL for raises that do
+    not come from a RETURN-FROM form (io_write's pprint exit), which their
+    own frames catch by the legacy name rule.
+    """
+    def __init__(self, tag, value, block_frame=None):
         self.tag = tag
         self.value = value
+        self.block_frame = block_frame
         super().__init__(f"RETURN-FROM {tag.name if hasattr(tag, 'name') else tag}")
 
 
@@ -347,9 +356,15 @@ class ThrowException(Exception):
 
 
 class GoException(Exception):
-    """Exception raised by GO to jump to a tag in TAGBODY."""
-    def __init__(self, tag):
+    """Exception raised by GO to jump to a tag in TAGBODY.
+
+    `tagbody_frame` is the lexically resolved target -- the
+    `evaluation_control_flow.TagbodyFrame` of the TAGBODY the GO is
+    textually nested in -- and only that TAGBODY receives the jump.
+    """
+    def __init__(self, tag, tagbody_frame=None):
         self.tag = tag
+        self.tagbody_frame = tagbody_frame
         super().__init__(f"GO {tag.name if hasattr(tag, 'name') else tag}")
 
 
@@ -1615,9 +1630,24 @@ def coerce_to_function(function, caller_name='FUNCALL'):
     if isinstance(function, lisptype.LispSymbol):
         env = state.current_environment
         func = env.find_func(function) if env is not None else None
+        if func is not None:
+            # A macro name or a special operator name has no *function* value
+            # -- the function cell holds the macro expander or the special
+            # form's evaluator, neither of which is a function designator
+            # (CLHS 3.1.2.1.2). So FUNCALL/APPLY of one signals
+            # UNDEFINED-FUNCTION (funcall.error.1/.2 for special operators,
+            # .3 for macros), however the evaluator dispatches the same
+            # symbol in the function position of a compound form.
+            from .utilities_functions import special_operator_p
+            if (getattr(func, '__is_macro__', False)
+                    or special_operator_p(function) is lisptype.T):
+                func = None
         if func is None:
             raise ConditionException(
-                lisptype.UndefinedFunction(name=function.name),
+                # CLHS: CELL-ERROR-NAME of an UNDEFINED-FUNCTION is the
+                # symbol itself, not its name string -- the same rule the
+                # eval dispatcher's signal below follows.
+                lisptype.UndefinedFunction(name=function),
                 recoverable=False
             )
         function = func

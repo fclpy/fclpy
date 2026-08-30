@@ -306,6 +306,16 @@ def equalp(obj1, obj2):
             return lisptype.lisp_bool(s1.upper() == s2.upper())
         return lisptype.NIL
 
+    from .arrays import is_array, array_rank_of, array_dimensions_of, array_elements
+    if is_array(obj1) and is_array(obj2):
+        if (array_rank_of(obj1) != array_rank_of(obj2)
+                or array_dimensions_of(obj1) != array_dimensions_of(obj2)):
+            return lisptype.NIL
+        for x, y in zip(array_elements(obj1), array_elements(obj2)):
+            if equalp(x, y) != lisptype.T:
+                return lisptype.NIL
+        return lisptype.T
+
     s1 = _string_characters(obj1)
     s2 = _string_characters(obj2)
     if s1 is not None and s2 is not None:
@@ -352,6 +362,17 @@ def equalp(obj1, obj2):
             if equalp(x, y) != lisptype.T:
                 return lisptype.NIL
         return lisptype.T
+
+    import fclpy.classes as classes
+    if isinstance(obj1, classes.LispInstance) and isinstance(obj2, classes.LispInstance):
+        cls1 = obj1.lisp_class
+        if (cls1 is obj2.lisp_class
+                and getattr(cls1, 'metaclass_name', 'STANDARD-CLASS') == 'STRUCTURE-CLASS'):
+            from .misc_clos import slot_value
+            for name in cls1.get_all_slots():
+                if equalp(slot_value(obj1, name), slot_value(obj2, name)) != lisptype.T:
+                    return lisptype.NIL
+            return lisptype.T
 
     return lisptype.NIL
 

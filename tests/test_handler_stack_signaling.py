@@ -52,11 +52,20 @@ class TestHandlerRunsBeforeUnwinding:
         assert sym_name(result) == 'GOOD'
 
     def test_handler_can_return_from_block_inside_protected_form(self, env):
-        """Same property via RETURN-FROM rather than THROW."""
+        """Same property via RETURN-FROM rather than THROW.
+
+        RETURN-FROM is lexically scoped to its enclosing BLOCK (CLHS 5.2), so
+        the BLOCK must enclose the HANDLER-BIND for the handler's closure to
+        see it -- a same-named block written *inside* the body would not be
+        lexically visible to the handler lambda. The property pinned is
+        unchanged: the handler runs at the signal point, while the block's
+        frame is still live, before any unwinding.
+        """
         result = eval_string("""
-            (handler-bind ((error #'(lambda (c) (declare (ignore c))
-                                      (return-from inner 'good))))
-              (block inner (error "an error") 'bad))
+            (block inner
+              (handler-bind ((error #'(lambda (c) (declare (ignore c))
+                                        (return-from inner 'good))))
+                (error "an error")))
         """, env)
         assert sym_name(result) == 'GOOD'
 

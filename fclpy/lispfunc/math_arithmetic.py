@@ -692,8 +692,13 @@ def _lisp_complex_div(a, b):
     if bi == 0:
         if not both_complex and ai == 0:
             return _exact_div(ar, br)
-        if ai == 0:
-            return _lisp_complex_wrap(_exact_div(ar, br), 0)
+        # The imaginary part is computed, not a literal 0: for a
+        # float-parts complex it must stay the float zero of the operand
+        # format -- `(/ #C(2.0 0.0) #C(2.0 0.0))` has to be `#C(1.0 0.0)`
+        # and EQL it (divide.lsp /.8); a literal int 0 made a
+        # float-real/int-imag LispComplex that no float complex EQLs.
+        # The rational case still coalesces in `_lisp_complex_wrap`,
+        # because `_exact_div(0, n)` answers the integer 0.
         return _lisp_complex_wrap(_exact_div(ar, br), _exact_div(ai, br))
     if ai == 0 and not both_complex:
         denom = br * br + bi * bi

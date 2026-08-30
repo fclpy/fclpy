@@ -6,11 +6,140 @@ from . import registry as _registry
 from .evaluation_core import ReturnFromException, ThrowException, GoException
 
 
+class BlockFrame:
+    """The identity of one lexically established BLOCK (CLHS 3.1.2.1.2.1).
+
+    RETURN-FROM is lexically scoped to the enclosing BLOCK *form*, not to the
+    nearest runtime frame whose name happens to match: a closure defined
+    inside a BLOCK returns to *that* block even when it is later called under
+    a same-named one (BLOCK.10). So the target of a return is this frame
+    object, which `eval_block` matches by identity, not the block's name.
+    `active` is the frame's dynamic extent: once False, the block has been
+    exited and returning to it is an error (CLHS 5.2).
+    """
+
+    __slots__ = ('name_key', 'active')
+
+    def __init__(self, name_key):
+        self.name_key = name_key
+        self.active = True
+
+
+class TagbodyFrame:
+    """The identity of one lexically established TAGBODY, with its tags.
+
+    GO's tag is lexically scoped to the enclosing TAGBODY *form* (CLHS
+    5.3.3: the tags have lexical scope), so GO carries the frame it resolved
+    to and `eval_tagbody` receives the jump only when the frame is its own.
+    `tags` maps each tag key to the index of the tag in the form; `active`
+    is the frame's dynamic extent.
+    """
+
+    __slots__ = ('tags', 'active')
+
+    def __init__(self, tags):
+        self.tags = tags
+        self.active = True
+
+
+def _block_name_key(name):
+    """Canonical hashable key for a block name.
+
+    NIL has three Python spellings here (None, the NIL singleton, and a
+    LispSymbol named NIL) and all three name the same block, so the key
+    folds them into one string the way the old three-way tag comparisons
+    did. Other block names are keyed by their symbol's name, which is what
+    the old name-matching compared.
+    """
+    if name is None or name is lisptype.NIL or name == lisptype.NIL:
+        return 'NIL'
+    if isinstance(name, lisptype.LispSymbol):
+        return name.name
+    return str(name)
+
+
+def establish_block_frame(env, name):
+    """Register a fresh BLOCK frame for `name` on `env`, and return it.
+
+    `env` must be an environment created *for this block* (eval_block, the
+    implicit-block runners and PPRINT-LOGICAL-BLOCK each make one), so at
+    most one frame per name lives on any one environment: an outer
+    same-named block's frame sits on its own environment further out on the
+    lexical chain, and `find_block_frame` takes the innermost.
+    """
+    frame = BlockFrame(_block_name_key(name))
+    frames = env.__dict__.get('block_frames')
+    if frames is None:
+        frames = {}
+        env.block_frames = frames
+    frames[frame.name_key] = frame
+    return frame
+
+
+def find_block_frame(env, name):
+    """The innermost lexically visible BLOCK frame named `name`, or None.
+
+    Walks the lexical environment chain, so a closure resolves the block its
+    *definition* was nested in: the frame of a block evaluated later, under
+    the call, sits on an environment that is not on the closure's chain and
+    is never found.
+    """
+    key = _block_name_key(name)
+    current = env
+    while current is not None:
+        frames = getattr(current, 'block_frames', None)
+        if frames:
+            frame = frames.get(key)
+            if frame is not None:
+                return frame
+        current = current.parent
+    return None
+
+
+def establish_tagbody_frame(env, tags):
+    """Register a fresh TAGBODY frame holding `tags` on `env`, and return it."""
+    frame = TagbodyFrame(tags)
+    env.tagbody_frame = frame
+    return frame
+
+
+def find_tagbody_frame(env, tag_key):
+    """The innermost lexically visible TAGBODY frame containing `tag_key`.
+
+    Skips frames that do not have the tag rather than stopping at the
+    innermost frame, so `(tagbody a (tagbody (go a)))` finds the outer
+    frame: the inner one is visible but does not contain the tag.
+    """
+    current = env
+    while current is not None:
+        frame = getattr(current, 'tagbody_frame', None)
+        if frame is not None and tag_key in frame.tags:
+            return frame
+        current = current.parent
+    return None
+
+
+def deactivate_frame(frame):
+    """End a block or tagbody frame's dynamic extent (its target has exited).
+
+    The frame stays registered on its environment rather than being removed,
+    so a later RETURN-FROM/GO whose lexical target *is* this frame is an
+    extent error instead of silently retargeting an outer same-named frame.
+    """
+    frame.active = False
+
+
 def eval_block(form, env):
     """Evaluate BLOCK special form: (BLOCK name body-form*)
     
     Establishes a block with the given name. Evaluates body forms in sequence.
     Can be exited early with RETURN-FROM.
+
+    The block's identity is a `BlockFrame` registered on a fresh child
+    environment, which the body evaluates in: a closure defined in the body
+    closes over the chain that carries the frame, so it returns to *this*
+    block even when called under a later, same-named one (BLOCK.10), while
+    direct code inside a later same-named block resolves to that one.
     """
     from .evaluation_core import eval
     
@@ -25,36 +154,40 @@ def eval_block(form, env):
     if not (isinstance(block_name, lisptype.LispSymbol) or block_name is None or block_name == lisptype.NIL):
         raise lisptype.LispNotImplementedError(f"BLOCK name must be a symbol, got {block_name}")
     
+    # The frame lives on a child environment so it is lexically visible to
+    # exactly the body forms and the closures they define.
+    block_env = lisptype.Environment(env)
+    frame = establish_block_frame(block_env, block_name)
+
     try:
-        # Evaluate body forms in sequence
-        result = lisptype.NIL
-        current = body_forms
-        while _consp_internal(current):
-            result = eval(car(current), env)
-            current = cdr(current)
-        return result
-    except ReturnFromException as e:
-        # Check if this exception is for our block
-        # Need to handle both symbol names and NIL
-        block_match = False
-        if e.tag == block_name:
-            block_match = True
-        elif isinstance(e.tag, lisptype.LispSymbol) and isinstance(block_name, lisptype.LispSymbol):
-            block_match = (e.tag.name == block_name.name)
-        elif (e.tag is None or e.tag == lisptype.NIL) and (block_name is None or block_name == lisptype.NIL):
-            block_match = True
-        
-        if block_match:
-            return e.value
-        else:
-            # Not for us, re-raise for outer block
+        try:
+            # Evaluate body forms in sequence
+            result = lisptype.NIL
+            current = body_forms
+            while _consp_internal(current):
+                result = eval(car(current), block_env)
+                current = cdr(current)
+            return result
+        except ReturnFromException as e:
+            # Only the frame *this* BLOCK established receives the transfer;
+            # a same-named block (inner or outer) re-raises it.
+            if e.block_frame is frame:
+                return e.value
             raise
+    finally:
+        deactivate_frame(frame)
 
 
 def eval_return_from(form, env):
     """Evaluate RETURN-FROM special form: (RETURN-FROM name value?)
     
     Exits the named BLOCK, returning the specified value (or NIL).
+
+    The target is resolved *lexically* -- the innermost block named `name`
+    on the environment chain, which is the one the form's text is nested in.
+    Returning to a block that is not visible, or whose dynamic extent has
+    ended, signals a CONTROL-ERROR (CLHS 5.2). CATCH/THROW is the opposite:
+    it matches by name at runtime.
     """
     from .evaluation_core import eval
     
@@ -69,14 +202,25 @@ def eval_return_from(form, env):
     if not (isinstance(block_name, lisptype.LispSymbol) or block_name is None or block_name == lisptype.NIL):
         raise lisptype.LispNotImplementedError(f"RETURN-FROM name must be a symbol, got {block_name}")
     
+    frame = find_block_frame(env, block_name)
+    if frame is None or not frame.active:
+        from .evaluation_conditions import signal_error_object
+        return signal_error_object(lisptype.ControlError(
+            message=("RETURN-FROM: no block named {} is visible".format(
+                _block_name_key(block_name))
+                     if frame is None else
+                     "RETURN-FROM: the block named {} has already been exited".format(
+                         _block_name_key(block_name)))))
+    
     # Evaluate the value form (default to NIL)
     if _consp_internal(value_forms):
         value = eval(car(value_forms), env)
     else:
         value = lisptype.NIL
     
-    # Raise exception to exit the block
-    raise ReturnFromException(block_name, value)
+    # Raise exception to exit the block: `block_frame` is what the target
+    # BLOCK matches on, by identity.
+    raise ReturnFromException(block_name, value, frame)
 
 
 @_registry.cl_macro('RETURN', documentation='RETURN macro: exits innermost NIL block')
@@ -269,6 +413,12 @@ def eval_tagbody(form, env):
     Establishes tags for GO to jump to. Tags are atoms (symbols or numbers);
     other forms are statements. Executes statements in order. GO can jump to a tag,
     continuing from there. Returns NIL.
+
+    The tags live on a `TagbodyFrame` registered on a fresh child environment
+    which the body evaluates in, so GO -- direct, or from a closure the body
+    defines -- resolves to *this* TAGBODY's tags through the lexical chain
+    (CLHS 5.3.3), and a GO resolved to an outer TAGBODY's frame passes
+    through here unmatched.
     """
     from .evaluation_core import eval
     
@@ -288,30 +438,36 @@ def eval_tagbody(form, env):
         forms.append(form_item)
         current = cdr(current)
     
+    # The frame lives on a child environment so it is lexically visible to
+    # exactly the body forms and the closures they define.
+    tagbody_env = lisptype.Environment(env)
+    frame = establish_tagbody_frame(tagbody_env, tag_indices)
+    
     # Execute forms, handling GO exceptions
     index = 0
-    while index < len(forms):
-        form_item = forms[index]
-        # Skip tags (they're just labels)
-        if not _consp_internal(form_item):
-            tag_key = _make_tag_key(form_item)
-            if tag_key in tag_indices:
+    try:
+        while index < len(forms):
+            form_item = forms[index]
+            # Skip tags (they're just labels)
+            if not _consp_internal(form_item):
+                tag_key = _make_tag_key(form_item)
+                if tag_key in tag_indices:
+                    index += 1
+                    continue
+            
+            try:
+                # Evaluate the form
+                eval(form_item, tagbody_env)
                 index += 1
-                continue
-        
-        try:
-            # Evaluate the form
-            eval(form_item, env)
-            index += 1
-        except GoException as e:
-            # GO was called - find the tag and jump to it
-            tag_key = _make_tag_key(e.tag)
-            if tag_key in tag_indices:
-                # Jump to after the tag
-                index = tag_indices[tag_key] + 1
-            else:
-                # Tag not in this TAGBODY - re-raise for outer TAGBODY
-                raise
+            except GoException as e:
+                # GO was called: jump only when it resolved to *this*
+                # TAGBODY's frame; a frame for another TAGBODY re-raises.
+                if e.tagbody_frame is frame:
+                    index = frame.tags[_make_tag_key(e.tag)] + 1
+                else:
+                    raise
+    finally:
+        deactivate_frame(frame)
     
     return lisptype.NIL
 
@@ -321,6 +477,10 @@ def eval_go(form, env):
     
     Jumps to the specified tag in the lexically enclosing TAGBODY.
     Tags are atoms (symbols, numbers, or other atoms) that must match a tag in the TAGBODY.
+
+    The target is resolved *lexically* -- the innermost visible TAGBODY
+    frame that has the tag (CLHS 5.3.3). GOing to a tag that is not visible,
+    or whose dynamic extent has ended, signals a CONTROL-ERROR.
     """
     args = cdr(form)
     if not _consp_internal(args):
@@ -333,8 +493,16 @@ def eval_go(form, env):
     if _consp_internal(tag):
         raise lisptype.LispNotImplementedError(f"GO tag must be an atom, got {tag}")
     
-    # Raise exception to be caught by enclosing TAGBODY
-    raise GoException(tag)
+    frame = find_tagbody_frame(env, _make_tag_key(tag))
+    if frame is None or not frame.active:
+        from .evaluation_conditions import signal_error_object
+        return signal_error_object(lisptype.ControlError(
+            message=("attempt to GO to nonexistent tag: {}".format(tag)
+                     if frame is None else
+                     "attempt to GO to a tag whose TAGBODY has exited: {}".format(tag))))
+    
+    # Raise exception to be caught by the TAGBODY that established the frame
+    raise GoException(tag, frame)
 
 
 __all__ = [
@@ -345,4 +513,11 @@ __all__ = [
     'eval_unwind_protect',
     'eval_tagbody',
     'eval_go',
+    'BlockFrame',
+    'TagbodyFrame',
+    'establish_block_frame',
+    'find_block_frame',
+    'establish_tagbody_frame',
+    'find_tagbody_frame',
+    'deactivate_frame',
 ]

@@ -1144,6 +1144,16 @@ def eval_pprint_logical_block(form, env):
     if bind_var is not None:
         bf.bind(bind_var, frame.stream)
 
+    # CLHS 22.2.2.1: the body is executed as an implicit block nil. Its frame
+    # is registered on `block_env`, so a RETURN-FROM NIL in the body -- or in
+    # a closure the body defines -- resolves here by lexical identity. The
+    # raw `(RETURN-FROM NIL)` that io_write's `%PPRINT-EXIT-IF-LIST-EXHAUSTED`
+    # raises from Python carries no frame (`block_frame is None`) and is still
+    # caught by the legacy name rule below.
+    from .evaluation_control_flow import (
+        establish_block_frame, deactivate_frame)
+    nil_block = establish_block_frame(block_env, lisptype.NIL)
+
     old_env = _state.current_environment
     _state.current_environment = block_env
     _state.pprint_stack.append(frame)
@@ -1154,11 +1164,13 @@ def eval_pprint_logical_block(form, env):
                 eval(car(current), block_env)
                 current = cdr(current)
         except ReturnFromException as e:
-            if not _null_internal(e.tag):
+            if e.block_frame is not nil_block and not (
+                    e.block_frame is None and _null_internal(e.tag)):
                 raise
         _io_write.flush_pprint_frame(frame, suffix_text)
         return lisptype.NIL
     finally:
+        deactivate_frame(nil_block)
         _state.pprint_stack.pop()
         _state.current_environment = old_env
         bf.unwind()
@@ -1683,12 +1695,18 @@ def make_ordinary_function(lambda_list, body, env, block_name=None, name=None):
 
             if block_name is None:
                 return run_body()
-            return _run_with_nil_block(run_body, block_name)
+            # The implicit block's frame is registered on `func_env`, so the
+            # body forms (and closures they define) resolve a RETURN-FROM to
+            # it through the lexical chain -- while an &aux/&key init form,
+            # evaluated in `func_env` *before* this registration, sees no
+            # block and its RETURN-FROM leaves the function (CLHS FLET.6).
+            return _run_with_nil_block(run_body, block_name, func_env)
         finally:
             frame.unwind()
 
     call.__lisp_docstring__ = docstring
     call.__lisp_lambda_list__ = lambda_list
+    call.__lisp_name__ = name
     return call
 
 
@@ -1745,13 +1763,14 @@ def eval_defun(form, env):
     while global_env.parent is not None:
         global_env = global_env.parent
     
-    # Add function to the GLOBAL environment (not local)
+    # Add function to the GLOBAL environment (not local). Deliberately NOT
+    # mirrored into the lexical environment either: CLHS 3.1.2.1.2 makes
+    # DEFUN a *global* definition, and a lexical copy shadows every later
+    # global redefinition of the same name for the extent of this binding --
+    # `(defun g ...)` inside a LET followed by `(setf (macro-function g) ...)`
+    # kept calling the old function (macro-function.10). The global binding
+    # is already visible here through the parent chain.
     global_env.add_function(func_name, user_function)
-    
-    # Also add to the current environment for immediate visibility
-    # (this helps when the function is called later in the same file)
-    if env is not global_env:
-        env.add_function(func_name, user_function)
     
     # Store docstring on the function symbol's property list
     if docstring:
@@ -2095,12 +2114,11 @@ def eval_defmacro(form, env):
     while global_env.parent is not None:
         global_env = global_env.parent
     
-    # Add macro to the GLOBAL environment (not local)
+    # Add macro to the GLOBAL environment (not local). Same rule as DEFUN
+    # above: DEFMACRO is a global definition (CLHS 3.1.2.1.2); a lexical
+    # copy would shadow later global redefinitions for the extent of this
+    # binding and is already visible here through the parent chain.
     global_env.add_function(macro_name, macro_callable)
-    
-    # Also add to the current environment for immediate visibility
-    if env is not global_env:
-        env.add_function(macro_name, macro_callable)
     
     # Store docstring on the macro symbol's property list
     if docstring:
@@ -3972,7 +3990,15 @@ def _fclpy_setf_find_class(name, value):
 def _fclpy_setf_macro_function(sym, value):
     """Install a macro definition for `sym` (SETF of MACRO-FUNCTION) in the
     root environment -- a global binding (CLHS macro-function, like
-    symbol-function, has no lexical component)."""
+    symbol-function, has no lexical component). One home for both faces of
+    the place: `get_setf_expansion`'s store form and `_place_accessor`'s
+    closure setter both call this.
+
+    Deliberately NOT mirrored into the lexical environment: a global
+    definition must not be shadowed by a stale copy of the previous one --
+    `(defun g ...)` inside a LET followed by `(setf (macro-function g) ...)`
+    left the defun's lexical install in the way (macro-function.10).
+    """
     if not isinstance(sym, lisptype.LispSymbol):
         raise lisptype.LispError("SETF MACRO-FUNCTION: requires a symbol")
     env = state.current_environment
@@ -4214,10 +4240,21 @@ def get_setf_expansion(place, env):
         store_form = _setf_form('PROGN', _setf_form('%FCLPY-SETF-FDEFINITION', temp, store), store)
         return [temp], list(place_args), [store], store_form, _setf_form(op, temp)
 
-    # MACRO-FUNCTION - install a macro definition (global, plus the current
-    # environment for immediate visibility; the same two writes the ladder's
-    # branch made). FDEFINITION above is the same shape one branch earlier.
-    if op_name == 'MACRO-FUNCTION' and len(place_args) == 1:
+    # MACRO-FUNCTION - install a macro definition. The place is
+    # `(MACRO-FUNCTION symbol [environment])` (CLHS 5.1.3); the environment
+    # subform is still *evaluated* exactly once -- macro-function.15 counts
+    # the evaluation of both subforms -- even though the store installs
+    # globally (NIL designates the global environment, and the ansi tests
+    # pass NIL explicitly). The 1-argument place form is the same store
+    # without the second temp. FDEFINITION above is the same shape one
+    # branch earlier.
+    if op_name == 'MACRO-FUNCTION' and len(place_args) in (1, 2):
+        if len(place_args) == 2:
+            temp0, temp1, store = _gensym_fn(), _gensym_fn(), _gensym_fn()
+            store_form = _setf_form('PROGN',
+                                    _setf_form('%FCLPY-SETF-MACRO-FUNCTION', temp0, store),
+                                    store)
+            return [temp0, temp1], list(place_args), [store], store_form, _setf_form(op, temp0, temp1)
         temp, store = _gensym_fn(), _gensym_fn()
         store_form = _setf_form('PROGN',
                                 _setf_form('%FCLPY-SETF-MACRO-FUNCTION', temp, store),
@@ -4709,13 +4746,7 @@ def _place_accessor(place_form, env):
                 raise lisptype.LispError("MACRO-FUNCTION place: requires a symbol")
 
             def _macro_function_setter(v):
-                global_env = env
-                while global_env.parent is not None:
-                    global_env = global_env.parent
-                global_env.add_function(sym, v)
-                if env is not global_env:
-                    env.add_function(sym, v)
-                return v
+                return _fclpy_setf_macro_function(sym, v)
 
             return (lambda: env.find_func(sym), _macro_function_setter)
 
@@ -5388,7 +5419,10 @@ def _make_method_function(required_params, optional_lambda_list, body, captured_
                     body_current = cdr(body_current)
                 return result
 
-            return _run_with_nil_block(_run_body, block_name)
+            # The implicit block's frame is registered on `method_env`, so a
+            # (RETURN-FROM gf-name ...) in the body resolves to it through
+            # the lexical chain (CLHS 7.6.5).
+            return _run_with_nil_block(_run_body, block_name, method_env)
         finally:
             frame.unwind()
     # CLHS 7.6.2: a method body may open with a documentation string.

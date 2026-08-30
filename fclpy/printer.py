@@ -753,12 +753,14 @@ def _write_character(value, ctx):
     char = value.char if isinstance(value, Character) else str(value)
     if not ctx.escape:
         return char
-    name = character_name(char)
-    # If we're printing readably and the character has no standard name and
-    # is not printable, the #\U+XXXX syntax is not readable. Signal an error.
-    if ctx.readably and name.startswith('U+'):
-        return _write_unreadable_checked(value, 'CHARACTER', ctx)
-    return '#\\' + name
+    # CLHS 22.1.3.3: a character *always* has a readable spelling -- #\Name
+    # when named, #\x when graphic, #\U+XXXX otherwise -- so unlike other
+    # objects a character never signals PRINT-NOT-READABLE under
+    # *PRINT-READABLY* (PRINT.CHAR.2/.8/.9). The #\U+XXXX spelling is only
+    # as readable as the reader's #\ name syntax: fclpy's reader does not
+    # accept #\U+XXXX yet (reported -- readtable.py's #\ handler), which is
+    # what still fails the char.8/.9 round trips.
+    return '#\\' + character_name(char)
 
 
 def _write_string(value, ctx):
@@ -914,6 +916,21 @@ def current_package():
     return state.current_package_value()
 
 
+def _package_is_live(package):
+    """True while `package` is still the registry entry its name denotes.
+
+    DELETE-PACKAGE removes a package's names from the registry but leaves
+    `symbol-package` slots pointing at the dead object (the package system's
+    defect, reported separately): a symbol whose home package is dead prints
+    a prefix naming a package `(find-package ...)` no longer answers, so the
+    printed form could not be read back. PRINT.SYMBOL.PREFIX.8 deletes the
+    home package and requires `#:ABC`.
+    """
+    from fclpy.lisptype import find_package
+
+    return find_package(package.name) is package
+
+
 def _package_prefix(symbol, ctx):
     """The ``PKG:``/``PKG::``/``#:`` prefix for `symbol`, or ``''``.
 
@@ -922,6 +939,10 @@ def _package_prefix(symbol, ctx):
     (single colon) or internal (double colon).
     """
     package = getattr(symbol, 'package', None)
+    if package is not None and not _package_is_live(package):
+        # The home package was deleted; the symbol is uninterned as far as
+        # any reader can tell.
+        package = None
     if package is None:
         # Uninterned. `*PRINT-GENSYM*` decides whether the reader is told so.
         return '#:' if ctx.gensym else ''
@@ -1136,6 +1157,35 @@ def _vector_elements(value):
     return array_elements(value)
 
 
+def _string_text_of_array(value):
+    """The text of a rank-1 LispArray that *is* a string, or None.
+
+    CLHS 22.1.3.4: a string prints with string syntax. The array model
+    (CLAUDE.md) gives strings three representations, and the printer only
+    handled two -- `(make-array 4 :element-type 'character :displaced-to ...)`
+    printed `#(#\\c #\\d ...)` (PRINT.STRING.12), and an `(array nil 0)`
+    printed `#()` (PRINT.STRING.NIL.1/.2). `characters.is_string` is the one
+    classifier, NIL element type included (the suite's
+    ``:nil-vectors-are-strings`` choice); this only falls back to None -- and
+    so to the vector spelling -- when an element is not actually a character,
+    which no character- or NIL-element-type array the tests construct is.
+    """
+    from fclpy.lispfunc.arrays import array_elements
+    from fclpy.lispfunc.characters import is_string
+
+    if not is_string(value):
+        return None
+    parts = []
+    for element in array_elements(value):
+        if isinstance(element, Character):
+            parts.append(element.char)
+        elif isinstance(element, str) and len(element) == 1:
+            parts.append(element)
+        else:
+            return None
+    return ''.join(parts)
+
+
 def _write_vector(value, ctx, depth):
     """Print a vector as ``#(...)``, or as ``#<...>`` when ``*PRINT-ARRAY*`` is NIL.
 
@@ -1187,6 +1237,23 @@ def _write_array(value, ctx, depth):
     if not ctx.array:
         return _unreadable(value, 'ARRAY')
 
+    # The reader infers dimension k of a #nA form from the length of the
+    # first (k-1)-indexed sub-list, so a zero dimension makes the next one
+    # unrecoverable: a (0 1) array prints #2A() and reads back (0 0), and a
+    # (2 0 1) array reads back (2 0 0). (A trailing zero dimension *is*
+    # recoverable -- each row exists and is empty -- which is why #2A(() ())
+    # round-trips for (2 0).) Under *PRINT-READABLY* the printed form must
+    # read back similar (CLHS 22.1.3.6), so signal PRINT-NOT-READABLE rather
+    # than emit a shape that reads back as a different array; the harness's
+    # RANDOMLY-CHECK-READABILITY passes :can-fail t and accepts exactly that
+    # (PRINT.ARRAY.2.21/.22/.23). The conforming alternative the reader would
+    # need is the full #A(element-type dimensions contents) syntax, which
+    # fclpy's reader does not accept yet -- reported, not fixed here.
+    dimensions = value.dimensions
+    if ctx.readably and any(dimensions[k] > 0 for k in range(1, len(dimensions))
+                            if dimensions[k - 1] == 0):
+        return _write_unreadable_checked(value, 'ARRAY', ctx)
+
     def nested(indices, dimension):
         if dimension == value.rank:
             # An element. `_write` applies *PRINT-LEVEL* to it if it is itself
@@ -1205,9 +1272,10 @@ def _write_array(value, ctx, depth):
             parts.append(nested(indices + [index], dimension + 1))
         return '(' + ' '.join(parts) + ')'
 
-    # A zero dimension needs no special case: `range(0)` is empty, so a
-    # dimension of length 0 yields `()` and the shape still prints -- e.g. a
-    # 2x0 array as `#2A(() ())`.
+    # A trailing zero dimension needs no special case: `range(0)` is empty,
+    # so a dimension of length 0 yields `()` and the shape still prints --
+    # e.g. a 2x0 array as `#2A(() ())`, which reads back (2 0). A *leading*
+    # zero dimension is the lossy case guarded above.
     return _circle_prefix(value, ctx) + f'#{value.rank}A' + nested([], 0)
 
 
@@ -1384,6 +1452,12 @@ def _write(value, ctx, depth):
         if value.element_type is BIT_TYPE and value.rank == 1:
             return _write_bit_vector(value, ctx)
         if value.rank == 1:
+            # A rank-1 array of character element type (NIL included) is a
+            # string under the array model and prints with string syntax,
+            # exactly as a LispString does (CLHS 22.1.3.4).
+            text = _string_text_of_array(value)
+            if text is not None:
+                return _emit(_write_string(lisptype.LispString(text), ctx))
             return _in_progress(value, ctx, _write_vector, depth)
         return _in_progress(value, ctx, _write_array, depth)
     if isinstance(value, (list, tuple)):

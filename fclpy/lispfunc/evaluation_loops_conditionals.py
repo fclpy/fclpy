@@ -2515,7 +2515,10 @@ def eval_loop(form, env):
         loop_env = lisptype.Environment(env)
         # LOOP takes no declarations, so its variables are lexical unless the
         # symbol has been *proclaimed* special -- which is `BindingFrame`'s
-        # decision, the same one LET and the DO family now make.
+        # decision, the same one LET and the DO family now make. Chaining
+        # through `block_env` puts the loop's implicit block on the lexical
+        # chain of every form evaluated in `loop_env`.
+        loop_env = lisptype.Environment(block_env)
         frame = BindingFrame(loop_env)
         loop_frame.append(frame)
 
@@ -2644,17 +2647,23 @@ def eval_loop(form, env):
         # No clause named a value, so the LOOP form's value is NIL.
         return lisptype.NIL
 
+    # The loop's implicit (or NAMED) block: its frame is registered on this
+    # child environment, which `loop_env` chains through inside
+    # _run_loop_and_finalize, so the WITH initialization forms -- CLHS
+    # 6.1.1.4's `(loop with nil = (return t) return nil)` case -- and every
+    # body form resolve a RETURN to *this* loop's block lexically.
+    block_env = lisptype.Environment(env)
     try:
         with loop_watchdog:
-            return _run_with_nil_block(_run_loop_and_finalize, loop_block_name)
+            return _run_with_nil_block(_run_loop_and_finalize, loop_block_name, block_env)
     finally:
         for frame in loop_frame:
             frame.unwind()
 
 
-def _run_with_nil_block(thunk, block_name=None):
-    """Run thunk(), catching a RETURN/RETURN-FROM aimed at the implicit block
-    DO/DO*/DOLIST/DOTIMES/LOOP establish around their loop.
+def _run_with_nil_block(thunk, block_name=None, env=None):
+    """Run thunk() inside the implicit block DO/DO*/DOLIST/DOTIMES/LOOP and
+    every function-definition body establishes (CLHS 6.1.1 / 3.1.2.1.2.3).
 
     block_name is the target block's name: None/NIL for the ordinary implicit
     NIL block every one of these forms gets by default, or a symbol for a
@@ -2662,23 +2671,27 @@ def _run_with_nil_block(thunk, block_name=None):
     block instead of NIL, so a bare (RETURN x) -- which is (RETURN-FROM NIL
     x) -- must NOT be caught here; it has to keep propagating to find an
     actual enclosing NIL block).
+
+    env is the environment the form's body evaluates in, and is where the
+    implicit block's frame is registered (see
+    evaluation_control_flow.establish_block_frame), so RETURN-FROM resolves
+    its target through the lexical chain: a closure defined inside the body
+    returns to *this* implicit block, while the same transfer raised from
+    code lexically outside it is re-raised instead of being caught by name.
     """
     from .evaluation_core import ReturnFromException
+    from .evaluation_control_flow import (
+        establish_block_frame, deactivate_frame)
 
-    def _tag_name(tag):
-        if tag is None or tag == lisptype.NIL:
-            return 'NIL'
-        if isinstance(tag, lisptype.LispSymbol):
-            return tag.name
-        return None
-
-    target_name = _tag_name(block_name)
+    frame = establish_block_frame(env, block_name)
     try:
         return thunk()
     except ReturnFromException as e:
-        if _tag_name(e.tag) == target_name:
+        if e.block_frame is frame:
             return e.value
         raise
+    finally:
+        deactivate_frame(frame)
 
 
 def _exec_iteration_body(body, env):
@@ -2724,8 +2737,13 @@ def eval_do(form, env):
     end_test = car(end_clause)
     result_forms = cdr(end_clause)
     
-    # Create new environment
-    loop_env = lisptype.Environment(env)
+    # The implicit NIL block's frame is registered on its own child
+    # environment, which adds no variable bindings; `loop_env` chains through
+    # it, so both the init forms (evaluated in `block_env`, still the
+    # enclosing lexical environment variable-wise) and the body/result forms
+    # (evaluated in `loop_env`) see the block lexically.
+    block_env = lisptype.Environment(env)
+    loop_env = lisptype.Environment(block_env)
     
     # Parse var specs and evaluate init forms IN PARALLEL (collect first)
     var_specs = []
@@ -2743,8 +2761,9 @@ def eval_do(form, env):
     
     # Evaluate all init forms first (parallel binding like LET), in the
     # *enclosing* environment -- DO.16 pins that, since its init form refers to
-    # a variable the body then declares special.
-    init_values = [eval(init_form, env) for var, init_form, _ in var_specs]
+    # a variable the body then declares special. `block_env` adds no variable
+    # bindings, so this is the same lexical environment for variables.
+    init_values = [eval(init_form, block_env) for var, init_form, _ in var_specs]
 
     # One shared binder decides lexical vs. dynamic for each variable and
     # undoes any dynamic binding on the way out, however this form exits.
@@ -2787,7 +2806,7 @@ def eval_do(form, env):
                 frame.bind(var, value)
 
     with frame, watchdog:
-        return _run_with_nil_block(_loop)
+        return _run_with_nil_block(_loop, lisptype.NIL, block_env)
 
 
 def eval_do_star(form, env):
@@ -2823,8 +2842,12 @@ def eval_do_star(form, env):
     end_test = car(end_clause)
     result_forms = cdr(end_clause)
     
-    # Create new environment
-    loop_env = lisptype.Environment(env)
+    # The implicit NIL block's frame is registered on its own child
+    # environment, which adds no variable bindings; `loop_env` chains through
+    # it, so the body/result forms -- and the sequentially-evaluated init
+    # forms, which already run in `loop_env` -- see the block lexically.
+    block_env = lisptype.Environment(env)
+    loop_env = lisptype.Environment(block_env)
     
     # The variables this DO* is about to bind, needed before the first bind so
     # the binder can tell a declaration *of* a variable it binds from a free
@@ -2893,7 +2916,7 @@ def eval_do_star(form, env):
                     frame.bind(var, new_value)
 
     with frame, watchdog:
-        return _run_with_nil_block(_loop)
+        return _run_with_nil_block(_loop, lisptype.NIL, block_env)
 
 
 def eval_dolist(form, env):
@@ -2918,18 +2941,24 @@ def eval_dolist(form, env):
     list_form = car(cdr(var_clause)) if _consp_internal(cdr(var_clause)) else lisptype.NIL
     result_form = car(cdr(cdr(var_clause))) if _consp_internal(cdr(cdr(var_clause))) else lisptype.NIL
 
-    # Create loop environment
-    loop_env = lisptype.Environment(env)
+    # The implicit NIL block's frame is registered on its own child
+    # environment, which adds no variable bindings; `loop_env` chains through
+    # it, so the body and result forms (evaluated in `loop_env`) and the
+    # list-form (evaluated in `block_env`, still the enclosing lexical
+    # environment variable-wise) see the block lexically.
+    block_env = lisptype.Environment(env)
+    loop_env = lisptype.Environment(block_env)
     frame = BindingFrame(loop_env, body=body, bound_vars=[var])
     _, body = body_specials(body)
     frame.bind(var, lisptype.NIL)
 
     def _loop():
-        # Evaluate list-form in the outer env (CLHS 6.2.8.2: "in the current lexical
-        # environment") so variable bindings and shadowing are respected. The RETURN
-        # exception will still be caught by _run_with_nil_block, so RETURN in the
-        # list-form exits the DOLIST's implicit block.
-        lst = eval(list_form, env)
+        # Evaluate list-form in `block_env` -- the enclosing lexical
+        # environment for variables (CLHS 6.2.8.2: "in the current lexical
+        # environment"), plus this DOLIST's implicit block, which per CLHS
+        # 6.1.2.1 surrounds the entire DOLIST form, so a RETURN in the
+        # list-form exits it.
+        lst = eval(list_form, block_env)
 
         # Iterate over list
         current_list = lst
@@ -2948,7 +2977,7 @@ def eval_dolist(form, env):
         return eval(result_form, loop_env)
 
     with frame:
-        return _run_with_nil_block(_loop)
+        return _run_with_nil_block(_loop, lisptype.NIL, block_env)
 
 
 def eval_dotimes(form, env):
@@ -2973,17 +3002,23 @@ def eval_dotimes(form, env):
     count_form = car(cdr(var_clause)) if _consp_internal(cdr(var_clause)) else 0
     result_form = car(cdr(cdr(var_clause))) if _consp_internal(cdr(cdr(var_clause))) else lisptype.NIL
 
-    # Create loop environment
-    loop_env = lisptype.Environment(env)
+    # The implicit NIL block's frame is registered on its own child
+    # environment, which adds no variable bindings; `loop_env` chains through
+    # it, so the body and result forms (evaluated in `loop_env`) and the
+    # count-form (evaluated in `block_env`, still the enclosing lexical
+    # environment variable-wise) see the block lexically.
+    block_env = lisptype.Environment(env)
+    loop_env = lisptype.Environment(block_env)
     frame = BindingFrame(loop_env, body=body, bound_vars=[var])
     _, body = body_specials(body)
 
     def _loop():
-        # Evaluate count-form in the outer env (CLHS 6.2.7.2: "in the current lexical
-        # environment") so variable bindings and shadowing are respected. The RETURN
-        # exception will still be caught by _run_with_nil_block, so RETURN in the
-        # count-form exits the DOTIMES's implicit block.
-        count = eval(count_form, env)
+        # Evaluate count-form in `block_env` -- the enclosing lexical
+        # environment for variables (CLHS 6.2.7.2: "in the current lexical
+        # environment"), plus this DOTIMES's implicit block, which per CLHS
+        # 6.1.2.1 surrounds the entire DOTIMES form, so a RETURN in the
+        # count-form exits it.
+        count = eval(count_form, block_env)
         if not isinstance(count, (int, float)):
             count = 0
         count = int(count)
@@ -3005,7 +3040,7 @@ def eval_dotimes(form, env):
         return eval(result_form, loop_env)
 
     with frame:
-        return _run_with_nil_block(_loop)
+        return _run_with_nil_block(_loop, lisptype.NIL, block_env)
 
 
 # DO-SYMBOLS/DO-EXTERNAL-SYMBOLS/DO-ALL-SYMBOLS are now real macros --

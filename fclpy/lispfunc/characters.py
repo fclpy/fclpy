@@ -448,6 +448,19 @@ def name_char(name):
         return None
     if not isinstance(text, str):
         return None
+    # The printer's spelling for a character with no name and no graphic
+    # form is #\U+XXXX (printer.character_name); NAME-CHAR must invert it,
+    # or print.char.7's `(eql c (name-char (subseq str 2)))` check fails for
+    # every character the printer spells that way. CODE-CHAR's construction
+    # is reused so the two agree on which codes denote characters (a code
+    # outside the implementation's range names nothing).
+    if len(text) > 2 and text[0] in 'uU' and text[1] == '+':
+        digits = text[2:]
+        if digits and all(c in '0123456789abcdefABCDEF' for c in digits):
+            try:
+                return lisptype.Character(chr(int(digits, 16)))
+            except ValueError:
+                return None
     try:
         return character(text)
     except lisptype.LispTypeError:

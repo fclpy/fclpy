@@ -67,7 +67,11 @@ def split_declarations(body):
 
 
 def declared_specials(declarations):
-    """The symbols named by ``(SPECIAL ...)`` specs in `declarations`."""
+    """The symbols named by ``(SPECIAL ...)`` specs in `declarations`.
+
+    Deduplicated by symbol identity: two same-named symbols from different
+    packages named in one spec are two variables, each its own declaration.
+    """
     specials = []
     seen = set()
     for decl in declarations:
@@ -78,8 +82,8 @@ def declared_specials(declarations):
                 names = cdr(spec)
                 while _consp_internal(names):
                     var = car(names)
-                    if isinstance(var, lisptype.LispSymbol) and var.name not in seen:
-                        seen.add(var.name)
+                    if isinstance(var, lisptype.LispSymbol) and var not in seen:
+                        seen.add(var)
                         specials.append(var)
                     names = cdr(names)
             specs = cdr(specs)
@@ -280,13 +284,17 @@ class BindingFrame:
 
     def __init__(self, env, body=None, bound_vars=(), defer_free_declarations=False):
         self.env = env
-        self._dynamic = {}      # name -> (symbol, had_value, old_value)
-        self._lexical = {}      # name -> the Binding this frame established
+        # Frame caches are keyed by the *symbol object*, not its name: two
+        # same-named symbols (an uninterned `#:x` beside an interned `x`,
+        # let.5) are two variables even inside one form, and CLHS variable
+        # binding and lookup are by symbol identity.
+        self._dynamic = {}      # symbol -> (symbol, had_value, old_value)
+        self._lexical = {}      # symbol -> the Binding this frame established
         self._package_bound = False
         self._old_package = None
 
         specials = declared_specials(split_declarations(body)[0]) if body is not None else []
-        self._special_names = {var.name for var in specials}
+        self._special_names = set(specials)
 
         # `bound_vars` is only ever consulted to separate free declarations
         # from bound ones, so with no declarations there is nothing to
@@ -294,9 +302,9 @@ class BindingFrame:
         # every function call once parameter binding started coming through
         # here, for a question that could not have a non-empty answer.
         if specials:
-            bound_names = {name for name in map(_symbol_name, _flatten_vars(bound_vars))
-                           if name is not None}
-            self._free_specials = [var for var in specials if var.name not in bound_names]
+            bound_syms = {v for v in _flatten_vars(bound_vars)
+                          if isinstance(v, lisptype.LispSymbol)}
+            self._free_specials = [var for var in specials if var not in bound_syms]
         else:
             self._free_specials = []
         if self._free_specials and not defer_free_declarations:
@@ -334,14 +342,14 @@ class BindingFrame:
         name = _symbol_name(var)
         if name is None:
             return False
-        if name in self._dynamic:
+        if var in self._dynamic:
             return True
-        if name in self._lexical:
+        if var in self._lexical:
             return False
         return self._binds_dynamically(var, name)
 
     def _binds_dynamically(self, var, name):
-        """Where a *new* binding for `name` goes: value cell, or environment.
+        """Where a *new* binding for `var` goes: value cell, or environment.
 
         The global environment has no lexical variables (CLHS 3.1.1.1), so a
         frame over it can only bind dynamically -- otherwise `bind` would ask
@@ -349,7 +357,7 @@ class BindingFrame:
         create, and the next iteration's assignment would have nothing to
         write through.
         """
-        return (name in self._special_names
+        return (var in self._special_names
                 or getattr(self.env, 'is_global', False)
                 or is_proclaimed_special(var, self.env))
 
@@ -385,24 +393,24 @@ class BindingFrame:
         value = lisptype.primary_value(value)
 
         # Already bound by this frame: assign, never establish a second one.
-        if name in self._dynamic:
+        if var in self._dynamic:
             var.value = value
             self._mirror_package(var, value)
             return value
-        if name in self._lexical:
-            binding = self._lexical[name]
+        if var in self._lexical:
+            binding = self._lexical[var]
             binding.value = value
             # add_variable keeps this cache in step with the binding list, so
             # writing through the binding object has to keep it in step too.
-            self.env._variable_map[name] = value
+            self.env._variable_map[var] = value
             self._mirror_package(var, value)
             return value
 
         if self._binds_dynamically(var, name):
             had_value = getattr(var, 'value', None) is not None
-            self._dynamic[name] = (var, had_value, getattr(var, 'value', None))
+            self._dynamic[var] = (var, had_value, getattr(var, 'value', None))
             var.value = value
-            if name in self._special_names:
+            if var in self._special_names:
                 # A *locally* declared special binds the value cell and adds
                 # nothing to this environment -- so an enclosing LEXICAL
                 # binding of the same name would still be found first by the
@@ -428,7 +436,7 @@ class BindingFrame:
             # -- reaches this binding instead of walking out to an enclosing
             # one of the same name.
             self.env.add_variable(var, value)
-            self._lexical[name] = self.env.variable_bindings
+            self._lexical[var] = self.env.variable_bindings
         self._mirror_package(var, value)
         return value
 

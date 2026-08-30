@@ -12,6 +12,30 @@ from fclpy.lisptype_basic import (
 )
 
 
+def _same_variable(a, b):
+    """Whether `a` and `b` denote the same variable (CLHS 3.1.2.1.1).
+
+    Variable binding and lookup are by symbol *identity*: an uninterned
+    ``#:x`` beside an interned ``x`` is a different variable, and two
+    same-named symbols from different packages are two variables (let.5).
+
+    One documented fallback mirrors `evaluation_control_flow._tags_match`'s:
+    when *both* symbols are uninterned (no package) and share a name, they
+    denote the same variable. That is the case of a macro expander that
+    built its expansion's binding and references as separate fresh
+    `LispSymbol` objects -- standard_macros' ``_sym('C')`` in the
+    IGNORE-ERRORS expansion binds one and references another -- where the
+    expander's own spellings of its one variable must unify, while the
+    reader-uninterned/interned pair stays distinct.
+    """
+    if a is b:
+        return True
+    return (isinstance(a, LispSymbol) and isinstance(b, LispSymbol)
+            and getattr(a, 'package', None) is None
+            and getattr(b, 'package', None) is None
+            and a.name == b.name)
+
+
 class Environment(lispT):
     """An execution environment for symbol bindings.
 
@@ -57,8 +81,14 @@ class Environment(lispT):
         self.function_bindings = None  # Singly-linked list of FunctionBinding objects
         self.symbol_macros = {}  # Dict of symbol-macro bindings: symbol.name -> expansion
 
-        # Fast name-based caches to speed up legacy APIs (find_func/find_variable).
-        # These legacy lookups compare by symbol.name, not by symbol identity.
+        # Fast caches to speed up legacy APIs (find_func/find_variable).
+        # The *function* caches are name-keyed: `find_func`'s documented
+        # contract is name-based lookup, and `_function_map_by_symbol` below
+        # is the identity overlay that keeps shadowed symbols distinct. The
+        # *variable* cache is keyed by the symbol object itself: CLHS variable
+        # binding and lookup are by symbol identity, so two same-named
+        # symbols -- an uninterned `#:x` beside an interned `x` (let.5), or
+        # the same name from two different packages -- are two variables.
         self._function_map = {}
         self._variable_map = {}
         # Identity-keyed overlay `find_func` checks *first* -- see its
@@ -103,9 +133,9 @@ class Environment(lispT):
 
         # Create new binding that shadows previous bindings
         self.bindings = Binding(symbol, value, self.bindings, env=self)
-        # Keep legacy name-based variable lookup fast.
+        # Keep the identity-keyed variable cache in step.
         try:
-            self._variable_map[symbol.name] = value
+            self._variable_map[symbol] = value
         except Exception:
             pass
         return value
@@ -309,20 +339,27 @@ class Environment(lispT):
             return
 
         self.variable_bindings = Binding(symbol, value, self.variable_bindings, self)
-        self._variable_map[symbol.name] = value
+        self._variable_map[symbol] = value
 
 
     
     def has_variable(self, sym: LispSymbol):
-        """Check if a variable binding exists (distinguishes unbound from bound-to-None)."""
+        """Check if a variable binding exists (distinguishes unbound from bound-to-None).
+
+        Binding and lookup are by symbol *identity* (CLHS 3.1.2.1.1): a
+        binding made for one symbol object is invisible to another with the
+        same name -- let.5's `(let ((x 0)) (let ((#:x 1)) x))` must see the
+        outer binding, and two same-named symbols from different packages are
+        two variables.
+        """
         if self.is_global:
             # Python None is the "unbound" marker in a value cell; NIL is a
             # distinct object, so a variable bound to NIL reads as bound.
             return getattr(sym, 'value', None) is not None
 
-        # Fast-path: name-based map populated by bind/add_variable
+        # Fast-path: identity-keyed map populated by bind/add_variable
         try:
-            if sym.name in self._variable_map:
+            if sym in self._variable_map:
                 return True
         except Exception:
             pass
@@ -330,14 +367,14 @@ class Environment(lispT):
         # Check modern lexical bindings list (self.bindings)
         b = self.bindings
         while b is not None:
-            if b.symbol.name == sym.name:
+            if _same_variable(b.symbol, sym):
                 return True
             b = b.next
 
         # Legacy variable_bindings (kept for backward compatibility)
         b = self.variable_bindings
         while b is not None:
-            if b.symbol.name == sym.name:
+            if _same_variable(b.symbol, sym):
                 return True
             b = b.next
 
@@ -347,27 +384,32 @@ class Environment(lispT):
         return False
     
     def find_variable(self, sym):
-        """Legacy: find a variable by symbol name."""
+        """Legacy: find a variable by symbol identity.
+
+        The variable cache is identity-keyed and the binding lists compare
+        the symbol object, so a binding of one symbol is never found through
+        another of the same name (see `has_variable`).
+        """
         if self.is_global:
             return getattr(sym, 'value', None)
 
         # Prefer walking the variable_bindings linked list to find the
-        # most-recent binding value. Only use the name-based cache as a
+        # most-recent binding value. Only use the identity-keyed cache as a
         # fallback to avoid returning stale cached values from a different
         # environment frame.
         b = self.variable_bindings
         while b is not None:
-            if b.symbol.name == sym.name:
+            if _same_variable(b.symbol, sym):
                 try:
-                    self._variable_map[sym.name] = b.value
+                    self._variable_map[sym] = b.value
                 except Exception:
                     pass
                 return b.value
             b = b.next
 
         try:
-            if sym.name in self._variable_map:
-                return self._variable_map[sym.name]
+            if sym in self._variable_map:
+                return self._variable_map[sym]
         except Exception:
             pass
 
@@ -388,10 +430,10 @@ class Environment(lispT):
 
         b = self.variable_bindings
         while b is not None:
-            if b.symbol.name == sym.name:
+            if _same_variable(b.symbol, sym):
                 b.value = value
                 try:
-                    self._variable_map[sym.name] = value
+                    self._variable_map[sym] = value
                 except Exception:
                     pass
                 return value
@@ -442,12 +484,13 @@ class Environment(lispT):
             # parent's `variable_bindings` list, so neither can out-rank the
             # other by position on its own -- this walk compares them, using
             # `_variable_map`, which holds only *this* environment's own
-            # bindings. Without it, `(let ((x :a)) (let ((x :b)) (declare
-            # (special x)) ...))` -- where the inner binding installs a
-            # `%SPECIAL-REF` redirection -- would leave that redirection
-            # visible to any *enclosing* lexical X, and a plain
-            # `(symbol-macrolet ((x 1)) (let ((x 2)) x))` answered 1.
-            if name in env._variable_map:
+            # bindings and is keyed by the symbol itself. Without it, `(let
+            # ((x :a)) (let ((x :b)) (declare (special x)) ...))` -- where
+            # the inner binding installs a `%SPECIAL-REF` redirection --
+            # would leave that redirection visible to any *enclosing* lexical
+            # X, and a plain `(symbol-macrolet ((x 1)) (let ((x 2)) x))`
+            # answered 1.
+            if symbol in env._variable_map:
                 return None
             env = env.parent
         return None

@@ -530,14 +530,30 @@ def write(object, *, stream=None, **kwargs):
 
 @_registry.cl_function('PRIN1-TO-STRING')
 def prin1_to_string(object):
-    """The escaped printed representation, as a string (CLHS 22.3.1)."""
-    return lisptype.LispString(_dispatch_print(object, {}, None))
+    """The escaped printed representation, as a string (CLHS 22.3.1).
+
+    Like `prin1` itself, this binds `*PRINT-READABLY*` to NIL for the print
+    (X3J13 PRINC-READABLY): prin1's output is already escaped, and leaving
+    `*print-readably*` inherited would force `*print-level*`/`*print-length*`
+    to NIL under `with-standard-io-syntax` and silently drop the caller's
+    abbreviation request.
+    """
+    return lisptype.LispString(_dispatch_print(object, {'readably': False}, None))
 
 
 @_registry.cl_function('PRINC-TO-STRING')
 def princ_to_string(object):
-    """The unescaped printed representation, as a string (CLHS 22.3.1)."""
-    return lisptype.LispString(_dispatch_print(object, {'escape': False}, None))
+    """The unescaped printed representation, as a string (CLHS 22.3.1).
+
+    Binds `*PRINT-READABLY*` to NIL as well as `*PRINT-ESCAPE*` (X3J13
+    PRINC-READABLY; CLHS 22.3.4.1 states the same binding for `~A`): PRINC's
+    output is not required to be readable, and the inherited
+    `*PRINT-READABLY*` from an enclosing `WITH-STANDARD-IO-SYNTAX` forced the
+    escape back on -- `(princ #\\a ...)` printed `#\a` for every character,
+    which is exactly what PRINT.CHAR.1 collects.
+    """
+    return lisptype.LispString(_dispatch_print(
+        object, {'escape': False, 'readably': False}, None))
 
 
 @_registry.cl_function('WRITE-TO-STRING')
@@ -563,8 +579,13 @@ def print_fn(object, stream=None):
 
 @_registry.cl_function('PRIN1')
 def prin1(object, stream=None):
-    """Print an object escaped, with no surrounding whitespace (CLHS 22.3.1)."""
-    write_text(_dispatch_print(object, {}, stream), stream)
+    """Print an object escaped, with no surrounding whitespace (CLHS 22.3.1).
+
+    Binds `*PRINT-READABLY*` to NIL like PRIN1 itself does (X3J13
+    PRINC-READABLY): the output is already escaped and readable by
+    construction.
+    """
+    write_text(_dispatch_print(object, {'readably': False}, stream), stream)
     return object
 
 
@@ -573,9 +594,15 @@ def princ(object, stream=None):
     """Print an object with escaping off (CLHS 22.3.1).
 
     Not a separate representation from `PRIN1`: the same printer with
-    `*PRINT-ESCAPE*` bound to NIL (CLHS 22.1.3.2).
+    `*PRINT-ESCAPE*` bound to NIL (CLHS 22.1.3.2). `*PRINT-READABLY*` is
+    bound to NIL too (X3J13 PRINC-READABLY; CLHS 22.3.4.1 states the same
+    binding for `~A`): an inherited `*print-readably*` -- `with-standard-io-syntax`
+    binds it T -- forced the escape back on, so PRINC of a character printed
+    `#\a` (PRINT.CHAR.1) and PRINC of an unnamed character signalled
+    PRINT-NOT-READABLE (PRINT.CHAR.2).
     """
-    write_text(_dispatch_print(object, {'escape': False}, stream), stream)
+    write_text(_dispatch_print(
+        object, {'escape': False, 'readably': False}, stream), stream)
     return object
 
 
@@ -4959,7 +4986,17 @@ def format_fn(destination, control_string, *args):
             # A string result the caller keeps as data: any sentinels a
             # frame-deferral left behind must not leak into it.
             formatted = _pp_resolve_bare_breaks(formatted)
-        return formatted
+        # FORMAT to NIL returns a Lisp STRING object (CLHS 22.3.1), not the
+        # Python `str` the engine assembles internally. A bare `str` is not a
+        # VECTOR under TYPEP, so ansi-test's own `equalp-with-case` (rt.lsp),
+        # which element-compares only objects that answer T to
+        # `(typep x 'vector)` and otherwise falls back to EQL, failed every
+        # deftest whose result was a `(format nil ...)` string -- even when
+        # expected and actual printed identically (17 failures in
+        # format-conditional.lsp). The FORMATTER half of every
+        # def-format-test already returned a LispString through
+        # GET-OUTPUT-STREAM-STRING; this makes the FORMAT half agree.
+        return lisptype.LispString(formatted)
     else:
         _emit_format_result(formatted, resolve_output_stream(destination))
         return lisptype.NIL

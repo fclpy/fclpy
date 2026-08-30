@@ -701,8 +701,8 @@ def _keyplace_form(operator, place, cond_clauses, expected_type, env, tmp=None):
                               _cons_from(
                                   [_sym('STORE-VALUE'),
                                    _cons_from([store_tmp]),
-                                   _cons_from([store_action,
-                                               _list(_sym('GO'), retry_tag)])])])])])])
+                                   store_action,
+                                   _list(_sym('GO'), retry_tag)])])])])])
     bindings = _cons_from([_list(t, v) for t, v in zip(temps, vals)])
     block_tag = _gensym()
     return _cons_from([_sym('LET*'), bindings,

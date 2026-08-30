@@ -660,8 +660,11 @@ def _apply_report(condition):
         # A function format control (FORMATTER's result) is left to whoever
         # reports the condition; FORMAT dispatches on it directly.
         return condition
-    condition.message = format_fn(
-        lisptype.NIL, str(control), *(condition.get_slot('format-arguments') or []))
+    # `format_fn` to NIL returns a LispString (CLHS 22.3.1); the message slot
+    # is read back as a plain Python str (Condition.__str__ returns it
+    # verbatim), so coerce here rather than at every reader.
+    condition.message = str(format_fn(
+        lisptype.NIL, str(control), *(condition.get_slot('format-arguments') or [])))
     return condition
 
 

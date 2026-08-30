@@ -528,10 +528,13 @@ class LispString(lispSequence):
         raise TypeError(f"Cannot concatenate LispString with {type(other)}")
     
     def __contains__(self, item):
-        """Check if character is in string."""
+        """Python's `in` on `str` asks for *substring* containment (the
+        protocol the operators that consume a LispString as a Python str rely
+        on), not element membership. A Character is its one-character string,
+        which makes `c in s` still answer the character question."""
         if isinstance(item, Character):
             item = item.char
-        return item in self._data
+        return item in str(self)
     
     @property
     def actual_length(self):
