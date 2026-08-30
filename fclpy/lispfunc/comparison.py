@@ -109,7 +109,19 @@ def _eql_number_key(x):
     if isinstance(x, float):
         return ('float', x)
     if isinstance(x, complex):
-        return ('complex', x)
+        # CLHS 5.3: two numbers are eql when of the same type *and* the
+        # same value, and for a complex "same type" means the parts: an
+        # integer-parts complex is not the same type as a float-parts
+        # one, so `(eql #c(1 2) #c(1.0 2.0))` is NIL. Keying by the
+        # complex's numeric value alone (what this used to do) made
+        # `complex.__eq__`'s numeric comparison answer T for those
+        # pairs -- the false positive that let a float result match an
+        # exact literal, which is how `expt.16`'s float answer "passed".
+        # Keying by the parts' own number keys gives exactly the
+        # part-type-and-value rule; a `LispComplex`'s `.real`/`.imag`
+        # answer the stored parts (int/Fraction/float), a plain
+        # `complex`'s are floats.
+        return ('complex', _eql_number_key(x.real), _eql_number_key(x.imag))
     return None
 
 

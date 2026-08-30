@@ -2461,11 +2461,21 @@ def eval_loop(form, env):
             if kind == 'for-across':
                 driver['_idx'] = driver.get('_idx', 0) + 1
                 return
-            if kind in ('for-range', 'for-below'):
-                driver['_cur'] = driver['_cur'] + driver['_step']
-                return
-            if kind == 'for-from':
-                driver['_cur'] = driver['_cur'] + driver['_step']
+            if kind in ('for-range', 'for-below', 'for-from'):
+                cur, step = driver['_cur'], driver['_step']
+                if isinstance(cur, complex) or isinstance(step, complex):
+                    # Step through the Lisp `+`'s complex path: a `from`
+                    # or `by` value that is a complex must step in Lisp
+                    # arithmetic, so exact parts stay exact (`loop for c
+                    # from #c(0 1) by 2` yields `#c(2 1)`, not the float
+                    # complex Python's `complex + int` would produce --
+                    # the numeric accident that let loop1's results
+                    # EQL-match their expected literals). `LispComplex`
+                    # subclasses `complex`, so this covers both shapes.
+                    from .math_arithmetic import _lisp_complex_add
+                    driver['_cur'] = _lisp_complex_add(cur, step)
+                else:
+                    driver['_cur'] = cur + step
                 return
             if kind == 'for-equals':
                 # Stepping happens in _bind_driver -- see _init_driver.

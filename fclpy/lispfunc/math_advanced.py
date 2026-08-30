@@ -264,16 +264,16 @@ def expt(base, power):
                     return
 
     # Narrow correctness fix for CLHS 12.1.5.3 / 12.1.4.1: when a complex
-    # base has *exact* parts (integers or `Fraction`s) and the power is a
-    # *non-negative* integer, the answer is also exact, and Python's
-    # `complex ** int` degrades both 0+2i squared (-4+0j then -4.0 once the
-    # imaginary-zero simplification runs) and (1/2 + 1/3 i) cubed to a
-    # float pair. The float answer is *wrong* for `(expt #c(0 2) 2) = -4`
-    # and the (1/2, 1/3) case in `expt.16`, both of which the test
-    # compares against exact rationals. Doing the multiplication by hand
-    # on Fractions keeps the answer exact; once imag collapses to 0, the
+    # base has *exact* parts (integers or `Fraction`s) and the power is an
+    # integer, the answer is also exact, and Python's `complex ** int`
+    # degrades both 0+2i squared (-4+0j then -4.0 once the imaginary-zero
+    # simplification runs) and (1/2 + 1/3 i) cubed to a float pair. The
+    # float answer is *wrong* for `(expt #c(0 2) 2) = -4` and the (1/2,
+    # 1/3) cases in `expt.16`/`expt.17`, both of which the test compares
+    # against exact rationals. Doing the multiplication by hand on
+    # Fractions keeps the answer exact; once imag collapses to 0, the
     # rational can be returned as-is.
-    if (isinstance(base, complex) and isinstance(power, int) and power >= 0
+    if (isinstance(base, complex) and isinstance(power, int)
             and not isinstance(power, bool)
             and (isinstance(base.real, (int, Fraction))
                  or (isinstance(base.real, float) and base.real.is_integer()))
@@ -288,18 +288,38 @@ def expt(base, power):
         # 0, return the rational (or its integer reduction).
         re_part = Fraction(int(base.real)) if isinstance(base.real, float) else Fraction(base.real)
         im_part = Fraction(int(base.imag)) if isinstance(base.imag, float) else Fraction(base.imag)
-        # Repeated squaring
+        # Repeated multiplication
         cur_re, cur_im = Fraction(1), Fraction(0)
-        for _ in range(power):
+        for _ in range(abs(power)):
             new_re = cur_re * re_part - cur_im * im_part
             new_im = cur_re * im_part + cur_im * re_part
             cur_re, cur_im = new_re, new_im
+        from .math_arithmetic import LispComplex, _canonicalize_rational, _lisp_complex_div
+        if power < 0:
+            # (expt c n) for a negative n is the reciprocal of the
+            # positive power -- the same exact arithmetic, divided out
+            # exactly. `_lisp_complex_div` signals DIVISION-BY-ZERO when
+            # the base was zero, which is the specified behavior.
+            # `expt.17` compares `(expt #c(1 1) -2)` against the exact
+            # `#c(0 -1/2)`; computing the positive power and then
+            # recursing into Python's `**` for the reciprocal loses the
+            # parts to float, and EQL was matching that float against
+            # the exact literal only numerically.
+            if cur_im == 0:
+                return _lisp_complex_div(1, _canonicalize_rational(cur_re))
+            return _lisp_complex_div(
+                1, LispComplex(_canonicalize_rational(cur_re),
+                               _canonicalize_rational(cur_im)))
         if cur_im == 0:
             # Coalesce per CLHS 12.1.5.3: complex with zero imag is real
-            if cur_re.denominator == 1:
-                return int(cur_re)
-            return cur_re
-        return complex(float(cur_re), float(cur_im))
+            return _canonicalize_rational(cur_re)
+        # The base was exact, so the answer is exact: keep the parts as
+        # the rationals they are. Converting them to float here (what
+        # this used to do) is what made `expt.16`'s result a float
+        # complex that could only EQL-match the exact expected
+        # `#c(-1/24 23/108)` numerically.
+        return LispComplex(_canonicalize_rational(cur_re),
+                           _canonicalize_rational(cur_im))
 
     # CLHS 12.1.4.1: an integer base to an integer power is rational (any
     # integer power, positive, zero, or negative). Python's `int ** int` for
