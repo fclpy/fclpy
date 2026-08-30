@@ -346,23 +346,6 @@ def equalp(obj1, obj2):
                 return lisptype.NIL
         return lisptype.T
 
-    # Vectors -- CLHS 5.3: two arrays are EQUALP if they have the same
-    # dimensions and EQUALP elements. Which *Python* container holds those
-    # elements is not part of the question, and testing `isinstance(x, list)`
-    # made it part of the question: a `#(...)` literal is an
-    # `AdjustableVector` while `(vector ...)` and every rebuilt sequence
-    # result is a Python `list`, so the same vector built two ways was never
-    # EQUALP to itself (plan.md Finding M).
-    from .sequence_protocol import is_vector, seq_elements
-    if is_vector(obj1) and is_vector(obj2):
-        left, right = seq_elements(obj1), seq_elements(obj2)
-        if len(left) != len(right):
-            return lisptype.NIL
-        for x, y in zip(left, right):
-            if equalp(x, y) != lisptype.T:
-                return lisptype.NIL
-        return lisptype.T
-
     import fclpy.classes as classes
     if isinstance(obj1, classes.LispInstance) and isinstance(obj2, classes.LispInstance):
         cls1 = obj1.lisp_class
@@ -411,6 +394,8 @@ def typep(object, type_specifier, environment=None):
     # DEFTYPE expansion and SATISFIES predicates correctly. This is a
     # targeted fix for specific failure cases, not a full refactor of TYPEP.
     from fclpy import typespec
+    from .evaluation_core import (ConditionException, ReturnFromException,
+                                  ThrowException, GoException)
     if _consp_internal(type_specifier) or isinstance(type_specifier, lisptype.LispSymbol):
         try:
             result = typespec.type_contains(object, type_specifier, environment)
@@ -422,6 +407,14 @@ def typep(object, type_specifier, environment=None):
                 datum=type_specifier,
                 expected_type=lisptype.LispSymbol('TYPE'),
                 message=f"Invalid type specifier: {type_specifier}"))
+        except (ConditionException, ReturnFromException, ThrowException, GoException):
+            # A DEFTYPE expander's own signaling -- e.g. the binder's arity
+            # PROGRAM-ERROR -- is a Lisp condition or control transfer in
+            # flight. It must reach the caller; swallowing it into the
+            # legacy ladder made `(typep x '(deftype-with-arity-error))`
+            # answer silently where SUBTYPEP propagated the same signal
+            # (Finding K's class).
+            raise
         except Exception:
             # For other exceptions (e.g., recursion in expanding DEFTYPEs),
             # fall through to the legacy implementation
