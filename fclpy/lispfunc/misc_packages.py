@@ -194,13 +194,23 @@ def package_symbols(package, kind):
 
     # Accessible = present + inherited externals, without duplicates. Identity
     # is the right key: an inherited symbol *is* the used package's symbol.
+    # A **present symbol shadows every inherited symbol of the same name**
+    # (CLHS 11.1.2.1 -- that is what SHADOW and SHADOWING-IMPORT do), so the
+    # inherited candidates are filtered *by name* against `pkg.symbols` and
+    # not merely deduplicated by identity: `do-symbols.4`/`.5`'s DS3 has both
+    # DS1:A shadowing-imported and DS2:A inherited-external, and only DS1:A
+    # is accessible.
     seen = {id(s) for s in present}
+    present_names = set(pkg.symbols.keys())
     accessible = list(present)
     for used in list(getattr(pkg, 'use_list', ()) or ()):
         used_pkg = lisptype.find_package(used) if isinstance(used, str) else used
         if used_pkg is None:
             continue
         for sym in _externals_of(used_pkg):
+            name = getattr(sym, 'name', None)
+            if isinstance(name, str) and name in present_names:
+                continue
             if id(sym) not in seen:
                 seen.add(id(sym))
                 accessible.append(sym)
@@ -221,19 +231,28 @@ def inherited_symbols(package):
     """The symbols `package` inherits from the packages it uses.
 
     Each is reported with its *home* package, which is what
-    WITH-PACKAGE-ITERATOR's third value must be for an :INHERITED symbol --
-    and what `with-package-iterator.12`-`.14` check via FIND-SYMBOL on that
-    home. Duplicated by identity: a symbol external in two used packages is
-    visited once.
+    WITH-PACKAGE-ITERATOR's third value must be for an :INHERITED symbol -- and
+    what `with-package-iterator.12`-`.14` check via FIND-SYMBOL on that home.
+    Duplicated by identity: a symbol external in two used packages is visited
+    once.
+
+    A name with a *present* symbol in `package` is skipped: a present symbol
+    shadows the inherited one (CLHS 11.1.2.1), so the inherited symbol of that
+    name is not accessible at all -- `find-symbol` answers the present symbol,
+    and reporting the inherited one would contradict it.
     """
     pkg = coerce_to_package(package)
     seen = set()
+    present_names = set(pkg.symbols.keys())
     result = []
     for used in list(getattr(pkg, 'use_list', ()) or ()):
         used_pkg = lisptype.find_package(used) if isinstance(used, str) else used
         if used_pkg is None:
             continue
         for sym in _externals_of(used_pkg):
+            name = getattr(sym, 'name', None)
+            if isinstance(name, str) and name in present_names:
+                continue
             if id(sym) not in seen:
                 seen.add(id(sym))
                 result.append((sym, used_pkg))
@@ -332,6 +351,21 @@ def make_package_iterator(packages, symbol_types):
                 f"WITH-PACKAGE-ITERATOR: {item!r} is not a symbol type",
                 expected_type='SYMBOL', actual_value=item)
         current = current.cdr
+    # CLHS 11.2: symbol-types must name at least one of the three access
+    # kinds -- `(with-package-iterator (x pkg))` with none is a PROGRAM-ERROR
+    # (`with-package-iterator.11`), not a silently empty iteration.
+    # `:internal` is tolerated beyond the standard three because the suite's
+    # own harness (`package-aux.lsp`'s `with-package-iterator-internal`) asks
+    # for present symbols under that spelling, and every implementation
+    # answers it.
+    if not kinds:
+        raise lisptype.LispProgramError(
+            "WITH-PACKAGE-ITERATOR: at least one symbol type is required")
+    for kind in kinds:
+        if kind not in ('SYMBOL', 'EXTERNAL', 'INHERITED', 'INTERNAL'):
+            raise lisptype.LispProgramError(
+                f"WITH-PACKAGE-ITERATOR: {kind!r} is not one of "
+                f":SYMBOL, :EXTERNAL, :INHERITED")
     return _PackageIterator(resolved, kinds)
 
 
@@ -686,11 +720,40 @@ def unintern(symbol, package=None):
 
 @_registry.cl_function('UNEXPORT')
 def unexport(symbols, package=None):
-    """Unexport symbols from package."""
+    """UNEXPORT symbols from a package (CLHS 11.2).
+
+    Each symbol must be **accessible** in the package: one that is not is a
+    PACKAGE-ERROR carrying the package on its `package` slot
+    (`unexport.5` unexports from a fresh `:use nil` package). A symbol that
+    is present but not exported is left alone (`unexport.6`), and
+    unexporting an inherited symbol is a no-op -- it was never in
+    `external_symbols` to begin with.
+    """
     pkg = coerce_to_package(package)
+    from .evaluation_conditions import signal_error_object
     for s in _as_list(symbols):
-        name = s.name if hasattr(s, 'name') else _designator_to_string(s)
+        if lisptype.is_symbol(s):
+            name = s.name
+            found, _status = pkg.find_symbol(name)
+            if found is None or found is not s:
+                condition = lisptype.PackageError(
+                    package=pkg,
+                    message=(f"UNEXPORT: the symbol {name} is not "
+                             f"accessible in package {pkg.name}"))
+                signal_error_object(condition)
+                return lisptype.NIL
+        else:
+            name = _designator_to_string(s)
+            found, _status = pkg.find_symbol(name)
+            if found is None:
+                condition = lisptype.PackageError(
+                    package=pkg,
+                    message=(f"UNEXPORT: no symbol named {name} is "
+                             f"accessible in package {pkg.name}"))
+                signal_error_object(condition)
+                return lisptype.NIL
         pkg.external_symbols.discard(name.upper())
+        pkg.external_symbols.discard(name)
     return lisptype.T
 
 

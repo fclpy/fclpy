@@ -407,21 +407,85 @@ def rational(number):
     return _canonicalize_rational(Fraction(number))
 
 
+def _float_rounding_interval(x):
+    """The open interval of reals that convert to the float `x`: the
+    midpoints between `x` and each of its two neighbors. Everything
+    strictly inside is closer to `x` than to any other float, so it
+    converts back to `x` under round-to-nearest whatever the tie rule --
+    which is exactly the guarantee RATIONALIZE needs: any rational in
+    the interval satisfies (= (float r x) x).
+
+    A bound is None when `x` is the extreme finite float of its kind and
+    the neighbor does not exist: the interval then runs to that infinity.
+    """
+    import math
+    v = Fraction(x)
+    lower = math.nextafter(x, -math.inf)
+    upper = math.nextafter(x, math.inf)
+    lo = None if math.isinf(lower) else (Fraction(lower) + v) / 2
+    hi = None if math.isinf(upper) else (v + Fraction(upper)) / 2
+    return lo, hi
+
+
+def _simplest_rational_in(lo, hi):
+    """The simplest rational strictly inside the open interval (lo, hi) --
+    smallest denominator, then smallest numerator -- by the Stern-Brocot /
+    continued-fraction descent the CLHS RATIONALIZE description implies.
+
+    `lo` and `hi` are exact `Fraction`s with lo < hi. At each step the
+    integer part is peeled off: an integer strictly inside the interval is
+    simplest; otherwise the same trick applied to the reciprocals of the
+    fractional parts finds the fraction of smallest denominator, which is
+    the only place a smaller denominator could hide.
+    """
+    if lo < 0:
+        if hi <= 0:
+            return -_simplest_rational_in(-hi, -lo)
+        return Fraction(0)
+    flo = lo.numerator // lo.denominator
+    fhi = hi.numerator // hi.denominator
+    if flo != fhi and flo + 1 < hi:
+        return Fraction(flo + 1)
+    # Same integer part (or flo+1 == hi exactly): descend on the
+    # fractional parts. p/q in (a, b) with a > 0 is q/p in (1/b, 1/a).
+    a = lo - flo
+    b = hi - flo
+    if a == 0:
+        # (flo, hi): the simplest fraction above flo is flo + 1/q with the
+        # smallest q such that 1/q < b.
+        return flo + 1 / (1 // b + 1)
+    return flo + 1 / _simplest_rational_in(1 / b, 1 / a)
+
+
 @_registry.cl_function('RATIONALIZE')
 def rationalize(x):
-    """Convert a float to the simplest rational within its representable
-    precision (CLHS 12.1.1.2), approximated here via
-    `Fraction.limit_denominator` -- CLHS's exact continued-fraction
-    algorithm, keyed to the float's own ulp rather than a fixed
-    denominator cap, is not attempted here and remains a known gap for
-    values (e.g. irrational transcendentals) where the two disagree.
+    """Convert a real to a rational (CLHS rationalize).
+
+    For a float this is the simplest rational that still converts back to
+    the same float -- the Stern-Brocot-simplest rational inside the
+    float's rounding interval (`_float_rounding_interval`), not the float's
+    own exact value, which is what RATIONAL returns. `rationalize.1`/`.3`
+    round-trip every result through (float r x) and fail on anything that
+    does not come back, which a fixed `limit_denominator` cap cannot
+    guarantee (it answered 0 for the subnormals and missed by an ulp on
+    doubles); an exact rational, an integer and zero come back unchanged.
     """
     _ensure_real(x, 'RATIONALIZE')
     if isinstance(x, int):
         return x
     if isinstance(x, Fraction):
         return _canonicalize_rational(x)
-    return _canonicalize_rational(Fraction(x).limit_denominator())
+    if x == 0:
+        return 0
+    lo, hi = _float_rounding_interval(x)
+    if lo is None:
+        # (-inf, hi): mirrored from the bounded case -- the simplest
+        # integer below hi is -floor(-hi) - 1.
+        return _canonicalize_rational(-((-hi).numerator // (-hi).denominator) - 1)
+    if hi is None:
+        # (lo, +inf): the simplest integer above lo.
+        return _canonicalize_rational(lo.numerator // lo.denominator + 1)
+    return _canonicalize_rational(_simplest_rational_in(lo, hi))
 
 
 # Type predicates

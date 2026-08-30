@@ -119,49 +119,54 @@ def sqrt(x):
     """Square root function."""
     return _irrational(math.sqrt, cmath.sqrt, x)
 
-def _check_float_overflow(result, base):
+def _check_float_overflow(result, base, power=None):
     """Check if result overflows/underflows for base's float type.
-    
-    CLHS 12.1.4.1: EXPT must signal FLOATING-POINT-OVERFLOW or 
-    FLOATING-UNDERFLOW when the mathematical result is too large or too small
-    for the float type of the base.
-    
-    All CL float subtypes (short, single, double, long) share Python's float,
-    but they have different ranges. Since fclpy doesn't preserve float subtype
-    info at runtime, we check against all ranges.
-    
-    Ranges (approximately):
-    - short/single: max ~3.4028235e+38, min ~1.4e-45
-    - double/long: max ~1.7976931348623157e+308, min ~5e-324
+
+    CLHS 12.1.4.1: EXPT must signal FLOATING-POINT-OVERFLOW or
+    FLOATING-POINT-UNDERFLOW when the mathematical result is too large or
+    too small for the float type of the base.
+
+    All CL float subtypes (short, single, double, long) share Python's
+    float, so the *double* range is the one hard boundary: Python has
+    already raised OverflowError for anything beyond it, and a finite
+    result is representable. The short/single range is checked only when
+    the power is an exact *integer* -- that is the regime a CL with
+    distinct float subtypes computes by repeated multiplication in the
+    base's own format, and `expt.error.4`-`.11` pin the signals it must
+    produce (`(expt most-positive-single-float 2)` overflows single even
+    though 1.2e77 is a fine double). A non-integral power is computed
+    through exp/log in the widest format, so only the double range bounds
+    it: the eager check there made format.e.1/.2's own
+    `(expt (coerce 10 type) e)` forms signal on results the tests require
+    back as values.
     """
-    import math
     from fclpy.lispfunc.evaluation_conditions import signal_condition
-    
-    # Short/single float range
-    short_max = 3.4028235e+38
-    short_min = 1.4e-45
-    
-    # Double/long float range (Python's full range)
-    double_max = sys.float_info.max
-    double_min = sys.float_info.min
-    
-    # Check for overflow (result larger than ANY type's max)
-    if abs(result) > double_max:
+
+    # Overflow beyond even the double range (an inf result escaping from
+    # the complex paths without Python raising).
+    if abs(result) > sys.float_info.max:
         signal_condition(lisptype.FloatingPointOverflow(
             f"EXPT: result overflows the range of the float type"))
         return
-    
+
+    if not (isinstance(power, int) and not isinstance(power, bool)):
+        return
+
+    # Short/single float range
+    short_max = 3.4028235e+38
+    short_min = 1.4e-45
+
     if abs(result) > short_max:
         signal_condition(lisptype.FloatingPointOverflow(
             f"EXPT: result overflows the range of the float type"))
         return
-    
-    # Check for underflow (result smaller than ANY type's min, but not zero)
-    if result != 0.0:
-        if abs(result) < double_min or abs(result) < short_min:
-            signal_condition(lisptype.FloatingPointUnderflow(
-                f"EXPT: result underflows the range of the float type"))
-            return
+
+    # Underflow below the single range (but not a true zero -- the zero
+    # case is handled by the caller's explicit underflow branch).
+    if result != 0.0 and abs(result) < short_min:
+        signal_condition(lisptype.FloatingPointUnderflow(
+            f"EXPT: result underflows the range of the float type"))
+        return
 
 
 @_registry.cl_function('EXPT')
@@ -332,7 +337,7 @@ def expt(base, power):
         result = result.real
 
     # Check for overflow/underflow
-    _check_float_overflow(result, base)
+    _check_float_overflow(result, base, power)
 
     # Additional underflow check: if result is 0.0 but base is non-zero and small,
     # it might be an underflow that Python truncated to 0.0

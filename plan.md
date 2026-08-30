@@ -26,6 +26,105 @@ history is preserved in condensed form in [Changelog](docs/changelog.md).
 
 ## 1. Status
 
+> ### Multi-agent round (2026-08-30): checklist index 597 → ~333
+>
+> Amended-index movement from one orchestration session (three parallel
+> worker worktrees + lead fixes; the official scoreboard still moves only
+> on a full run). Clusters closed or advanced, by mechanism:
+>
+> - **FORMAT engine** (~88): `~/` function directive, `~_`/`~*`/`~^`
+>   (incl. the `~:^` last-sublist rule and `~?`/`~(` scopes), `~[`,
+>   `~{` error signaling, `~<newline>`, `~W` (new), `~:C`, `~B/D/X/O/R`
+>   fallback binding of the print control vars.
+> - **PPrint** (~55): PPRINT-FILL/LINEAR/TABULAR real CLHS drivers, a real
+>   PPRINT-TAB, PPRINT-POP/PPRINT-NEWLINE.FILL/PPRINT-LOGICAL-BLOCK.17,
+>   pprint-local `*print-circle*` labelling, plus io_write leftovers
+>   (broadcast FILE-LENGTH/POSITION, FILE-AUTHOR, RENAME-FILE.5, WRITE's
+>   `&key stream`, DELETE-FILE rmdir).
+> - **CLOS** (~69 direct + unlocked): real class precedence lists (CLHS
+>   4.3.5.1 topological sort, not C3) over a real built-in class
+>   hierarchy + condition hierarchy + metaclasses; CLASS-PRECEDENCE-LIST;
+>   class_of rewritten; method maintenance; CALL-NEXT-METHOD/NEXT-METHOD-P
+>   as frame-capturing locals; CHANGE-CLASS protocol; DEFGENERIC options
+>   (incl. `:generic-function-class` → recorded, DEFGENERIC.30); CLHS
+>   7.1.2 initarg validity; ADD-METHOD's shadowing 3-arg duplicate deleted.
+> - **Compile-file MAKE-LOAD-FORM protocol** (14): CLHS 3.2.4 creation/
+>   initialization forms with data-flow ordering (creation deps recursive,
+>   inits topological, bound-vs-emitted distinction), object/class
+>   constants externalized via reference symbols / `(FIND-CLASS 'name)`.
+> - **Macro system M4 phase 1** (28 of 66 converted): WHEN/UNLESS/PROG1/
+>   PROG2/NTH-VALUE/MULTIPLE-VALUE-{LIST,BIND,SETQ}/PSETQ/AND/OR/CASE
+>   family/INCF/DECF/PUSH/POP/PUSHNEW/REMF/ROTATEF/SHIFTF/RETURN/IGNORE-
+>   ERRORS/CHECK-TYPE/STEP/DECLAIM/DESTRUCTURING-BIND etc. now REAL
+>   macros in the new `lispfunc/standard_macros.py` (one implementation;
+>   eval branches deleted). Compiler-macro facility built: registry,
+>   `(SETF COMPILER-MACRO-FUNCTION)`, DEFINE-COMPILER-MACRO as a real
+>   macro, COMPILE expanding compiler macros (notinline + decline).
+> - **Evaluator/conditions**: LOOP main clauses run in source order
+>   (CLHS 6.1.2.1); quasiquote unquote takes the primary value only
+>   (DEFMACRO.17/.17A); HANDLER-CASE passes a THROW through to its
+>   enclosing CATCH (the obsolete M7 approximation removed — the
+>   uncaught-throw CONTROL-ERROR is signaled at the throw site since
+>   `state.catch_tags` exists); SLOT-VALUE's SETF path honors the
+>   built-in-class guard; DPB/DEPOSIT-FIELD semantics split; SETF of
+>   LDB/MASK-FIELD evaluation order; RATIONALIZE's exact rounding-interval
+>   algorithm; EXPT single-float overflow gated on integer powers;
+>   ARITHMETIC-ERROR-OPERANDS/OPERATION read their slots; DEFUN returns
+>   the written `(setf f)` name; PACKAGE-ERROR-PACKAGE's None-stub
+>   duplicate deleted.
+>
+> **pytest 2097 green throughout; duplicates gate clean; every integrated
+> cluster verified in-tree with targeted ANSI runs (0 unaccounted).**
+>
+> ### Remaining findings for the next run (recorded 2026-08-30)
+>
+> 1. **TYPE-OF.4 residual (+1 gate flag, `comparison.py`)**: `type_of`'s
+>    fallback answers T for streams/hash-tables/pathnames/readtables/
+>    conditions, contradicting the new `class_of`. A fix that consults
+>    `classes.class_of` broke the ansi-aux bootstrap (NOTNOT-MV undefined
+>    — cause undiagnosed; a type_of↔class_of recursion was ruled out
+>    empirically). Root-cause the aux-load failure first, then re-apply.
+> 2. **`printer/print-cons.lsp` (+1 gate flag)**: 5 failing vs the 08-28
+>    baseline's 4 — drift that predates the 2026-08-30 session; diff the
+>    five against the baseline before assuming the session caused it.
+> 3. **PPRINT-DISPATCH.7**: `.0001` reads as the symbol `|.0001|` —
+>    potential-number syntax (tokenizer.py/lispreader.py).
+> 4. **EXPT.16**: the reader must keep exact rational parts in `#c(...)`
+>    literals (`readtable.py::_read_complex_number` ~1199, mirroring
+>    `misc_macros.complex_fn`).
+> 5. **FORMAT.E.26 vs exp.error.4/.5/.8/.9**: jointly unsatisfiable
+>    without float-subtype tracking (single vs double range); accepted
+>    net-loss until then.
+> 6. **FORMAT.C.4A/FORMATTER.C.4A + FORMAT.S.8**: need CHAR-NAME coverage
+>    for every non-graphic character (characters.py); `~:C`'s delegation
+>    is already in place.
+> 7. **FORMAT.LOGICAL-BLOCK.CIRCLE.1-3**: `*print-circle*` across several
+>    `~A` calls in one FORMAT needs shared circle bookkeeping in
+>    printer.py (io_write's pprint-local labelling is the model).
+> 8. **M4 phase 2**: 38 of the 90 `*cl-macro-symbols*` still lack a
+>    macro function — the definer forms (defun/defmacro/defclass/...),
+>    DO/DOLIST/DOTIMES, COND, SETF/PSETF, PROG/PROG*, LAMBDA, FORMATTER,
+>    ASSERT, the WITH-* family's remaining names. MACRO-FUNCTION.1/.2/.3
+>    pass only at full coverage. `standard_macros.py`'s
+>    `_standard_macro` pattern is the established home.
+> 9. **dcf/eval-and-compile tail**: EVERY/SOME/NOTANY/NOTEVERY `.ERROR.*`
+>    and FUNCALL.ERROR.* (bad-designator signaling), LET*/LET, PSETQ/
+>    ROTATEF/SETF.ORDER leftovers, CASE/CCASE/CTYPECASE residuals,
+>    EQUAL/EQUALP, VALUES*, DCF-MACROS, DESTRUCTURING-BIND.ERROR.10,
+>    COMPILED-FUNCTION-P.1, OR.6, NIL.7, PROG*.11, misc/misc.lsp (16).
+> 10. **Process notes**: a Windows-console UnicodeEncodeError (cp1252) can
+>    kill a run silently while printing diagnostics — set
+>    PYTHONIOENCODING=utf-8 for runs that may print non-ASCII;
+>    `git apply --3way` can roll back atomically while still printing
+>    per-file success — verify with `git diff --stat` after every apply;
+>    PowerShell `>` writes UTF-16 — use `git diff --output`; worker
+>    sessions can end empty at ~50% — always verify the worktree diff on
+>    disk rather than trusting the report.
+> 11. A **full ~86-minute run is mandatory before moving the official
+>    scoreboard**: DELETE-FILE/OPEN (bootstrap path) and the whole
+>    evaluator/printer surface were touched this session.
+
+
 **Latest full run: 2026-08-28. 95.4% passing, 1004 failing.**
 
 ```

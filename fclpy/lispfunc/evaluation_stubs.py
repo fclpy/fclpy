@@ -336,12 +336,6 @@ def ccase(keyform, *clauses):
     return None  # Simplified
 
 
-@_registry.cl_function('ECASE')
-def ecase(keyform, *clauses):
-    """Exhaustive case."""
-    return None  # Simplified
-
-
 def eval_fn(form, env=None):
     """Eval function (alias)."""
     from .evaluation_core import eval

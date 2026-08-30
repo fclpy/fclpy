@@ -148,7 +148,11 @@ class TestReadtableCase:
     """CLHS 23.2: a keyword, and a place."""
 
     def test_readtable_case_is_a_keyword(self):
-        assert readtable_case() is lisptype.intern_keyword('UPCASE')
+        # CLHS 23.2: the readtable argument is required (zero arguments is a
+        # PROGRAM-ERROR, `readtable-case.error.1`); NIL denotes the standard
+        # readtable only where a *designator* is accepted, and READTABLE-CASE
+        # takes a readtable.
+        assert readtable_case(get_current_readtable()) is lisptype.intern_keyword('UPCASE')
 
     def test_setf_readtable_case(self, env):
         result = eval_string(

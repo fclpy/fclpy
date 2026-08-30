@@ -110,7 +110,13 @@ from .pathnames import (
     ensure_directories_exist,
 )
 
+from .standard_macros import (
+    _declaim_expander as declaim,
+    _step_expander as step,
+)
+
 from .misc_macros import (
+    declare,
     with_pprint_logical_block,
     complex_fn,
     load_time_value,
@@ -163,7 +169,7 @@ from .misc_macros import (
     char_code_limit,
     # do_symbols, do_external_symbols, do_all_symbols are now special forms
     # with_package_iterator is now a macro in evaluation_special_forms.py
-    declaim,
+    # declaim and step are now macros in standard_macros.py (imported above)
     declare,
     defgeneric,
     defpackage,
@@ -181,7 +187,6 @@ from .misc_macros import (
     dribble,
     disassemble,
     room,
-    step,
     provide,
     require,
     make_load_form_saving_slots,

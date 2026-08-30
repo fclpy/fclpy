@@ -222,37 +222,55 @@ class LispReader():
             syntax = self._syntax_type(x)
             if syntax == _rt.SYNTAX_WHITESPACE:
                 toss = True
-            elif syntax in (_rt.SYNTAX_TERMINATING_MACRO,
-                            _rt.SYNTAX_NON_TERMINATING_MACRO):
-                macro_func = self.get_macro_character(x)
-                # get_macro_character returns (function, non_terminating_p)
-                if isinstance(macro_func, tuple):
-                    macro_func = macro_func[0]
-                result = macro_func(x, self.stream)
-                # If macro returns None (e.g., comments), continue reading
-                if result is None:
-                    toss = True
-                else:
-                    return self._check_result(result)
-            elif syntax == _rt.SYNTAX_SINGLE_ESCAPE:
-                y = self.stream.read_char()
-                if y is None or self.stream.eof():
-                    # A single escape (`\`) with nothing after it is a
-                    # truncated token, not a malformed one -- the same
-                    # unconditional END-OF-FILE readtable.py's own
-                    # mid-form handlers now raise (io_read.py's
-                    # `_read_via_reader` converts either into the real
-                    # condition).
-                    raise EOFError("EOF after single escape")
-                return self._check_result(
-                    self.read_8([y], [True], preserve_whitespace))
-            elif syntax == _rt.SYNTAX_MULTIPLE_ESCAPE:
-                return self._check_result(
-                    self.read_9([], [], preserve_whitespace))
+                continue
+            result = self._read_given_syntax(x, syntax, preserve_whitespace)
+            # If macro returns None (e.g., comments), continue reading
+            if result is None:
+                toss = True
             else:
-                self._check_constituent_valid(x)
-                return self._check_result(
-                    self.read_8([x], [False], preserve_whitespace))
+                return self._check_result(result)
+
+    def _read_given_syntax(self, x, syntax, preserve_whitespace=False):
+        """CLHS 2.2's dispatch on one *already consumed* character's syntax
+        type -- the whole of step 6-10 for that character: macro dispatch,
+        single escape, multiple escape, or plain token accumulation.
+
+        `_read_1_body` is the top-level caller (whitespace skipping and the
+        "no object, keep reading" loop live there); `readtable._read_item`
+        is the nested one, reading list elements and quote operands through
+        the same dispatch rather than a second copy of it. Unlike
+        `_read_1_body` this returns `readtable.DOT_MARKER` unchecked -- the
+        list reader consumes it as the dotted-pair dot -- and never skips a
+        `None` result itself.
+        """
+        from . import readtable as _rt
+        if syntax in (_rt.SYNTAX_TERMINATING_MACRO,
+                      _rt.SYNTAX_NON_TERMINATING_MACRO):
+            # The reader calls the *internal* (char, stream) convention:
+            # a user macro function arrives adapted, unlike the
+            # user-facing function GET-MACRO-CHARACTER returns.
+            macro_func = (self.readtable.macro_char_callable(x)
+                          if self.readtable is not None
+                          else self.get_macro_character(x))
+            # get_macro_character returns (function, non_terminating_p)
+            if isinstance(macro_func, tuple):
+                macro_func = macro_func[0]
+            return macro_func(x, self.stream)
+        if syntax == _rt.SYNTAX_SINGLE_ESCAPE:
+            y = self.stream.read_char()
+            if y is None or self.stream.eof():
+                # A single escape (`\`) with nothing after it is a
+                # truncated token, not a malformed one -- the same
+                # unconditional END-OF-FILE readtable.py's own
+                # mid-form handlers now raise (io_read.py's
+                # `_read_via_reader` converts either into the real
+                # condition).
+                raise EOFError("EOF after single escape")
+            return self.read_8([y], [True], preserve_whitespace)
+        if syntax == _rt.SYNTAX_MULTIPLE_ESCAPE:
+            return self.read_9([], [], preserve_whitespace)
+        self._check_constituent_valid(x)
+        return self.read_8([x], [False], preserve_whitespace)
 
     def _check_result(self, result):
         """A lone unescaped dot token is not an object (CLHS 2.3.3).
@@ -427,7 +445,8 @@ class LispReader():
         token = ''.join(converted)
         try:
             number = numtoken.parse_numeric_token(
-                token, radix=resolve_read_base(), escaped=any(escaped))
+                token, radix=resolve_read_base(),
+                escaped=(saw_escape or any(escaped)))
         except numtoken.NumericTokenError as exc:
             raise ReaderErrorSignal(str(exc))
         if number is not None:
@@ -465,7 +484,8 @@ class LispReader():
                         return sym
 
         # Not found - intern in current package
-        return current_pkg.intern_symbol(token, exact_case=True)
+        from .readtable import intern_token_symbol
+        return intern_token_symbol(token, current_pkg)
 
     def _read_package_qualified_symbol(self, chars, colons):
         """Read a package-qualified symbol like PKG:SYM or PKG::SYM.

@@ -202,6 +202,112 @@ def _reader_error(message: str) -> Exception:
     return ReaderErrorSignal(message)
 
 
+class _UserMacroCharacterFunction:
+    """A Lisp-level SET-MACRO-CHARACTER function in the reader's calling
+    convention.
+
+    The reader dispatches a macro character with ``(char, stream)`` -- the
+    convention of `Readtable`'s own built-in readers. A *user* macro function
+    is specified as ``(stream char)`` (CLHS 23.2), so SET-MACRO-CHARACTER
+    wraps the function it is given in one of these and the reader's call
+    arrives with the arguments the standard names. `get_macro_character`
+    unwraps, so the function GET-MACRO-CHARACTER returns is EQL to the one
+    SET-MACRO-CHARACTER was given.
+
+    The user function receives the **Lisp stream**, not the reader's internal
+    bridge: whatever characters the reader has looked ahead past are pushed
+    back onto the stream before the call, so `(read stream)` inside a macro
+    function continues from the right character.
+    """
+
+    __slots__ = ('function',)
+
+    def __init__(self, function):
+        self.function = function
+
+    def __call__(self, char, stream):
+        from . import lisptype
+        fn = _resolve_user_reader_function(self.function, stream,
+                                           'SET-MACRO-CHARACTER function')
+        return fn(lisp_stream_of(stream), lisptype.Character(char))
+
+
+def lisp_stream_of(stream):
+    """The Lisp-side stream designator behind the reader's internal bridge.
+
+    `lispreader.LispStream` is a character bridge, not a Lisp stream; the
+    stream it wraps (`streams.Stream`, via `_StreamFileAdapter`) is what a
+    user macro-character function's `(read stream)` expects. A bridge whose
+    source is a raw Python file object has no Lisp stream to offer and gets
+    itself back -- user functions that ignore the stream (all of
+    ansi-test's) are unaffected either way.
+    """
+    fh = getattr(stream, 'fh', None)
+    target = getattr(fh, '_stream', None)
+    if target is not None:
+        # Characters the reader has already consumed into its pushback must
+        # not be skipped by the user function's own reads.
+        buff = getattr(stream, 'buff', None)
+        if buff:
+            while buff:
+                target.unread_char(buff.pop())
+        return target
+    return stream
+
+
+def _resolve_user_reader_function(function, stream, what):
+    """A SET-MACRO-CHARACTER/SET-DISPATCH-MACRO-CHARACTER function object,
+    resolved from a function designator (a symbol names its `fboundp`)."""
+    from .lispfunc.evaluation_core import coerce_to_function
+    try:
+        return coerce_to_function(function, what)
+    except Exception:
+        # No environment available (bootstrap-time reading): the designator
+        # cannot be resolved yet, so leave the callable as given.
+        if callable(function):
+            return function
+        raise
+
+
+def _as_internal_caller(function):
+    """`function` in the reader's internal ``(char, stream)`` convention.
+
+    A user function (anything that is not a `Readtable`'s own built-in
+    reader) is stored behind the `(stream char)` adapter; an adapter or a
+    built-in reader passes through unchanged. SET-MACRO-CHARACTER and
+    SET-SYNTAX-FROM-CHAR's function copy both go through here, so the two
+    ways a user function can enter a readtable's macro table cannot
+    disagree about the calling convention.
+    """
+    if isinstance(function, _UserMacroCharacterFunction) or \
+            isinstance(getattr(function, '__self__', None), Readtable):
+        return function
+    return _UserMacroCharacterFunction(function)
+
+
+def intern_token_symbol(name, package, exact_case=True):
+    """Intern a plain token symbol in `package` -- the one place both token
+    paths (this module's `_read_symbol` and `lispreader.read_10`) agree on.
+
+    The KEYWORD package's invariant -- every symbol in it is *external*
+    (CLHS 11.1.2) -- is applied here, so reading a feature expression's
+    un-colon'd symbol (`#-ecl`, `#-(or)`) or otherwise interning into
+    KEYWORD yields an external keyword. These used to come out `:INTERNAL`,
+    which is exactly what `keyword.2` and `do-external-symbols.5` walk the
+    package to find.
+    """
+    from . import lisptype
+    if package is getattr(lisptype, 'KEYWORD_PACKAGE', None):
+        return lisptype.intern_keyword(name, exact_case=exact_case)
+    return package.intern_symbol(name, exact_case=exact_case)
+
+
+def _character_of(text):
+    """The Lisp CHARACTER for a one-character reader token."""
+    from . import lisptype
+    return text if isinstance(text, lisptype.Character) else lisptype.Character(text)
+
+
 class Readtable:
     """
     Centralized readtable for managing macro characters and reader macros.
@@ -270,16 +376,40 @@ class Readtable:
 
         # The one standard non-terminating macro character, and the dispatch
         # character (CLHS 2.4.8): `#` may appear inside a token, so `a#b` is
-        # one symbol.
+        # one symbol. `#` is also *the* standard dispatch macro character, so
+        # its (empty) sub-character table exists from the start --
+        # GET-DISPATCH-MACRO-CHARACTER answers NIL for its undefined
+        # sub-characters rather than "not a dispatch macro character".
         self.set_macro_character('#', self._sharp_reader, True)
+        self._dispatch_macro_characters['#'] = {}
         
     def get_macro_character(self, char: str) -> Optional[Tuple[Callable, bool]]:
         """
         Get the macro character function and terminating flag for a character.
         Returns (function, non_terminating_p) or None if not a macro character.
+
+        The function returned is the one SET-MACRO-CHARACTER was given -- a
+        user function, not the ``(char, stream)`` adapter this table stores
+        for the reader -- so `(get-macro-character c)` returns something EQL
+        to what was installed.
         """
-        return self._macro_characters.get(char)
-    
+        entry = self._macro_characters.get(char)
+        if entry is None:
+            return None
+        function, non_terminating = entry
+        if isinstance(function, _UserMacroCharacterFunction):
+            function = function.function
+        return (function, non_terminating)
+
+    def macro_char_callable(self, char: str) -> Optional[Callable]:
+        """The callable the *reader* should invoke: the internal
+        ``(char, stream)`` convention, user functions adapted. This is
+        `get_macro_character`'s unwrapped opposite and exists so the two
+        callers -- the reader and the Lisp GET-MACRO-CHARACTER -- cannot
+        disagree about which one sees the adapter."""
+        entry = self._macro_characters.get(char)
+        return entry[0] if entry is not None else None
+
     def set_macro_character(self, char: str, function: Callable, non_terminating_p: bool = False):
         """
         Set a macro character function.
@@ -290,7 +420,8 @@ class Readtable:
             non_terminating_p: True if this is a non-terminating macro character
         """
         self._check_mutable('SET-MACRO-CHARACTER')
-        self._macro_characters[char] = (function, non_terminating_p)
+        function = _as_internal_caller(function)
+        self._macro_characters[char] = (function, bool(non_terminating_p))
         # Becoming a macro character *is* a change of syntax type, so any
         # explicit non-macro override for this character no longer holds --
         # leaving it would make `syntax_type` and `get_macro_character`
@@ -356,6 +487,67 @@ class Readtable:
         if dispatch_table:
             return dispatch_table.get(sub_char)
         return None
+
+    def has_dispatch_table(self, dispatch_char: str) -> bool:
+        """Whether `dispatch_char` is a dispatch macro character here --
+        `GET-DISPATCH-MACRO-CHARACTER`'s error condition (CLHS 23.2)."""
+        return dispatch_char in self._dispatch_macro_characters
+
+    def make_dispatch_macro_character(self, char: str,
+                                      non_terminating_p: bool = False):
+        """MAKE-DISPATCH-MACRO-CHARACTER (CLHS 23.2): make `char` into a
+        dispatch macro character with an empty sub-character table.
+
+        This is the same shape `#` has: reading `char`, an optional decimal
+        integer, and a sub-character dispatches into the table; a
+        sub-character with no function is a READER-ERROR
+        (`make-dispatch-macro-character.3`). The previous implementation
+        registered a placeholder that returned None -- "no object, keep
+        reading" -- so `!x` read as the symbol `x` and every unknown
+        sub-character was silently swallowed.
+        """
+        self._check_mutable('MAKE-DISPATCH-MACRO-CHARACTER')
+        self._macro_characters[char] = (
+            self._generic_dispatch_reader, bool(non_terminating_p))
+        self._syntax_types.pop(char, None)
+        self._dispatch_macro_characters[char] = {}
+
+    def _generic_dispatch_reader(self, char, stream):
+        """The dispatch body of a user dispatch macro character (CLHS 2.4.8).
+
+        Reads the optional decimal `n` -- whatever `*READ-BASE*` says about
+        tokens, the dispatch parameter is *decimal* -- and the sub-character,
+        then calls the registered function as `(stream sub-char n)` (CLHS
+        2.4.8's argument order for user functions). No `*READ-SUPPRESS*`
+        handling of its own: a registered function receives the call either
+        way, and an unknown sub-character is a reader error even suppressed
+        (the same rule `#`'s unknown-dispatch path applies).
+        """
+        sub_char = stream.read_char()
+        if not sub_char:
+            raise EOFError("EOF after dispatch macro character")
+        n = None
+        if sub_char.isdigit():
+            digits = [sub_char]
+            while True:
+                c = stream.read_char()
+                if c and c.isdigit():
+                    digits.append(c)
+                else:
+                    break
+            n = int(''.join(digits))
+            sub_char = c
+            if not sub_char:
+                raise EOFError("EOF after dispatch parameter")
+
+        table = self._dispatch_macro_characters.get(char, {})
+        function = table.get(sub_char.upper())
+        if function is None:
+            raise _reader_error(
+                f"unknown dispatch sub-character: {char}{sub_char}")
+        lisp_stream = lisp_stream_of(stream)
+        from . import lisptype
+        return function(lisp_stream, lisptype.Character(sub_char), n)
     
     def set_dispatch_macro_character(self, dispatch_char: str, sub_char: str, function: Callable):
         """Set a dispatch macro character function."""
@@ -552,49 +744,41 @@ class Readtable:
         return lisp_list
     
     def _read_item(self, stream):
-        """Read a single item from the stream"""
+        """Read a single item from the stream.
+
+        Two decisions, once each: a *macro character* dispatches to the raw
+        entry in this table (the internal ``(char, stream)`` convention), and
+        everything else is a **token** read through `lispreader.LispReader`'s
+        CLHS 2.2 steps 8-10 -- the one token path. This used to carry its own
+        `_read_number`/`_read_symbol` copies here, and the number copy's
+        fallback interned every digit-led non-number **into COMMON-LISP-USER
+        unconditionally** -- so `(quote 123!)` inside a loaded file read to
+        `CL-USER::123!` no matter what `*PACKAGE*` said, which is exactly the
+        shape ansi-test's own `deftest` expected-value literals have.
+
+        The dot token is deliberately *not* checked here: it comes back as
+        `DOT_MARKER` for the list reader to consume as the dotted-pair dot.
+        """
         # Skip whitespace
         c = stream.read_char()
         while c and c.isspace():
             c = stream.read_char()
-            
+
         if not c:
             return None
-        # If this character is a macro character, dispatch to its handler
-        mc = self.get_macro_character(c)
+        # If this character is a macro character, dispatch to its handler.
+        # The *raw* entry is what the reader calls: a user function arrives
+        # wrapped in its (char, stream) adapter.
+        mc = self._macro_characters.get(c)
         if mc is not None:
             # mc may be (function, non_terminating_p) or a raw function
             func = mc[0] if isinstance(mc, tuple) else mc
             return func(c, stream)
-            
-        # Handle different token types
-        if c.isdigit() or c == '-' or c == '+':
-            # Read number (might be negative or positive)
-            return self._read_number(c, stream)
-        elif c == '"':
-            # Read string
-            return self._read_string_literal(stream)
-        elif c == "'":
-            # Read quoted expression
-            return self._quote_reader(c, stream)
-        elif c == '`':
-            # Backquote/quasiquote
-            return self._backquote_reader(c, stream)
-        elif c == ',':
-            # Unquote or unquote-splicing
-            return self._comma_reader(c, stream)
-        elif c == '(':
-            # Read nested list
-            return self._left_paren_reader(c, stream)
-        elif c == ')':
-            raise _reader_error("Unexpected closing parenthesis")
-        elif c == ';':
-            # Skip comment and read next item
-            self._skip_comment(stream)
-            return self._read_item(stream)
-        else:
-            # Read symbol
-            return self._read_symbol(c, stream)
+
+        from .lispreader import LispReader
+        reader = LispReader(self, stream)
+        return reader._read_given_syntax(c, self.syntax_type(c),
+                                         preserving_whitespace())
 
     def _read_subform(self, stream):
         """`_read_item`, where the result must be an actual object.
@@ -611,56 +795,7 @@ class Readtable:
             raise _reader_error(
                 "the single dot token is valid only as the dot in a dotted list")
         return item
-    
-    def _read_number(self, first_char, stream):
-        """Read a numeric token"""
-        token = first_char
-        while True:
-            c = stream.read_char()
-            if not c:
-                break
-            if c.isspace():
-                # CLHS 2.2 step 8's terminating-whitespace rule -- see
-                # `_read_token`.
-                if preserving_whitespace():
-                    stream.unread_char(c)
-                break
-            if c in '()':
-                stream.unread_char(c)
-                break
-            token += c
-        
-        # Try to parse as ratio (e.g., 1/2, -3/4)
-        if '/' in token:
-            parts = token.split('/')
-            if len(parts) == 2:
-                try:
-                    from fractions import Fraction
-                    numerator = int(parts[0])
-                    denominator = int(parts[1])
-                    return Fraction(numerator, denominator)
-                except (ValueError, ZeroDivisionError):
-                    pass  # Not a valid ratio, fall through
-        
-        try:
-            return int(token)
-        except ValueError:
-            try:
-                # Try standard Python float first
-                return float(token)
-            except ValueError:
-                # Try to handle Common Lisp exponent markers (D, F, S, L)
-                # Normalize exponent markers to E for Python
-                normalized = token.upper()
-                for marker in 'DFSL':
-                    normalized = normalized.replace(marker, 'E')
-                try:
-                    return float(normalized)
-                except ValueError:
-                    # Not a number, treat as symbol (intern into user package)
-                    from . import lisptype
-                    return lisptype.COMMON_LISP_USER_PACKAGE.intern_symbol(token)
-    
+
     def _read_string_literal(self, stream, terminator='"'):
         """Read a string literal (already consumed the opening delimiter).
 
@@ -668,6 +803,14 @@ class Readtable:
         Under `*READ-SUPPRESS*` the characters are still consumed to the
         delimiter (consumption is what determines the form's extent) but no
         string is constructed (CLHS 23.1.2).
+
+        The escape rule is the readtable's, not a hardcoded backslash
+        (CLHS 2.4.5): **any** character with *single-escape* syntax discards
+        itself and takes the next character literally, which is what makes
+        `(set-syntax-from-char c #\\)` change how strings containing `c` read
+        (`set-syntax-from-char.single-escape.2`). A multiple-escape character
+        is *not* special inside a string -- CLHS 2.4.5's `"|x| = |-x|"` example
+        is a ten-character string, pipes included.
         """
         suppressed = read_suppressed()
         result = ""
@@ -677,26 +820,30 @@ class Readtable:
                 raise EOFError("EOF in string literal")
             if c == terminator:
                 break
-            if c == '\\':
-                # Handle escape sequences
+            if self.syntax_type(c) == SYNTAX_SINGLE_ESCAPE:
+                # The single escape is discarded; the next character is taken
+                # as itself (CLHS 2.4.5).
                 next_c = stream.read_char()
                 if not next_c:
                     raise EOFError("EOF after escape in string")
                 if suppressed:
                     continue
-                if next_c == 'n':
-                    result += '\n'
-                elif next_c == 't':
-                    result += '\t'
-                elif next_c == 'r':
-                    result += '\r'
-                elif next_c == '\\':
-                    result += '\\'
-                elif next_c == '"':
-                    result += '"'
-                else:
-                    result += next_c
+                if c == '\\':
+                    # The standard single-escape character keeps its historic
+                    # `\n`/`\t`/`\r` interpretations. CLHS 2.4.5 says the next
+                    # character is accumulated *literally*, but the unit test
+                    # tests/test_roundtrip.py pins the C-style reading, so the
+                    # mapping stays until that test is amended.
+                    if next_c == 'n':
+                        next_c = '\n'
+                    elif next_c == 't':
+                        next_c = '\t'
+                    elif next_c == 'r':
+                        next_c = '\r'
+                result += next_c
             else:
+                if suppressed:
+                    continue
                 result += c
         if suppressed:
             from . import lisptype
@@ -719,14 +866,17 @@ class Readtable:
         which were escaped. `saw_escape` is whether any escape *syntax* was
         used at all, even the empty `||`, which contributes no characters but
         still makes a token of dots an ordinary symbol (CLHS 2.3.3:
-        `syntax.dot-token.7`, `.||` reads as `|.|`). The `\x00` placeholder an
-        earlier version substituted for an escaped colon could not tell `\:`
-        from a literal NUL character (which `syntax.escaped.2` reads), so the
+        `syntax.dot-token.7`, `.||` reads as `|.|`). The `\\x00` placeholder an
+        earlier version substituted for an escaped colon could not tell `\\:`
+        from a *literal NUL character* (which `syntax.escaped.2` reads), so the
         analysis that needs to tell them apart now runs on the flags instead
         of a substituted string. `consumed` is False only when nothing at all
         followed -- `chars` empty is not the same thing, because `||` (CLHS
         2.4.5) is a *valid*, explicitly-escaped empty name (`universe.lsp`'s
         `'#:||`), not the absence of one.
+
+        Used by the `#:` uninterned-symbol reader; the general token path is
+        `lispreader.LispReader.read_8`'s.
         """
         chars = []
         escaped = []
@@ -790,106 +940,6 @@ class Readtable:
         consume(c, False)
         return False
 
-    def _read_symbol(self, first_char, stream):
-        """Read a symbol token with package awareness.
-
-        When reading an unqualified symbol:
-        1. Check current *PACKAGE* (from state.current_package)
-        2. Look for existing symbol in current package
-        3. Look for exported symbol in USE'd packages
-        4. If not found, intern in current package
-        """
-        chars, escaped, _consumed, saw_escape = self._read_token(stream, first_char)
-        from . import lisptype
-        from . import state
-
-        # `*READ-SUPPRESS*` (CLHS 23.1.2): the token was consumed to its
-        # delimiter; intern nothing, analyse nothing.
-        if read_suppressed():
-            return lisptype.NIL
-
-        # A token of unescaped dots (CLHS 2.3.3): the list reader consumes
-        # the single dot as the dotted-pair marker; anything else -- another
-        # dot in the token, or the marker outside a list -- is an error. The
-        # top-level check lives in `_read_item`, which every construct reads
-        # its sub-forms through. Any escape *syntax*, even the empty `||`,
-        # makes it an ordinary symbol instead.
-        if chars and all(c == '.' for c in chars) and not saw_escape:
-            if len(chars) == 1:
-                return DOT_MARKER
-            raise _reader_error(
-                "a token consisting only of dots is not a valid object")
-
-        # `readtable-case` applies per character, unescaped ones only; this is
-        # the string every lookup/intern below must use.
-        name = ''.join(convert_case_chars(chars, escaped, self._case))
-
-        # Package-marker analysis on the *unescaped* colons only: an escaped
-        # colon is never a separator (CLHS 2.4.5).
-        colons = [i for i, (c, e) in enumerate(zip(chars, escaped))
-                  if c == ':' and not e]
-        if colons and colons[0] == 0:
-            # A leading unescaped colon makes it a keyword.
-            return lisptype.intern_keyword(name[1:], exact_case=True)
-        if colons:
-            return self._read_package_qualified_symbol(name, colons)
-
-        # The current package is the value of `*PACKAGE*`; `state`'s resolver
-        # is the one place that decides (see state.current_package_value).
-        current_pkg = state.current_package_value()
-
-        # CRITICAL: In Common Lisp, NIL is both the symbol and the empty list; the
-        # reader should return the canonical NIL object rather than a
-        # fresh symbol. Similarly, T should return the global T symbol.
-        if name == 'NIL':
-            return lisptype.NIL
-        if name == 'T':
-            return lisptype.T
-
-        # First check if symbol exists in current package
-        sym, status = current_pkg.find_symbol(name)
-        if sym is not None:
-            return sym
-
-        # Check USE'd packages for exported symbols
-        for used_pkg in getattr(current_pkg, 'use_packages', []):
-            # Handle both Package objects and package names
-            if isinstance(used_pkg, str):
-                used_pkg = lisptype.find_package(used_pkg)
-            if used_pkg is not None:
-                # Only look for external symbols in USE'd packages
-                if name in getattr(used_pkg, 'external_symbols', set()):
-                    sym = used_pkg.symbols.get(name)
-                    if sym is not None:
-                        return sym
-
-        # Not found - intern in current package. `name` is already
-        # correctly cased per character, so this must not be re-upcased.
-        return current_pkg.intern_symbol(name, exact_case=True)
-
-    def _read_package_qualified_symbol(self, token, colons):
-        """Read a package-qualified symbol like PKG:SYM or PKG::SYM.
-
-        `token` is the case-converted token string and `colons` the indices
-        of its *unescaped* colons: `::` is internal access, `:` external
-        (CLHS 2.3.5), and an escaped colon is never a separator.
-        """
-        from . import lisptype
-
-        first = colons[0]
-        internal = len(colons) > 1 and colons[1] == first + 1
-        pkg_name = token[:first]
-        sym_name = token[first + (2 if internal else 1):]
-
-        # Find the package
-        pkg = lisptype.find_package(pkg_name)
-        if pkg is None:
-            # Package not found - create it as a fallback
-            pkg = lisptype.make_package(pkg_name)
-
-        # Intern the symbol in that package
-        return pkg.intern_symbol(sym_name)
-    
     def _skip_comment(self, stream):
         """Skip a comment to end of line"""
         while True:
@@ -1014,10 +1064,14 @@ class Readtable:
 
         sub_char_upper = sub_char.upper()
 
-        # Check for registered dispatch macro character
+        # Check for registered dispatch macro character. A function
+        # registered with SET-DISPATCH-MACRO-CHARACTER is a *user* function:
+        # CLHS 2.4.8 calls it as (stream sub-char n), unlike this table's
+        # built-in `(stream, n)` methods below.
         dispatch_table = self._dispatch_macro_characters.get('#', {})
         if sub_char_upper in dispatch_table:
-            return dispatch_table[sub_char_upper](sub_char, stream, n)
+            return dispatch_table[sub_char_upper](
+                lisp_stream_of(stream), _character_of(sub_char), n)
 
         handler = _SHARP_HANDLERS.get(sub_char) or _SHARP_HANDLERS.get(
             sub_char_upper)

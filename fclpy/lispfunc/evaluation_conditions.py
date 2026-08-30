@@ -1946,15 +1946,15 @@ def eval_handler_case(form, env):
         # HANDLER-CASE clause's protected form (handler-case.20-.26/.29) had
         # its transfer intercepted here and misreported as an uncaught THROW.
         raise
-    except ThrowException as e:
-        # An uncaught THROW is a CONTROL-ERROR (CLHS 5.2). Converting it here
-        # rather than at the THROW itself is a known approximation: it needs a
-        # catch-tag stack to know at throw time that no tag matches (M7). A
-        # clause matching CONTROL-ERROR therefore still gets a chance.
-        control_error = lisptype.ControlError(message=f"Uncaught THROW {e.tag}")
-        for clause in clause_list:
-            if _condition_matches(car(clause), control_error):
-                return _run_handler_case_clause(clause, control_error, env)
+    except ThrowException:
+        # A ThrowException reaching here always has a live CATCH further
+        # out: EVAL-THROW consults `state.catch_tags` *before* raising and
+        # signals the CONTROL-ERROR itself for a tag with no catcher -- the
+        # approximation this clause used to make ("needs a catch-tag stack
+        # to know at throw time", M7) is obsolete, and acting on it broke
+        # the pass-through of a THROW whose catcher encloses this
+        # HANDLER-CASE (the unit suite's non-local-exit contract, and CLHS
+        # 5.2's throw semantics). Let the transfer continue outward.
         raise
     except (ConditionException, lisptype.LispError) as exc:
         # Backstop for conditions raised without being signaled -- see

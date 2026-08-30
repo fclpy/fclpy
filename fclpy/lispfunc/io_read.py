@@ -505,15 +505,25 @@ def copy_readtable(from_readtable=_rt._OMITTED, to_readtable=_rt._OMITTED):
 
 
 @_registry.cl_function('READTABLE-CASE')
-def readtable_case(readtable=_rt._OMITTED):
+def readtable_case(readtable):
     """READTABLE-CASE: the case sensitivity mode, as a keyword (CLHS 23.2).
 
     This answered the Python string `'UPCASE'`, which is a Python object
     appearing as a Lisp value (standing rule 2) and is not `EQ` to the
     `:UPCASE` every caller compares it against.
+
+    The argument is a **readtable**, not a readtable designator: CLHS 23.2
+    gives READTABLE-CASE one required argument typed as a readtable, with
+    no NIL-denotes-standard rule and no default. `check-type-error` drives
+    `*mini-universe*` through it (`readtable-case.error.1`/`.3`), so zero
+    arguments is a PROGRAM-ERROR and NIL, a number, or any other
+    non-readtable is a TYPE-ERROR.
     """
-    table = _rt.coerce_to_readtable(readtable, 'READTABLE-CASE')
-    return _rt.case_keyword(table.readtable_case())
+    if not isinstance(readtable, _rt.Readtable):
+        raise lisptype.LispTypeError(
+            f"READTABLE-CASE: {type(readtable).__name__} is not a readtable",
+            expected_type="READTABLE", actual_value=readtable)
+    return _rt.case_keyword(readtable.readtable_case())
 
 
 @_registry.cl_function('SET-READTABLE-CASE')
@@ -523,9 +533,14 @@ def set_readtable_case(readtable, mode):
     SETF reaches a place named by a function through a `SET-<name>` function
     when no expander is registered, so this is the writer half of
     READTABLE-CASE rather than a sixth entry in the place ladder (M5).
+    Like the reader half, `readtable` is typed READTABLE -- strictly, with
+    no designator rule (`readtable-case.error.5`).
     """
-    table = _rt.coerce_to_readtable(readtable, 'SETF READTABLE-CASE')
-    table.set_readtable_case(_rt.case_from_designator(mode, 'SETF READTABLE-CASE'))
+    if not isinstance(readtable, _rt.Readtable):
+        raise lisptype.LispTypeError(
+            f"SETF READTABLE-CASE: {type(readtable).__name__} is not a readtable",
+            expected_type="READTABLE", actual_value=readtable)
+    readtable.set_readtable_case(_rt.case_from_designator(mode, 'SETF READTABLE-CASE'))
     return mode
 
 
@@ -558,10 +573,22 @@ def set_macro_character(char, function, non_terminating_p=None, readtable=_rt._O
 
 @_registry.cl_function('GET-DISPATCH-MACRO-CHARACTER')
 def get_dispatch_macro_character(disp_char, sub_char, readtable=_rt._OMITTED):
-    """Get dispatch macro character function."""
+    """Get dispatch macro character function.
+
+    CLHS 23.2: "if disp-char is not a dispatch macro character in readtable,
+    an error is signaled" -- so asking about a character that was never made
+    a dispatch macro character (`get-dispatch-macro-character.1` drives every
+    standard character through it) signals rather than answering NIL. Only
+    an *undefined sub-character of a real dispatch character* answers NIL.
+    """
     table = _rt.coerce_to_readtable(readtable, 'GET-DISPATCH-MACRO-CHARACTER')
+    disp = _char_of(disp_char, 'GET-DISPATCH-MACRO-CHARACTER')
+    if not table.has_dispatch_table(disp):
+        raise lisptype.LispError(
+            f"GET-DISPATCH-MACRO-CHARACTER: {disp!r} is not a dispatch "
+            f"macro character")
     function = table.get_dispatch_macro_character(
-        _char_of(disp_char, 'GET-DISPATCH-MACRO-CHARACTER'),
+        disp,
         _char_of(sub_char, 'GET-DISPATCH-MACRO-CHARACTER').upper())
     # "No function" is NIL, not Python None (standing rule 2).
     return lisptype.NIL if function is None else function
@@ -579,13 +606,20 @@ def set_dispatch_macro_character(disp_char, sub_char, function, readtable=_rt._O
 
 @_registry.cl_function('MAKE-DISPATCH-MACRO-CHARACTER')
 def make_dispatch_macro_character(char, non_terminating_p=None, readtable=_rt._OMITTED):
-    """Make character into dispatch macro character."""
+    """MAKE-DISPATCH-MACRO-CHARACTER (CLHS 23.2): make `char` a dispatch
+    macro character with an empty sub-character table.
+
+    The character gets the same shape `#` has -- an optional decimal
+    parameter and a sub-character dispatching into the table -- so an
+    unknown sub-character is a READER-ERROR
+    (`make-dispatch-macro-character.3`), and a non-terminating dispatch
+    character is still accumulated into tokens
+    (`make-dispatch-macro-character.2`/`.4`).
+    """
     table = _rt.coerce_to_readtable(readtable, 'MAKE-DISPATCH-MACRO-CHARACTER')
-    # Our simplified Readtable doesn't expose a dedicated creator; emulate by
-    # registering a placeholder sharp reader if needed and marking non-terminating.
-    table.set_macro_character(
+    table.make_dispatch_macro_character(
         _char_of(char, 'MAKE-DISPATCH-MACRO-CHARACTER'),
-        lambda c, s: None, _supplied_true(non_terminating_p))
+        _supplied_true(non_terminating_p))
     return lisptype.T
 
 
@@ -626,6 +660,11 @@ def set_syntax_from_char(to_char, from_char, to_readtable=_rt._OMITTED,
     syntax = source.syntax_type(from_c)
     macro = source.get_macro_character(from_c)
     function = macro[0] if macro is not None else None
+    if function is not None:
+        # A user macro function must keep its (stream char) calling
+        # convention when copied to the new character -- the same adapter
+        # SET-MACRO-CHARACTER installs.
+        function = _rt._as_internal_caller(function)
     target.set_syntax_type(to_c, syntax, function)
     # A dispatch macro character carries its sub-character table with it;
     # otherwise `(set-syntax-from-char c #\#)` would make `c` dispatch and

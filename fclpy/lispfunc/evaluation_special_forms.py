@@ -2462,16 +2462,39 @@ def eval_macroexpand_1(form, env):
 def eval_macro_function(form, env):
     """Evaluate MACRO-FUNCTION special form.
     
-    (MACRO-FUNCTION symbol) - return the macro function for a symbol, or NIL if not a macro.
+    (MACRO-FUNCTION symbol [environment]) - return the macro function for a symbol, or NIL if not a macro.
+
+    The lambda list is `(symbol &optional environment)` (CLHS 25.1.3's
+    macro-function: "macro-name [environment]"): a second argument is the
+    environment designator (NIL meaning the global environment), and a
+    third is a PROGRAM-ERROR (macro-function.error.2). The two-argument
+    call is what macro-function.13 exercises with each argument form
+    evaluated -- and both argument forms *are* evaluated.
     """
     from .evaluation_core import eval, ConditionException
+    from .binding import root_environment
 
     args = cdr(form)
-    if not _consp_internal(args):
-        cond = lisptype.ProgramError(message="MACRO-FUNCTION requires 1 argument")
+    arg_count = 0
+    cur = args
+    while _consp_internal(cur):
+        arg_count += 1
+        cur = cdr(cur)
+
+    if arg_count == 0 or arg_count > 2:
+        cond = lisptype.ProgramError(
+            message="MACRO-FUNCTION requires 1 or 2 arguments")
         raise ConditionException(cond, recoverable=False)
     
     symbol_form = car(args)
+    lookup_env = env
+    if arg_count == 2:
+        env_value = eval(car(cdr(args)), env)
+        if env_value is None or env_value is lisptype.NIL:
+            # NIL designates the global environment, not "unspecified"
+            lookup_env = root_environment(env)
+        elif isinstance(env_value, lisptype.Environment):
+            lookup_env = env_value
 
     # MACRO-FUNCTION is an ordinary function (CLHS 8.1), not a special
     # operator -- its argument is evaluated like any function call's. A bare
@@ -2486,7 +2509,7 @@ def eval_macro_function(form, env):
         return lisptype.NIL
 
     # Try to find the function in the environment first
-    func = env.find_func(symbol)
+    func = lookup_env.find_func(symbol)
 
     # If environment binding is a macro callable, return it immediately
     if callable(func) and getattr(func, '__is_macro__', False):
@@ -3660,48 +3683,6 @@ def copy_structure(structure):
                                  slot_values=dict(structure.slot_values))
 
 
-def _pop_expander(place, *_rest):
-    """POP macro expander: return an expansion form for (POP place).
-
-    This is the callable returned by (MACRO-FUNCTION 'POP).  It is flagged
-    with __is_macro__ so the macro-expander recognises it.
-
-    For a simple symbol place we expand into:
-        (LET ((#:tmp (CAR place)))
-          (SETQ place (CDR place))
-          #:tmp)
-    """
-    from . import utilities_symbols as _utils
-
-    if isinstance(place, lisptype.LispSymbol):
-        tmp = _utils.gensym()
-        car_call  = lisptype.lispCons(lisptype.LispSymbol('CAR'),
-                        lisptype.lispCons(place, lisptype.NIL))
-        binding   = lisptype.lispCons(tmp,
-                        lisptype.lispCons(car_call, lisptype.NIL))
-        bindings  = lisptype.lispCons(binding, lisptype.NIL)
-        cdr_call  = lisptype.lispCons(lisptype.LispSymbol('CDR'),
-                        lisptype.lispCons(place, lisptype.NIL))
-        setq_call = lisptype.lispCons(lisptype.LispSymbol('SETQ'),
-                        lisptype.lispCons(place,
-                            lisptype.lispCons(cdr_call, lisptype.NIL)))
-        body      = lisptype.lispCons(setq_call,
-                        lisptype.lispCons(tmp, lisptype.NIL))
-        return lisptype.lispCons(lisptype.LispSymbol('LET'),
-                   lisptype.lispCons(bindings, body))
-
-    raise lisptype.LispNotImplementedError(f"POP: unsupported place form: {place}")
-
-# Mark as a proper macro callable and register it so (MACRO-FUNCTION 'POP) returns it.
-_pop_expander.__is_macro__ = True
-_registry.function_registry['POP'] = _registry.RegistryEntry(
-    name='POP',
-    py_name='_pop_expander',
-    kind='macro',
-    func=_pop_expander,
-)
-
-
 def eval_pop(form, env):
     """Evaluate POP special form.
 
@@ -3729,32 +3710,6 @@ def eval_pop(form, env):
 
     setter(old_value.cdr)
     return old_value.car
-
-
-def _remf_expander(*args):
-    """REMF macro expander: mark REMF as a macro for MACRO-FUNCTION.
-
-    This is the callable returned by (MACRO-FUNCTION 'REMF). It is flagged
-    with __is_macro__ so the macro-expander recognises it.
-
-    REMF works with generalized places and returns a boolean, so a simple
-    expansion is not practical. The actual expansion is handled by the
-    evaluator's special form dispatch to eval_remf.
-    """
-    # This function is not meant to be called as a macro expander during
-    # evaluation -- the evaluator routes REMF directly to eval_remf.
-    # This function exists only so that (MACRO-FUNCTION 'REMF) returns
-    # a callable, marking REMF as a macro.
-    raise lisptype.LispNotImplementedError("REMF macro expander should not be called directly")
-
-# Mark as a proper macro callable and register it so (MACRO-FUNCTION 'REMF) returns it.
-_remf_expander.__is_macro__ = True
-_registry.function_registry['REMF'] = _registry.RegistryEntry(
-    name='REMF',
-    py_name='_remf_expander',
-    kind='macro',
-    func=_remf_expander,
-)
 
 
 def eval_remf(form, env):
@@ -3807,35 +3762,6 @@ def eval_remf(form, env):
     return lisptype.NIL
 
 
-def _push_expander(item, place, *_rest):
-    """PUSH macro expander: return an expansion form for (PUSH item place).
-
-    This is the callable returned by (MACRO-FUNCTION 'PUSH). It is flagged
-    with __is_macro__ so the macro-expander recognises it.
-
-    For a simple symbol place we expand into:
-        (SETQ place (CONS item place))
-    """
-    if isinstance(place, lisptype.LispSymbol):
-        cons_call = lisptype.lispCons(lisptype.LispSymbol('CONS'),
-                        lisptype.lispCons(item,
-                            lisptype.lispCons(place, lisptype.NIL)))
-        return lisptype.lispCons(lisptype.LispSymbol('SETQ'),
-                   lisptype.lispCons(place,
-                       lisptype.lispCons(cons_call, lisptype.NIL)))
-
-    raise lisptype.LispNotImplementedError(f"PUSH: unsupported place form: {place}")
-
-# Mark as a proper macro callable and register it so (MACRO-FUNCTION 'PUSH) returns it.
-_push_expander.__is_macro__ = True
-_registry.function_registry['PUSH'] = _registry.RegistryEntry(
-    name='PUSH',
-    py_name='_push_expander',
-    kind='macro',
-    func=_push_expander,
-)
-
-
 def eval_push(form, env):
     """Evaluate PUSH special form.
 
@@ -3859,32 +3785,6 @@ def eval_push(form, env):
     new_value = cons(item, getter())
     setter(new_value)
     return new_value
-
-
-def _pushnew_expander(*args):
-    """PUSHNEW macro expander: mark PUSHNEW as a macro for MACRO-FUNCTION.
-
-    This is the callable returned by (MACRO-FUNCTION 'PUSHNEW). It is flagged
-    with __is_macro__ so the macro-expander recognises it.
-
-    Unlike PUSH, PUSHNEW supports keyword arguments and generalized places,
-    so a simple expansion is not practical here. The actual expansion is
-    handled by the evaluator's special form dispatch to eval_pushnew.
-    """
-    # This function is not meant to be called as a macro expander during
-    # evaluation -- the evaluator routes PUSHNEW directly to eval_pushnew.
-    # This function exists only so that (MACRO-FUNCTION 'PUSHNEW) returns
-    # a callable, marking PUSHNEW as a macro.
-    raise lisptype.LispNotImplementedError("PUSHNEW macro expander should not be called directly")
-
-# Mark as a proper macro callable and register it so (MACRO-FUNCTION 'PUSHNEW) returns it.
-_pushnew_expander.__is_macro__ = True
-_registry.function_registry['PUSHNEW'] = _registry.RegistryEntry(
-    name='PUSHNEW',
-    py_name='_pushnew_expander',
-    kind='macro',
-    func=_pushnew_expander,
-)
 
 
 def eval_pushnew(form, env):
@@ -6190,3 +6090,10 @@ def eval_make_method(form, env):
     it as a form means it was used somewhere it has no meaning."""
     raise lisptype.LispProgramError(
         "MAKE-METHOD is only valid as an argument to CALL-METHOD")
+
+
+# The standard macros converted from hard-coded eval branches live in one
+# module; importing it here (after every helper it needs is defined) is what
+# gets their cl_macro registrations into the registry before
+# lispenv.setup_standard_environment binds them.
+from . import standard_macros as _standard_macros  # noqa: F401

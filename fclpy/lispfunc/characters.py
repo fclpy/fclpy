@@ -95,16 +95,34 @@ def alpha_char_p(character):
 
 @_registry.cl_function('ALPHANUMERICP')
 def alphanumericp(character):
-    """Test if character is alphanumeric."""
+    """Test if character is alphanumeric.
+
+    "Alphanumeric" is *alphabetic or a digit* here -- the same two
+    predicates ALPHA-CHAR-P and DIGIT-CHAR-P answer -- and not Python's
+    `str.isalnum()`, which is true for the superscript digits (`²`) that
+    DIGIT-CHAR-P rejects, so the two answers disagreed
+    (`alphanumericp.5.body` walks every code point and requires exactly
+    `alphanumericp` ⇔ `(or (alpha-char-p x) (digit-char-p x))`).
+    """
     text = _require_char_text(character, 'ALPHANUMERICP')
-    return lisptype.lisp_bool(text.isalnum())
+    return lisptype.lisp_bool(text.isalpha() or digit_char_p(text) is not None)
 
 
 @_registry.cl_function('BOTH-CASE-P')
 def both_case_p(character):
-    """Test if character has both cases."""
+    """Test if character has case.
+
+    This must agree with UPPER-CASE-P and LOWER-CASE-P exactly: a character
+    that either of those answers T for has case, and a character BOTH-CASE-P
+    answers T for must be reported upper or lower case by them
+    (`both-case-p.2.body` requires exactly this over every code point). The
+    previous `upper() != lower()` test answered T for the titlecase
+    characters (for which neither UPPER-CASE-P nor LOWER-CASE-P is true) and
+    disagreed the other way wherever Python's case predicates diverge from
+    each other.
+    """
     text = _require_char_text(character, 'BOTH-CASE-P')
-    return lisptype.lisp_bool(text.upper() != text.lower())
+    return lisptype.lisp_bool(text.isupper() or text.islower())
 
 
 @_registry.cl_function('CHAR-CODE')
@@ -131,22 +149,42 @@ def _single_char_case_map(text, mapped):
 
 @_registry.cl_function('CHAR-DOWNCASE')
 def char_downcase(character):
-    """Convert character to lowercase."""
+    """Convert character to lowercase.
+
+    CLHS 13.1.1: a character that is not upper case is returned *unchanged*
+    -- CHAR-DOWNCASE maps only the upper-case characters. Running
+    `str.lower()` on every character changed titlecase and uncased letters
+    (`ǅ` became `ǆ`, `İ` became two characters), which
+    `char-downcase.2.body`'s `(or (upper-case-p x) (eqlt u x))` rejects.
+    """
     text = _char_text(character)
     if text is None:
         raise lisptype.LispTypeError("CHAR-DOWNCASE: argument must be a character",
                                     expected_type="CHARACTER", actual_value=character)
-    return lisptype.Character(_single_char_case_map(text, text.lower()))
+    if text.isupper():
+        return lisptype.Character(_single_char_case_map(text, text.lower()))
+    return lisptype.Character(text)
 
 
 @_registry.cl_function('CHAR-UPCASE')
 def char_upcase(character):
-    """Convert character to uppercase."""
+    """Convert character to uppercase.
+
+    CLHS 13.1.1: a character that is not lower case is returned *unchanged*
+    -- CHAR-UPCASE maps only the lower-case characters. Running
+    `str.upper()` on every character changed titlecase and uncased letters
+    (`ǅ` became `Ǆ` although `(lower-case-p x)` is NIL, which
+    `char-upcase.2.body` rejects), and the two-character expansions
+    (`'ß'.upper()`) leaked into CHAR-EQUAL's comparisons as `ord()` on a
+    two-character string.
+    """
     text = _char_text(character)
     if text is None:
         raise lisptype.LispTypeError("CHAR-UPCASE: argument must be a character",
                                     expected_type="CHARACTER", actual_value=character)
-    return lisptype.Character(_single_char_case_map(text, text.upper()))
+    if text.islower():
+        return lisptype.Character(_single_char_case_map(text, text.upper()))
+    return lisptype.Character(text)
 
 
 def _fold_case(text):
@@ -345,15 +383,24 @@ def digit_char(weight, radix=10):
 
 @_registry.cl_function('DIGIT-CHAR-P')
 def digit_char_p(character, radix=10):
-    """Test if character is digit and return weight."""
+    """Test if character is digit and return weight.
+
+    The case fold must be guarded to a *single* character before the range
+    test: `'ß'.upper()` is the two characters `'SS'`, and the plain
+    string comparison `'A' <= 'SS' <= 'Z'` is TRUE (it compares the first
+    characters), which then called `ord()` on a two-character string.
+    """
     text = _char_text(character)
     if text is None:
         return None
 
     if '0' <= text <= '9':
         weight = ord(text) - ord('0')
-    elif 'A' <= text.upper() <= 'Z':
-        weight = ord(text.upper()) - ord('A') + 10
+    elif text.isalpha():
+        upper = text.upper()
+        if len(upper) != 1 or not ('A' <= upper <= 'Z'):
+            return None
+        weight = ord(upper) - ord('A') + 10
     else:
         return None
 
@@ -383,13 +430,28 @@ def upper_case_p(character):
 
 @_registry.cl_function('NAME-CHAR')
 def name_char(name):
-    """Get character by name."""
-    if isinstance(name, (str, lisptype.LispString, lisptype.LispSymbol)):
-        try:
-            return character(name)
-        except lisptype.LispTypeError:
-            return None
-    return None
+    """Get character by name.
+
+    `name` is a **string designator** (CLHS 13.1.7): a string, a symbol, or
+    a character -- and the string representations of CLAUDE.md's array model
+    count, so a *displaced or specialized character array* naming "Newline"
+    resolves exactly like the `LispString` spelling of the same text does
+    (`name-char.specialized.4` builds every etype × name combination and
+    requires both readings to be EQL). The previous implementation accepted
+    only `str`/`LispString`/symbol and answered NIL for the array shapes.
+    """
+    if isinstance(name, lisptype.Character):
+        return name
+    try:
+        text = _string_designator(name)
+    except lisptype.LispTypeError:
+        return None
+    if not isinstance(text, str):
+        return None
+    try:
+        return character(text)
+    except lisptype.LispTypeError:
+        return None
 
 
 @_registry.cl_function('INT-CHAR')
@@ -438,11 +500,18 @@ def schar(string, index):
 @_registry.cl_function('STRING')
 def string_fn(designator):
     """Convert a string designator to a string (CLHS 16.2: a string,
-    a character, or a symbol -- denoting its name)."""
-    if isinstance(designator, lisptype.LispString):
-        return designator  # Already a mutable string
-    elif isinstance(designator, str):
-        return lisptype.LispString(designator)
+    a character, or a symbol -- denoting its name).
+
+    A *string* is returned **itself** (CLHS 16.2: "if the designator is a
+    string, it is returned"), across every representation this
+    implementation gives strings -- `str`, `LispString`, and the
+    specialized character `LispArray` (plus the `(array nil 0)` shape
+    `string.10`/`string.16` exercise) -- because `check-predicate` runs
+    `(eq s (string s))` over `*universe*` and a rebuilt string would break
+    the EQ. Only a character and a symbol are coerced to a fresh string.
+    """
+    if is_string(designator):
+        return designator
     elif isinstance(designator, lisptype.Character):
         return lisptype.LispString(designator.char)
     elif isinstance(designator, lisptype.LispSymbol):
@@ -502,20 +571,28 @@ def simple_string_p(object):
 
 
 @_registry.cl_function('MAKE-STRING')
-def make_string(size, initial_element=None, element_type=None):
+def make_string(size, *, initial_element=None, element_type=None):
     """Create a string of the given size.
-    
+
     Args:
         size: Length of the string to create
         initial_element: Character to fill the string with (default is space)
         element_type: Element type (ignored, always CHARACTER)
-    
+
     Returns:
         A string of length size filled with initial_element
-    
+
     Examples:
         (make-string 5) => "     "
         (make-string 3 :initial-element #\\x) => "xxx"
+
+    `initial-element` and `element-type` are **keyword-only**: MAKE-STRING's
+    ANSI lambda list is `(make-string size &key initial-element
+    element-type)`, and a plain defaulted positional parameter is
+    indistinguishable from an `&optional` one to the argument checker --
+    which is why `(make-string 10 :bad t)` and `(make-string 10 1 1)`
+    bound their junk positionally instead of signalling the PROGRAM-ERROR
+    CLHS 3.4.1.4 requires (`make-string.error.2`/`.5`).
     """
     if not isinstance(size, int) or size < 0:
         raise lisptype.LispTypeError("MAKE-STRING: size must be a non-negative integer",
@@ -559,17 +636,27 @@ def _capitalize_range(read, write, start, end):
         if ch.isalnum():
             if at_word_start:
                 if ch.isalpha():
-                    write(i, ch.upper())
+                    write(i, char_upcase(lisptype.Character(ch)).char)
                 at_word_start = False
             elif ch.isalpha():
-                write(i, ch.lower())
+                write(i, char_downcase(lisptype.Character(ch)).char)
         else:
             at_word_start = True
 
 
-def _apply_case(read, write, start, end, transform):
+def _upcase_char_reader_writer(read, write, start, end):
+    """CHAR-UPCASE-driven uppercasing over [start, end) -- the CLHS 16.4
+    `:case :upcase` rule, which maps each character exactly the way
+    CHAR-UPCASE does (a character with no single-character upper-case
+    partner is left alone; `'ß'` stays one character)."""
     for i in range(start, end):
-        write(i, transform(read(i)))
+        write(i, char_upcase(lisptype.Character(read(i))).char)
+
+
+def _downcase_char_reader_writer(read, write, start, end):
+    """The CHAR-DOWNCASE-driven counterpart of `_upcase_char_reader_writer`."""
+    for i in range(start, end):
+        write(i, char_downcase(lisptype.Character(read(i))).char)
 
 
 def _mutable_string_bounds(string, start, end, what):
@@ -614,7 +701,7 @@ def string_downcase(string, *, start=0, end=None):
     text = _string_designator(string)
     start, end = _seq.bounding_indices(len(text), start, end, 'STRING-DOWNCASE')
     result = list(text)
-    _apply_case(lambda i: result[i], lambda i, c: result.__setitem__(i, c), start, end, str.lower)
+    _downcase_char_reader_writer(lambda i: result[i], lambda i, c: result.__setitem__(i, c), start, end)
     return lisptype.LispString(''.join(result))
 
 
@@ -625,7 +712,7 @@ def string_upcase(string, *, start=0, end=None):
     text = _string_designator(string)
     start, end = _seq.bounding_indices(len(text), start, end, 'STRING-UPCASE')
     result = list(text)
-    _apply_case(lambda i: result[i], lambda i, c: result.__setitem__(i, c), start, end, str.upper)
+    _upcase_char_reader_writer(lambda i: result[i], lambda i, c: result.__setitem__(i, c), start, end)
     return lisptype.LispString(''.join(result))
 
 
@@ -641,7 +728,7 @@ def nstring_capitalize(string, *, start=0, end=None):
 def nstring_downcase(string, *, start=0, end=None):
     """CLHS 16.4: destructively lowercase `string` in place, returning it."""
     start, end = _mutable_string_bounds(string, start, end, 'NSTRING-DOWNCASE')
-    _apply_case(_array_char_reader(string), _array_char_writer(string), start, end, str.lower)
+    _downcase_char_reader_writer(_array_char_reader(string), _array_char_writer(string), start, end)
     return string
 
 
@@ -649,7 +736,7 @@ def nstring_downcase(string, *, start=0, end=None):
 def nstring_upcase(string, *, start=0, end=None):
     """CLHS 16.4: destructively uppercase `string` in place, returning it."""
     start, end = _mutable_string_bounds(string, start, end, 'NSTRING-UPCASE')
-    _apply_case(_array_char_reader(string), _array_char_writer(string), start, end, str.upper)
+    _upcase_char_reader_writer(_array_char_reader(string), _array_char_writer(string), start, end)
     return string
 
 
@@ -687,7 +774,13 @@ def _string_relation(s1, s2, start1, end1, start2, end2, fold):
     while i1 < end1 and i2 < end2:
         c1, c2 = s1[i1], s2[i2]
         if fold:
-            c1, c2 = c1.upper(), c2.upper()
+            # The fold is per *character* and length-preserving -- the same
+            # guarded single-character upper-case CHAR-EQUAL/CHAR-LESSP
+            # apply. A raw `str.upper()` expands (`'ß'.upper()` is `'SS'`),
+            # and a two-character "character" then orders unlike the char
+            # predicates do, which `random-string-comparison-tests` catches
+            # against the suite's own per-character reference model.
+            c1, c2 = _fold_case(c1), _fold_case(c2)
         if c1 != c2:
             return ('lt', i1) if c1 < c2 else ('gt', i1)
         i1 += 1
@@ -875,11 +968,17 @@ def string_trim(character_bag, string):
 def _parse_integer_digit_weight(ch, radix):
     """The digit weight of `ch` in `radix`, or None if it names no digit
     in that radix -- the same rule `DIGIT-CHAR-P` applies, restated here
-    over a plain Python character instead of a Lisp one."""
+    over a plain Python character instead of a Lisp one. The upper-case
+    fold is guarded to one character the way DIGIT-CHAR-P's is, for the
+    same `'ß'.upper()` reason.
+    """
     if '0' <= ch <= '9':
         weight = ord(ch) - ord('0')
     elif ch.isalpha():
-        weight = ord(ch.upper()) - ord('A') + 10
+        upper = ch.upper()
+        if len(upper) != 1 or not ('A' <= upper <= 'Z'):
+            return None
+        weight = ord(upper) - ord('A') + 10
     else:
         return None
     return weight if weight < radix else None

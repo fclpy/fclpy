@@ -375,11 +375,17 @@ def eval_eval_when(form, env):
     (EVAL-WHEN (situation*) form*)
     
     Situations can be:
-    - :COMPILE-TOPLEVEL (or COMPILE) - evaluate at compile time
-    - :LOAD-TOPLEVEL (or LOAD) - evaluate at load time  
-    - :EXECUTE (or EVAL) - evaluate at execution time
+    - :COMPILE-TOPLEVEL (or COMPILE) - compile-file-time processing only
+    - :LOAD-TOPLEVEL (or LOAD) - the load of a *compiled* file only
+    - :EXECUTE (or EVAL) - whenever the form is evaluated
     
-    For an interpreter, we evaluate if :EXECUTE or :LOAD-TOPLEVEL is present.
+    CLHS 3.2.3.1's Figure 3-7 decides what each situation means, and for
+    the interpreter the operative column is E: evaluating the form runs the
+    body iff the situations include :EXECUTE (or EVAL). :LOAD-TOPLEVEL
+    belongs to the load of a compiled file -- which COMPILE-FILE arranges
+    for by emitting the body forms themselves -- so an `(eval-when
+    (:load-toplevel) ...)` sitting in interpreted code evaluates to NIL
+    and runs nothing (eval-when.6/.9/.12/.15).
     """
     from .evaluation_core import eval
     
@@ -390,8 +396,7 @@ def eval_eval_when(form, env):
     situations = car(args)
     body = cdr(args)
     
-    # Check if any relevant situation applies
-    # For an interpreter at runtime, :EXECUTE and :LOAD-TOPLEVEL apply
+    # The interpreter is the eval situation: only :EXECUTE (or EVAL) applies.
     should_execute = False
     current = situations
     while _consp_internal(current):
@@ -403,9 +408,7 @@ def eval_eval_when(form, env):
         else:
             sit_name = str(sit).upper()
         
-        # :EXECUTE means "at runtime" - always applies for interpreter
-        # :LOAD-TOPLEVEL means "when loading" - applies when loading files
-        if sit_name in ('EXECUTE', ':EXECUTE', 'EVAL', 'LOAD-TOPLEVEL', ':LOAD-TOPLEVEL', 'LOAD'):
+        if sit_name in (':EXECUTE', 'EXECUTE', 'EVAL'):
             should_execute = True
             break
         current = cdr(current)

@@ -913,21 +913,23 @@ def eval(form, env=None):
     from .evaluation_special_forms import (
         eval_if, eval_setq, eval_defun, eval_defmacro, eval_macroexpand_1,
         eval_macro_function, eval_lambda, eval_declare, eval_declaim,
-        eval_defvar, eval_defparameter, eval_defconstant, eval_defstruct, eval_pop, eval_push, eval_pushnew, eval_remf,
-        eval_incf, eval_decf, eval_defclass, eval_defgeneric, eval_defmethod, eval_define_method_combination,
+        eval_defvar, eval_defparameter, eval_defconstant, eval_defstruct,
+        eval_pop, eval_push, eval_pushnew, eval_remf,
+        eval_incf, eval_decf,
+        eval_defclass, eval_defgeneric, eval_defmethod, eval_define_method_combination,
         eval_call_method, eval_make_method,
-        eval_destructuring_bind, eval_psetq, eval_rotatef, eval_pprint_logical_block
+        eval_destructuring_bind, eval_rotatef, eval_pprint_logical_block
     )
     from .evaluation_control_flow import (
         eval_block, eval_return_from, eval_catch, eval_throw,
         eval_unwind_protect, eval_tagbody, eval_go
     )
     from .evaluation_loops_conditionals import (
-        eval_when, eval_unless, eval_cond, eval_case, eval_ccase, eval_and, eval_or,
-        eval_progn, eval_locally, eval_prog1, eval_prog2, eval_prog, eval_prog_star, eval_time, eval_let, eval_letstar, eval_quasiquote,
+        eval_cond, eval_case, eval_ccase, eval_and, eval_or,
+        eval_progn, eval_locally, eval_prog, eval_prog_star, eval_let, eval_letstar, eval_quasiquote,
         eval_loop, eval_eval_when, eval_do, eval_do_star, eval_dolist, eval_dotimes,
         eval_do_symbols, eval_do_external_symbols, eval_do_all_symbols,
-        eval_flet, eval_labels,
+        eval_flet, eval_labels, eval_time,
         eval_ecase, eval_typecase, eval_etypecase, eval_ctypecase
     )
     from .utilities_functions import eval_progv
@@ -935,8 +937,7 @@ def eval(form, env=None):
         eval_signal, eval_error, eval_cerror, eval_warn,
         eval_restart_case, eval_restart_bind, eval_invoke_restart, eval_abort,
         eval_with_condition_restarts,
-        eval_multiple_value_call, eval_multiple_value_bind, eval_multiple_value_setq,
-        eval_multiple_value_prog1,
+        eval_multiple_value_call, eval_multiple_value_prog1,
         eval_handler_bind, eval_handler_case, eval_ignore_errors,
         eval_define_condition
     )
@@ -1628,26 +1629,8 @@ def eval(form, env=None):
                 return eval_flet(form, env)
             elif operator.name == 'LABELS':
                 return eval_labels(form, env)
-            elif operator.name == 'WHEN':
-                return eval_when(form, env)
-            elif operator.name == 'UNLESS':
-                return eval_unless(form, env)
             elif operator.name == 'EVAL-WHEN':
                 return eval_eval_when(form, env)
-            elif operator.name == 'COND':
-                return eval_cond(form, env)
-            elif operator.name == 'CASE':
-                return eval_case(form, env)
-            elif operator.name == 'CCASE':
-                return eval_ccase(form, env)
-            elif operator.name == 'ECASE':
-                return eval_ecase(form, env)
-            elif operator.name == 'TYPECASE':
-                return eval_typecase(form, env)
-            elif operator.name == 'ETYPECASE':
-                return eval_etypecase(form, env)
-            elif operator.name == 'CTYPECASE':
-                return eval_ctypecase(form, env)
             elif operator.name == 'PROGV':
                 return eval_progv(form, env)
             elif operator.name == '%SPECIAL-REF':
@@ -1656,17 +1639,10 @@ def eval(form, env=None):
                 # (`_get_special_reference`/`_set_special_reference`), so the
                 # SETF branch above cannot drift from this one.
                 return _get_special_reference(car(cdr(form)), env)
-            elif operator.name == 'MULTIPLE-VALUE-SETQ':
-                return eval_multiple_value_setq(form, env)
+            elif operator.name == 'PROGV':
+                return eval_progv(form, env)
             elif operator.name == 'MULTIPLE-VALUE-PROG1':
                 return eval_multiple_value_prog1(form, env)
-            elif operator.name == 'PSETQ':
-                return eval_psetq(form, env)
-            elif operator.name == 'ROTATEF':
-                return eval_rotatef(form, env)
-            elif operator.name == 'SHIFTF':
-                from . import evaluation_special_forms as _es_forms
-                return _es_forms.eval_shiftf(form, env)
             elif operator.name == 'DEFINE-MODIFY-MACRO':
                 from . import evaluation_special_forms as _es_forms
                 return _es_forms.eval_define_modify_macro(form, env)
@@ -1692,40 +1668,10 @@ def eval(form, env=None):
                     store_form,
                     access_form,
                 )
-            elif operator.name == 'MULTIPLE-VALUE-LIST':
-                # Must see the raw (possibly multiple-valued) result of its
-                # argument -- unlike ordinary function-call arguments, this
-                # is NOT a single-value context, so it bypasses the generic
-                # argument-evaluation loop below (which coerces to primary
-                # value).
-                from .evaluation_stubs import multiple_value_list as _mvl
-                mvl_args = cdr(form)
-                if not _consp_internal(mvl_args):
-                    raise lisptype.LispNotImplementedError("MULTIPLE-VALUE-LIST requires one form")
-                return _mvl(eval(car(mvl_args), env))
-            elif operator.name == 'NTH-VALUE':
-                # Same rationale as MULTIPLE-VALUE-LIST above: its value-form
-                # argument must not be coerced to a single value.
-                from .evaluation_stubs import nth_value as _nth_value
-                nv_args = cdr(form)
-                if not _consp_internal(nv_args) or not _consp_internal(cdr(nv_args)):
-                    raise lisptype.LispNotImplementedError("NTH-VALUE requires n and a form")
-                n = eval(car(nv_args), env)
-                return _nth_value(n, eval(car(cdr(nv_args)), env))
-            elif operator.name == 'AND':
-                return eval_and(form, env)
-            elif operator.name == 'OR':
-                return eval_or(form, env)
-            elif operator.name == 'PROG1':
-                return eval_prog1(form, env)
-            elif operator.name == 'PROG2':
-                return eval_prog2(form, env)
             elif operator.name == 'PROG':
                 return eval_prog(form, env)
             elif operator.name == 'PROG*':
                 return eval_prog_star(form, env)
-            elif operator.name == 'TIME':
-                return eval_time(form, env)
             elif operator.name == 'DEFVAR':
                 return eval_defvar(form, env)
             elif operator.name == 'DEFPARAMETER':
@@ -1750,18 +1696,8 @@ def eval(form, env=None):
                 return eval_make_method(form, env)
             elif operator.name == 'LOOP':
                 return eval_loop(form, env)
-            elif operator.name == 'POP':
-                return eval_pop(form, env)
-            elif operator.name == 'REMF':
-                return eval_remf(form, env)
-            elif operator.name == 'PUSH':
-                return eval_push(form, env)
-            elif operator.name == 'PUSHNEW':
-                return eval_pushnew(form, env)
             elif operator.name == 'DEFUN':
                 return eval_defun(form, env)
-            elif operator.name == 'LAMBDA':
-                return eval_lambda(form, env)
             elif operator.name == 'QUASIQUOTE':
                 return eval_quasiquote(form, env)
             elif operator.name == 'THE':
@@ -1771,8 +1707,6 @@ def eval(form, env=None):
                 return eval_defmacro(form, env)
             elif operator.name == 'DECLARE':
                 return eval_declare(form, env)
-            elif operator.name == 'DECLAIM':
-                return eval_declaim(form, env)
             elif operator.name == 'PROCLAIM':
                 from .evaluation_special_forms import eval_proclaim
                 return eval_proclaim(form, env)
@@ -1794,8 +1728,6 @@ def eval(form, env=None):
                 return eval_unwind_protect(form, env)
             elif operator.name == 'MULTIPLE-VALUE-CALL':
                 return eval_multiple_value_call(form, env)
-            elif operator.name == 'MULTIPLE-VALUE-BIND':
-                return eval_multiple_value_bind(form, env)
             elif operator.name == 'SIGNAL':
                 return eval_signal(form, env)
             elif operator.name == 'ERROR':
@@ -1818,16 +1750,10 @@ def eval(form, env=None):
                 return eval_handler_bind(form, env)
             elif operator.name == 'HANDLER-CASE':
                 return eval_handler_case(form, env)
-            elif operator.name == 'IGNORE-ERRORS':
-                return eval_ignore_errors(form, env)
             elif operator.name == 'TAGBODY':
                 return eval_tagbody(form, env)
             elif operator.name == 'GO':
                 return eval_go(form, env)
-            elif operator.name == 'INCF':
-                return eval_incf(form, env)
-            elif operator.name == 'DECF':
-                return eval_decf(form, env)
             elif operator.name == 'DO':
                 return eval_do(form, env)
             elif operator.name == 'DO*':
@@ -1868,6 +1794,14 @@ def eval(form, env=None):
                 new_env = lisptype.Environment(parent=env)
                 
                 # Process bindings: ((sym1 expansion1) (sym2 expansion2) ...)
+                # The binding-module imports live up here because BOTH the
+                # globally-special binding check below and the free-SPECIAL
+                # declaration scan further down need them -- a local import
+                # placed between the two uses made the first one an
+                # UnboundLocalError (RESTART-CASE.30 drives this exact path
+                # through a symbol-macrolet whose expansion signals).
+                from .binding import (BindingFrame, declared_specials,
+                                      split_declarations, is_proclaimed_special)
                 if _consp_internal(bindings_form):
                     binding_list = bindings_form
                     while _consp_internal(binding_list):
@@ -1876,20 +1810,54 @@ def eval(form, env=None):
                             sym = car(binding)
                             expansion = car(cdr(binding)) if _consp_internal(cdr(binding)) else lisptype.NIL
                             if isinstance(sym, lisptype.LispSymbol):
+                                # CLHS 3.1.2.1.1.3 / 3.3.4: a symbol-macro
+                                # binding is a *lexical* binding, and a name
+                                # that is globally special -- DEFVAR/
+                                # DEFPARAMETER/PROCLAIM'd, or DEFCONSTANT'd
+                                # (a constant variable is proclaimed special
+                                # too) -- may only be bound dynamically. A
+                                # symbol-macro for such a name is therefore a
+                                # PROGRAM-ERROR at the binding itself
+                                # (symbol-macrolet.error.2/.3).
+                                if is_proclaimed_special(sym, env):
+                                    raise ConditionException(
+                                        lisptype.ProgramError(
+                                            message=("SYMBOL-MACROLET: cannot bind "
+                                                     "symbol-macro for globally special "
+                                                     "variable %s" % sym.name)),
+                                        recoverable=False)
                                 # Store symbol-macro as a special binding
                                 # We'll mark it with a wrapper so lookup knows it's a symbol-macro
                                 new_env.add_symbol_macro(sym, expansion)
                         binding_list = cdr(binding_list)
                 
-                # Evaluate body forms in the new environment with symbol-macros active
-                result = lisptype.NIL
-                body = body_forms
-                while _consp_internal(body):
-                    form_in_body = car(body)
-                    result = eval(form_in_body, new_env)
-                    body = cdr(body)
-                
-                return result
+                # CLHS 3.4.11: it is an error to (declare (special x)) a name
+                # this form has bound a symbol-macro for -- the declaration
+                # would redirect a reference the macro binding already owns
+                # (symbol-macrolet.error.1). Any other free SPECIAL
+                # declaration governs the body the way MACROLET's does
+                # (CLHS 3.3.4): references to that name read the dynamic
+                # value cell for the body's extent (symbol-macrolet.8).
+                for var in declared_specials(split_declarations(body_forms)[0]):
+                    if new_env.get_symbol_macro(var) is not None:
+                        raise ConditionException(
+                            lisptype.ProgramError(
+                                message=("SYMBOL-MACROLET: cannot declare special "
+                                         "the symbol-macro binding for %s" % var.name)),
+                            recoverable=False)
+                frame = BindingFrame(new_env, body=body_forms)
+                try:
+                    # Evaluate body forms in the new environment with symbol-macros active
+                    result = lisptype.NIL
+                    body = body_forms
+                    while _consp_internal(body):
+                        form_in_body = car(body)
+                        result = eval(form_in_body, new_env)
+                        body = cdr(body)
+                    
+                    return result
+                finally:
+                    frame.unwind()
             elif operator.name == 'MACROLET':
                 # (MACROLET ((name lambda-list . body) ...) body-form...)
                 # Create local macro bindings in a new environment and evaluate body

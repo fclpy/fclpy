@@ -346,7 +346,9 @@ class TestReadtableLispFunctions:
         rt.set_readtable_case('DOWNCASE')
 
         set_current_readtable(rt)
-        case = readtable_case()
+        # CLHS 23.2: READTABLE-CASE takes one required readtable argument
+        # (zero arguments is a PROGRAM-ERROR, `readtable-case.error.1`).
+        case = readtable_case(rt)
 
         assert case is lisptype.intern_keyword('DOWNCASE')
 

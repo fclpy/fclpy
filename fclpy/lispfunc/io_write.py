@@ -430,8 +430,42 @@ def _dispatch_print(object, overrides, stream):
     default fallback, the ordinary `printer.write_object` does the work --
     a dispatch entry cannot make output less correct than the standard
     printer produces, only more elaborate.
+
+    Every write here is also where a print inside an open `PPRINT-LOGICAL-BLOCK`
+    honours `*PRINT-CIRCLE*` (CLHS 22.2.2: "the arguments of the standard
+    printing functions ... are all checked (when necessary) for circularity
+    and sharing"): a labelled object prints an `#n=` before it the first
+    time, or collapses to `#n#` when it was already printed. The check does
+    not apply to WRITE-STRING/WRITE-LINE/WRITE-CHAR (CLHS, same paragraph),
+    and those do not come through here.
     """
-    if not _printer._true(_printer.resolve_control('*PRINT-PRETTY*')):
+    circle = _pp_circle_active()
+    label_prefix = ''
+    if circle is not None and _pp_is_circle_aggregate(object):
+        label, skip = _pp_circle_label(circle, object)
+        if skip:
+            return label
+        label_prefix = label
+    if not label_prefix:
+        # The overwhelmingly common case -- no labelling owed -- must return
+        # the body's result *as is*: some callers return a `LispString`
+        # (FORMAT's capture), which a `str +` would reject.
+        return _dispatch_print_body(object, overrides, stream)
+    return label_prefix + _dispatch_print_body(object, overrides, stream)
+
+
+def _dispatch_print_body(object, overrides, stream):
+    """The pre-`*PRINT-CIRCLE*` body of `_dispatch_print`."""
+    # An explicit `:pretty` argument overrides the variable for this one
+    # call (CLHS 22.3.1's "each of the keyword arguments ... which correspond
+    # to printer control variables" are bound around the print) -- WRITE's
+    # `:pretty nil` must print unprettily even inside a pretty dynamic
+    # context, and PPRINT.1's random write-args exercise exactly that.
+    if 'pretty' in overrides and overrides['pretty'] is not None:
+        pretty = _printer._true(overrides['pretty'])
+    else:
+        pretty = _printer._true(_printer.resolve_control('*PRINT-PRETTY*'))
+    if not pretty:
         return _write_object(object, **overrides)
     dispatch_table = _current_pprint_table()
     dispatch_fn, found_p = pprint_dispatch(object, dispatch_table)
@@ -474,11 +508,17 @@ def _current_pprint_table():
 
 
 @_registry.cl_function('WRITE')
-def write(object, stream=None, **kwargs):
+def write(object, *, stream=None, **kwargs):
     """Print an object to a stream, honouring the printer keyword arguments.
 
     CLHS 22.3.1. WRITE is the general entry point: `PRIN1` and `PRINC` are it
     with `*PRINT-ESCAPE*` forced true and false respectively.
+
+    `stream` is an `&key` parameter, keyword-only in the Python signature --
+    the one mapping of CLHS's `&key` (CLAUDE.md's lambda-list rule) -- so a
+    second *positional* argument is an arity error
+    (`write-byte.error.5`'s `(write 1 s)` on a binary stream) rather than a
+    silently accepted stream designator.
 
     Routes through the pprint dispatch when `*print-pretty*` is true; calls
     `printer.write_object` otherwise. The same routing is applied to the
@@ -904,9 +944,17 @@ def _pprint_unpretty(object, stream):
 
 @_registry.cl_function('PPRINT')
 def pprint(object, stream=None):
-    """A newline, then the object printed with `*PRINT-PRETTY*` true (CLHS 22.3.1)."""
+    """A newline, then the object pretty-printed (CLHS 22.3.1).
+
+    PPRINT is a `TERPRI` followed by a WRITE with `*PRINT-ESCAPE*` and
+    `*PRINT-PRETTY*` forced true for the call, and it returns **no values**
+    -- `pprint.1`'s `(assert (null (multiple-value-list (pprint obj))))`
+    holds that against a NIL return as firmly as it holds the output
+    equality.
+    """
     write_text('\n', stream)
-    return _pprint_unpretty(object, stream)
+    write_text(_dispatch_print(object, {'escape': True, 'pretty': True}, stream), stream)
+    return lisptype.MultipleValues()
 
 
 def _pprint_dispatch_default(stream, object):
@@ -1002,9 +1050,11 @@ class PPrintFrame:
     """
 
     __slots__ = ('remaining', 'stream', 'count', 'started_as_nil',
-                 'outer_target', 'body_col', 'per_line_text')
+                 'outer_target', 'body_col', 'per_line_text',
+                 'skip_output', 'circle_owner', 'circle_visits')
 
-    def __init__(self, remaining, stream, outer_target=None, body_col=0, per_line_text=None):
+    def __init__(self, remaining, stream, outer_target=None, body_col=0, per_line_text=None,
+                 skip_output=False, circle_owner=False, circle_visits=None):
         self.remaining = remaining
         self.stream = stream
         self.count = 0
@@ -1017,6 +1067,18 @@ class PPrintFrame:
         self.outer_target = outer_target
         self.body_col = body_col
         self.per_line_text = per_line_text
+        # `*PRINT-CIRCLE*` support (CLHS 22.2.2): `skip_output` marks a block
+        # whose object was already printed (a shared reference) -- only "#n#"
+        # was emitted at setup, so the body runs against a throwaway buffer
+        # and `flush_pprint_frame` discards everything. `circle_owner` marks
+        # the frame that *created* the ambient circle state, so the state is
+        # popped exactly once. `circle_visits` is the recording pre-pass
+        # (SBCL's first, output-discarded pass): how many times the walk
+        # reached each cons position -- a cons reached twice is where
+        # PPRINT-POP's dotted back-reference fires (pprint-pop.7/.8).
+        self.skip_output = skip_output
+        self.circle_owner = circle_owner
+        self.circle_visits = circle_visits
 
 
 def _current_pprint_frame(operator_name):
@@ -1033,6 +1095,204 @@ def _current_pprint_frame(operator_name):
         raise lisptype.LispProgramError(
             f"{operator_name}: not inside a PPRINT-LOGICAL-BLOCK")
     return stack[-1]
+
+
+# === *PRINT-CIRCLE* support for the pprint operators (CLHS 22.2.2) ===
+#
+# pprint-logical-block (and therefore PPRINT-FILL/LINEAR/TABULAR, which are
+# defined in terms of it) performs its own circularity detection: the block's
+# object gets an "#n=" before it the first time it is printed, an "#n#" (and
+# nothing else -- no prefix, no suffix, no body) when it is printed again.
+# CLHS 22.2.2 is explicit that the arguments of WRITE and friends are checked
+# too, so an element popped by PPRINT-POP and written with WRITE participates
+# in the same labelling.
+#
+# The state is one labelling table shared by a whole top-level pprint
+# operation, established when the outermost block is entered and popped when
+# it flushes. Nested blocks (and every WRITE under them) consult the innermost
+# entry. A depth is recorded with each entry so an abnormal exit -- which
+# skips `flush_pprint_frame` -- cannot leave a stale table poisoning every
+# later print: the next entry point trims entries whose frame has already
+# unwound.
+
+_PP_CIRCLE_STATES = []
+
+
+def _pp_circle_active():
+    """The innermost ambient circle-labelling state, or `None`."""
+    return _PP_CIRCLE_STATES[-1] if _PP_CIRCLE_STATES else None
+
+
+def _pp_is_circle_aggregate(value):
+    """Whether `value` is an object the circle labelling can mark.
+
+    The same aggregate set `printer._aggregate_pieces` walks, asked through
+    `printer._is_aggregate` so the pprint side and the printer side cannot
+    disagree about what counts (plan.md standing rule 3).
+    """
+    from fclpy.printer import _is_aggregate
+    return _is_aggregate(value)
+
+
+def _pp_circle_map_compute(root):
+    """Label every shared or cyclic aggregate reachable from `root`.
+
+    The standard algorithm with a visited set: the first visit descends,
+    a second reach assigns a label and does *not* descend again. Not
+    descending is what keeps a shared cons's *contents* from being
+    labelled too -- `pprint-fill.14` prints `(X X)` (two references to
+    one `(A)`) as `(#1=(A) #1#)`, where `A` must stay unlabelled, while
+    a whole-object `write` pass that re-walks both references would hand
+    out a second label to `A`.
+    """
+    from fclpy.printer import _aggregate_pieces
+    label_map = {}
+    seen = set()
+    counter = [1]
+
+    def visit(obj):
+        if obj is None or obj is lisptype.NIL:
+            return
+        if not _pp_is_circle_aggregate(obj):
+            return
+        key = id(obj)
+        if key in seen:
+            if key not in label_map:
+                label_map[key] = counter[0]
+                counter[0] += 1
+            return
+        seen.add(key)
+        pieces = _aggregate_pieces(obj)
+        if pieces:
+            for sub in pieces:
+                visit(sub)
+
+    visit(root)
+    return label_map
+
+
+def _pp_circle_enter(object):
+    """Establish (or re-enter) the ambient circle state for a pprint block.
+
+    Returns `(state, created)`. `state` is `None` when `*PRINT-CIRCLE*` is
+    false or the object is not an aggregate -- nothing to track. When a
+    state is already active (a nested block, or an element print under one)
+    it is *reused*: one top-level print owns one labelling table, so label
+    numbers stay consistent across the whole operation.
+    """
+    import fclpy.state as state
+    depth = len(getattr(state, 'pprint_stack', []) or [])
+    # Trim entries whose frame already unwound without flushing (a non-local
+    # exit that skipped `flush_pprint_frame`). An entry pushed when the stack
+    # was `d` deep is live exactly while the stack is deeper than `d`.
+    while _PP_CIRCLE_STATES and _PP_CIRCLE_STATES[-1]['depth'] >= depth:
+        _PP_CIRCLE_STATES.pop()
+    if not _printer._true(_printer.resolve_control('*PRINT-CIRCLE*')):
+        return None, False
+    if not _pp_is_circle_aggregate(object):
+        return None, False
+    existing = _PP_CIRCLE_STATES[-1] if _PP_CIRCLE_STATES else None
+    if existing is not None:
+        return existing, False
+    if _consp_internal(object):
+        labels, visits = _pp_circle_visit_prepass(object)
+    else:
+        labels, visits = _pp_circle_map_compute(object), None
+    entry = {'map': labels, 'seen': set(), 'depth': depth, 'visits': visits}
+    _PP_CIRCLE_STATES.append(entry)
+    return entry, True
+
+
+def _pp_circle_label(state, object):
+    """The "#n="/"#n#" a pprint block owes `object`, per `state`.
+
+    Returns `('#n=', False)` to print before the block's own prefix,
+    `('#n#', True)` when the object was already printed and the whole
+    block must collapse to just the back-reference, or `('', False)` for
+    an unlabelled object.
+    """
+    if state is None:
+        return '', False
+    label = state['map'].get(id(object))
+    if label is None:
+        return '', False
+    if label in state['seen']:
+        return f'#{label}#', True
+    state['seen'].add(label)
+    return f'#{label}=', False
+
+
+def _pp_circle_visit_prepass(object):
+    """The recording pre-pass behind the pprint operators' circle labels.
+
+    This mirrors the walk a `PPRINT-LOGICAL-BLOCK` body performs over its
+    list -- the canonical `(pprint-exit-if-list-exhausted) (write
+    (pprint-pop) ...)` loop -- *including where that walk stops*, and
+    records two things:
+
+    * `labels` -- every aggregate encountered a second time, numbered in
+      encounter order. An element printed twice (`pprint-fill.14`'s
+      `(X X)`) and a tail reached twice (`pprint-pop.7`) both get labels;
+      an object cut off by `*PRINT-LENGTH*` before its second encounter
+      gets none, which is why `pprint-pop.7` under `*PRINT-LENGTH*` 1
+      prints `<(1) ...>` with no `#1=` at all.
+    * `visits` -- how many times each cons was reached as a *position* of
+      the list. A cons reached twice is where the real walk terminates
+      with a ". #n#" / ". #n=(...)" back-reference (`pprint-pop.7`/`.8`);
+      `pprint_pop` consults this to decide the unprinted-cycle case.
+
+    The stop rules are the observable ones: NIL ends the walk, a dotted
+    tail ends it, `*PRINT-LENGTH*` ends it, and a repeated *position*
+    ends it (the dot). A repeated *element* only labels; the walk goes on.
+    The pass is bounded -- each cons is recorded at most twice -- so a
+    circular list cannot spin it forever.
+    """
+    length = _pprint_length()
+    labels = {}
+    visits = {}
+    counter = [1]
+
+    def encounter(obj):
+        """Record one encounter; True when this is a repeat."""
+        if not _pp_is_circle_aggregate(obj):
+            return False
+        key = id(obj)
+        if key in labels:
+            return True
+        visits[key] = visits.get(key, 0) + 1
+        if visits[key] >= 2:
+            labels[key] = counter[0]
+            counter[0] += 1
+            return True
+        return False
+
+    def element_encounter(obj):
+        """Record an element encounter: labels a repeat, never stops."""
+        if not _pp_is_circle_aggregate(obj):
+            return
+        key = id(obj)
+        if key in labels or key in visits:
+            if key not in labels:
+                labels[key] = counter[0]
+                counter[0] += 1
+        else:
+            visits[key] = 1
+
+    position = object
+    count = 0
+    encounter(position)
+    while True:
+        if _null_internal(position):
+            return labels, visits
+        if not _consp_internal(position):
+            return labels, visits
+        if length is not None and count >= length:
+            return labels, visits
+        if count > 0 and encounter(position):
+            return labels, visits
+        element_encounter(position.car)
+        count += 1
+        position = position.cdr
 
 
 def pprint_logical_block_setup(stream_designator, object, prefix, per_line_prefix, suffix,
@@ -1076,6 +1336,14 @@ def pprint_logical_block_setup(stream_designator, object, prefix, per_line_prefi
     if level is not None and depth >= level:
         return ('level-exceeded', outer_target, None, None)
 
+    # CLHS 22.2.2: with *PRINT-CIRCLE* true and `object` already printed, an
+    # "#n#" is printed and the prefix, suffix and body are all skipped. The
+    # label (when the object is printed for the first time) goes out *before*
+    # the prefix. The same enter also establishes the ambient labelling table
+    # for this top-level print, which WRITE and PPRINT-POP consult.
+    circle_state, circle_created = _pp_circle_enter(object)
+    label_text, skip = _pp_circle_label(circle_state, object)
+
     # Gated on whether the keyword was syntactically *given*, not on whether
     # its value is NIL: `:prefix nil` is a supplied non-string value and must
     # fail `_pprint_block_text`'s check (`pprint-logical-block.error.1`),
@@ -1084,6 +1352,23 @@ def pprint_logical_block_setup(stream_designator, object, prefix, per_line_prefi
     per_line_text = (_pprint_block_text(per_line_prefix, ':PER-LINE-PREFIX')
                       if per_line_prefix_given else None)
     suffix_text = _pprint_block_text(suffix, ':SUFFIX') if suffix_given else ''
+
+    write_text(label_text, outer_target)
+    if skip:
+        # Only the back-reference: the body still runs (CLHS models the
+        # detection as a first, output-suppressed pass), but against a
+        # throwaway buffer that `flush_pprint_frame` discards.
+        body_buffer = _PPBuffer()
+        frame = PPrintFrame(object, body_buffer, outer_target=outer_target,
+                            skip_output=True, circle_owner=circle_created,
+                            circle_visits=circle_state['visits'])
+        return ('run', body_buffer, frame, '')
+
+    # PPRINT-POP's dotted back-reference consults the recording pre-pass,
+    # which the circle enter already ran (and only under *PRINT-CIRCLE*:
+    # its ". x" for a plain dotted tail is older behavior and needs no
+    # table).
+    circle_visits = circle_state['visits'] if circle_state is not None else None
 
     write_text(per_line_text if per_line_text is not None else prefix_text, outer_target)
     # Only the outermost frame's column is needed now -- a nested frame's
@@ -1095,7 +1380,8 @@ def pprint_logical_block_setup(stream_designator, object, prefix, per_line_prefi
 
     body_buffer = _PPBuffer()
     frame = PPrintFrame(object, body_buffer, outer_target=outer_target,
-                         body_col=body_col, per_line_text=per_line_text)
+                        body_col=body_col, per_line_text=per_line_text,
+                        circle_owner=circle_created, circle_visits=circle_visits)
     return ('run', body_buffer, frame, suffix_text)
 
 
@@ -1137,12 +1423,22 @@ def flush_pprint_frame(frame, suffix_text):
     reached, by `_pp_render_block` recursing into it with the real column
     that point in the single left-to-right pass has reached.
     """
-    if isinstance(frame.outer_target, _PPBuffer):
-        frame.outer_target.tokens.append(('block', suffix_text, frame.per_line_text, frame.stream.tokens))
-        return
-    rendered = _pp_render_top(frame.stream.tokens, frame.body_col,
-                               frame.per_line_text, len(suffix_text))
-    write_text(rendered + suffix_text, frame.outer_target)
+    try:
+        if frame.skip_output:
+            # CLHS 22.2.2's "#n#" case: the back-reference was already
+            # written at setup; the body's output (captured in a throwaway
+            # buffer) and the suffix are discarded wholesale.
+            return
+        if isinstance(frame.outer_target, _PPBuffer):
+            frame.outer_target.tokens.append(
+                ('block', suffix_text, frame.per_line_text, frame.stream.tokens))
+            return
+        rendered = _pp_render_top(frame.stream.tokens, frame.body_col,
+                                   frame.per_line_text, len(suffix_text))
+        write_text(rendered + suffix_text, frame.outer_target)
+    finally:
+        if frame.circle_owner:
+            _PP_CIRCLE_STATES.pop()
 
 
 def _pprint_exit_nil():
@@ -1223,6 +1519,28 @@ def pprint_pop():
     if length is not None and frame.count >= length and (is_cons or (is_nil and frame.started_as_nil)):
         write_text('...', frame.stream)
         _pprint_exit_nil()
+    if is_cons and frame.count > 0:
+        # CLHS 22.2.2's circularity/sharing case. Two ways the termination
+        # fires: the tail was *already printed* within this operation (a
+        # shared reference -- pprint-pop.7's tail is element 1 -- so only
+        # the back-reference may follow), or the recording pre-pass says
+        # this position gets revisited before the walk ends (pprint-pop.8's
+        # cycle: "[[1 2 ...]]" under *PRINT-LENGTH* 2 but "[[1 . #1=(2 . #1#)]]"
+        # under 3 -- the difference is exactly whether the pre-pass, which
+        # stops where the real walk stops, got that far). An already-printed
+        # tail always dots; an unprinted one only when the cycle re-enters.
+        circle = _pp_circle_active()
+        label = circle['map'].get(id(remaining)) if circle is not None else None
+        already_seen = label is not None and label in circle['seen']
+        visits = frame.circle_visits
+        if already_seen or (visits is not None and visits.get(id(remaining), 0) >= 2):
+            if already_seen:
+                write_text(f'. #{label}#', frame.stream)
+            else:
+                if label is not None:
+                    circle['seen'].add(label)
+                write_text('. ' + _write_object(remaining), frame.stream)
+            _pprint_exit_nil()
     frame.count += 1
     if is_nil:
         return lisptype.NIL
@@ -1283,15 +1601,124 @@ def pprint_indent(relative_to, n, stream=None):
     return lisptype.NIL
 
 
-@_registry.cl_function('PPRINT-LINEAR')
-def pprint_linear(stream, object, prefix=None, per_line_prefix=None, suffix=None):
-    """The list on one line, in a `(`...`)` block (CLHS 22.2.2).
-
-    Linear style breaks either at every conditional newline or at none; with no
-    line breaking available this is the "at none" case, which is a legal
-    rendering for any list that fits. See `_pprint_unpretty`.
+def _pprint_list_unpretty(object, colon_p, target):
+    """*PRINT-PRETTY* false (CLHS 22.2.2's fallback for the list styles):
+    print with a minimum of whitespace per CLHS 22.1.3.5, parenthesized iff
+    `colon_p`. With the parens this is an ordinary `write`; without them the
+    elements are written space-separated, still honouring `*PRINT-LENGTH*`
+    and guarded against a circular tail.
     """
-    return _pprint_unpretty(object, stream)
+    if colon_p:
+        write_text(_write_object(object), target)
+        return
+    pieces = []
+    tail = object
+    limit = _pprint_length()
+    seen = set()
+    truncated = False
+    while _consp_internal(tail):
+        if limit is not None and len(pieces) >= limit:
+            truncated = True
+            break
+        if id(tail) in seen:
+            truncated = True
+            break
+        seen.add(id(tail))
+        pieces.append(_write_object(tail.car))
+        tail = tail.cdr
+    if not truncated and not _null_internal(tail):
+        pieces.append('. ' + _write_object(tail))
+    write_text(' '.join(pieces), target)
+
+
+def _pprint_list_style(stream_designator, object, colon_p, break_kind, tabsize=None):
+    """The shared body of PPRINT-FILL, PPRINT-LINEAR and PPRINT-TABULAR.
+
+    CLHS defines the three as `PPRINT-LOGICAL-BLOCK` loops that differ only
+    in what goes between the elements (its `pprint-tabular` note gives the
+    tabular loop verbatim; fill and linear are the same loop with a `:fill`
+    / `:linear` `PPRINT-NEWLINE` in place of the tab). All three parenthesize
+    iff `colon_p`, ignore their at-p argument, print a non-list as by
+    `write`, and fall back to minimum-whitespace printing when
+    `*PRINT-PRETTY*` is false. This is one driver rather than three loop
+    bodies for the same reason the CLHS gives one `pprint-logical-block`
+    shape: the abbreviation, circularity and buffer plumbing are the
+    block's, not the loop's.
+    """
+    if not _listp_internal(object):
+        # CLHS: "uses write to print object when it is a non-list".
+        write(object, stream=stream_designator)
+        return lisptype.NIL
+    colon_p = _colon_default(colon_p)
+    if not _printer._true(_printer.resolve_control('*PRINT-PRETTY*')):
+        _pprint_list_unpretty(object, colon_p, resolve_output_stream(stream_designator))
+        return lisptype.NIL
+
+    kind, buffer, frame, suffix_text = pprint_logical_block_setup(
+        stream_designator, object,
+        '(' if colon_p else '', None,
+        ')' if colon_p else '',
+        prefix_given=True, per_line_prefix_given=False, suffix_given=True)
+    if kind == 'level-exceeded':
+        write_text('#', resolve_output_stream(stream_designator))
+        return lisptype.NIL
+
+    import fclpy.state as state
+    from .evaluation_core import ReturnFromException
+    state.pprint_stack.append(frame)
+    try:
+        try:
+            pprint_exit_if_list_exhausted()
+            while True:
+                element = pprint_pop()
+                write(element, stream=frame.stream)
+                pprint_exit_if_list_exhausted()
+                write_text(' ', frame.stream)
+                if tabsize is not None:
+                    frame.stream.tokens.append(
+                        ('tab', 'section-relative', 0, tabsize))
+                frame.stream.tokens.append(('break', break_kind))
+        except ReturnFromException as exc:
+            if not _null_internal(exc.tag):
+                raise
+    finally:
+        state.pprint_stack.pop()
+    flush_pprint_frame(frame, suffix_text)
+    return lisptype.NIL
+
+
+def _truthy(value):
+    """A Lisp generalized boolean as Python truth, NIL-aware."""
+    if value is None or value is lisptype.NIL:
+        return False
+    return _printer._true(value)
+
+
+def _colon_default(colon_p):
+    """`colon-p` with its CLHS default applied: true when omitted.
+
+    The three spellings must be told apart here: a Python `None` is the
+    *omitted* argument (the parameter's own default), an explicit Lisp NIL
+    arrives as the `lisptype.NIL` singleton, and the `~/.../` dispatch hands
+    Python `True`/`False` for the flags it read. Only the first takes the
+    CLHS default -- `pprint-fill.5`'s explicit NIL must suppress the
+    parentheses that the same call with the argument omitted would print.
+    """
+    if colon_p is None:
+        return True
+    return _truthy(colon_p)
+
+
+@_registry.cl_function('PPRINT-LINEAR')
+def pprint_linear(stream, object, colon_p=None, at_p=None):
+    """The list on one line, or one element per line (CLHS 22.2.2).
+
+    `colon-p` defaults to true and decides the parentheses; `at-p` is
+    accepted and ignored (CLHS: "Each function ignores its at-sign-p
+    argument", kept so the functions work via `~/.../` and
+    `set-pprint-dispatch`).
+    """
+    return _pprint_list_style(stream, object, colon_p, 'linear')
 
 
 _PP_NEWLINE_KINDS = {'LINEAR': 'linear', 'FILL': 'fill', 'MISER': 'miser', 'MANDATORY': 'mandatory'}
@@ -1329,25 +1756,73 @@ def pprint_newline(kind, stream=None):
 
 @_registry.cl_function('PPRINT-TAB')
 def pprint_tab(kind, colnum, colinc, stream=None):
-    """Pretty print tab (stub)."""
-    return None
+    """Tab to a column inside a logical block (CLHS 22.2.1.2).
+
+    `kind` is `:line`, `:section`, `:line-relative` or `:section-relative`;
+    the sectioned kinds measure from the start of the enclosing logical
+    block's section rather than the line start. The tab is meaningful only
+    on a *pretty-printing* stream -- which, in this implementation's shape,
+    is the buffered stream a `PPRINT-LOGICAL-BLOCK` binds its stream symbol
+    to: a tab aimed at a raw stream does nothing at all even with
+    `*PRINT-PRETTY*` true (`pprint-tab.non-pretty.1`-`.4`), and a tab
+    inside a block whose `*PRINT-PRETTY*` is false does nothing either
+    (`.5`-`.8`). Inside a block it records a `'tab'` token in that block's
+    buffer; the spaces are emitted by the render pass, which is the only
+    place the column the tab runs from is actually known.
+    """
+    name = kind.name.upper() if isinstance(kind, lisptype.LispSymbol) else None
+    if name not in ('LINE', 'SECTION', 'LINE-RELATIVE', 'SECTION-RELATIVE'):
+        raise lisptype.LispTypeError(
+            f"PPRINT-TAB: kind must be :LINE, :SECTION, :LINE-RELATIVE or "
+            f":SECTION-RELATIVE, not {_write_object(kind, escape=True)}",
+            expected_type='(MEMBER :LINE :SECTION :LINE-RELATIVE :SECTION-RELATIVE)',
+            actual_value=kind)
+    if not _printer._true(_printer.resolve_control('*PRINT-PRETTY*')):
+        return lisptype.NIL
+    try:
+        stop, step = int(colnum), int(colinc)
+    except (TypeError, ValueError):
+        raise lisptype.LispTypeError(
+            f"PPRINT-TAB: colnum and colinc must be non-negative integers, "
+            f"got {_write_object(colnum, escape=True)} and "
+            f"{_write_object(colinc, escape=True)}",
+            expected_type='(MOD 536870911)', actual_value=colnum)
+    target = resolve_output_stream(stream)
+    import fclpy.state as state
+    for frame in reversed(getattr(state, 'pprint_stack', []) or []):
+        if frame.stream is target:
+            if frame.skip_output:
+                return lisptype.NIL
+            frame.stream.tokens.append(
+                ('tab', name.lower(), stop, step))
+            return lisptype.NIL
+    return lisptype.NIL
 
 
 @_registry.cl_function('PPRINT-TABULAR')
-def pprint_tabular(stream, object, prefix=None, per_line_prefix=None, suffix=None,
-                   tabsize=None):
-    """The list in tabular style (CLHS 22.2.2), on one line without column stops."""
-    return _pprint_unpretty(object, stream)
+def pprint_tabular(stream, object, colon_p=None, at_sign_p=None, tabsize=None):
+    """The list in columns (CLHS 22.2.2).
+
+    Like PPRINT-FILL, but each separator is also a
+    `(pprint-tab :section-relative 0 tabsize)` -- the definition in CLHS's
+    own note on these functions -- so element starts align on a `tabsize`
+    grid measured from the section start. `tabsize` defaults to 16 when
+    omitted or NIL.
+    """
+    if tabsize is None or tabsize is lisptype.NIL or tabsize is False:
+        size = 16
+    else:
+        size = int(tabsize)
+    return _pprint_list_style(stream, object, colon_p, 'fill', tabsize=size)
 
 
 @_registry.cl_function('PPRINT-FILL')
 def pprint_fill(stream, object, colon_p=None, at_sign_p=None):
-    """The list in fill style (CLHS 22.2.2), on one line.
+    """As many elements per line as the margin allows (CLHS 22.2.2).
 
-    `colon_p` (whether to parenthesize) is accepted and ignored, like every
-    other block-delimiter argument here -- see `_pprint_unpretty`.
+    `colon-p` decides the parentheses; `at-p` is accepted and ignored.
     """
-    return _pprint_unpretty(object, stream)
+    return _pprint_list_style(stream, object, colon_p, 'fill')
 
 
 @_registry.cl_function('SET-PPRINT-DISPATCH')
@@ -1804,18 +2279,48 @@ def _current_column(emitted):
     return _pp_visible_width(text.rsplit('\n', 1)[-1])
 
 
+def _compute_tab_size(kind, colnum, colinc, column, section_start):
+    """The number of spaces one tab directive emits (CLHS 22.2.1.2, 22.3.6.1).
+
+    One function for both `PPRINT-TAB`'s four kinds and FORMAT's `~T` family,
+    which are the same operation (`~T` is `:line`, `~:T` `:section`, `~@T`
+    `:line-relative`, `~:@T` `:section-relative`). `colnum` is the stop
+    column for the absolute kinds and the offset for the relative ones;
+    `colinc` is the grid the relative kinds round up to. The sectioned kinds
+    measure from `section_start` -- the column where the enclosing logical
+    block's section began -- instead of the line start.
+
+    The formulas are the ones `pprint-tab.line.1` and `pprint-tab.line-
+    relative.1` pin down: tab to `colnum`, or -- already at or past it -- to
+    the next `colnum + k*colinc` beyond the current column (no move at all
+    when `colinc` is 0); and for the relative kinds, `colnum` spaces then
+    enough more to reach the next multiple of `colinc`.
+    """
+    relative = kind in ('LINE-RELATIVE', 'SECTION-RELATIVE')
+    position = column - (section_start if kind in ('SECTION', 'SECTION-RELATIVE') else 0)
+    if relative:
+        colnum = max(colnum, 0)
+        if colinc > 1:
+            rem = (position + colnum) % colinc
+            if rem:
+                colnum += colinc - rem
+        return colnum
+    if position < colnum:
+        return colnum - position
+    if colinc <= 0:
+        return 0
+    return colinc - ((position - colnum) % colinc)
+
+
 def _tab_padding(column, params, colon_flag, at_flag):
     """The spaces `~T` emits from `column` (CLHS 22.3.6.1).
 
-    `~colnum,colincT` moves to `colnum`, or -- already at or past it -- to the
-    first `colnum + k*colinc` beyond the current column, with `colinc` 0
-    meaning "then do not move". `~colrel,colinc@T` emits `colrel` spaces and
-    then as few more as it takes to reach a multiple of `colinc`.
-
-    Both used to be `' ' * colnum`, under the comment "we don't track column,
-    so just emit spaces" -- a different directive entirely: `AA~4T` is *move
-    to column 4*, two spaces, and answered four. The column was in fact
-    available all along (`emitted`), which is what `_current_column` reads.
+    `_compute_tab_size` owns the arithmetic; `~T` has no section of its own,
+    so the section origin is 0. Both forms used to be `' ' * colnum`, under
+    the comment "we don't track column, so just emit spaces" -- a different
+    directive entirely: `AA~4T` is *move to column 4*, two spaces, and
+    answered four. The column was in fact available all along (`emitted`),
+    which is what `_current_column` reads.
     """
     def param(index, default):
         if len(params) > index and not _is_unspecified(params[index]):
@@ -1829,20 +2334,11 @@ def _tab_padding(column, params, colon_flag, at_flag):
     if at_flag:
         colrel = param(0, 1)
         colinc = param(1, 1)
-        pad = max(colrel, 0)
-        target = column + pad
-        if colinc > 0 and target % colinc:
-            pad += colinc - (target % colinc)
-        return ' ' * pad
+        return ' ' * _compute_tab_size('LINE-RELATIVE', colrel, colinc, column, 0)
 
     colnum = param(0, 1)
     colinc = param(1, 1)
-    if column < colnum:
-        return ' ' * (colnum - column)
-    if colinc <= 0:
-        return ''
-    steps = (column - colnum) // colinc + 1
-    return ' ' * (colnum + steps * colinc - column)
+    return ' ' * _compute_tab_size('LINE', colnum, colinc, column, 0)
 
 
 #: The directives that mean something only to the pretty printer, and so may
@@ -2722,6 +3218,23 @@ def _pp_render(tokens, start_col, indent_baseline, right_margin, block_fits, mis
     return ''.join(out)
 
 
+def _pp_tab_static_width(token):
+    """An upper bound on the spaces a `'tab'` token will emit.
+
+    `_compute_tab_size` answers exactly, but only given the column the tab
+    runs at -- which the flat-width scan (`_pp_block_flat_width`) and the
+    fill-break lookahead (`_pp_render_block`'s `lookahead`) both lack, since
+    they walk the tokens without a running column. The bound is what those
+    two static passes use: `colnum` is the furthest an absolute tab can
+    move (and `colinc` the furthest it moves once past the stop), and a
+    relative tab emits `colnum` spaces plus at most `colinc - 1` more.
+    """
+    _, kind, colnum, colinc = token
+    if kind in ('line', 'section'):
+        return max(colnum, colinc if colinc > 0 else 0)
+    return max(colnum, 0) + max(colinc - 1, 0)
+
+
 def _pp_block_flat_width(tokens):
     """Width of a `PPRINT-LOGICAL-BLOCK` token list if every break stayed
     unbroken -- `None` if that is impossible (a `:mandatory` break anywhere,
@@ -2742,6 +3255,8 @@ def _pp_block_flat_width(tokens):
         elif kind == 'break':
             if tok[1] == 'mandatory':
                 return None
+        elif kind == 'tab':
+            width += _pp_tab_static_width(tok)
         elif kind == 'block':
             _, suffix_text, _per_line, subtokens = tok
             sub_flat = _pp_block_flat_width(subtokens)
@@ -2752,7 +3267,7 @@ def _pp_block_flat_width(tokens):
 
 
 def _pp_render_block(tokens, start_col, indent_baseline, right_margin, miser_width,
-                      block_fits, miser_active):
+                      block_fits, miser_active, suffix_len=0):
     """Render a `PPRINT-LOGICAL-BLOCK` token list (CLHS 22.2.1), recursing into
     any nested `'block'` token with the column this same left-to-right pass
     has *actually* reached by the time it gets there -- the enclosing
@@ -2764,6 +3279,14 @@ def _pp_render_block(tokens, start_col, indent_baseline, right_margin, miser_wid
     """
     col = start_col
     indent = indent_baseline
+    # The section origin for `:section`/`:section-relative` tabs (CLHS
+    # 22.2.1.2): the column where this block's section began -- the block's
+    # own start column. A nested block's render pass (the `'block'` case
+    # below) gets its own, so tabs inside it measure from the nested start.
+    section_start = start_col
+    # Whether a newline has been emitted since the last break -- the fill
+    # rule's "the preceding section was not printed on a single line".
+    section_broken = False
     out = []
 
     def lookahead(idx):
@@ -2778,11 +3301,20 @@ def _pp_render_block(tokens, start_col, indent_baseline, right_margin, miser_wid
                     width += len(text.split('\n', 1)[0])
                     break
                 width += len(text)
+            elif kind == 'tab':
+                width += _pp_tab_static_width(tok)
             elif kind == 'block':
                 sub_flat = _pp_block_flat_width(tok[3])
                 if sub_flat is None:
                     break
                 width += sub_flat + len(tok[1])
+        else:
+            # No further break: the section being measured runs to the end
+            # of the block, whose suffix terminates it (CLHS 22.2.1.1's
+            # section extends "to the end of the enclosing logical block").
+            # Without the suffix, `pprint-tabular.21`'s last element counted
+            # one character short and the final fill break failed to fire.
+            width += suffix_len
         return width
 
     def rstrip_pending():
@@ -2812,12 +3344,25 @@ def _pp_render_block(tokens, start_col, indent_baseline, right_margin, miser_wid
                     out.append('\n')
                 out.append(part)
                 col = len(part) if j == len(parts) - 1 else 0
+            section_broken = True
         elif kind == 'indent':
             # No effect while the enclosing section is in miser mode (CLHS
             # 22.2.2's pprint-indent) -- see `_pp_render`'s identical guard.
             if not miser_active:
                 _, relative_to, n = tok
                 indent = (indent_baseline + n) if relative_to == 'block' else (col + n)
+        elif kind == 'tab':
+            # PPRINT-TAB (CLHS 22.2.1.2): real spaces at the real column.
+            # The sectioned kinds measure from the block's own start, which
+            # is `section_start` here -- for the first line of a block with
+            # a `:prefix`, the prefix was already written by setup, so the
+            # body start *is* the section start.
+            _tag, tab_kind, tab_colnum, tab_colinc = tok
+            pad = _compute_tab_size(tab_kind.upper(), tab_colnum, tab_colinc,
+                                    col, section_start)
+            if pad > 0:
+                out.append(' ' * pad)
+                col += pad
         elif kind == 'block':
             _, suffix_text, sub_per_line, subtokens = tok
             sub_flat = _pp_block_flat_width(subtokens)
@@ -2827,13 +3372,16 @@ def _pp_render_block(tokens, start_col, indent_baseline, right_margin, miser_wid
                          and (right_margin - col) <= miser_width)
             sub_indent_baseline = 0 if sub_per_line is not None else col
             rendered_sub = _pp_render_block(subtokens, col, sub_indent_baseline,
-                                             right_margin, miser_width, sub_fits, sub_miser)
+                                             right_margin, miser_width, sub_fits, sub_miser,
+                                             suffix_len=len(suffix_text))
             if sub_per_line is not None:
                 rendered_sub = rendered_sub.replace('\n', '\n' + sub_per_line)
             combined = rendered_sub + suffix_text
             out.append(combined)
             nl = combined.rfind('\n')
             col = len(combined) - nl - 1 if nl != -1 else col + len(combined)
+            if nl != -1:
+                section_broken = True
         else:  # break
             bkind = tok[1]
             if bkind == 'mandatory':
@@ -2853,7 +3401,17 @@ def _pp_render_block(tokens, start_col, indent_baseline, right_margin, miser_wid
                 # wrapping plain `:fill` lookahead would give.
                 fire = not block_fits
             else:  # fill, outside miser mode
-                fire = False if block_fits else (col + lookahead(idx)) > right_margin
+                # CLHS 22.2.1.1's fill rule is three-way: break if the
+                # following section does not fit on the end of the current
+                # line, OR if "the preceding section was not printed on a
+                # single line" -- a fill break follows a section that itself
+                # wrapped (`pprint-newline.fill.7`: the section holding the
+                # eight-element fill block wrapped, so the very next break
+                # fires even though "X" would fit). `section_broken` tracks
+                # exactly that: any newline emitted since the last break.
+                fire = ((section_broken or (col + lookahead(idx)) > right_margin)
+                        if not block_fits else False)
+            section_broken = False
             if fire:
                 rstrip_pending()
                 col = max(indent, 0)
@@ -2890,7 +3448,7 @@ def _pp_render_top(tokens, body_col, per_line_text, suffix_len):
 
     indent_baseline = 0 if per_line_text is not None else body_col
     rendered = _pp_render_block(tokens, body_col, indent_baseline, rm, miser_width,
-                                 block_fits, miser_active)
+                                 block_fits, miser_active, suffix_len=suffix_len)
     if per_line_text is not None:
         rendered = rendered.replace('\n', '\n' + per_line_text)
     return rendered
@@ -4464,7 +5022,15 @@ def delete_file(filespec):
 
     path_str = resolve_filespec(filespec)
     try:
-        os.remove(path_str)
+        if os.path.isdir(path_str):
+            # CLHS defines DELETE-FILE on files, but the suite's own cleanup
+            # (ensure-directories-exist.8) deletes the scratch directories it
+            # created; `os.remove` cannot remove a directory on Windows,
+            # `os.rmdir` can (an empty one -- a non-empty one still errors,
+            # which is the honest failure).
+            os.rmdir(path_str)
+        else:
+            os.remove(path_str)
     except FileNotFoundError:
         return signal_file_error(
             pathname_from_namestring(path_str), "DELETE-FILE: file not found: " + path_str)
@@ -4486,14 +5052,15 @@ def rename_file(filespec, new_name):
     renamed, and no truenames, which is what the caller needs in order to find
     the file afterwards.
 
-    `new-name` is merged with `filespec` rather than with
-    `*default-pathname-defaults*`: CLHS says the components new-name does not
-    supply come from the file being renamed, which is what makes
-    `(rename-file "a/b.txt" "c")` land in `a/` and keep the type. That merge is
-    MERGE-PATHNAMES' job and is delegated to it -- it is still namestring-based
-    rather than component-based here, so a new-name that omits the *type*
-    (rename-file.3) does not yet inherit it; that is the pathname component
-    model, tracked separately, not something to work around in this operator.
+    `new-name` is merged with the *pathname* of the file being renamed, on
+    the untranslated designators, rather than with their OS translations:
+    CLHS 20.2 says the components new-name does not supply come from the
+    file, and `rename-file.5` renames one logical pathname to another and
+    requires the defaulted name back as a logical pathname. The merge is
+    MERGE-PATHNAMES' job and is delegated to it; the OS-side target of the
+    `os.replace` is a separate merge over the *resolved* paths, which is
+    what makes `(rename-file "a/b.txt" "c")` land in `a/` and keep the type
+    (rename-file.3).
     """
     import os
     from fclpy.lispfunc.pathnames import (
@@ -4506,10 +5073,20 @@ def rename_file(filespec, new_name):
             pathname_from_namestring(old_path), "RENAME-FILE: file not found: " + old_path)
 
     old_truename = pathname_from_os_path(os.path.realpath(old_path))
+    # The *returned* defaulted new name is merged in pathname space, on the
+    # untranslated designators -- CLHS 20.2 says new-name is merged with the
+    # pathname of the file, not with its OS translation, and rename-file.5
+    # renames one logical pathname to another and requires the defaulted
+    # name back as a LOGICAL pathname. The OS-side target of the rename is
+    # still computed from the resolved paths, which is what keeps a relative
+    # new-name landing next to the file being renamed.
+    from fclpy.lispfunc.pathnames import _coerce_pathname_designator
     defaulted_new_name = merge_pathnames(
+        _coerce_pathname_designator(new_name, 'RENAME-FILE'),
+        _coerce_pathname_designator(filespec, 'RENAME-FILE'))
+    new_path = merge_pathnames(
         pathname_from_namestring(resolve_filespec(new_name)),
-        pathname_from_namestring(old_path))
-    new_path = defaulted_new_name.namestring()
+        pathname_from_namestring(old_path)).namestring()
 
     try:
         os.replace(old_path, new_path)
@@ -4523,8 +5100,27 @@ def rename_file(filespec, new_name):
 
 @_registry.cl_function('FILE-AUTHOR')
 def file_author(pathspec):
-    """Get file author."""
-    return "unknown"  # Simplified
+    """FILE-AUTHOR (CLHS 21.1.2): the author of the file `pathspec` names.
+
+    The file systems this runs on record no author in the CLHS sense, so the
+    string this answers is implementation-defined. What the spec does pin
+    down are the failure modes, and they are what `file-author.error.3`/`.4`
+    check: a *wild* pathname cannot name one file, and a file that is not
+    there cannot be asked about -- each a FILE-ERROR, not a fabricated
+    answer for whatever the designator happened to spell.
+    """
+    import os
+    from fclpy.lispfunc.pathnames import (
+        _coerce_pathname_designator, _error_if_wild, resolve_filespec)
+    from fclpy.lispfunc.evaluation_conditions import signal_file_error
+
+    pn = _coerce_pathname_designator(pathspec, 'FILE-AUTHOR')
+    _error_if_wild(pn, 'FILE-AUTHOR')
+    path_str = resolve_filespec(pn)
+    if not os.path.exists(path_str):
+        return signal_file_error(
+            pn, "FILE-AUTHOR: file not found: " + path_str)
+    return "unknown"
 
 
 @_registry.cl_function('FILE-LENGTH')
@@ -4545,9 +5141,14 @@ def file_length(stream):
     """
     from .streams import Stream, BroadcastStream, SynonymStream, stream_type_matches
     if isinstance(stream, BroadcastStream):
+        # CLHS 21.1.2: a broadcast stream's file operations act on its LAST
+        # component ("ensure that the last component is taken" is the
+        # broadcast-stream-streams.3 test's own comment) -- delegating to the
+        # first handed a string stream to FILE-LENGTH's type-error check. An
+        # empty broadcast stream is length 0 (`make-broadcast-stream.5`).
         if not stream.streams:
-            return 1
-        return file_length(stream.streams[0])
+            return 0
+        return file_length(stream.streams[-1])
     if isinstance(stream, SynonymStream):
         return file_length(stream._target())
     if not (isinstance(stream, Stream) and stream_type_matches(stream, 'FILE-STREAM')):
@@ -4576,7 +5177,16 @@ def file_position(stream, position=None):
     so a successful seek drops it.
     """
     import os
-    from .streams import Stream
+    from .streams import Stream, BroadcastStream
+
+    if isinstance(stream, BroadcastStream):
+        # CLHS 21.1.2's "last component" rule, same as FILE-LENGTH's: the
+        # position of a broadcast stream is the position of the last stream
+        # it broadcasts to, and 0 when there is none
+        # (`make-broadcast-stream.6`, `broadcast-stream-streams.4`).
+        if not stream.streams:
+            return 0
+        return file_position(stream.streams[-1], position)
 
     if not isinstance(stream, Stream) or not hasattr(stream.file_obj, 'seek'):
         return lisptype.NIL

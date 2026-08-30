@@ -423,12 +423,24 @@ def intern(name, package=None):
     `(intern "" p)` must equal `(intern (make-array 0 :element-type nil) p)`.
     A `NIL`-element-type array's contents are all `NIL`, the textual
     empty string; `intern.3` exercises this directly.
+
+    The string is interned **as given**: INTERN does no case conversion
+    (CLHS 11.2 -- case is a *reader* rule), so `(intern "12e5")` and the
+    reader's `|12e5|` denote the same symbol. The previous default call
+    upcased, and under `:preserve` (`read-symbol.25`) the interned symbol
+    and the read one came out different.
+
+    Interning into the KEYWORD package yields an **external** keyword
+    (CLHS 11.1.2 -- every symbol in KEYWORD is external), which is what
+    `keyword.2` requires of `(do-symbols ...)` over it.
     """
     from .misc_packages import _designator_to_string
     name = _designator_to_string(name)
     from .misc_packages import coerce_to_package
     pkg = coerce_to_package(package)
-    return pkg.intern_symbol(name)
+    if pkg is lisptype.KEYWORD_PACKAGE:
+        return lisptype.intern_keyword(name, exact_case=True)
+    return pkg.intern_symbol(name, exact_case=True)
 
 
 @_registry.cl_function('FIND-SYMBOL')

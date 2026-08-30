@@ -338,6 +338,49 @@ def _compile_time_forms(form):
     return []
 
 
+def _eval_when_body(form):
+    """The body forms of an EVAL-WHEN form, as a Python list."""
+    out = []
+    cur = form.cdr
+    cur = cur.cdr if isinstance(cur, lisptype.lispCons) else lisptype.NIL
+    while isinstance(cur, lisptype.lispCons):
+        out.append(cur.car)
+        cur = cur.cdr
+    return out
+
+
+def _output_forms(form):
+    """The forms COMPILE-FILE writes to the output for one top-level `form`
+    (CLHS 3.2.3.1, not-compile-time mode), as a Python list.
+
+    The output is loaded by the same evaluator that interprets source, and
+    the evaluator runs an EVAL-WHEN's body only in the `:execute` situation
+    -- so a form whose compiled-file behaviour is "run at load" must be
+    emitted as its body, not left in place. Figure 3-7's rows, for a
+    top-level EVAL-WHEN with situations S:
+
+    - :load-toplevel in S (with or without the others): the Action is
+      Process -- the body becomes the top-level forms at that point, so it
+      is what gets emitted (`load.18`, eval-when.1's "load compiled").
+    - :compile-toplevel only: the Action is Evaluate, and the emitted
+      nothing -- the body ran during compilation, and re-emitting the form
+      would make the interpreter run it at load, which no row allows.
+    - neither: the Action is Discard -- emit nothing (eval-when.1's
+      "load compiled" omits the `(:execute)` top-level entry, so an
+      execute-only form must not survive into the output).
+
+    PROGN and LOCALLY are emitted unchanged: their subforms stay in the
+    top-level sequence either way, and no test observes the difference.
+    """
+    name = _operator_name(form)
+    if name == 'EVAL-WHEN':
+        situations = set(_eval_when_situations(form))
+        if situations & {'LOAD-TOPLEVEL', 'LOAD'}:
+            return _eval_when_body(form)
+        return []
+    return [form]
+
+
 def _lisp_list_of(items):
     result = lisptype.NIL
     for item in reversed(list(items)):
@@ -850,20 +893,23 @@ def compile_file(input_file, *, output_file=None, verbose=lisptype.OMITTED,
                 form = read_form(stream, lisptype.NIL, eof)
                 if form is eof:
                     break
-                # CLHS 3.2.4: objects in the form that need MAKE-LOAD-FORM
-                # are externalized before the form is written -- creation
-                # SETQs and runnable initialization forms precede it, the
-                # form's object constants become their reference symbols.
-                # Printed *before* its compile-time effects run, so every
-                # symbol is printed relative to the package current when the
-                # form was read -- which is the package the reader will be in
-                # when the output is loaded back, because the output's own
-                # IN-PACKAGE forms appear there in the same order.
-                for output_form in _externalize_load_forms(form, externalizer):
-                    text = _print_for_output(output_form)
-                    printed_forms.append(text)
-                    if print_p:
-                        write_text(text + "\n")
+                # CLHS 3.2.3.1 first (the not-compile-time-mode output the
+                # form produces), then CLHS 3.2.4: objects in each output
+                # form that need MAKE-LOAD-FORM are externalized before the
+                # form is written -- creation SETQs and runnable
+                # initialization forms precede it, the form's object
+                # constants become their reference symbols. Printed *before*
+                # its compile-time effects run, so every symbol is printed
+                # relative to the package current when the form was read --
+                # which is the package the reader will be in when the output
+                # is loaded back, because the output's own IN-PACKAGE forms
+                # appear there in the same order.
+                for out_form in _output_forms(form):
+                    for output_form in _externalize_load_forms(out_form, externalizer):
+                        text = _print_for_output(output_form)
+                        printed_forms.append(text)
+                        if print_p:
+                            write_text(text + "\n")
                 for compile_time_form in _compile_time_forms(form):
                     lisp_eval(compile_time_form, state.current_environment)
         except ConditionException as exception:
@@ -1327,14 +1373,26 @@ def method_combination_type():
 
 @_registry.cl_function('ARITHMETIC-ERROR-OPERANDS')
 def arithmetic_error_operands(condition):
-    """Get operands from arithmetic error condition."""
-    return []
+    """CLHS ARITHMETIC-ERROR-OPERANDS: the :OPERANDS slot of the condition
+    -- the list of operands the signaling operation was called with. The
+    stub that stood here returned the Python list ``[]`` (standing rule 2)
+    and answered #() for every condition, which is what
+    arithmetic-error.1/.2 walk the mini-universe asserting against."""
+    slots = getattr(condition, '_slots', None)
+    if isinstance(slots, dict):
+        return slots.get('operands') or lisptype.NIL
+    return lisptype.NIL
 
 
 @_registry.cl_function('ARITHMETIC-ERROR-OPERATION')
 def arithmetic_error_operation(condition):
-    """Get operation from arithmetic error condition."""
-    return None
+    """CLHS ARITHMETIC-ERROR-OPERATION: the :OPERATION slot -- the
+    operation that signaled (e.g. the symbol /). The stub that stood here
+    returned Python ``None`` (standing rule 2)."""
+    slots = getattr(condition, '_slots', None)
+    if isinstance(slots, dict):
+        return slots.get('operation') or lisptype.NIL
+    return lisptype.NIL
 
 
 @_registry.cl_function('FILE-ERROR-PATHNAME')
@@ -1432,12 +1490,6 @@ def do_all_symbols_special(form):
 
 
 # --- Declaration and definition macros ---
-@_registry.cl_function('DECLAIM')
-def declaim(*declarations):
-    """Global declaration."""
-    return lisptype.NIL
-
-
 @_registry.cl_function('DECLARE')
 def declare(*declarations):
     """Local declaration."""
@@ -1593,12 +1645,6 @@ def room(x=lisptype.OMITTED):
         f"{'.'.join(str(n) for n in sys.version_info[:3])}.\n",
         None)
     return lisptype.MultipleValues()
-
-
-@_registry.cl_function('STEP')
-def step(form):
-    """Step through evaluation."""
-    return form
 
 
 # --- TRACE / UNTRACE (CLHS 25.1.2) ---
@@ -2091,7 +2137,6 @@ __all__ = [
     'char_code_limit',
     # do_symbols, do_external_symbols, do_all_symbols are now special forms
     # with_package_iterator is now a macro in evaluation_special_forms.py
-    'declaim',
     'declare',
     # NOTE: defclass, defgeneric, defpackage, defstruct are NOT exported here
     # because they are stubs that would override real implementations from classes.py
@@ -2109,7 +2154,6 @@ __all__ = [
     'dribble',
     'disassemble',
     'room',
-    'step',
     'provide',
     'require',
     # make_load_form is now a generic function in misc_clos.py
