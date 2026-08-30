@@ -961,21 +961,21 @@ def eval_let(form, env):
 
 def eval_letstar(form, env):
     """Evaluate LET* special form with sequential binding semantics.
-    
+
     (LET* ((var1 init1) (var2 init2) ...) body...)
-    
+
     In LET*, each init form is evaluated in the environment AFTER previous
     bindings have been established. This is "sequential" binding.
     """
     from .evaluation_core import eval
-    
+
     args = cdr(form)
     if not _consp_internal(args):
         raise lisptype.LispNotImplementedError("LET* requires at least a binding list")
-    
+
     bindings_form = car(args)
     body = cdr(args)
-    
+
     # Create new environment for LET* scope
     letstar_env = lisptype.Environment(env)
 
@@ -993,7 +993,12 @@ def eval_letstar(form, env):
         binding = car(current)
         bound_vars.append(car(binding) if _consp_internal(binding) else binding)
         current = cdr(current)
-    frame = BindingFrame(letstar_env, body=body, bound_vars=bound_vars)
+    # LET* evaluates each init form in `letstar_env`, so a free special declaration
+    # must not be installed until the inits are done -- like DO*.16 and
+    # `install_free_declarations`.
+    frame = BindingFrame(letstar_env, body=body, bound_vars=bound_vars,
+                         defer_free_declarations=True)
+    _, body = body_specials(body)
 
     # Process bindings sequentially - each can see previous ones
     current = bindings_form
@@ -1012,6 +1017,9 @@ def eval_letstar(form, env):
         if isinstance(var, lisptype.LispSymbol):
             frame.bind(var, value)
         current = cdr(current)
+
+    # The inits are done; the body *is* in the scope of the body's declarations.
+    frame.install_free_declarations()
 
     # Update state.current_environment for functions that need it (like LOAD)
     old_env = state.current_environment

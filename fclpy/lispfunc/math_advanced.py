@@ -182,18 +182,19 @@ def expt(base, power):
         if isinstance(base, float):
             return 1.0
         elif isinstance(base, complex):
-            # Check if the base is an exact complex (created from exact inputs)
-            # In Python, all complex parts are floats, but we can heuristically detect
-            # exact complex if both real and imaginary parts are whole numbers.
-            # Exact complex (like #C(1 1) in Lisp) => return exact 1
-            # Float complex (like #C(1.5f0 2.3f0)) => return #C(1.0 0.0)
-            if (isinstance(base.real, int) or base.real == int(base.real)) and \
-               (isinstance(base.imag, int) or base.imag == int(base.imag)):
-                # Both parts look like whole numbers: treat as exact
+            # CLHS 12.1.4.1 / 12.1.4.1.1: x^0 is one *in the base's own
+            # type* -- a rational complex gives the integer 1 (expt.7
+            # loops `(complex i i)` and demands `(eql (expt c 0) 1)`),
+            # a float complex gives a float-parts one (expt.8-.11 demand
+            # `#c(1.0s0 0.0s0)` etc.). The old heuristic keyed on the
+            # parts' *value* being whole, which made a float complex
+            # with whole-valued parts answer the integer -- a type the
+            # base does not have -- and an exact rational complex with
+            # fractional parts (`#c(1/2 1/3)`) answer a float one.
+            if isinstance(base.real, (int, Fraction)) and \
+                    isinstance(base.imag, (int, Fraction)):
                 return 1
-            else:
-                # At least one part has fractional component: return float complex
-                return complex(1.0, 0.0)
+            return complex(1.0, 0.0)
         else:
             if isinstance(power, float):
                 # CLHS 12.1.4.1.1: a float power always produces a float result,

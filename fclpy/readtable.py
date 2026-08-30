@@ -1640,25 +1640,37 @@ class Readtable:
         if read_suppressed():
             return lisptype.NIL
 
-        # Convert Fraction to float for complex construction
-        if isinstance(real_part, Fraction):
-            real_part = float(real_part)
-        if isinstance(imag_part, Fraction):
-            imag_part = float(imag_part)
-
-        # Ensure both parts are numeric
-        if not isinstance(real_part, (int, float)):
+        # Both parts must be *real* numbers -- a rational (int/Fraction) or
+        # a float. A complex part is not a real, so `#c(#c(1 2) 3)` is an
+        # error, as is any other non-number.
+        if not isinstance(real_part, (int, float, Fraction)):
             raise _reader_error(f"Real part must be a number, got {type(real_part).__name__}")
-        if not isinstance(imag_part, (int, float)):
+        if not isinstance(imag_part, (int, float, Fraction)):
             raise _reader_error(f"Imaginary part must be a number, got {type(imag_part).__name__}")
 
-        # CLHS 12.1.5.3: a rational real part with imaginary zero coalesces
-        # to the real part (`syntax.sharp-c.2`: `#C(1 0)` is 1). A float
-        # imaginary zero does not coalesce -- `(complex 1 0.0)` is `#c(1.0
-        # 0.0)` -- so the zero test is on an *integer* imaginary part.
-        if imag_part == 0 and isinstance(imag_part, int) and \
-                isinstance(real_part, int):
+        # The reader applies COMPLEX's rules (CLHS 12.1.5.3), mirroring
+        # `misc_macros.complex_fn`: a *rational* real part with a *rational*
+        # zero imag part coalesces to the real part (`syntax.sharp-c.2`:
+        # `#C(1 0)` is 1; `(complex 1/2 0)` is 1/2). A float zero does not
+        # coalesce -- `(complex 1 0.0)` is `#c(1.0 0.0)` -- and neither
+        # does a float real part (`(complex 1.0 0)` is `#c(1.0 0.0)`).
+        if imag_part == 0 and not isinstance(imag_part, float) and \
+                isinstance(real_part, (int, Fraction)):
             return real_part
+
+        # Both parts rational: keep the literal exact (CLHS 2.3.2 -- the
+        # ratio in the source denotes a ratio). Converting the parts to
+        # float here is what made `#c(1/2 1/3)` read as a float complex
+        # and left `expt.16` comparing a float answer against the exact
+        # `#c(-1/24 23/108)` the source wrote.
+        if isinstance(real_part, (int, Fraction)) and \
+                isinstance(imag_part, (int, Fraction)):
+            from fclpy.lispfunc.math_arithmetic import LispComplex
+            return LispComplex(real_part, imag_part)
+
+        # At least one float: a float-parts complex, as `complex_fn` builds
+        # it (`complex.5`'s rule that a complex with a float part has float
+        # parts throughout).
         return complex(real_part, imag_part)
 
     def _read_array(self, stream, rank):
