@@ -114,9 +114,19 @@ class Pathname:
         directory = None
         if self.directory is not None:
             directory = tuple(norm(c) for c in self.directory)
-        # An unspecified version and :NEWEST denote the same file on a
-        # physical pathname -- MERGE-PATHNAMES's own tests confirm this is
-        # not a simplification: `merge-pathnames.2`-`.4`'s helper checks
+        # The version component, and :UNSPECIFIC in name/type, are not
+        # equality-distinct here: on this implementation's file systems they
+        # name no different file (CLHS 19.2.2.2.3: :unspecific "is considered
+        # to be 'absent' or to 'have no meaning'"; 19.2.2.4.6: other version
+        # values have implementation-defined meaning, and EQUAL's own
+        # requirement is "functionally equivalent"). The SXHASH surrogate for
+        # a pathname is its *namestring* (misc_hashtables.sxhash_key), and a
+        # physical namestring renders no version and no :unspecific name/type
+        # (`render_namestring`/`_render_component`) -- so CLHS 18.2.2's
+        # "(equal x y) implies (= (sxhash x) (sxhash y))" forces EQUAL to read
+        # NIL/:NEWEST/:WILD versions, and :unspecific name/type, as one value.
+        # MERGE-PATHNAMES's own tests confirm the version half is not a
+        # simplification: `merge-pathnames.2`-`.4`'s helper checks
         # `(if (pathname-version p1) (equalp v1 v2) (equalp v2 :newest))`,
         # accepting *either* answer as correct when no version was ever
         # supplied. Without normalizing them here, `(equal (pathname
@@ -124,10 +134,19 @@ class Pathname:
         # MERGE-PATHNAMES answers :NEWEST when `f` names a file (CLHS
         # 19.3.3), while `*load-pathname*`, built straight from a namestring
         # that has no version syntax at all, answers NIL for the identical
-        # file.
-        version = None if self.version is _K_NEWEST else self.version
+        # file. (PATHNAME-MATCH-P is a different operator and still
+        # distinguishes :WILD from NIL -- its matching is `_component_match`,
+        # not this key; `pathname-match-p.5`/`.6` pin that, and
+        # `pathnames-print-and-read-properly` pins the equality side.)
+        def eq_key(c):
+            if c is _K_UNSPECIFIC:
+                return None
+            return norm(c)
+
+        version = None if self.version in (_K_NEWEST, _K_WILD, _K_UNSPECIFIC) \
+            else self.version
         return (norm(self.host), norm(self.device), directory,
-                norm(self.name), norm(self.type), version, self.logical)
+                eq_key(self.name), eq_key(self.type), version, self.logical)
 
 
 # ===== Directory component coercion =====
