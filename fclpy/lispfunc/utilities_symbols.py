@@ -70,7 +70,12 @@ def symbol_value(*args):
         )
     symbol = _require_symbol(args[0], 'SYMBOL-VALUE')
     # T, NIL, and keywords are self-evaluating and therefore always bound.
-    if symbol is lisptype.T or getattr(symbol, 'name', None) in ('T', 'NIL') or isinstance(symbol, lisptype.lispKeyword):
+    # NIL can appear as None, lispNull, or a LispSymbol named "NIL", so
+    # check explicitly for each form before checking the name attribute.
+    if (symbol is lisptype.T or symbol is None or symbol is lisptype.NIL
+            or isinstance(symbol, lisptype.lispNull)
+            or isinstance(symbol, lisptype.lispKeyword)
+            or getattr(symbol, 'name', None) in ('T', 'NIL')):
         return symbol
     value = getattr(symbol, 'value', None)
     if value is None:

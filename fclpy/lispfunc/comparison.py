@@ -976,6 +976,58 @@ def type_of(object):
     elif callable(object):
         return lisptype.LispSymbol('FUNCTION')
     else:
+        # Final fallback: check representation families that CLASS-OF knows
+        # about but TYPE-OF had no branch for (streams, hash tables,
+        # pathnames, etc.). Return the CLHS class name so CLASS-OF doesn't
+        # have to fall back to calling this function (avoiding recursion).
+        from fclpy.lispfunc.misc_hashtables import is_hash_table
+        if is_hash_table(object):
+            return lisptype.LispSymbol('HASH-TABLE')
+        try:
+            from fclpy.lispfunc.pathnames import Pathname
+            if isinstance(object, Pathname):
+                logical = getattr(object, 'logical', False)
+                return lisptype.LispSymbol('LOGICAL-PATHNAME' if logical else 'PATHNAME')
+        except Exception:
+            pass
+        from fclpy.readtable import Readtable
+        if isinstance(object, Readtable):
+            return lisptype.LispSymbol('READTABLE')
+        try:
+            from fclpy.lispfunc.utilities_system import RandomState
+            if isinstance(object, RandomState):
+                return lisptype.LispSymbol('RANDOM-STATE')
+        except Exception:
+            pass
+        # Check stream types
+        from fclpy.lispfunc import streams as _streams
+        _STREAM_CLASS_NAMES = (
+            ('StringInputStream', 'STRING-STREAM'),
+            ('StringOutputStream', 'STRING-STREAM'),
+            ('FillPointerOutputStream', 'STRING-STREAM'),
+            ('TwoWayStream', 'TWO-WAY-STREAM'),
+            ('EchoStream', 'ECHO-STREAM'),
+            ('ConcatenatedStream', 'CONCATENATED-STREAM'),
+            ('BroadcastStream', 'BROADCAST-STREAM'),
+            ('SynonymStream', 'SYNONYM-STREAM'),
+        )
+        for cls_name, type_name in _STREAM_CLASS_NAMES:
+            pycls = getattr(_streams, cls_name, None)
+            if isinstance(pycls, type) and isinstance(object, pycls):
+                return lisptype.LispSymbol(type_name)
+        # Check condition types
+        try:
+            from fclpy import lisptype as _lisptype_module
+            _condition_base_class = getattr(_lisptype_module, 'Condition', ())
+            if isinstance(object, _condition_base_class):
+                from fclpy.lispfunc.evaluation_conditions import _condition_class_for_name
+                from fclpy.classes import _CONDITION_NAMES_MOST_SPECIFIC_FIRST
+                for cond_name in _CONDITION_NAMES_MOST_SPECIFIC_FIRST:
+                    pycls = _condition_class_for_name(cond_name)
+                    if isinstance(pycls, type) and isinstance(object, pycls):
+                        return lisptype.LispSymbol(cond_name)
+        except Exception:
+            pass
         return lisptype.T
 
 
