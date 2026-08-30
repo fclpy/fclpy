@@ -1042,6 +1042,13 @@ def type_of(object):
             # and they still disagree about streams, which that function has
             # no cell for at all.
             return lisptype.LispSymbol('RESTART')
+        from fclpy import classes as _classes_mod
+        if isinstance(object, _classes_mod.Method):
+            # A DEFMETHOD product is a STANDARD-METHOD (CLHS 7.6.2); the
+            # type-of answer must be a name whose class `classes.find_class`
+            # registers, or CLASS-OF falls back to the T class and
+            # TYPE-OF.4's `(subtypep (type-of x) (class-of x))` fails.
+            return lisptype.LispSymbol('STANDARD-METHOD')
         try:
             from fclpy.lispfunc.utilities_system import RandomState
             if isinstance(object, RandomState):
@@ -1059,6 +1066,12 @@ def type_of(object):
             ('ConcatenatedStream', 'CONCATENATED-STREAM'),
             ('BroadcastStream', 'BROADCAST-STREAM'),
             ('SynonymStream', 'SYNONYM-STREAM'),
+            # The base class last: `*standard-output*` and friends are bare
+            # `Stream` instances, and with no entry for it `(type-of
+            # *standard-output*)` answered T -- which `CLASS-OF` then followed
+            # to the T class, and every STREAM-specializer dispatch on a
+            # console stream ranked against the wrong class.
+            ('Stream', 'STREAM'),
         )
         for cls_name, type_name in _STREAM_CLASS_NAMES:
             pycls = getattr(_streams, cls_name, None)

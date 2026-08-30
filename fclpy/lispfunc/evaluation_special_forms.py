@@ -167,109 +167,6 @@ def eval_setq(form, env):
     return result
 
 
-def eval_psetq(form, env):
-    """Evaluate PSETQ special form.
-
-    Syntax: (PSETQ var1 val1 var2 val2 ...)
-
-    Like SETQ, but every *form in source order* (the value-form, then the
-    next var's place subforms) is evaluated before any assignment. A
-    var naming a symbol-macro (e.g. via SYMBOL-MACROLET) is assigned
-    through its expansion: a chain of symbol-macros resolves to the
-    underlying variable, a CAR/CDR form is mutated in place, and a more
-    complex expansion is handed to `_place_accessor` so the assignment
-    lands exactly where the expansion points
-    (`psetq.4`/`psetq.5`/`psetq.7`). Without the L-R interleaving,
-    `psetq.7` was resolving both x and y's `AREF` place first (i
-    incremented twice), then evaluating both value-forms (i incremented
-    twice more) -- the standard's L-R order has place, value, place,
-    value, so each symbol-macro's `INCF` runs *between* value reads and
-    yields the (aref a 1)=2, (aref a 3)=4 the test expects.
-    """
-    from .evaluation_core import eval
-
-    args = cdr(form)
-    pairs = []  # (var, value_form)
-
-    while _consp_internal(args) and _consp_internal(cdr(args)):
-        var = car(args)
-        value_form = car(cdr(args))
-
-        if not isinstance(var, lisptype.LispSymbol):
-            raise lisptype.LispNotImplementedError("PSETQ: variable must be a symbol")
-
-        pairs.append((var, value_form))
-        args = cdr(cdr(args))
-
-    # CLHS 5.1.3 + 5.1.1.1: in source order, evaluate each var's
-    # symbol-macro expansion (the "place" part), then the value-form,
-    # then the next var's place, and so on -- *not* all places first
-    # then all values. Materialise place closures as we go so the next
-    # value-form reads the side effects of the previous place
-    # resolution, then read each value-form, then assign the matching
-    # place closure with that value.
-    value_results = []
-    place_setters = []  # parallel to value_results
-
-    for var, value_form in pairs:
-        expansion = env.get_symbol_macro(var)
-        setter = None
-        if expansion is None:
-            setter = ('var', var)
-        elif isinstance(expansion, lisptype.LispSymbol):
-            place = expansion
-            while isinstance(place, lisptype.LispSymbol):
-                deeper = env.get_symbol_macro(place)
-                if deeper is None:
-                    break
-                place = deeper
-            if isinstance(place, lisptype.LispSymbol):
-                setter = ('var', place)
-            else:
-                try:
-                    _g, _s = _place_accessor(place, env)
-                    setter = ('accessor', _s)
-                except lisptype.LispError:
-                    setter = None
-        elif _consp_internal(expansion) and isinstance(car(expansion), lisptype.LispSymbol):
-            op_name = car(expansion).name
-            place_args = cdr(expansion)
-            if op_name in ('CAR', 'CDR') and _consp_internal(place_args):
-                target = eval(car(place_args), env)
-                if _consp_internal(target):
-                    setter = ('cell', target, op_name == 'CAR')
-                else:
-                    setter = None
-            else:
-                try:
-                    _g, _s = _place_accessor(expansion, env)
-                    setter = ('accessor', _s)
-                except lisptype.LispError:
-                    setter = None
-        place_setters.append(setter)
-        # Evaluate the value-form *now* (after this place's subforms,
-        # before the next place's) -- `psetq.7` is the canonical test.
-        value_results.append(eval(value_form, env))
-
-    for setter, value in zip(place_setters, value_results):
-        if setter is None:
-            continue
-        kind = setter[0]
-        if kind == 'cell':
-            target = setter[1]
-            is_car = setter[2]
-            if is_car:
-                target.car = value
-            else:
-                target.cdr = value
-        elif kind == 'var':
-            env.set_variable(setter[1], value)
-        elif kind == 'accessor':
-            setter[1](value)
-
-    return lisptype.NIL
-
-
 def eval_the(form, env):
     """Evaluate THE special operator.
 
@@ -290,125 +187,6 @@ def eval_the(form, env):
 
     # Do not evaluate type_spec here; evaluate and return the expression value
     return eval(expr, env)
-
-
-def eval_incf(form, env):
-    """Evaluate INCF special form - increment a place.
-    
-    (INCF place) increments place by 1
-    (INCF place delta) increments place by delta
-    
-    Currently only supports simple variable places, not general setf-able places.
-    """
-    from .evaluation_core import eval
-    
-    args = cdr(form)
-    if not _consp_internal(args):
-        raise lisptype.LispNotImplementedError("INCF requires at least 1 argument")
-
-    place = car(args)
-    delta_args = cdr(args)
-
-    # CLHS 5.1.2.8: a bare symbol may name a symbol-macro (e.g. a
-    # WITH-SLOTS/WITH-ACCESSORS binding), in which case it is not a
-    # "simple variable" at all -- resolve it to its expansion first so the
-    # fast path below only ever applies to a genuine variable, matching
-    # SETF/SETQ's own resolution loop.
-    while isinstance(place, lisptype.LispSymbol):
-        expansion = env.get_symbol_macro(place)
-        if expansion is None:
-            break
-        place = expansion
-
-    # Handle simple variable case. CLHS 5.1.3: evaluate the delta before
-    # reading the current value (place's subforms, none for a bare variable,
-    # are evaluated first, then delta, then the place's value is read).
-    if isinstance(place, lisptype.LispSymbol):
-        delta = eval(car(delta_args), env) if _consp_internal(delta_args) else 1
-        if env.has_variable(place):
-            current_value = env.find_variable(place)
-        else:
-            current_value = 0
-        new_value = current_value + delta
-        env.set_variable(place, new_value)
-        return new_value
-
-    # Any other place `_place_accessor` knows (CAR/CDR/CADR/AREF/GETF/...)
-    # -- shared with PUSH/PUSHNEW/ROTATEF/SHIFTF, so a place newly
-    # supported there works for INCF too instead of needing its own copy
-    # of the same place logic. `_place_accessor` evaluates the place's own
-    # subforms (e.g. an AREF index) as soon as it is called, which is why
-    # delta is evaluated only *after* this -- `incf.order.1` pins that
-    # order directly: `(incf (aref x (incf i)) (incf i))` requires the
-    # place's own `(incf i)` to run before delta's.
-    getter, setter = _place_accessor(place, env)
-    current_value = getter()
-    delta = eval(car(delta_args), env) if _consp_internal(delta_args) else 1
-    try:
-        new_value = current_value + delta
-    except TypeError:
-        raise lisptype.LispTypeError(
-            actual_value=current_value, expected_type='number',
-            message="INCF: cannot add delta to place value")
-    setter(new_value)
-    return new_value
-
-
-def eval_decf(form, env):
-    """Evaluate DECF special form - decrement a place.
-    
-    (DECF place) decrements place by 1
-    (DECF place delta) decrements place by delta
-    
-    Currently only supports simple variable places, not general setf-able places.
-    """
-    from .evaluation_core import eval
-    
-    args = cdr(form)
-    if not _consp_internal(args):
-        raise lisptype.LispNotImplementedError("DECF requires at least 1 argument")
-
-    place = car(args)
-    delta_args = cdr(args)
-
-    # CLHS 5.1.2.8: resolve a symbol-macro place before the fast path below
-    # -- see INCF's identical loop above for why.
-    while isinstance(place, lisptype.LispSymbol):
-        expansion = env.get_symbol_macro(place)
-        if expansion is None:
-            break
-        place = expansion
-
-    # Handle simple variable case. CLHS 5.1.3: evaluate the delta before
-    # reading the current value (place's subforms, none for a bare variable,
-    # are evaluated first, then delta, then the place's value is read).
-    if isinstance(place, lisptype.LispSymbol):
-        delta = eval(car(delta_args), env) if _consp_internal(delta_args) else 1
-        if env.has_variable(place):
-            current_value = env.find_variable(place)
-        else:
-            current_value = 0
-        new_value = current_value - delta
-        env.set_variable(place, new_value)
-        return new_value
-
-    # Any other place `_place_accessor` knows (CAR/CDR/CADR/AREF/GETF/...)
-    # -- shared with PUSH/PUSHNEW/ROTATEF/SHIFTF/INCF, so a place newly
-    # supported there works for DECF too instead of needing its own copy.
-    # `_place_accessor` evaluates the place's own subforms as soon as it
-    # is called, which by CLHS 5.1.3 must happen before delta -- see INCF
-    # for the complex-place evaluation order that was corrected by decf.order.2.
-    getter, setter = _place_accessor(place, env)
-    delta = eval(car(delta_args), env) if _consp_internal(delta_args) else 1
-    current_value = getter()
-    try:
-        new_value = current_value - delta
-    except TypeError:
-        raise lisptype.LispTypeError(
-            actual_value=current_value, expected_type='number',
-            message="DECF: cannot subtract delta from place value")
-    setter(new_value)
-    return new_value
 
 
 @_registry.cl_macro('WITH-OPEN-FILE', documentation='WITH-OPEN-FILE macro expander')
@@ -3941,161 +3719,6 @@ def copy_structure(structure):
                                  slot_values=dict(structure.slot_values))
 
 
-def eval_pop(form, env):
-    """Evaluate POP special form.
-
-    (POP place) — Remove and return the first element from the list stored
-    in place. Goes through `_place_accessor` (shared with ROTATEF/SHIFTF)
-    so any place kind it supports works here too, not just a bare
-    variable -- `cons/pop.lsp`'s `(pop (aref x i))`-style cases need
-    exactly that.
-    """
-    args = cdr(form)
-    if not _consp_internal(args):
-        raise lisptype.LispNotImplementedError("POP requires a place argument")
-
-    place = car(args)
-    getter, setter = _place_accessor(place, env)
-    old_value = getter()
-    if old_value is lisptype.NIL or old_value is None:
-        # (car nil) and (cdr nil) are both NIL, not an error (CLHS NIL is
-        # the empty list) -- `pop.2` pops an already-empty place and
-        # expects `(nil nil)` back, not a signaled error.
-        setter(lisptype.NIL)
-        return lisptype.NIL
-    if not _consp_internal(old_value):
-        raise lisptype.LispError("POP: place does not hold a cons")
-
-    setter(old_value.cdr)
-    return old_value.car
-
-
-def eval_remf(form, env):
-    """Evaluate REMF special form.
-
-    (REMF place indicator) -- CLHS 5.1.3: removes the indicator/value pair
-    named by `indicator` from the plist stored in `place`, returning a
-    generalized boolean (true if a pair was removed, NIL if the indicator
-    was not found). `place`'s subforms are evaluated exactly once, before
-    `indicator` (pinned by `remf.order.1`/`.2`), through `_place_accessor`
-    (shared with PUSH/POP/PUSHNEW/ROTATEF) so any place kind it supports
-    works here too.
-
-    Previously a `cl_function` that received `place` already evaluated to
-    a value and unconditionally returned NIL without removing anything --
-    a place designator is not a value, and REMF must be able to write the
-    shortened list back to arbitrary places, not just read one.
-    """
-    from .evaluation_core import eval
-
-    args = cdr(form)
-    if not _consp_internal(args) or not _consp_internal(cdr(args)):
-        raise lisptype.LispNotImplementedError("REMF requires a place and an indicator")
-
-    place = car(args)
-    getter, setter = _place_accessor(place, env)
-    indicator = eval(car(cdr(args)), env)
-
-    plist = getter()
-    if not _consp_internal(plist):
-        return lisptype.NIL
-    if plist.car is indicator:
-        if not _consp_internal(plist.cdr):
-            raise lisptype.LispError("REMF: odd-length property list")
-        setter(plist.cdr.cdr)
-        return lisptype.T
-
-    prev = plist
-    if not _consp_internal(prev.cdr):
-        raise lisptype.LispError("REMF: odd-length property list")
-    current = prev.cdr.cdr
-    while _consp_internal(current):
-        if not _consp_internal(current.cdr):
-            raise lisptype.LispError("REMF: odd-length property list")
-        if current.car is indicator:
-            prev.cdr.cdr = current.cdr.cdr
-            return lisptype.T
-        prev = current
-        current = current.cdr.cdr
-    return lisptype.NIL
-
-
-def eval_push(form, env):
-    """Evaluate PUSH special form.
-
-    (PUSH item place) — Prepend item to the list stored in place, and store
-    the result back in place. CLHS 5.1.3: item is evaluated before place's
-    subforms (pinned by `push.order.1`-`.3`); `_place_accessor` (shared with
-    ROTATEF/SHIFTF) evaluates those subforms exactly once, so any place kind
-    it supports works here too, not just a bare variable.
-    """
-    from .evaluation_core import eval
-
-    args = cdr(form)
-    if not _consp_internal(args) or not _consp_internal(cdr(args)):
-        raise lisptype.LispNotImplementedError("PUSH requires an item and a place argument")
-
-    item_form = car(args)
-    place = car(cdr(args))
-
-    item = eval(item_form, env)
-    getter, setter = _place_accessor(place, env)
-    new_value = cons(item, getter())
-    setter(new_value)
-    return new_value
-
-
-def eval_pushnew(form, env):
-    """Evaluate PUSHNEW special form.
-
-    (PUSHNEW item place &key key test test-not) — CLHS 5.1.3 defines this
-    directly in terms of ADJOIN: `(setf place (adjoin item place ...))`,
-    with item evaluated first, then place's subforms, then the keyword
-    arguments left to right as written (pinned by `pushnew.order.1`-`.3`
-    and `pushnew.12`-`.15`).
-
-    Previously a `cl_function` (`sequences_higher.pushnew`) that received
-    `place` already evaluated to a value, so it only ever worked when place
-    was a plain Python-list variable, and it ignored :test/:key/:test-not
-    entirely -- the largest 100%-failing file in the suite (plan.md C16).
-    """
-    from .evaluation_core import eval
-    from .sequences_higher import adjoin
-
-    args = cdr(form)
-    if not _consp_internal(args) or not _consp_internal(cdr(args)):
-        raise lisptype.LispNotImplementedError("PUSHNEW requires an item and a place argument")
-
-    item_form = car(args)
-    place = car(cdr(args))
-    kw_forms = cdr(cdr(args))
-
-    item = eval(item_form, env)
-    getter, setter = _place_accessor(place, env)
-    old_value = getter()
-
-    test = test_not = key = None
-    cur = kw_forms
-    while _consp_internal(cur):
-        kw = car(cur)
-        cur = cdr(cur)
-        if not _consp_internal(cur):
-            raise lisptype.LispError("PUSHNEW: odd number of keyword arguments")
-        value = eval(car(cur), env)
-        cur = cdr(cur)
-        kw_name = kw.name if isinstance(kw, lisptype.LispSymbol) else None
-        if kw_name == 'TEST':
-            test = value
-        elif kw_name == 'TEST-NOT':
-            test_not = value
-        elif kw_name == 'KEY':
-            key = value
-
-    new_value = adjoin(item, old_value, test=test, test_not=test_not, key=key)
-    setter(new_value)
-    return new_value
-
-
 def _setf_form(head, *args):
     """Build the Lisp form (head arg1 arg2 ...), unevaluated.
 
@@ -4193,23 +3816,48 @@ _registry.function_registry['%FCLPY-ARRAY-PLACE-SET'] = _registry.RegistryEntry(
     kind='function', func=_fclpy_array_place_set)
 
 
+def _fclpy_array_place_apply(op_sym, value, *args):
+    """Internal helper: the write half of an APPLY place over an array
+    operator -- `(setf (apply #'aref a i1... spread) v)`. `args` are APPLY's
+    own arguments after the function designator, already evaluated, so the
+    *last* one is APPLY's spread list and the rest are the leading
+    subscripts (CLHS 14.2 / 5.1.2.5): `(apply #'aref a 1 2 '(3 4))` reads
+    `(aref a 1 2 3 4)`.
+    """
+    rest = list(args)
+    spread = rest.pop() if rest else None
+    from .sequence_protocol import seq_elements
+    indices = rest + (list(seq_elements(spread)) if not _null_internal(spread) else [])
+    _arrays.array_place_write(op_sym.name, indices, value)
+    return value
+
+
+_registry.function_registry['%FCLPY-ARRAY-PLACE-APPLY'] = _registry.RegistryEntry(
+    name='%FCLPY-ARRAY-PLACE-APPLY', py_name='_fclpy_array_place_apply',
+    kind='function', func=_fclpy_array_place_apply)
+
+
 def _fclpy_setf_symbol_value(sym, value):
     sym.value = value
     return value
 
 
 def _fclpy_setf_symbol_function(sym, value):
-    # Find the environment where this symbol's function is bound and update it there
-    # This ensures we update the correct environment level (local or global)
+    """SETF of SYMBOL-FUNCTION writes the symbol's *global* function cell
+    (CLHS symbol-function has no lexical component: a FLET/MACROLET local
+    binding shadows it but is not written by it), so this walks to the root
+    environment and binds there. Writing to `state.current_environment`
+    instead was wrong twice over: from inside a SETF expansion it was the
+    expansion's own transient LET* environment, whose bindings evaporate
+    with it (fboundp answered NIL immediately after the setf), and even at
+    the site it would have overwritten a lexical FLET binding instead of
+    the global cell."""
+    if not isinstance(sym, lisptype.LispSymbol):
+        raise lisptype.LispError("SETF SYMBOL-FUNCTION: requires a symbol")
     env = state.current_environment
-    while env is not None:
-        if env._function_map and sym in env._function_map:
-            # Found where it's stored, update it
-            env.add_function(sym, value)
-            return value
+    while env is not None and env.parent is not None:
         env = env.parent
-    # Not found in any parent, add to current environment
-    state.current_environment.add_function(sym, value)
+    env.add_function(sym, value)
     return value
 
 
@@ -4259,19 +3907,17 @@ def _fclpy_setf_sequence_element(seq, idx, value):
 
 
 def _fclpy_setf_fdefinition(name, value):
-    """Set function definition for a function name."""
+    """SETF of FDEFINITION (CLHS): writes the *global* function binding --
+    see `_fclpy_setf_symbol_function` for why the root environment, and not
+    `state.current_environment` (a SETF expansion's own LET*, or a lexical
+    FLET that shadows the name without being its target), is where this
+    lands."""
     from .utilities_functions import _function_spec_to_key
     key = _function_spec_to_key(name)
-    # Find the environment where this function is bound and update it there
     env = state.current_environment
-    while env is not None:
-        if env._function_map and key in env._function_map:
-            # Found where it's stored, update it
-            env.add_function(key, value)
-            return value
+    while env is not None and env.parent is not None:
         env = env.parent
-    # Not found in any parent, add to current environment
-    state.current_environment.add_function(key, value)
+    env.add_function(key, value)
     return value
 
 
@@ -4292,19 +3938,23 @@ def _fclpy_setf_get(sym, indicator, value):
 
 
 def _fclpy_setf_getf(plist, indicator, value):
-    """Set property value in a property list."""
-    # GETF returns (value, found) but here we're just setting the value
-    # We need to return the actual plist with the updated value
-    # But wait, GETF takes a plist and returns a value
-    # For SETF, we need to modify the plist that's stored elsewhere
-    # This is actually complex because the plist is usually a variable
-    # Actually, looking at CLHS, (SETF (GETF place indicator) value)
-    # modifies place to contain the new plist
-    # So we need to return the new plist, but we only have access to
-    # the old one and the indicator and value
-    # The actual implementation should be handled by a special case
-    # in the ROTATEF/SETF code that knows about GETF
-    raise lisptype.LispNotImplementedError("GETF place modification requires special handling")
+    """The write half of a GETF place (CLHS 5.1.2.6): mutate an existing
+    indicator's value cell in place, or build the fresh
+    (indicator value) pair prepended to `plist` -- either way the *new*
+    plist is returned, and the GETF expansion's LET writes it back through
+    the plist place's own storing form. (The old body raised
+    LispNotImplementedError: it was the store form GET-SETF-EXPANSION's
+    GETF branch generated, and nothing could ever evaluate it -- so INCF
+    of a GETF place signalled undefined-function %FCLPY-SETF-GETF while
+    SETF of one worked, because only the ladder handled GETF.)
+    """
+    current = plist
+    while _consp_internal(current) and _consp_internal(cdr(current)):
+        if car(current) == indicator:
+            cdr(current).car = value
+            return plist
+        current = cdr(cdr(current))
+    return lisptype.lispCons(indicator, lisptype.lispCons(value, plist))
 
 
 def _fclpy_setf_find_class(name, value):
@@ -4319,42 +3969,51 @@ def _fclpy_setf_find_class(name, value):
     return value
 
 
-def _fclpy_setf_ldb(size, pos, current, value):
-    """Set bits in a value (helper for SETF of LDB)."""
-    mask = (1 << int(size)) - 1
-    return (int(current) & ~(int(mask) << int(pos))) | ((int(value) & int(mask)) << int(pos))
+def _fclpy_setf_macro_function(sym, value):
+    """Install a macro definition for `sym` (SETF of MACRO-FUNCTION) in the
+    root environment -- a global binding (CLHS macro-function, like
+    symbol-function, has no lexical component)."""
+    if not isinstance(sym, lisptype.LispSymbol):
+        raise lisptype.LispError("SETF MACRO-FUNCTION: requires a symbol")
+    env = state.current_environment
+    while env is not None and env.parent is not None:
+        env = env.parent
+    env.add_function(sym, value)
+    return value
 
 
 def _fclpy_setf_subseq(seq, start, end, new_seq):
-    """Replace a subsequence in a sequence."""
+    """(SETF (SUBSEQ seq start [end]) new-seq) -- CLHS 17.1: copy as many of
+    new-seq's elements as fit into seq in place; it does not resize seq.
+    `end` of NIL means "to the end of seq" (the 2-argument place's expansion
+    binds its end temp to NIL). One implementation for both faces of the
+    protocol: the `%FCLPY-SETF-SUBSEQ` store form and `_place_accessor`'s
+    SUBSEQ closure both call this.
+    """
+    from .sequence_protocol import seq_elements
+    src = seq_elements(new_seq)
+    start_idx = int(start)
     if _consp_internal(seq):
-        # For lists, we need to modify the cells in place
-        # This is complex, so we'll just modify the car values
-        start_idx = int(start)
-        end_idx = int(end) if end is not None else None
         cell = seq
-        # Skip to start position
         for _ in range(start_idx):
             if not _consp_internal(cell):
                 raise lisptype.LispError("SUBSEQ place: start index out of bounds")
             cell = cdr(cell)
-        # Copy values from new_seq
-        new_cell = new_seq
-        idx = 0
-        while _consp_internal(cell) and _consp_internal(new_cell):
-            if end_idx is not None and start_idx + idx >= end_idx:
-                break
-            cell.car = new_cell.car
+        limit = (end - start_idx) if not _null_internal(end) else len(src)
+        i = 0
+        while _consp_internal(cell) and i < len(src) and i < limit:
+            cell.car = src[i]
             cell = cdr(cell)
-            new_cell = cdr(new_cell)
-            idx += 1
+            i += 1
         return new_seq
-    else:
-        # For vectors (Python lists / strings)
-        start_idx = int(start)
-        end_idx = int(end) if end is not None else len(seq)
-        seq[start_idx:end_idx] = new_seq
-        return new_seq
+    # Vector (Python list / LispString / LispArray): write in place, never
+    # resize -- the old `seq[start:end] = new_seq` slice assignment let a
+    # longer new-seq grow the vector, which SUBSEQ's place definition
+    # forbids.
+    end_idx = end if not _null_internal(end) else len(seq)
+    for i in range(start_idx, min(end_idx, start_idx + len(src))):
+        seq[i] = src[i - start_idx]
+    return new_seq
 
 
 for _helper_name, _helper_fn in (
@@ -4366,8 +4025,9 @@ for _helper_name, _helper_fn in (
     ('%FCLPY-SETF-SEQUENCE-ELEMENT', _fclpy_setf_sequence_element),
     ('%FCLPY-SETF-FDEFINITION', _fclpy_setf_fdefinition),
     ('%FCLPY-SETF-GET', _fclpy_setf_get),
+    ('%FCLPY-SETF-GETF', _fclpy_setf_getf),
     ('%FCLPY-SETF-FIND-CLASS', _fclpy_setf_find_class),
-    ('%FCLPY-SETF-LDB', _fclpy_setf_ldb),
+    ('%FCLPY-SETF-MACRO-FUNCTION', _fclpy_setf_macro_function),
     ('%FCLPY-SETF-SUBSEQ', _fclpy_setf_subseq),
 ):
     _registry.function_registry[_helper_name] = _registry.RegistryEntry(
@@ -4428,12 +4088,42 @@ def get_setf_expansion(place, env):
         temps, vals, stores, store_form, access_form = get_setf_expansion(subplace, env)
         return temps, vals, stores, store_form, _setf_form('THE', type_spec, access_form)
 
-    # CLHS 5.1.2.5 -- only the literal-final-argument shape is resolvable
-    # without evaluating the place.
+    # CLHS 5.1.2.5 -- a literal-final-argument spread rewrites to the
+    # underlying place outright; a *computed* spread keeps APPLY's shape,
+    # storing through the operator's writer applied over the spread (the
+    # same semantics `(setf (apply #'aref a i args) v)` has everywhere:
+    # `(apply #'(setf aref) v a i args)` -- defgeneric.33).
     if op_name == 'APPLY':
         rewritten = _rewrite_setf_apply(place_args)
         if rewritten is not None:
             return get_setf_expansion(rewritten, env)
+        fn_form = place_args[0] if place_args else None
+        if (_consp_internal(fn_form) and isinstance(car(fn_form), lisptype.LispSymbol)
+                and car(fn_form).name == 'FUNCTION'):
+            fn_name = car(cdr(fn_form))
+            if isinstance(fn_name, lisptype.LispSymbol):
+                temps = [_gensym_fn() for _ in place_args[1:]]
+                store = _gensym_fn()
+                if _arrays.is_array_place(fn_name.name):
+                    # Array-place ops write through the same runtime the
+                    # literal shape rewrites to; the spread list is the
+                    # temp holding APPLY's last argument.
+                    store_form = _setf_form(
+                        'PROGN',
+                        _setf_form('%FCLPY-ARRAY-PLACE-APPLY',
+                                   _setf_form('QUOTE', fn_name), store, *temps),
+                        store)
+                else:
+                    # CLHS 5.1.2.9's writer, applied: the newvalue first,
+                    # then the access-form's arguments, then the spread.
+                    store_form = _setf_form(
+                        'PROGN',
+                        _setf_form('APPLY', _setf_form('FUNCTION',
+                                   _setf_form('SETF', fn_name)),
+                                   store, *temps),
+                        store)
+                access_form = _setf_form('APPLY', _setf_form('FUNCTION', fn_name), *temps)
+                return temps, list(place_args[1:]), [store], store_form, access_form
         raise lisptype.LispNotImplementedError(
             "SETF of APPLY requires a literal quoted (or NIL) final argument list")
 
@@ -4524,39 +4214,119 @@ def get_setf_expansion(place, env):
         store_form = _setf_form('PROGN', _setf_form('%FCLPY-SETF-FDEFINITION', temp, store), store)
         return [temp], list(place_args), [store], store_form, _setf_form(op, temp)
 
-    # GET - symbol property
-    if op_name == 'GET' and len(place_args) >= 2:
-        # GET takes (sym indicator &optional default), but for SETF we only care about sym and indicator
-        temp0, temp1, store = _gensym_fn(), _gensym_fn(), _gensym_fn()
-        # Only evaluate the first two arguments for the store operation
-        temps = [temp0, temp1]
-        vals = list(place_args[:2])
-        store_form = _setf_form('PROGN', _setf_form('%FCLPY-SETF-GET', temp0, temp1, store), store)
-        return temps, vals, [store], store_form, _setf_form('GET', temp0, temp1)
-
-    # GETF - property list element
-    if op_name == 'GETF' and len(place_args) >= 2:
-        # GETF takes (plist indicator &optional default)
-        # SETF of GETF modifies the plist, which is stored in the first argument's place
-        # This requires special handling because the plist itself must be updated
-        # For now, we'll handle this by returning the plist with the value updated
-        temps = [_gensym_fn() for _ in place_args[:2]]
-        store = _gensym_fn()
-        # (SETF (GETF plist-place indicator) value) should set the plist-place
-        # to a modified plist with indicator mapped to value
-        # We need a helper that does this
-        # Let's use the same pattern as GETHASH
-        store_form = _setf_form('PROGN', _setf_form('%FCLPY-SETF-GETF', temps[0], temps[1], store), store)
-        return temps, list(place_args[:2]), [store], store_form, _setf_form('GETF', *temps)
-
-    # FIND-CLASS - class registry
-    if op_name == 'FIND-CLASS' and len(place_args) == 1:
+    # MACRO-FUNCTION - install a macro definition (global, plus the current
+    # environment for immediate visibility; the same two writes the ladder's
+    # branch made). FDEFINITION above is the same shape one branch earlier.
+    if op_name == 'MACRO-FUNCTION' and len(place_args) == 1:
         temp, store = _gensym_fn(), _gensym_fn()
-        store_form = _setf_form('PROGN', _setf_form('%FCLPY-SETF-FIND-CLASS', temp, store), store)
+        store_form = _setf_form('PROGN',
+                                _setf_form('%FCLPY-SETF-MACRO-FUNCTION', temp, store),
+                                store)
         return [temp], list(place_args), [store], store_form, _setf_form(op, temp)
 
-    # LDB and SUBSEQ are not yet supported - fallback to generic handler
-    # TODO: implement proper LDB and SUBSEQ place expansion
+    # GET - symbol property
+    if op_name == 'GET' and len(place_args) >= 2:
+        # GET takes (sym indicator &optional default): every subform
+        # including the optional default gets a temp, exactly as GETHASH's
+        # branch does -- CLHS 5.1.1.1 evaluates a place's subforms left to
+        # right exactly once, and place_args[:2] dropped the default. The
+        # store ignores the default's value, but the access form keeps it
+        # so a read-modify-write op (INCF) sees it.
+        temps = [_gensym_fn() for _ in place_args]
+        store = _gensym_fn()
+        store_form = _setf_form('PROGN',
+                                _setf_form('%FCLPY-SETF-GET', temps[0], temps[1], store),
+                                store)
+        return temps, list(place_args), [store], store_form, _setf_form('GET', *temps)
+
+    # GETF - property list element. The plist is itself a nested place
+    # (CLHS 5.1.2.6), so its own expansion is composed in: the new plist is
+    # computed once and written back through the plist place's own storing
+    # form, and the fresh store variable below is what the caller binds the
+    # newvalue to. The indicator and the optional default are GETF's own
+    # subforms and are bound like any other temps (CLHS 5.1.1.1 -- the same
+    # rule GETHASH's branch applies to its default; setf-getf.order.1/.2
+    # count each subform exactly once), and the access form keeps the
+    # default so a read-modify-write op (INCF) sees it (incf-getf.1).
+    if op_name == 'GETF' and place_args:
+        plist_temps, plist_vals, plist_stores, plist_store_form, plist_access = \
+            get_setf_expansion(place_args[0], env)
+        if len(plist_stores) != 1:
+            raise lisptype.LispNotImplementedError(
+                "GETF of a plist place with more than one store variable")
+        ind_form = place_args[1] if len(place_args) > 1 else lisptype.NIL
+        default_form = place_args[2] if len(place_args) > 2 else lisptype.NIL
+        ind_t, dv_t, store = _gensym_fn(), _gensym_fn(), _gensym_fn()
+        compute = _setf_form('%FCLPY-SETF-GETF', plist_access, ind_t, store)
+        write_through = _setf_form(
+            'LET', _setf_pylist_to_form([_setf_form(plist_stores[0], compute)]),
+            plist_store_form)
+        store_form = _setf_form('PROGN', write_through, store)
+        return (plist_temps + [ind_t, dv_t],
+                plist_vals + [ind_form, default_form],
+                [store], store_form,
+                _setf_form('GETF', plist_access, ind_t, dv_t))
+
+    # LDB and MASK-FIELD (CLHS 5.1.2.11 -- the bytespec places): the inner
+    # place is itself a place, so its own expansion is composed in. The
+    # stored integer is the real DPB/DEPOSIT-FIELD computation over the
+    # inner place's current value (the same arithmetic the closure pair in
+    # `_place_accessor` applies, reached through the arithmetic functions
+    # rather than a second copy of the formula), and the fresh store
+    # variable is what the caller binds the newvalue to -- SETF of LDB
+    # answers the newvalue itself, not the field-dressed integer
+    # (ldb.place.1). Subform order (CLHS 5.1.1.1, ldb.place.order.1): the
+    # bytespec's subforms, then the inner place's, then the newvalue.
+    if op_name in ('LDB', 'MASK-FIELD') and len(place_args) == 2:
+        inner_temps, inner_vals, inner_stores, inner_store_form, inner_access = \
+            get_setf_expansion(place_args[1], env)
+        if len(inner_stores) != 1:
+            raise lisptype.LispNotImplementedError(
+                f"SETF of ({op_name} ... ) over a multi-store place")
+        bp_t, store = _gensym_fn(), _gensym_fn()
+        op_fn = 'DPB' if op_name == 'LDB' else 'DEPOSIT-FIELD'
+        compute = _setf_form(op_fn, store, bp_t, inner_access)
+        write_through = _setf_form(
+            'LET', _setf_pylist_to_form([_setf_form(inner_stores[0], compute)]),
+            inner_store_form)
+        store_form = _setf_form('PROGN', write_through, store)
+        return ([bp_t] + inner_temps,
+                [place_args[0]] + inner_vals,
+                [store], store_form,
+                _setf_form(op, bp_t, inner_access))
+
+    # (SETF (SUBSEQ seq start [end]) new-seq) -- CLHS 17.1: copies as many
+    # of new-seq's elements as fit into seq in place. The runtime does the
+    # write (`_fclpy_setf_subseq`, shared with `_place_accessor`'s closure);
+    # the read side is the ordinary SUBSEQ function, which NIL-as-end means
+    # "to the end" for -- so a 2-argument place binds its end temp to NIL.
+    if op_name == 'SUBSEQ' and place_args:
+        end_form = place_args[2] if len(place_args) > 2 else lisptype.NIL
+        temps = [_gensym_fn() for _ in range(3)]
+        store = _gensym_fn()
+        store_form = _setf_form('PROGN',
+                                _setf_form('%FCLPY-SETF-SUBSEQ',
+                                           temps[0], temps[1], temps[2], store),
+                                store)
+        access_form = _setf_form('SUBSEQ', *temps)
+        return temps, [place_args[0], place_args[1], end_form], \
+            [store], store_form, access_form
+
+    # FIND-CLASS - class registry. The optional `environment` argument is a
+    # subform like any other (CLHS 5.1.1.1: it must be evaluated exactly
+    # once, find-class.16 counts it), so every place argument gets a temp;
+    # the store uses only the name.
+    if op_name == 'FIND-CLASS' and place_args:
+        temps = [_gensym_fn() for _ in place_args]
+        store = _gensym_fn()
+        store_form = _setf_form('PROGN',
+                                _setf_form('%FCLPY-SETF-FIND-CLASS', temps[0], store),
+                                store)
+        access_form = _setf_form(op, *temps)
+        return temps, list(place_args), [store], store_form, access_form
+
+    # LDB and SUBSEQ are handled directly above; what is left falls through
+    # to the registered expanders and the two generic writer shapes below.
 
     # User-registered DEFSETF / DEFINE-SETF-EXPANDER take priority over the
     # operator's own macro definition (setf-macro.2: a DEFSETF overrides a
@@ -4572,6 +4342,28 @@ def get_setf_expansion(place, env):
     expanded, did_expand = _direct_macroexpand_1(place, env)
     if did_expand:
         return get_setf_expansion(expanded, env)
+
+    # fclpy's SET-<name> writer convention: an operator whose write half is
+    # a dedicated `SET-<op>` function (SET-READTABLE-CASE, ...) -- the same
+    # lookup the ladder's struct/reader branch made, so e.g.
+    # `(setf (readtable-case rt) :upcase)` works here exactly as it did
+    # there. Checked for existence at expansion time; an operator without
+    # one falls through to the generic `(setf fn)` fallback below.
+    setter_sym = lisptype.LispSymbol(f"SET-{op_name}")
+    setter_fn = global_env.find_func(setter_sym)
+    if setter_fn is None or not callable(setter_fn):
+        py_name = _registry.get_function_py_name(f"SET-{op_name}")
+        if py_name:
+            import fclpy.lispfunc as _lispfunc_mod
+            setter_fn = getattr(_lispfunc_mod, py_name, None)
+    if callable(setter_fn):
+        temps = [_gensym_fn() for _ in place_args]
+        store = _gensym_fn()
+        store_form = _setf_form('PROGN',
+                                _setf_form(setter_sym, *temps, store),
+                                store)
+        access_form = _setf_form(op, *temps)
+        return temps, list(place_args), [store], store_form, access_form
 
     # CLHS 5.1.2.9's fallback: (setf (fn a1..an) v) => (funcall #'(setf fn) v a1..an)
     temps = [_gensym_fn() for _ in place_args]
@@ -4641,33 +4433,6 @@ def _expand_registered_setf(entry, op, place_args, env):
         return temps, vals, stores, values[3], values[4]
 
     raise lisptype.LispNotImplementedError(f"SETF: unsupported expander type {etype!r}")
-
-
-def _setf_needs_expansion_bridge(op_name, place_op, env):
-    """True if SETF's legacy per-operator ladder does not (yet) cover this
-    place correctly and should instead route through `_place_accessor` /
-    GET-SETF-EXPANSION: VALUES/THE/APPLY-as-place, any DEFSETF/DEFINE-
-    SETF-EXPANDER registration (the ladder's own trailing short-form
-    branch calls a registered update-fn directly as a Python callable,
-    which silently discards the expansion instead of evaluating it when
-    the update-fn is itself a macro -- `defsetf.2b`), or a macro place.
-    Every op the ladder already special-cases directly (CAR, CDR, AREF,
-    GETF, ...) returns False so that existing, unchanged code path keeps
-    running.
-    """
-    if op_name in ('VALUES', 'THE', 'APPLY', '%SPECIAL-REF'):
-        return True
-    global_env = env
-    while global_env.parent is not None:
-        global_env = global_env.parent
-    expanders = getattr(global_env, 'setf_expanders', None)
-    if expanders and op_name in expanders:
-        return True
-    try:
-        fn = env.find_func(place_op)
-    except Exception:
-        fn = None
-    return bool(fn is not None and getattr(fn, '__is_macro__', False))
 
 
 def _accessor_from_expansion(place, env):
@@ -4957,33 +4722,39 @@ def _place_accessor(place_form, env):
         if op_name == 'LDB' and _consp_internal(place_args) and _consp_internal(cdr(place_args)):
             # (LDB bytespec place) -- CLHS 22.1.3; `(byte size position)`
             # is a plain (size, position) Python tuple here (`math_arithmetic.byte_fn`).
+            # Read and write go through the real LDB/DPB functions rather
+            # than a second copy of their arithmetic -- the form half of
+            # this place (`get_setf_expansion`'s LDB branch) generates
+            # calls to the same two functions, so the two faces of the
+            # protocol cannot disagree.
             size, pos = eval(car(place_args), env)
             inner_getter, inner_setter = _place_accessor(car(cdr(place_args)), env)
-            mask = (1 << size) - 1
 
             def _ldb_getter():
-                return (inner_getter() >> pos) & mask
+                from .math_arithmetic import ldb as _ldb_fn
+                return _ldb_fn((size, pos), inner_getter())
 
             def _ldb_setter(v):
-                current = inner_getter()
-                inner_setter((current & ~(mask << pos)) | ((v & mask) << pos))
+                from .math_arithmetic import dpb as _dpb_fn
+                inner_setter(_dpb_fn(v, (size, pos), inner_getter()))
                 return v
 
             return (_ldb_getter, _ldb_setter)
 
         if op_name == 'MASK-FIELD' and _consp_internal(place_args) and _consp_internal(cdr(place_args)):
             # (MASK-FIELD bytespec place) -- like LDB but the field keeps
-            # its original bit position instead of being shifted down.
+            # its original bit position instead of being shifted down; the
+            # write is DEPOSIT-FIELD's own computation.
             size, pos = eval(car(place_args), env)
             inner_getter, inner_setter = _place_accessor(car(cdr(place_args)), env)
-            mask = ((1 << size) - 1) << pos
 
             def _mask_field_getter():
-                return inner_getter() & mask
+                from .math_arithmetic import mask_field as _mask_field_fn
+                return _mask_field_fn((size, pos), inner_getter())
 
             def _mask_field_setter(v):
-                current = inner_getter()
-                inner_setter((current & ~mask) | (v & mask))
+                from .math_arithmetic import deposit_field as _deposit_field_fn
+                inner_setter(_deposit_field_fn(v, (size, pos), inner_getter()))
                 return v
 
             return (_mask_field_getter, _mask_field_setter)
@@ -5005,24 +4776,12 @@ def _place_accessor(place_form, env):
                 from .sequences_compose import subseq as _subseq_fn
                 return _subseq_fn(seq, start, end)
 
+            def _subseq_getter():
+                from .sequences_compose import subseq as _subseq_fn
+                return _subseq_fn(seq, start, end)
+
             def _subseq_setter(new_seq):
-                from .sequence_protocol import seq_elements
-                src = seq_elements(new_seq)
-                if _consp_internal(seq):
-                    cell = seq
-                    for _ in range(start):
-                        cell = cdr(cell)
-                    i = 0
-                    limit = (end - start) if end is not None else len(src)
-                    while _consp_internal(cell) and i < len(src) and i < limit:
-                        cell.car = src[i]
-                        cell = cdr(cell)
-                        i += 1
-                else:
-                    limit = end if end is not None else len(seq)
-                    for i in range(start, min(limit, start + len(src))):
-                        seq[i] = src[i - start]
-                return new_seq
+                return _fclpy_setf_subseq(seq, start, end, new_seq)
 
             return (_subseq_getter, _subseq_setter)
 
@@ -5116,69 +4875,6 @@ def _place_accessor(place_form, env):
         return _accessor_from_expansion(place_form, env)
 
     raise lisptype.LispNotImplementedError(f"place not supported: {place_form}")
-
-
-def eval_rotatef(form, env):
-    """Evaluate ROTATEF special form.
-
-    (ROTATEF place*) — Evaluates each place's shared subforms exactly
-    once (left to right), then rotates their values: place[i] gets the
-    old value of place[i+1], with the last place getting the first
-    place's old value. Always returns NIL.
-    """
-    args = cdr(form)
-
-    places = []
-    current = args
-    while _consp_internal(current):
-        places.append(car(current))
-        current = cdr(current)
-
-    if not places:
-        return lisptype.NIL
-
-    accessors = [_place_accessor(p, env) for p in places]
-    old_values = [get() for get, _ in accessors]
-
-    n = len(accessors)
-    for i in range(n):
-        accessors[i][1](old_values[(i + 1) % n])
-
-    return lisptype.NIL
-
-
-def eval_shiftf(form, env):
-    """Evaluate SHIFTF special form.
-
-    (SHIFTF place+ newvalue) -- CLHS 5.1.3: every place's subforms are
-    resolved left to right (via `_place_accessor`, shared with ROTATEF),
-    then their old values are read; `newvalue` is evaluated *after* all of
-    that (`shiftf-order.*` pins this). place[i] is set to the old value of
-    place[i+1], the last place is set to `newvalue`, and the first place's
-    old value is returned.
-    """
-    from .evaluation_core import eval
-
-    forms = []
-    current = cdr(form)
-    while _consp_internal(current):
-        forms.append(car(current))
-        current = cdr(current)
-
-    if len(forms) < 2:
-        raise lisptype.LispNotImplementedError("SHIFTF requires at least one place and a new-value form")
-
-    *place_forms, value_form = forms
-    accessors = [_place_accessor(p, env) for p in place_forms]
-    old_values = [get() for get, _ in accessors]
-    new_value = eval(value_form, env)
-
-    n = len(accessors)
-    for i in range(n):
-        target_value = old_values[i + 1] if i + 1 < n else new_value
-        accessors[i][1](target_value)
-
-    return old_values[0]
 
 
 def eval_define_modify_macro(form, env):
@@ -6103,7 +5799,6 @@ __all__ = [
     'eval_defconstant',
     'eval_defstruct',
     'eval_defclass',
-    'eval_pop',
     'eval_defgeneric',
     'eval_defmethod',
     'eval_define_method_combination',

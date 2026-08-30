@@ -1025,6 +1025,11 @@ def _representation_name_of(obj: Any) -> Optional[str]:
             return 'RANDOM-STATE'
     except Exception:
         pass
+    if isinstance(obj, Method):
+        # A DEFMETHOD product is a STANDARD-METHOD (CLHS 7.6.2) -- the class
+        # `_init_builtin_classes` registers, so CLASS-OF answers a real class
+        # and method dispatch on METHOD/STANDARD-METHOD specializers ranks.
+        return 'STANDARD-METHOD'
     from fclpy.lispfunc import streams as _streams
     for cls, name in _STREAM_CLASS_NAMES:
         pycls = getattr(_streams, cls, None)
@@ -1035,7 +1040,9 @@ def _representation_name_of(obj: Any) -> Optional[str]:
 
 # streams.py's Python stream classes -> their CLHS 21.2 class names, most
 # specific first. (The module cannot be imported eagerly here: it lives
-# above classes.py in the bootstrap's import order.)
+# above classes.py in the bootstrap's import order.) The base `Stream` is
+# last: `*standard-output*` and friends are bare `Stream` instances, and
+# with no entry for them CLASS-OF answered the T class.
 _STREAM_CLASS_NAMES = (
     ('StringInputStream', 'STRING-STREAM'),
     ('StringOutputStream', 'STRING-STREAM'),
@@ -1045,6 +1052,7 @@ _STREAM_CLASS_NAMES = (
     ('ConcatenatedStream', 'CONCATENATED-STREAM'),
     ('BroadcastStream', 'BROADCAST-STREAM'),
     ('SynonymStream', 'SYNONYM-STREAM'),
+    ('Stream', 'STREAM'),
 )
 
 

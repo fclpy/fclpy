@@ -3,6 +3,7 @@
 import fclpy.lisptype as lisptype
 from .core import car, cdr, _consp_internal, _null_internal, cons, _check_list
 from .evaluation_core import ThrowException
+from .math_arithmetic import _s_plus_ as _lisp_plus
 
 
 class LoopFinishException(ThrowException):
@@ -2108,7 +2109,12 @@ def eval_loop(form, env):
             elif acc_type == 'append' and acc_value is not lisptype.NIL and acc_value is not None:
                 state['items'].append(acc_value)
         elif acc_type == 'sum':
-            state['number'] += acc_value
+            # Through the Lisp + function, not Python's +=: the numeric
+            # tower's exactness rules (an exact COMPLEX staying exact --
+            # LOOP.10.73/.87) live in one place, `math_arithmetic._s_plus_`,
+            # and a Python `+=` on the accumulator silently produced a raw
+            # float-pair complex instead.
+            state['number'] = _lisp_plus(state['number'], acc_value)
         elif acc_type == 'count':
             if lisptype.is_truthy(acc_value):
                 state['number'] += 1

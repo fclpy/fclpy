@@ -1277,7 +1277,16 @@ def _class_cell_of(obj):
     if isinstance(obj, lisptype.Condition):
         return _cell_key(type(obj))
     if isinstance(obj, _classes.LispClass):
-        return 'STANDARD-CLASS'
+        # A class object is an instance of its *metaclass* (CLHS 4.3.7):
+        # a DEFCLASS's product of STANDARD-CLASS, a DEFSTRUCT's of
+        # STRUCTURE-CLASS (`evaluation_special_forms.py` records exactly
+        # that), the built-in type classes of BUILT-IN-CLASS. This is the
+        # same rule `classes.class_of` applies to a class object, so TYPEP
+        # and CLASS-OF cannot disagree about it -- the hardcoded
+        # 'STANDARD-CLASS' here made `(typep (find-class 's)
+        # 'structure-class)` NIL for every DEFSTRUCT, which is what
+        # ansi-test's STRUCT-TEST-nn/14 and STRUCTURE-1-13 assert.
+        return getattr(obj, 'metaclass_name', 'STANDARD-CLASS')
     if isinstance(obj, _classes.GenericFunction):
         return 'STANDARD-GENERIC-FUNCTION'
     from fclpy.lispfunc.misc_hashtables import is_hash_table
@@ -1306,7 +1315,31 @@ def _class_cell_of(obj):
         return 'RESTART'
     from fclpy.lispfunc.pathnames import Pathname
     if isinstance(obj, Pathname):
-        return 'PATHNAME'
+        # A logical pathname is a *subtype* here (`_CLASS_PARENTS`:
+        # LOGICAL-PATHNAME under PATHNAME), so the two names must land in
+        # different cells or `(typep p 'logical-pathname)` is NIL for every
+        # logical pathname.
+        return 'LOGICAL-PATHNAME' if getattr(obj, 'logical', False) else 'PATHNAME'
+    try:
+        # A stream is an instance of exactly one of the CLHS 21.2 stream
+        # classes; `stream_type_matches` is the same object model STREAMP
+        # answers from, so the cell and the predicate cannot disagree. The
+        # concrete subtypes are asked first so the cell is the most specific
+        # class; a bare base `Stream` (the console streams) is a STREAM.
+        from fclpy.lispfunc.streams import Stream, stream_type_matches
+        for _stream_type in ('STRING-STREAM', 'FILE-STREAM', 'TWO-WAY-STREAM',
+                             'ECHO-STREAM', 'CONCATENATED-STREAM',
+                             'BROADCAST-STREAM', 'SYNONYM-STREAM'):
+            if stream_type_matches(obj, _stream_type):
+                return _stream_type
+        if isinstance(obj, Stream):
+            return 'STREAM'
+    except Exception:
+        pass
+    if isinstance(obj, _classes.Method):
+        # A DEFMETHOD product is a STANDARD-METHOD (CLHS 7.6.2) --
+        # METHOD/STANDARD-METHOD both answer T for it through `_CLASS_PARENTS`.
+        return 'STANDARD-METHOD'
     if callable(obj):
         # A DEFINE-CONDITION :READER is a generic function (CLHS 9.4) but is
         # not a `classes.GenericFunction` -- that object model is not wired
@@ -1319,6 +1352,13 @@ def _class_cell_of(obj):
         # cell sits below GENERIC-FUNCTION and beside it.
         if getattr(obj, '_condition_reader_generic', False):
             return 'GENERIC-FUNCTION'
+        # COMPILED-FUNCTION-P's own answer (everything callable here is
+        # Python, so a function object with a code object is a compiled
+        # function): the cell must agree with the predicate or
+        # `check-type-predicate` collects the mismatch. FUNCTION still
+        # contains this cell (`_CLASS_PARENTS`).
+        if hasattr(obj, '__code__'):
+            return 'COMPILED-FUNCTION'
         return 'FUNCTION'
     return 'STRUCTURE-OBJECT'
 

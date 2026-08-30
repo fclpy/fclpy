@@ -198,6 +198,19 @@ history is preserved in condensed form in [Changelog](docs/changelog.md).
 >      branch) and every future one are safe for these macros. A *user*
 >      DEFMACRO may still run arbitrary code at expansion time — that is
 >      what macros are, not a defect.
+> 13. **EQUALP of two equal rank-2 arrays answers NIL** (found 2026-08-30
+>    while classifying M5's targeted runs).
+>
+>    - *Plain version:* `(equalp (make-array '(2 2) :initial-contents
+>      '((0 0) (0 a))) (make-array '(2 2) :initial-contents '((0 0)
+>      (0 a))))` is NIL. Confirmed at HEAD with the M5 changes stashed —
+>      pre-existing, not a place-protocol regression.
+>    - *What it costs:* `SETF-APPLY.2` (the setf itself works; the test's
+>      `equalp` comparison fails) and `EQUALP.7`/`EQUALP.16` in
+>      `data-and-control-flow`; plausibly anything asserting equalp
+>      equivalence of multi-dimensional arrays. `places.lsp`'s 1 residual
+>      failure is this, not SETF.
+>    - *Owner:* **M9** (EQUALP/sequences), not M5.
 
 > ### Latest full run (2026-08-30): 98.8% passing, 265 failing — up from 95.4%
 >
@@ -242,6 +255,163 @@ history is preserved in condensed form in [Changelog](docs/changelog.md).
 > generated code's fresh, uninterned operator symbols are unaffected), so
 > nothing needed to change in `standard_macros.py` itself once it existed.
 
+
+> ### Session handoff (2026-08-30, late): full-run regressions diagnosed and fixed — 496 → ~330 measured, remainder recorded below
+>
+> **What the regression was.** The full run that completed at 21:14 (496
+> failing, on a tree this session did not touch) regressed against the
+> 17:05 amended checklist in streams/objects/pathnames/iteration/files/
+> conditions/structures. Bisected by timestamp, not guessed: commit
+> `cc14282` ("Fixed class and types", 17:23) rewrote `TYPEP` (in
+> `comparison.py`) to consult `typespec.type_contains` **first** for every
+> symbol/cons specifier — and the typespec CLASS sort's object→cell
+> mapping (`typespec._class_cell_of`) was incomplete, so it answered a
+> *certain NIL* for objects it had no cell for, shadowing the legacy
+> ladder branches that knew the right answer (comparison.py's STREAM,
+> METHOD, LOGICAL-PATHNAME branches were dead for symbol specifiers).
+> One mechanism: ~250 of the regressions. The other ~40 lived in the
+> run's "286 unattributable" bucket — the bulk was OPEN.\* (155) and
+> STRUCT-TEST-\* (44), whose failures were the same mechanism (asserts
+> like `(typep s 'file-stream)`).
+>
+> **Fixed (all verified by targeted runs, merged into the checklist with
+> `--update-checklist`):**
+> - `typespec._class_cell_of` completed: stream cells (each concrete
+>   subtype via `streams.stream_type_matches`, then base `Stream` →
+>   'STREAM' — `*standard-output*` is a *bare* Stream, so the subclass-only
+>   tables in `classes.py`/`comparison.py` missed every console stream);
+>   `classes.Method` → 'STANDARD-METHOD'; `Pathname.logical` →
+>   'LOGICAL-PATHNAME'; a callable with `__code__` → 'COMPILED-FUNCTION'
+>   (mirrors `compiled-function-p`, COMPILED-FUNCTION-P.1's agreement
+>   check); and a `LispClass` object now maps to its **metaclass** cell
+>   (`getattr(obj, 'metaclass_name', ...)`, not a hardcoded
+>   'STANDARD-CLASS') — that last one alone fixed all 44
+>   `STRUCT-TEST-nn/14` + `STRUCTURE-1-13` (DEFSTRUCT already recorded
+>   `metaclass_name='STRUCTURE-CLASS'`; only the cell model ignored it).
+> - The same completions went into the two sibling tables
+>   (`comparison.type_of`, `classes._representation_name_of`: base
+>   `Stream`, `Method`) so `type-of`/`class-of` agree with `typep` — the
+>   "merge the two tables" instruction of finding 1 below, partially done
+>   (the string-cell model is now consistent; `classes.class_of` still has
+>   its own ladder feeding off `type_of`).
+> - `LOOP`'s SUM accumulator accumulated with Python `+=`, bypassing the
+>   exact numeric tower (`LOOP.10.73/.87` answered raw `10+10j` instead of
+>   `#C(10 10)`); it now goes through `math_arithmetic._s_plus_`.
+> - SETF of APPLY with a *computed* spread (`(setf (apply #'aref y args)
+>   x)`): array-place ops store through the new `%FCLPY-ARRAY-PLACE-APPLY`
+>   runtime (last evaluated arg is APPLY's spread list), everything else
+>   through CLHS 5.1.2.9's writer applied — `defgeneric.33`.
+> - The FIND-CLASS place expansion now temps the optional `environment`
+>   subform (`find-class.16/.19`).
+>
+> **Measured movement vs the 496 run (per-directory, checklist merged):**
+> streams 37→**0**, pathnames 15→**0**, conditions 3→**0**, structures
+> 45→**0**, objects 15→**3**, cons 16→**3**, files 5→**1**, symbols
+> 13→**10**, types-and-classes 31→**20**, data-and-control-flow 21→**16**,
+> iteration 13→**11**. types-and-classes, symbols and iteration are now
+> *below* their 17:05 baselines.
+>
+> ### What to do next (the remainder, for the next session)
+>
+> 1. **FIND-CLASS.22/.23** (objects, 2): `(setf (find-class 'x) nil)`
+>    followed by FUNCALLing a GF whose method specializes on the
+>    unregistered class. The full forms are in `run_all_tests.log` (grep
+>    `Test FIND-CLASS.22 failed`). Owner: CLOS. Suspect: dispatch or
+>    `MAKE-INSTANCE` after unregistration, not the place itself.
+> 2. **DEFGENERIC.30** (1): plan.md's M4 note records
+>    `:generic-function-class → recorded, DEFGENERIC.30` as done, but it
+>    fails. Re-diagnose against the CLOS rework.
+> 3. **RecursionError ×11 in `run_all_tests.log`**: COPY-TREE.2,
+>    INTERSECTION.12, NINTERSECTION.3/.10/.11/.12, UNION.24, NUNION.24,
+>    SET-DIFFERENCE.13 — the set-operation/copy-tree family recursing in
+>    Python (large ~100-element arguments, `do-random-unions`-style
+>    helpers). Convert the recursive helper to iteration or raise the
+>    conversion boundary. The single **UnicodeEncodeError** is the known
+>    cp1252 console issue (finding 10: run with
+>    `PYTHONIOENCODING=utf-8`).
+> 4. **TYPEP's bridge still has `except Exception: pass`** (from
+>    `cc14282`) — standing rule 4. A control-transfer exception escaping
+>    `type_contains` is silently swallowed into a legacy-ladder retry.
+>    Make it loud or catch precisely.
+> 5. **Fold the remaining directories into the checklist** (mechanical,
+>    `run_ansi.py <dir> --update-checklist`): printer, characters,
+>    strings, packages, hash-tables, system-construction, misc,
+>    auxiliary. Everything else is current as of this session.
+> 6. **Pre-existing, *not* regressions** (do not re-diagnose): the LOOP
+>    `AND`-joined parallel FOR clauses (plan.md C1 follow-up — 11 of
+>    iteration's 11: LOOP.4.7/.4.8 duplicated-destructuring
+>    PROGRAM-ERROR, LOOP.5.ERROR.3/.4, LOOP.7.18-.20 missing
+>    PACKAGE-ERROR, LOOP.11.12/.11.22, LOOP.13.87, LOOP.17.21 — plus
+>    LDIFF.2/MAPCAN.3/NTH.1 in cons); CCASE.31/CTYPECASE.12; EQUALP of
+>    rank-2 arrays (finding 13); the FORMAT tail.
+> 7. **Verify `TRUENAME.5`** (files' 1 remaining) against the baseline
+>    (files was 1 failing at 17:05 — likely the same test; confirm before
+>    calling it new).
+> 8. **Then a full ~86-minute run is mandatory** — mandatory twice over
+>    here: the M5 conversions touch SETF, and every regression fix above
+>    was verified only by targeted runs. Refresh
+>    `docs/ansi_checklist_baseline.json` from it (`--save-baseline`) and
+>    move the §1 scoreboard. This session's changes were never measured
+>    by the 21:14 run (it imported its tree at 17:59).
+>
+> **Work-splitting hint for a multi-agent session:** the items are
+> disjoint by mechanism — (1)+(2) are CLOS, (3) is sequences/set-ops,
+> (4) is one function, (5) is mechanical I/O, (6) is documented debt,
+> (7) is one probe, (8) must go last and alone. Nothing else in the tree
+> should touch `typespec._class_cell_of` without reading its comment
+> block first: it is now the one object→class mapping the CLASS sort
+> consults, and the two sibling tables were brought in line with it.
+>
+> ### M5 is done (2026-08-30): SETF/PSETF are real expansions; one place protocol
+>
+> The successor item the M4 note below pointed at is closed. `SETF`/`PSETF`
+> expand through `_place_full` — `get_setf_expansion` — to
+> `(let* ((temps vals...) (store value)) store-form)`, one pair per PROGN
+> element, exactly the CLHS 5.1.2 shape; the `eval_setf` ladder extracted in
+> M4 is deleted, as are the nine dead `eval_*` place workers whose macro
+> expanders had already replaced them (INCF/DECF/PUSH/POP/PUSHNEW/REMF/
+> ROTATEF/SHIFTF/PSETQ — all of which expand through the *same*
+> `_place_full`). What made this more than a cleanup: the form protocol was
+> the *weaker* of the two faces, and the operators that had no choice but to
+> use it were failing on places the ladder knew. `get_setf_expansion` now
+> answers every place kind the ladder did — LDB/MASK-FIELD composed from the
+> inner place's own expansion through the real DPB/DEPOSIT-FIELD, SUBSEQ, a
+> GETF whose store runtime actually exists (the old `%FCLPY-SETF-GETF`
+> raised `LispNotImplementedError`, so INCF of a GETF place signalled
+> undefined-function while SETF of one worked), GET's default subform
+> evaluated, MACRO-FUNCTION, and the `SET-<name>` writer convention — and
+> the closure face (`_place_accessor`) shares the runtimes instead of
+> carrying a second copy of the arithmetic.
+>
+> Two defects the conversion exposed, both fixed in the same change:
+> `_fclpy_setf_symbol_function`/`_fclpy_setf_fdefinition` wrote the function
+> cell into `state.current_environment` — which inside a SETF expansion is
+> the expansion's own transient LET* (let* mirrors it), so the binding
+> evaporated with it and `(fboundp g)` answered NIL immediately after
+> `(setf (symbol-function g) #'car)` — and, more basically, into the
+> *lexical* environment at all, when CLHS's symbol-function/fdefinition/
+> macro-function are global cells. All three runtimes now walk to the root
+> environment (pytest's `TestFmakunbound` caught the first; the
+> flet-shadowing case caught the second).
+>
+> **Measured (targeted, checklist NOT merged — a full run was in flight):**
+> `rotatef.lsp` 12→0, `getf.lsp` 3→0, `places.lsp` 1 (pre-existing,
+> below), `psetf`/`defsetf`/`define-setf-expander`/`get-setf-expansion`/
+> `ldb`/`mask-field`/`incf`/`decf`/`push`/`pushnew`/`pop`/`remf`/`macrolet`/
+> `loop` all 0, and the whole `data-and-control-flow` directory 77→17
+> failing with every survivor an identified pre-existing family. pytest
+> 2097 green; duplicates gate clean.
+>
+> **About the full run that was in flight:** it *completed* at 21:14 the
+> same day (COMPLETENESS: OK, 21908 accounted, 496 failing) but it measured
+> HEAD as of its 17:59 launch — Python imported the tree before any M5 edit
+> — so it does **not** measure this milestone; M5 still needs its own full
+> run. Its 496-vs-265 movement against the earlier 08-30 run is entirely in
+> the "not attributable to a file" bucket (286, up from 4): the baseline
+> check answers **zero per-file regressions**, so the gap is an attribution
+> artifact of that run's shape (or failures the static scan cannot place),
+> not a spread of file-level regressions. Diagnosing it, and re-measuring
+> the scoreboard with M5 in, are the next session's opening moves.
 
 > ### M4 is complete (2026-08-30): all 87 CLHS macros are real macros
 >
@@ -1787,7 +1957,7 @@ Milestones now describe *mechanisms*, and map onto the clusters above.
 | **M2** | Environment model | **binding forms done**, and **the global environment done (2026-08-15)** — one `BindingFrame` decides lexical vs. dynamic for LET, LET* and all eight iteration forms, and a global variable has one home, the symbol's value cell. Outstanding: `is_truthy(False)`, and the lambda-list binders, which are M3's | C1, X2 |
 | **M3** | One lambda-list engine | **ordinary lambda list done (2026-08-22)** — LAMBDA/DEFUN/FLET/LABELS share `make_ordinary_function`, which binds through `BindingFrame` and signals the CLHS 3.5.1 arity errors; DEFMETHOD shares its tail binder. Outstanding: the **macro** lambda list (`_create_macro_function`) and `bind_destructuring_pattern` are still two more binders, neither signalling a PROGRAM-ERROR | C17, X2 |
 | **M4** | A real macro system | **DONE** (2026-08-30) — all 87 CLHS *Macro* operators are real macros; 3 of 5 *Local Macro*s, the other two deliberate (see the M4-complete note in §1). Roughly half are still `_reuse_definer` staging posts rather than real expansions — a quality item, not an open milestone | — |
-| **M5** | `GET-SETF-EXPANSION` / places | not started — deletes ~600 lines of ladder code, now sitting in `evaluation_core.eval_setf` where M4's extraction left it as one replaceable piece | C16 |
+| **M5** | `GET-SETF-EXPANSION` / places | **DONE (2026-08-30)** — SETF/PSETF are real CLHS 5.1.2 expansions over `get_setf_expansion` (via `_place_full`); the ~540-line `eval_setf` ladder and the dead `eval_incf/decf/push/pop/pushnew/remf/rotatef/shiftf/psetq` workers are deleted. `get_setf_expansion` gained the place kinds the ladder had and it lacked — LDB/MASK-FIELD (through the real DPB/DEPOSIT-FIELD), SUBSEQ, a working GETF (its store runtime previously raised), GET's default subform, MACRO-FUNCTION, the `SET-<name>` writer — so the *form* face stopped being the weaker copy: `rotatef.lsp` 12→0 and `getf.lsp` 3→0 failing without either file being targeted. `_place_accessor` remains as the closure face (SETQ/PSETQ symbol-macro paths, STORE-VALUE restarts) sharing the same runtimes. Verified: pytest 2097 green (the `FMAKUNBOUND` unit test caught a real defect the conversion exposed — `_fclpy_setf_symbol_function` wrote into the expansion's transient LET* env; symbol-function/fdefinition/macro-function now write the *root* env, which is what CLHS means by these being global cells), duplicates gate clean, targeted dcf sweep 77→17 failing with every survivor a pre-existing family. A full run re-measures the scoreboard | C16 |
 | **M6** | Multiple values, sequences | partial | C3, C5, X2, X3 |
 | **M7** | Non-local control flow | partial — name-based block/tag matching, no identity objects | — |
 | **M8** | Conditions and restarts | **signaling core done**; restart half + `DEFINE-CONDITION` + raise-site migration remain | C9, X1 |

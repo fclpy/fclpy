@@ -413,6 +413,66 @@ def _psetq_expander(form, env):
                       + body_forms + [lisptype.NIL])
 
 
+@_standard_macro('SETF')
+def _setf_expander(form, env):
+    """(setf place value ...) -> (progn (let* ((t v)... (s value)) store-form) ...).
+
+    CLHS 5.1.2's own expansion, one pair at a time: the place's subforms
+    run first, then the value form, then the storing form -- which is what
+    `setf.order.1`/`.2` count -- and each pair is fully processed before the
+    next one. The value comes from the storing form (CLHS 5.1.1), not from
+    the value form: a long-form DEFSETF body may compute something else
+    (defsetf.7a). `(setf)` is NIL (setf.1); a place count that is not even
+    violates the `{place newvalue}*` syntax and is a PROGRAM-ERROR.
+    """
+    args = _form_args(form)
+    if not args:
+        return lisptype.NIL
+    if len(args) % 2 != 0:
+        raise lisptype.LispProgramError(
+            "SETF requires an even number of argument forms")
+    pairs = []
+    for i in range(0, len(args), 2):
+        place, value_form = args[i], args[i + 1]
+        temps, vals, stores, store_form, _access = _place_full(place, env)
+        bindings = [_list(t, v) for t, v in zip(temps, vals)]
+        bindings.extend(_store_value_bindings(stores, value_form))
+        pairs.append(_cons_from([_sym('LET*'), _cons_from(bindings), store_form]))
+    if len(pairs) == 1:
+        return pairs[0]
+    return _cons_from([_sym('PROGN')] + pairs)
+
+
+@_standard_macro('PSETF')
+def _psetf_expander(form, env):
+    """(psetf place value ...) -> parallel SETF, returns NIL (psetf.2).
+
+    PSETQ's shape generalized from variables to places (CLHS 5.1.3): all of
+    the place subforms and value forms run left to right -- each pair's
+    place, then that pair's value, then the next pair's place (psetf.7/.8) --
+    and only then are the storing forms evaluated, in source order. One
+    LET* holds every binding; the store forms run in its body.
+    """
+    args = _form_args(form)
+    if len(args) % 2 != 0:
+        raise lisptype.LispProgramError(
+            "PSETF requires an even number of argument forms")
+
+    bindings = []
+    body_forms = []
+    for i in range(0, len(args), 2):
+        place, value_form = args[i], args[i + 1]
+        temps, vals, stores, store_form, _access = _place_full(place, env)
+        bindings.extend(_list(t, v) for t, v in zip(temps, vals))
+        bindings.extend(_store_value_bindings(stores, value_form))
+        body_forms.append(store_form)
+
+    if not body_forms:
+        return lisptype.NIL
+    return _cons_from([_sym('LET*'), _cons_from(bindings)]
+                      + body_forms + [lisptype.NIL])
+
+
 # ---------------------------------------------------------------------------
 # AND / OR (CLHS 5.3)
 # ---------------------------------------------------------------------------
@@ -766,6 +826,29 @@ def _store_bindings(stores, value_form):
     place, where each store variable receives the same form's primary
     value -- the same single-value write the pre-conversion setter did."""
     return [_list(s, value_form) for s in stores]
+
+
+def _store_value_bindings(stores, value_form):
+    """Bindings putting `value_form`'s values into a place's store variables.
+
+    One store variable binds the value form directly: the LET* binding is a
+    single-value context, so exactly the primary value is stored (CLHS
+    5.1.1; `setf.4`). Several store variables -- a VALUES place, a
+    multi-store DEFSETF -- each take the corresponding value of the value
+    form's multiple values (defsetf.7a pins the correspondence, and
+    setf-values.* pins the distribution). An empty stores list (a `(values)`
+    place, setf-values.6) gets a scratch binding so the value form is still
+    evaluated, for effect.
+    """
+    if not stores:
+        return [_list(_gensym(), value_form)]
+    if len(stores) == 1:
+        return [_list(stores[0], value_form)]
+    mv = _gensym()
+    bindings = [_list(mv, _list(_sym('MULTIPLE-VALUE-LIST'), value_form))]
+    for j, s in enumerate(stores):
+        bindings.append(_list(s, _list(_sym('NTH'), j, mv)))
+    return bindings
 
 
 @_standard_macro('INCF')
@@ -1433,9 +1516,9 @@ _standard_macro('HANDLER-BIND')(
 _standard_macro('HANDLER-CASE')(
     _reuse_definer('eval_handler_case', module_name='evaluation_conditions'))
 # DEFSTRUCT / LOOP / PPRINT-LOGICAL-BLOCK: the last three operators whose
-# ladder branch was already a one-line delegation to an `eval_xxx(form,
-# env)` worker, so converting them is purely a change of *trigger* -- the
-# same function runs, with the same `env`, on the same unevaluated form.
+# ladder branch was already a one-line delegation to an `eval_xxx(form, env)`
+# worker, so converting them is purely a change of *trigger* -- the same
+# function runs, with the same `env`, on the same unevaluated form.
 # Each of the three is also a case where rebuilding a CLHS expansion from
 # scratch would be actively wrong to attempt here: DEFSTRUCT's is not
 # specified as a macro expansion at all (CLHS 3.4.6 leaves the generated
@@ -1451,35 +1534,21 @@ _standard_macro('LOOP')(
     _reuse_definer('eval_loop', module_name='evaluation_loops_conditionals'))
 _standard_macro('PPRINT-LOGICAL-BLOCK')(
     _reuse_definer('eval_pprint_logical_block'))
-# SETF / PSETF / DEFPACKAGE: the last three, and the only ones whose ladder
-# branch was a large *inline* block rather than a delegation, so converting
-# them needed the block extracted first. That extraction is deliberately a
-# pure move -- the workers live in `evaluation_core` itself
-# (`eval_setf`/`eval_psetf`/`eval_defpackage`), not in a "better" module, so
-# every free name in those several hundred lines resolves to exactly what it
-# resolved to inline and no place-resolution behaviour can shift underneath
-# the conversion.
-#
-# SETF in particular is *not* rebuilt here into its CLHS 5.1.2 expansion
-# (`(let* ((tmp sub)...) (let ((store val)) store-form))` via
-# GET-SETF-EXPANSION). That rewrite is real work with real risk -- the
-# ladder's place handling covers VALUES/THE/APPLY places, symbol-macro
-# places, the LDB/MASK-FIELD/SUBSEQ/GETF place-in-place cases and their
-# subform-evaluation *order* (which `setf-getf.order.*`,
-# `ldb.place.order.1` and `mask-field.place.order.1` each count directly),
-# plus the known left-to-right gap in the legacy branches that plan.md
-# already tracks. Doing it properly is the M5 place-protocol milestone,
-# whose whole point is to make `_place_accessor`/`get_setf_expansion` the
-# single mechanism the ladder's remaining branches currently bypass. M4's
-# question is a narrower one -- is `(macro-function 'setf)` non-NIL, does
-# the operator dispatch through the macro path -- and that is what this
-# answers, without spending M5's risk budget early.
-_standard_macro('SETF')(
-    _reuse_definer('eval_setf', module_name='evaluation_core'))
-_standard_macro('PSETF')(
-    _reuse_definer('eval_psetf', module_name='evaluation_core'))
+# DEFPACKAGE: the last of the three extracted ladder blocks, and the only
+# one still deferred -- its option clauses are literal data (CLHS 7.2),
+# never evaluated, so an expansion form has nothing to see and a real
+# expansion would buy nothing.
 _standard_macro('DEFPACKAGE')(
     _reuse_definer('eval_defpackage', module_name='evaluation_core'))
+
+# SETF / PSETF, by contrast, ARE real expansions above (CLHS 5.1.2) --
+# the M5 place-protocol milestone: their place resolution goes through
+# `_place_full` (GET-SETF-EXPANSION), which is also what INCF/DECF/PUSH/
+# PUSHNEW/POP/REMF/ROTATEF/SHIFTF/PSETQ/MULTIPLE-VALUE-SETQ expand through,
+# so there is one place-resolution mechanism and `(macroexpand-1 '(setf ...))`
+# shows real code. The `eval_setf` place ladder these two workers replaced
+# (`evaluation_core.py`, ~490 lines of per-operator branches that bypassed
+# that protocol) is deleted with the conversion.
 
 
 # ---------------------------------------------------------------------------

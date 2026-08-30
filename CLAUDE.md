@@ -290,18 +290,33 @@ happens to miss is still a defect (plan.md §5, and the final gate in §7).
       time with the evaluation-time env. Used where rebuilding the expansion
       would duplicate a mechanism that already has exactly one home (LOOP's
       single iteration engine, the condition system's `:no-error`/
-      in-transit-transfer handling, DEFSTRUCT's BOA lambda lists, SETF's
-      place ladder). Earlier these expanded by *running* the worker and
-      quoting its result, so a bare `MACROEXPAND-1` executed the program
-      (plan.md finding 12: RESTART-CASE evaluated its protected form twice);
-      the deferral removed that whole defect class at the factory —
-      macroexpansion of the family is now side-effect-free and
+      in-transit-transfer handling, DEFSTRUCT's BOA lambda lists,
+      DEFPACKAGE's literal option clauses). Earlier these expanded by
+      *running* the worker and quoting its result, so a bare `MACROEXPAND-1`
+      executed the program (plan.md finding 12: RESTART-CASE evaluated its
+      protected form twice); the deferral removed that whole defect class at
+      the factory — macroexpansion of the family is now side-effect-free and
       `macro_expansion_evaluates` answers False for all of it.
-    **`SETF` is the one that most wants converting**: its worker is still the
-    ~480-line place ladder extracted verbatim into `evaluation_core.eval_setf`,
-    which bypasses `get_setf_expansion`/`_place_accessor` for most place kinds.
-    That is the M5 place-protocol milestone, and the extraction was kept a
-    *pure move* precisely so M5 can replace it as one piece.
+    **SETF and PSETF are real expansions (M5, 2026-08-30)**, and the place
+    protocol is now one mechanism: `_setf_expander`/`_psetf_expander` in
+    `standard_macros.py` resolve every target through `_place_full` —
+    `get_setf_expansion` — and expand to
+    `(let* ((temps vals...) (store value)) store-form)`. The old
+    ~540-line per-operator ladder (`evaluation_core.eval_setf`) that
+    bypassed the protocol is deleted, along with the dead
+    `eval_incf/decf/push/pop/pushnew/remf/rotatef/shiftf/psetq` workers
+    whose macro expanders had replaced them. INCF/DECF/PUSH/PUSHNEW/POP/
+    REMF/ROTATEF/SHIFTF/PSETQ/MULTIPLE-VALUE-SETQ expand through the *same*
+    `_place_full`, so a place kind is implemented once in
+    `get_setf_expansion` (the form face, what GET-SETF-EXPANSION answers)
+    and works for all ten operators. `_place_accessor` is the closure face
+    of the same protocol — SETQ/PSETQ/MULTIPLE-VALUE-SETQ's symbol-macro
+    path and the conditions system's STORE-VALUE restarts use it — and both
+    faces share the `%FCLPY-SETF-*` runtimes and the same arithmetic
+    (LDB/MASK-FIELD go through the real DPB/DEPOSIT-FIELD; SUBSEQ's write
+    is one function used by both). **The one rule that keeps the faces from
+    drifting apart: fix a place kind in `get_setf_expansion`, never by
+    adding a branch to a caller.**
   - **A builtin's ANSI lambda list is its Python signature**, read by
     `evaluation_core.LambdaListShape` and enforced by `split_keyword_args` —
     the one place CLHS 3.4.1.4/3.5.1.5 is applied, for direct calls, FUNCALL
