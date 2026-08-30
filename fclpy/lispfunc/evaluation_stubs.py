@@ -214,6 +214,9 @@ def values_list(lst):
         items.append(car(cur))
         cur = cdr(cur)
 
+    if cur is not lisptype.NIL:
+        raise lisptype.LispTypeError(f"VALUES-LIST: {lst} is not a list")
+
     if not items:
         return values()
 
