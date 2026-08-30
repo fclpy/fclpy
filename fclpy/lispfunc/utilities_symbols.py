@@ -300,9 +300,13 @@ def get_current_package():
     return state.current_package_value()
 
 
-@_registry.cl_function('IN-PACKAGE')
+@_registry.cl_function('%IN-PACKAGE')
 def in_package(*args):
-    """Set current package and return it (CLHS 11.2).
+    """Runtime primitive behind the `IN-PACKAGE` macro (CLHS 11.2):
+    set the current package and return it. Registered under a private
+    name because `IN-PACKAGE` itself is a macro, not a function --
+    `standard_macros.py`'s expander quotes its (unevaluated) name
+    argument and calls this.
 
     `in-package` is a *binding form*: it is supposed to be wrapped in
     `LET`/`LET*` so the package change is local. As a top-level form

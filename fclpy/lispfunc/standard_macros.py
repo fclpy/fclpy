@@ -1083,3 +1083,19 @@ def _lambda_expander(form, env):
     position evaluates through this same expansion."""
     return _cons_from([_sym('FUNCTION'), form])
 
+
+@_standard_macro('IN-PACKAGE')
+def _in_package_expander(form, env):
+    """(in-package name) -> (%in-package 'name) -- CLHS 11.2: IN-PACKAGE
+    is a macro, and its name argument is a package designator that is
+    never evaluated (so `(in-package cl-test)` names the package
+    CL-TEST, not whatever CL-TEST is bound to). `%IN-PACKAGE` in
+    `utilities_symbols.py` is the runtime primitive that actually
+    switches `*PACKAGE*`; quoting the argument here is what keeps it
+    unevaluated across the macroexpansion boundary."""
+    args = _form_args(form)
+    if len(args) != 1:
+        raise lisptype.LispProgramError(
+            "IN-PACKAGE requires exactly one argument")
+    return _list(_sym('%IN-PACKAGE'), _quoted(args[0]))
+

@@ -1768,18 +1768,6 @@ def eval(form, env=None):
                 return eval_do_external_symbols(form, env)
             elif operator.name == 'DO-ALL-SYMBOLS':
                 return eval_do_all_symbols(form, env)
-            elif operator.name == 'IN-PACKAGE':
-                # IN-PACKAGE is a macro in Common Lisp - it doesn't evaluate its argument
-                # (in-package #:cl-test) -> call in_package with symbol CL-TEST
-                args = cdr(form)
-                if args is None or args == lisptype.NIL:
-                    raise lisptype.LispError("IN-PACKAGE requires a package designator")
-                name_arg = car(args)
-                # Don't evaluate - pass the symbol/keyword directly
-                from .utilities_symbols import in_package
-                return in_package(name_arg)
-            
-
             elif operator.name == 'SYMBOL-MACROLET':
                 # (SYMBOL-MACROLET ((sym1 expansion1) (sym2 expansion2) ...) body-form...)
                 # Create symbol-macro bindings in a new environment and evaluate body

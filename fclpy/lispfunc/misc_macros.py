@@ -621,17 +621,33 @@ class _LoadFormExternalizer:
     def _reject_nested_instances(payload):
         """Loud failure for an externalizable object buried inside a quoted
         tree -- the shape that would need the constant rebuilt as
-        construction code."""
+        construction code.
+
+        The spine (`cdr`) is walked iteratively, not recursively: a quoted
+        constant is exactly the shape a data-heavy test file uses for a long
+        *flat* list (ansi-test's own `*cl-macro-symbols*`-sized tables), and
+        recursing once per element overflowed Python's call stack on one of
+        those during `gclload2.lsp`'s compile-file step, aborting the whole
+        bootstrap with a bare RecursionError before a single test ran. Only
+        `car` -- genuine tree nesting, bounded by how deeply the data is
+        actually nested rather than by its length -- still recurses."""
         import fclpy.classes as classes
 
         def scan(node):
+            while isinstance(node, lisptype.lispCons):
+                head = node.car
+                if isinstance(head, classes.LispInstance):
+                    raise lisptype.LispNotImplementedError(
+                        "COMPILE-FILE: object constant nested inside a "
+                        "quoted tree needs MAKE-LOAD-FORM construction-code "
+                        "rebuild")
+                if isinstance(head, lisptype.lispCons):
+                    scan(head)
+                node = node.cdr
             if isinstance(node, classes.LispInstance):
                 raise lisptype.LispNotImplementedError(
                     "COMPILE-FILE: object constant nested inside a quoted "
                     "tree needs MAKE-LOAD-FORM construction-code rebuild")
-            if isinstance(node, lisptype.lispCons):
-                scan(node.car)
-                scan(node.cdr)
         scan(payload)
 
     def _externalize(self, obj, emitted):
