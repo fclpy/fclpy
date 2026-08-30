@@ -2487,14 +2487,6 @@ def eval_macro_function(form, env):
         raise ConditionException(cond, recoverable=False)
     
     symbol_form = car(args)
-    lookup_env = env
-    if arg_count == 2:
-        env_value = eval(car(cdr(args)), env)
-        if env_value is None or env_value is lisptype.NIL:
-            # NIL designates the global environment, not "unspecified"
-            lookup_env = root_environment(env)
-        elif isinstance(env_value, lisptype.Environment):
-            lookup_env = env_value
 
     # MACRO-FUNCTION is an ordinary function (CLHS 8.1), not a special
     # operator -- its argument is evaluated like any function call's. A bare
@@ -2503,7 +2495,18 @@ def eval_macro_function(form, env):
     # treating it literally is what made `(let ((s 'foo)) (macro-function s))`
     # look up the symbol S instead of FOO while `(macro-function 'foo)`
     # happened to work only because `(QUOTE FOO)` isn't itself a LispSymbol.
+    # Evaluate symbol first (left-to-right evaluation order per CLHS 3.4.1)
     symbol = eval(symbol_form, env)
+
+    lookup_env = env
+    if arg_count == 2:
+        # Then evaluate environment argument
+        env_value = eval(car(cdr(args)), env)
+        if env_value is None or env_value is lisptype.NIL:
+            # NIL designates the global environment, not "unspecified"
+            lookup_env = root_environment(env)
+        elif isinstance(env_value, lisptype.Environment):
+            lookup_env = env_value
 
     if not isinstance(symbol, lisptype.LispSymbol):
         return lisptype.NIL
