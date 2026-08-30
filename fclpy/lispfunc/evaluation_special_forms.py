@@ -2589,6 +2589,9 @@ def eval_destructuring_bind(form, env):
     expr_form = car(cdr(args))
     body = cdr(cdr(args))
 
+    # Validate that the pattern doesn't use NIL, T, or keywords as variable names
+    _check_destructuring_pattern_vars(pattern)
+
     # Evaluate the expression to destructure
     expr_val = eval(expr_form, env)
 
@@ -2608,6 +2611,48 @@ def eval_destructuring_bind(form, env):
         cur = cdr(cur)
 
     return result
+
+
+def _check_destructuring_pattern_vars(pattern):
+    """Validate that a destructuring pattern doesn't use invalid variable names.
+
+    NIL, T, and keywords cannot be used as variable names (CLHS 3.4.4).
+    Raises PROGRAM-ERROR if any are found.
+    """
+    if isinstance(pattern, lisptype.lispKeyword):
+        raise lisptype.LispProgramError(
+            "Keywords cannot be used as variable names in a destructuring pattern")
+
+    # NIL, in any form (None, lispNull, or LispSymbol named NIL)
+    if pattern is None or pattern is lisptype.NIL or isinstance(pattern, lisptype.lispNull):
+        raise lisptype.LispProgramError(
+            "NIL cannot be used as a variable name in a destructuring pattern")
+
+    if isinstance(pattern, lisptype.LispSymbol):
+        name_upper = pattern.name.upper()
+        if name_upper == 'T':
+            raise lisptype.LispProgramError(
+                "T cannot be used as a variable name in a destructuring pattern")
+        elif name_upper == 'NIL':
+            raise lisptype.LispProgramError(
+                "NIL cannot be used as a variable name in a destructuring pattern")
+        return
+
+    # Recursively check list patterns
+    if _consp_internal(pattern):
+        cur = pattern
+        while _consp_internal(cur):
+            elem = car(cur)
+
+            # Skip lambda-list keywords (&REST, &KEY, etc.)
+            if isinstance(elem, lisptype.LispSymbol) and elem.name.startswith('&'):
+                cur = cdr(cur)
+                continue
+
+            # Recursively check the element
+            _check_destructuring_pattern_vars(elem)
+
+            cur = cdr(cur)
 
 
 def eval_lambda(form, env):

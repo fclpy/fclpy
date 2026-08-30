@@ -705,7 +705,20 @@ def bind_destructuring_pattern(pattern, value, env, frame=None):
     `frame`, when given, is where every leaf binding actually goes (see
     `_bind_leaf`); it is optional and defaults to plain lexical binding.
     """
-    if isinstance(pattern, lisptype.LispSymbol) and pattern.name.upper() != 'NIL':
+    if isinstance(pattern, lisptype.lispKeyword):
+        # Keywords cannot be used as binding variables
+        raise lisptype.LispProgramError(
+            f"Keywords cannot be used as variable names in a destructuring pattern")
+    if isinstance(pattern, lisptype.LispSymbol):
+        name_upper = pattern.name.upper()
+        if name_upper == 'NIL':
+            # NIL as a binding variable is an error (not just ignored)
+            raise lisptype.LispProgramError(
+                f"NIL cannot be used as a variable name in a destructuring pattern")
+        elif name_upper == 'T':
+            # T as a binding variable is an error
+            raise lisptype.LispProgramError(
+                f"T cannot be used as a variable name in a destructuring pattern")
         _bind_leaf(pattern, value if value is not None else lisptype.NIL, env, frame)
         return
     if not _consp_internal(pattern):
