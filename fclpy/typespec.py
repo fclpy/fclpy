@@ -1294,7 +1294,31 @@ def _class_cell_of(obj):
             return 'RANDOM-STATE'
     except Exception:
         pass
+    # RESTART and PATHNAME are `_CLASS_ROOTS` like HASH-TABLE and PACKAGE
+    # above, but had no cell here, so every restart and every pathname fell
+    # through to STRUCTURE-OBJECT: `(typep r 'restart)` and `(typep p
+    # 'pathname)` were NIL, and `(type-of r)` was T. TYPEP delegates a
+    # *symbol* specifier to `type_contains` before ever reaching
+    # `comparison.py`'s ladder, so the RESTART branch that ladder does have
+    # was dead for `(typep r 'restart)` and live only for the string
+    # spelling -- the two disagreed about the same object (standing rule 3).
+    if isinstance(obj, lisptype.Restart):
+        return 'RESTART'
+    from fclpy.lispfunc.pathnames import Pathname
+    if isinstance(obj, Pathname):
+        return 'PATHNAME'
     if callable(obj):
+        # A DEFINE-CONDITION :READER is a generic function (CLHS 9.4) but is
+        # not a `classes.GenericFunction` -- that object model is not wired
+        # into FUNCALL/APPLY (plan.md Finding L), so the reader is a plain
+        # callable carrying the marker `_make_condition_reader` sets.
+        # `comparison.py`'s GENERIC-FUNCTION branch already reads that marker
+        # and is dead for a *symbol* specifier, which is the spelling
+        # `condition-27-reader-is-generic` uses; deciding it here is what
+        # makes the two agree. It is not a STANDARD-GENERIC-FUNCTION: this
+        # cell sits below GENERIC-FUNCTION and beside it.
+        if getattr(obj, '_condition_reader_generic', False):
+            return 'GENERIC-FUNCTION'
         return 'FUNCTION'
     return 'STRUCTURE-OBJECT'
 

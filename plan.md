@@ -78,12 +78,30 @@ history is preserved in condensed form in [Changelog](docs/changelog.md).
 >
 > ### Remaining findings for the next run (recorded 2026-08-30)
 >
-> 1. **TYPE-OF.4 residual (+1 gate flag, `comparison.py`)**: `type_of`'s
->    fallback answers T for streams/hash-tables/pathnames/readtables/
->    conditions, contradicting the new `class_of`. A fix that consults
->    `classes.class_of` broke the ansi-aux bootstrap (NOTNOT-MV undefined
->    — cause undiagnosed; a type_of↔class_of recursion was ruled out
->    empirically). Root-cause the aux-load failure first, then re-apply.
+> 1. **TYPEP and TYPE-OF use two different tables to answer "what class is
+>    this object?", and the tables disagree.**
+>
+>    - *Plain version:* there are two lists of "Python object -> Lisp class".
+>      One lives in `typespec._class_cell_of`, the other in
+>      `comparison.type_of`. Adding an entry to one does not add it to the
+>      other, so the same object can be a RESTART to one and a T to the other.
+>    - *Trap to know:* `comparison.typep` looks like it has its own table of
+>      class branches, but for a *symbol* type specifier -- `'restart`, which
+>      is how every test writes it -- TYPEP hands off to `_class_cell_of`
+>      first and never reaches those branches. So they are dead code, and
+>      editing them fixes nothing. Test with a symbol, not a string.
+>    - *Fixed 2026-08-30:* RESTART, PATHNAME and condition `:READER`
+>      (as GENERIC-FUNCTION) added to `_class_cell_of`; RESTART added to
+>      `type_of`. Before this, `(typep r 'restart)` and `(typep #p"x"
+>      'pathname)` were both NIL.
+>    - *Still broken:* `(typep *standard-output* 'stream)` is NIL.
+>      `_class_cell_of` has no stream entry at all.
+>    - *Owner:* **M9** (types/SUBTYPEP/CLOS). Not M4, not M5.
+>    - *What to do:* do **not** just add a stream entry -- that fixes one
+>      symptom and leaves two tables. Merge them into one. Note an earlier
+>      attempt to route `type_of` through `classes.class_of` broke the
+>      ansi-test bootstrap (NOTNOT-MV undefined, cause never diagnosed), so
+>      diagnose that failure before retrying that particular approach.
 > 2. **`printer/print-cons.lsp` (+1 gate flag)**: 5 failing vs the 08-28
 >    baseline's 4 — drift that predates the 2026-08-30 session; diff the
 >    five against the baseline before assuming the session caused it.
@@ -121,7 +139,40 @@ history is preserved in condensed form in [Changelog](docs/changelog.md).
 > 11. A **full ~86-minute run is mandatory before moving the official
 >    scoreboard**: DELETE-FILE/OPEN (bootstrap path) and the whole
 >    evaluator/printer surface were touched this session.
-
+> 12. **Macroexpanding a form can RUN it. Anything that expands a form just
+>    to look at its shape will execute the program by accident.**
+>
+>    - *Plain version:* about half the M4 macro conversions took a shortcut
+>      called `_reuse_definer`. A normal macro rewrites a form into another
+>      form. These do not -- they **run** the form and quote the answer. So
+>      for LOOP, DO, DOLIST, DOTIMES, RESTART-CASE, HANDLER-CASE,
+>      WITH-CONDITION-RESTARTS, DEFSTRUCT and the DEF* definers,
+>      "expand it" and "execute it" are the same operation.
+>    - *What it broke (2026-08-30):* RESTART-CASE expands its protected form
+>      to check "is this literally a call to SIGNAL/ERROR/CERROR/WARN?".
+>      That check executed the form. The control transfer it raised was
+>      swallowed by a bare `except Exception`. RESTART-CASE then evaluated
+>      the form a second time. Result:
+>      `(let ((x 0)) (restart-case (loop repeat 3 do (incf x)) (foo () 1)) x)`
+>      answered **6** instead of 3.
+>    - *Why nobody noticed:* the ansi tests that hit this all passed anyway,
+>      because their forms had no side effects. It showed up only as 20
+>      tracebacks in `run_all_tests.err`. **A traceback in the .err file can
+>      be a wrong answer that no test catches.**
+>    - *Fixed 2026-08-30, but only patched:* `_reuse_definer` now marks its
+>      macros `__runs_body__`; `misc_packages.macro_expansion_evaluates`
+>      reads that mark; RESTART-CASE's shape check stops at such a macro.
+>      Separately `_direct_macroexpand_1` now re-raises control transfers
+>      instead of logging them (Finding K).
+>    - *Owner:* **leftover M4 work, and it has no milestone.** M4 is DONE by
+>      its own definition (every macro has a macro function). Converting
+>      these shortcuts into real expansions is unowned -- **except `SETF`,
+>      which is M5.**
+>    - *What to do next:* every *other* place that expands a form to inspect
+>      it has the same latent bug. One more is known:
+>      `get_setf_expansion`'s CLHS 5.1.2.7 place branch. Guarding each call
+>      site one at a time is not the fix -- converting the shortcut macros
+>      into real expansions is.
 
 > ### Latest full run (2026-08-30): 98.8% passing, 265 failing — up from 95.4%
 >
@@ -2015,7 +2066,7 @@ Anything knowingly non-ANSI, with the milestone that removes it. Empty means
 | `DEFINE-CONDITION` creates no class | predates the class lattice | M8 |
 | `HANDLER-CASE` converts an uncaught `THROW` into `CONTROL-ERROR` | needs a catch-tag stack to decide at THROW time | M7 |
 | 114 non-ANSI symbols exported from `CL` | registry auto-export | M1 |
-| ~~~90 standard macros implemented as special forms~~ **resolved 2026-08-30** — all 87 CLHS *Macro* operators are real macros (M4). What remains is a *quality* item, not a deviation: roughly half go through `_reuse_definer`, which runs the existing worker at expansion time and quotes the result, so a bare `MACROEXPAND-1` of one runs its body. Invisible to ansi-test and to every EVAL/LOAD call site, but each conversion to a real expansion is an improvement | ~~M4~~ |
+| **Macroexpanding these macros RUNS them.** About half the M4 conversions use `_reuse_definer`, which executes the form and quotes the answer instead of rewriting it. So expanding one has side effects | This row used to say the shortcut was "invisible to ansi-test and to every EVAL/LOAD call site." **That was wrong, and it cost a wrong answer the same day** — see §1 finding 12: RESTART-CASE ran its protected form twice, so `(restart-case (loop repeat 3 do (incf x)) …)` counted to 6 instead of 3. Now guarded at the one known inspection site, which is a patch, not a fix | Unowned M4 leftover. The `SETF` slice of it is **M5** |
 | Five parallel place protocols; `GET-SETF-EXPANSION` a stub | predates the setf protocol | M5 |
 | **Two** lambda-list binders left, for the *macro* lambda list — `_create_macro_function` and `bind_destructuring_pattern`. Both ignore `&aux` and `&allow-other-keys` and signal no PROGRAM-ERROR for a malformed call | was six; the ordinary lambda list is one constructor as of 2026-08-22. These two implement a *different* lambda list (CLHS 3.4.4, nested destructuring patterns) and already share `bind_destructuring_pattern`, so folding them together is its own change | M3 |
 | Two CLOS implementations, two readers, two readtables, dead `reader.py`/`tokenizer.py` fork | historical forks | M9 / M10 |
@@ -2023,6 +2074,7 @@ Anything knowingly non-ANSI, with the milestone that removes it. Empty means
 | `*PRINT-CIRCLE*` unimplemented; the printer instead cuts off at depth 256 | needs a labelling pass over the object graph | M10 |
 | `~&` sees only the column within its own control string, so a `~&` opening a control string cannot tell the stream is mid-line; `FRESH-LINE` is correct | FORMAT builds its whole output as a string before writing, and the column is not threaded through the eleven nested `_format_process_cursor` call sites | C2 |
 | **`~T`/`~<...~:;...~>`'s "current column" is likewise control-string-local, not stream-wide** (2026-08-27, `_current_column`) — `~T` now tabs correctly *within* one FORMAT call (`format-justify.lsp` 0/59 → 59/59), but a preceding `WRITE-STRING` to the same stream is invisible to it, the same gap the row above already names for `~&` | same root cause as the row above; one fix (threading the stream's real column through FORMAT) closes both | C2 |
+| **`(typep <stream> 'stream)` answers NIL.** Streams are missing from `typespec._class_cell_of`, the table TYPEP actually uses | Symptom of the two-table split in §1 finding 1. RESTART, PATHNAME and condition readers had the same hole and were fixed 2026-08-30; streams were left because doing them properly means the seven CLHS stream subclasses too. **Do not just add a stream entry** — that leaves two tables that will drift again | **M9** |
 | `SUBTYPEP` string-pair table | no type lattice | M9 |
 | **No class precedence list.** `classes._specificity_key` orders applicable methods by *ancestor count*, and the live `_init_builtin_classes` gives every built-in class `T` as its only superclass — so `INTEGER`, `RATIONAL` and `NUMBER` are equally specific and ties are broken by *definition order* (a stable sort). Much of `objects/` therefore passes because ansi-test happens to define its methods most-specific-first | CLHS 7.6.6.1 wants the argument's class precedence list position, which needs a real C3 linearization *and* a real built-in class hierarchy; both are the same mechanism as C14's type lattice, so doing it here would be a second one | M9 / §4 item 17a |
 | `classes.py` defines `_init_builtin_classes` twice; the second wins and the first is dead | standing rule 3, unresolved — the two disagree about the class hierarchy, which is exactly why it matters | M9 / §4 item 17a |
@@ -2602,7 +2654,7 @@ cluster exists.
 | **I** | One `LispString`/`str` split explains the EQUAL/EQUALP cluster | M9 |
 | **J** | ~~There is no `coerce_to_function`~~ — **obsolete, fixed 2026-08-12**; it exists in `evaluation_core.py` and the sequence/set operations share it | C3 |
 | **M** | **Python type tests stand in for Lisp type tests.** `isinstance(x, str)` for "is a string", `isinstance(x, (list, tuple))` for "is a list", `callable(x)` for "is a function". Each is false for exactly the Lisp object it is meant to match, so the branch is dead and the code silently takes the wrong path. This is the *same* defect as X2 (designators), X3, `~{`'s cons blindness, and `EQUAL`/`TYPEP`/`CHARACTERP` on strings — **found five times in different subsystems, and it is what a "shared mechanism" audit should grep for first** | X2, C2, C13, C14 |
-| **K** | Non-local exits swallowed by bare `except` — **recurs in a new operator each time it is found** (`funcall`, `IGNORE-ERRORS`, `RestartException`) | C2, C7 |
+| **K** | **A bare `except Exception` eats non-local exits (RETURN-FROM/GO/THROW/restart transfers), turning a control transfer into a silent wrong answer.** Found in a new operator every time someone looks: `funcall`, `IGNORE-ERRORS`, `RestartException`, and 2026-08-30 `misc_packages._direct_macroexpand_1`. **Rule:** any `except Exception` on a path that can evaluate user code must first re-raise `(ReturnFromException, ThrowException, GoException)` | C2, C7 |
 | **L** | Duplicate and dead implementations | C6, C15 |
 
 **A recurring defect class worth naming:** *"the form does not establish the

@@ -1032,6 +1032,16 @@ def type_of(object):
         from fclpy.readtable import Readtable
         if isinstance(object, Readtable):
             return lisptype.LispSymbol('READTABLE')
+        if isinstance(object, lisptype.Restart):
+            # RESTART is a CLHS 9.1 system class like READTABLE and PACKAGE
+            # above, and had no branch here, so `(type-of r)` answered T and
+            # `(class-of r)` followed it to the T class. Note this ladder is
+            # a *second* answer to "which built-in class does this object
+            # belong to", beside `typespec._class_cell_of` (standing rule 3);
+            # the two disagreed about restarts in both directions until now,
+            # and they still disagree about streams, which that function has
+            # no cell for at all.
+            return lisptype.LispSymbol('RESTART')
         try:
             from fclpy.lispfunc.utilities_system import RandomState
             if isinstance(object, RandomState):

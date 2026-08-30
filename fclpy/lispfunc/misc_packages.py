@@ -893,7 +893,8 @@ def _direct_macroexpand_1(form, environment):
     function never wraps the form in a cons cell, so it is safe to call
     with forms that are themselves quoted lists such as (QUOTE FOO).
     """
-    from .evaluation_core import _consp_internal
+    from .evaluation_core import (_consp_internal, ReturnFromException,
+                                  ThrowException, GoException)
     from .core import car as _car, cdr as _cdr
 
     # CLHS 3.8: a *symbol* that names a symbol-macro also expands, not only
@@ -960,9 +961,49 @@ def _direct_macroexpand_1(form, environment):
         # answer "not a valid place" for it (`incf.22`/`decf.22`).
         expanded = lisptype.primary_value(macro_func(*call_args))
         return expanded, True
+    except (ReturnFromException, ThrowException, GoException):
+        # A control transfer is not an expansion failure -- it is the program
+        # transferring control, and it must reach the frame that established
+        # its target. Catching it here turned an invoked restart into "this
+        # form does not expand" and lost the transfer entirely (plan.md
+        # Finding K's defect class); `RestartCaseTransfer` and
+        # `HandlerCaseTransfer` are `ThrowException` subclasses precisely so
+        # a pass-through tuple like this one covers them.
+        raise
     except Exception:
         logger.error(f"[_direct_macroexpand_1] error expanding {operator}", exc_info=True)
         return form, False
+
+
+def macro_expansion_evaluates(form, environment):
+    """True when macroexpanding FORM would *run* it rather than rewrite it.
+
+    `standard_macros._reuse_definer` builds expanders that call the
+    operator's existing `eval_xxx(form, env)` worker immediately and quote
+    the result, so for that family -- LOOP, DO/DOLIST/DOTIMES, RESTART-CASE,
+    HANDLER-CASE, WITH-CONDITION-RESTARTS, DEFSTRUCT, the DEF* definers --
+    "macroexpansion" *is* evaluation. That is the purity compromise CLAUDE.md
+    records, and it is fine for a caller that was going to evaluate the
+    expansion anyway. It is not fine for a caller that macroexpands only to
+    *inspect a form's shape*: that inspection executes the program, and the
+    real evaluation then runs it a second time. Such a caller asks this first
+    and stops expanding when it answers true.
+    """
+    from .evaluation_core import _consp_internal
+    from .core import car as _car
+
+    if not _consp_internal(form):
+        return False
+    operator = _car(form)
+    if not isinstance(operator, lisptype.LispSymbol) or environment is None:
+        return False
+    try:
+        macro_func = environment.find_func(operator)
+    except Exception:
+        return False
+    if not macro_func or not getattr(macro_func, '__is_macro__', False):
+        return False
+    return bool(getattr(macro_func, '__runs_body__', False))
 
 
 @_registry.cl_function('MACROEXPAND')

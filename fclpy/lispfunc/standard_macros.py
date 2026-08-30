@@ -106,6 +106,10 @@ def _standard_macro(lisp_name, documentation=None):
         expander.__is_macro__ = True
         expander.__expects_whole__ = True
         expander.__expects_environment__ = True
+        # Carried through from the wrapped expander: `_reuse_definer` sets it,
+        # and `misc_packages.macro_expansion_evaluates` reads it off the bound
+        # macro function, which is this wrapper and not `fn`.
+        expander.__runs_body__ = getattr(fn, '__runs_body__', False)
         _registry.cl_macro(lisp_name, documentation=documentation)(expander)
         return fn
     return decorator
@@ -1310,6 +1314,12 @@ def _reuse_definer(worker_name, module_name='evaluation_special_forms'):
         return _quoted(worker(form, env))
     expander.__name__ = worker_name
     expander.__doc__ = f"Definer macro reusing `{worker_name}` -- see _reuse_definer."
+    # This family's "expansion" *is* evaluation: the worker runs the form and
+    # the result is quoted. Anything that macroexpands only to inspect a
+    # form's shape must therefore stop here rather than expand -- see
+    # `misc_packages.macro_expansion_evaluates`, and the RESTART-CASE
+    # protected-form inspector that reads it.
+    expander.__runs_body__ = True
     return expander
 
 
