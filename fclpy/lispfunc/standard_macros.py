@@ -599,7 +599,7 @@ def _keyform_form(key_form, tmp, cond_clauses):
          if cond_clauses else lisptype.NIL])
 
 
-def _keyplace_form(operator, place, cond_clauses, expected_type, env):
+def _keyplace_form(operator, place, cond_clauses, expected_type, env, tmp=None):
     """CCASE/CTYPECASE: match, and on no match signal a *correctable*
     TYPE-ERROR whose STORE-VALUE restart stores back into the place and
     retries -- the protocol ccase.31/ctypecase.12 exercise through
@@ -608,7 +608,8 @@ def _keyplace_form(operator, place, cond_clauses, expected_type, env):
     variables are the ones GET-SETF-EXPANSION's own store form names, so
     arbitrary places work unchanged."""
     temps, vals, stores, store_form, access = _place_full(place, env)
-    tmp = _gensym()
+    if tmp is None:
+        tmp = _gensym()
     retry_tag = _gensym()
     store_tmp = _gensym()
 
@@ -632,10 +633,12 @@ def _keyplace_form(operator, place, cond_clauses, expected_type, env):
                                    _cons_from([store_action,
                                                _list(_sym('GO'), retry_tag)])])])])])])
     bindings = _cons_from([_list(t, v) for t, v in zip(temps, vals)])
+    block_tag = _gensym()
     return _cons_from([_sym('LET*'), bindings,
-                       _cons_from([_sym('TAGBODY'),
-                                   retry_tag,
-                                   inner])])
+                       _cons_from([_sym('BLOCK'), block_tag,
+                                   _cons_from([_sym('TAGBODY'),
+                                               retry_tag,
+                                               _list(_sym('RETURN-FROM'), block_tag, inner)])])])
 
 
 @_standard_macro('CASE')
@@ -690,7 +693,7 @@ def _ccase_expander(form, env):
     tmp = _gensym()
     cond_clauses = _eql_cond_clauses(clauses, tmp, False, all_keys)
     return _keyplace_form('CCASE', args[0], cond_clauses,
-                          _member_type_form(all_keys), env)
+                          _member_type_form(all_keys), env, tmp)
 
 
 @_standard_macro('TYPECASE')
@@ -739,7 +742,7 @@ def _ctypecase_expander(form, env):
     tmp = _gensym()
     cond_clauses = _typep_cond_clauses(clauses, tmp, False, all_types)
     return _keyplace_form('CTYPECASE', args[0], cond_clauses,
-                          _or_type_form(all_types), env)
+                          _or_type_form(all_types), env, tmp)
 
 
 # ---------------------------------------------------------------------------
