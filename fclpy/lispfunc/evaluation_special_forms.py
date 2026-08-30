@@ -4199,6 +4199,16 @@ def _fclpy_setf_symbol_value(sym, value):
 
 
 def _fclpy_setf_symbol_function(sym, value):
+    # Find the environment where this symbol's function is bound and update it there
+    # This ensures we update the correct environment level (local or global)
+    env = state.current_environment
+    while env is not None:
+        if env._function_map and sym in env._function_map:
+            # Found where it's stored, update it
+            env.add_function(sym, value)
+            return value
+        env = env.parent
+    # Not found in any parent, add to current environment
     state.current_environment.add_function(sym, value)
     return value
 
@@ -4213,11 +4223,152 @@ def _fclpy_setf_gethash(key, table, value):
     return puthash(key, table, value)
 
 
+def _fclpy_setf_nth_element(idx, seq, value):
+    """Set element at index in a list (for NTH/SECOND/etc)."""
+    if _consp_internal(seq):
+        cell = seq
+        for _ in range(int(idx)):
+            if not _consp_internal(cell):
+                raise lisptype.LispError("NTH place: index out of bounds")
+            cell = cdr(cell)
+        if not _consp_internal(cell):
+            raise lisptype.LispError("NTH place: index out of bounds")
+        cell.car = value
+        return value
+    else:
+        # Python list / vector
+        seq[int(idx)] = value
+        return value
+
+
+def _fclpy_setf_sequence_element(seq, idx, value):
+    """Set element at index in a sequence (for CHAR/SCHAR/ELT)."""
+    if _consp_internal(seq):
+        cell = seq
+        for _ in range(int(idx)):
+            if not _consp_internal(cell):
+                raise lisptype.LispError("sequence place: index out of bounds")
+            cell = cdr(cell)
+        if not _consp_internal(cell):
+            raise lisptype.LispError("sequence place: index out of bounds")
+        cell.car = value
+        return value
+    else:
+        seq[int(idx)] = value
+        return value
+
+
+def _fclpy_setf_fdefinition(name, value):
+    """Set function definition for a function name."""
+    from .utilities_functions import _function_spec_to_key
+    key = _function_spec_to_key(name)
+    # Find the environment where this function is bound and update it there
+    env = state.current_environment
+    while env is not None:
+        if env._function_map and key in env._function_map:
+            # Found where it's stored, update it
+            env.add_function(key, value)
+            return value
+        env = env.parent
+    # Not found in any parent, add to current environment
+    state.current_environment.add_function(key, value)
+    return value
+
+
+def _fclpy_setf_get(sym, indicator, value):
+    """Set property value in symbol's plist."""
+    if not isinstance(sym, lisptype.LispSymbol):
+        raise lisptype.LispError("GET place: requires a symbol")
+    if not _consp_internal(sym.plist):
+        sym.plist = lisptype.NIL
+    cur = sym.plist
+    while _consp_internal(cur) and _consp_internal(cdr(cur)):
+        if car(cur) == indicator:
+            cdr(cur).car = value
+            return value
+        cur = cdr(cdr(cur))
+    sym.plist = lisptype.lispCons(indicator, lisptype.lispCons(value, sym.plist))
+    return value
+
+
+def _fclpy_setf_getf(plist, indicator, value):
+    """Set property value in a property list."""
+    # GETF returns (value, found) but here we're just setting the value
+    # We need to return the actual plist with the updated value
+    # But wait, GETF takes a plist and returns a value
+    # For SETF, we need to modify the plist that's stored elsewhere
+    # This is actually complex because the plist is usually a variable
+    # Actually, looking at CLHS, (SETF (GETF place indicator) value)
+    # modifies place to contain the new plist
+    # So we need to return the new plist, but we only have access to
+    # the old one and the indicator and value
+    # The actual implementation should be handled by a special case
+    # in the ROTATEF/SETF code that knows about GETF
+    raise lisptype.LispNotImplementedError("GETF place modification requires special handling")
+
+
+def _fclpy_setf_find_class(name, value):
+    """Register or unregister a class under a name."""
+    import fclpy.classes as _classes
+    if isinstance(value, _classes.LispClass):
+        _classes.register_class_as(name, value)
+    elif _null_internal(value):
+        _classes.unregister_class_as(name)
+    else:
+        raise lisptype.LispError("FIND-CLASS place: value must be a class or NIL")
+    return value
+
+
+def _fclpy_setf_ldb(size, pos, current, value):
+    """Set bits in a value (helper for SETF of LDB)."""
+    mask = (1 << int(size)) - 1
+    return (int(current) & ~(int(mask) << int(pos))) | ((int(value) & int(mask)) << int(pos))
+
+
+def _fclpy_setf_subseq(seq, start, end, new_seq):
+    """Replace a subsequence in a sequence."""
+    if _consp_internal(seq):
+        # For lists, we need to modify the cells in place
+        # This is complex, so we'll just modify the car values
+        start_idx = int(start)
+        end_idx = int(end) if end is not None else None
+        cell = seq
+        # Skip to start position
+        for _ in range(start_idx):
+            if not _consp_internal(cell):
+                raise lisptype.LispError("SUBSEQ place: start index out of bounds")
+            cell = cdr(cell)
+        # Copy values from new_seq
+        new_cell = new_seq
+        idx = 0
+        while _consp_internal(cell) and _consp_internal(new_cell):
+            if end_idx is not None and start_idx + idx >= end_idx:
+                break
+            cell.car = new_cell.car
+            cell = cdr(cell)
+            new_cell = cdr(new_cell)
+            idx += 1
+        return new_seq
+    else:
+        # For vectors (Python lists / strings)
+        start_idx = int(start)
+        end_idx = int(end) if end is not None else len(seq)
+        seq[start_idx:end_idx] = new_seq
+        return new_seq
+
+
 for _helper_name, _helper_fn in (
     ('%FCLPY-SETF-SYMBOL-VALUE', _fclpy_setf_symbol_value),
     ('%FCLPY-SETF-SYMBOL-FUNCTION', _fclpy_setf_symbol_function),
     ('%FCLPY-SETF-SYMBOL-PLIST', _fclpy_setf_symbol_plist),
     ('%FCLPY-SETF-GETHASH', _fclpy_setf_gethash),
+    ('%FCLPY-SETF-NTH-ELEMENT', _fclpy_setf_nth_element),
+    ('%FCLPY-SETF-SEQUENCE-ELEMENT', _fclpy_setf_sequence_element),
+    ('%FCLPY-SETF-FDEFINITION', _fclpy_setf_fdefinition),
+    ('%FCLPY-SETF-GET', _fclpy_setf_get),
+    ('%FCLPY-SETF-FIND-CLASS', _fclpy_setf_find_class),
+    ('%FCLPY-SETF-LDB', _fclpy_setf_ldb),
+    ('%FCLPY-SETF-SUBSEQ', _fclpy_setf_subseq),
 ):
     _registry.function_registry[_helper_name] = _registry.RegistryEntry(
         name=_helper_name, py_name=_helper_fn.__name__, kind='function', func=_helper_fn)
@@ -4344,6 +4495,68 @@ def get_setf_expansion(place, env):
         temp, store = _gensym_fn(), _gensym_fn()
         store_form = _setf_form('PROGN', _setf_form(setter_name, temp, store), store)
         return [temp], list(place_args), [store], store_form, _setf_form(op, temp)
+
+    # NTH accessor functions (SECOND, THIRD, ..., TENTH) + generic NTH
+    _NTH_ACCESSOR_INDEX = {
+        'FIRST': 0, 'SECOND': 1, 'THIRD': 2, 'FOURTH': 3, 'FIFTH': 4,
+        'SIXTH': 5, 'SEVENTH': 6, 'EIGHTH': 7, 'NINTH': 8, 'TENTH': 9,
+    }
+    if op_name in _NTH_ACCESSOR_INDEX and op_name != 'FIRST' and len(place_args) == 1:
+        temp, store = _gensym_fn(), _gensym_fn()
+        idx = _NTH_ACCESSOR_INDEX[op_name]
+        store_form = _setf_form('PROGN', _setf_form('%FCLPY-SETF-NTH-ELEMENT', idx, temp, store), store)
+        return [temp], list(place_args), [store], store_form, _setf_form(op, temp)
+
+    if op_name == 'NTH' and len(place_args) == 2:
+        temp0, temp1, store = _gensym_fn(), _gensym_fn(), _gensym_fn()
+        store_form = _setf_form('PROGN', _setf_form('%FCLPY-SETF-NTH-ELEMENT', temp0, temp1, store), store)
+        return [temp0, temp1], list(place_args), [store], store_form, _setf_form('NTH', temp0, temp1)
+
+    # CHAR, SCHAR, ELT - sequence element access
+    if op_name in ('CHAR', 'SCHAR', 'ELT') and len(place_args) == 2:
+        temp0, temp1, store = _gensym_fn(), _gensym_fn(), _gensym_fn()
+        store_form = _setf_form('PROGN', _setf_form('%FCLPY-SETF-SEQUENCE-ELEMENT', temp0, temp1, store), store)
+        return [temp0, temp1], list(place_args), [store], store_form, _setf_form(op, temp0, temp1)
+
+    # FDEFINITION - function definition
+    if op_name == 'FDEFINITION' and len(place_args) == 1:
+        temp, store = _gensym_fn(), _gensym_fn()
+        store_form = _setf_form('PROGN', _setf_form('%FCLPY-SETF-FDEFINITION', temp, store), store)
+        return [temp], list(place_args), [store], store_form, _setf_form(op, temp)
+
+    # GET - symbol property
+    if op_name == 'GET' and len(place_args) >= 2:
+        # GET takes (sym indicator &optional default), but for SETF we only care about sym and indicator
+        temp0, temp1, store = _gensym_fn(), _gensym_fn(), _gensym_fn()
+        # Only evaluate the first two arguments for the store operation
+        temps = [temp0, temp1]
+        vals = list(place_args[:2])
+        store_form = _setf_form('PROGN', _setf_form('%FCLPY-SETF-GET', temp0, temp1, store), store)
+        return temps, vals, [store], store_form, _setf_form('GET', temp0, temp1)
+
+    # GETF - property list element
+    if op_name == 'GETF' and len(place_args) >= 2:
+        # GETF takes (plist indicator &optional default)
+        # SETF of GETF modifies the plist, which is stored in the first argument's place
+        # This requires special handling because the plist itself must be updated
+        # For now, we'll handle this by returning the plist with the value updated
+        temps = [_gensym_fn() for _ in place_args[:2]]
+        store = _gensym_fn()
+        # (SETF (GETF plist-place indicator) value) should set the plist-place
+        # to a modified plist with indicator mapped to value
+        # We need a helper that does this
+        # Let's use the same pattern as GETHASH
+        store_form = _setf_form('PROGN', _setf_form('%FCLPY-SETF-GETF', temps[0], temps[1], store), store)
+        return temps, list(place_args[:2]), [store], store_form, _setf_form('GETF', *temps)
+
+    # FIND-CLASS - class registry
+    if op_name == 'FIND-CLASS' and len(place_args) == 1:
+        temp, store = _gensym_fn(), _gensym_fn()
+        store_form = _setf_form('PROGN', _setf_form('%FCLPY-SETF-FIND-CLASS', temp, store), store)
+        return [temp], list(place_args), [store], store_form, _setf_form(op, temp)
+
+    # LDB and SUBSEQ are not yet supported - fallback to generic handler
+    # TODO: implement proper LDB and SUBSEQ place expansion
 
     # User-registered DEFSETF / DEFINE-SETF-EXPANDER take priority over the
     # operator's own macro definition (setf-macro.2: a DEFSETF overrides a
