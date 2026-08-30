@@ -763,7 +763,10 @@ def realpart(number):
 
 @_registry.cl_function('CONJUGATE')
 def conjugate(number):
-    """Return complex conjugate."""
+    """Return complex conjugate, preserving the type of parts."""
+    if isinstance(number, LispComplex):
+        # LispComplex preserves part types; conjugate without converting to float
+        return LispComplex(number.real, -number.imag)
     if isinstance(number, complex):
         return number.conjugate()
     return number

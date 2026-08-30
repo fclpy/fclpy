@@ -5,7 +5,7 @@ from fractions import Fraction
 import fclpy.lisptype as lisptype
 import fclpy.state as state
 from fclpy.lispfunc import registry as _registry
-from .core import car, cdr, cons, _consp_internal
+from .core import car, cdr, cadr, cons, _consp_internal
 from .sequence_protocol import build_sequence, seq_elements, list_elements as _list_elements
 
 

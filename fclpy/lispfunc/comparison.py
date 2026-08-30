@@ -960,6 +960,9 @@ def type_of(object):
             return lisptype.LispSymbol('CHARACTER')
         else:
             return lisptype.LispSymbol('STRING')
+    elif isinstance(object, lisptype.LispString):
+        # LispString is the Lisp representation of a STRING, distinct from Python str
+        return lisptype.LispSymbol('STRING')
     elif isinstance(object, (list, tuple)):
         return lisptype.LispSymbol('VECTOR')
     elif isinstance(object, classes.Method):
