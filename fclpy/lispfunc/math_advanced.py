@@ -47,59 +47,40 @@ def _irrational(real_fn, complex_fn, x):
 def exp(x):
     """Exponential function.
 
-    CLHS 12.1.5.1: Must signal FLOATING-POINT-OVERFLOW or FLOATING-POINT-UNDERFLOW
-    when the result is too large or too small for the float type.
-    """
+    CLHS 12.1.5.1: must signal an ERROR of type floating-point-overflow /
+    floating-point-underflow when the mathematical result is out of range.
+    EXP is computed through exp/log in the widest format -- the same regime
+    `_check_float_overflow` documents for EXPT's non-integral powers -- so
+    only the double range bounds it. This used to consult the short/single
+    bound too, which made every finite result between 3.4e38 and 1.79e308
+    spuriously signal: `(exp (log most-positive-double-float))` signalled a
+    condition that nothing handled (SIGNAL semantics) and then fell off the
+    end answering Python None -- the NIL that broke FORMAT.E.26's double
+    rows. Both signal sites now use ERROR semantics (`signal_error_object`):
+    handlers run at the signal point, and with no handler the condition
+    propagates instead of the operator answering None."""
     try:
         result = _irrational(math.exp, cmath.exp, x)
     except OverflowError:
-        # Python's math.exp raised OverflowError before we could get a result
-        from fclpy.lispfunc.evaluation_conditions import signal_condition
-        signal_condition(lisptype.FloatingPointOverflow(
-            f"EXP: result overflows the range of the float type"))
+        from fclpy.lispfunc.evaluation_conditions import signal_error_object
+        signal_error_object(lisptype.FloatingPointOverflow(
+            "EXP: result overflows the range of the float type"))
         return
-
-    # Check if result overflows/underflows
     if isinstance(result, (int, float)):
-        # For real results, check overflow/underflow
-        from fclpy.lispfunc.evaluation_conditions import signal_condition
-
-        # Short/single float range
-        short_max = 3.4028235e+38
-        short_min = 1.4e-45
-
-        # Double/long float range (Python's full range)
-        double_max = sys.float_info.max
-        double_min = sys.float_info.min
-
-        # Check for overflow (result larger than ANY type's max)
-        if abs(result) > double_max:
-            signal_condition(lisptype.FloatingPointOverflow(
-                f"EXP: result overflows the range of the float type"))
+        from fclpy.lispfunc.evaluation_conditions import signal_error_object
+        # Defensive only: math.exp raises OverflowError before producing an
+        # inf, so a finite real result cannot exceed the double range here.
+        if abs(result) > sys.float_info.max:
+            signal_error_object(lisptype.FloatingPointOverflow(
+                "EXP: result overflows the range of the float type"))
             return
-
-        if abs(result) > short_max:
-            signal_condition(lisptype.FloatingPointOverflow(
-                f"EXP: result overflows the range of the float type"))
+        # Underflow: math.exp silently answers 0.0 below the double range's
+        # edge (log(min) ~ -744.44 for IEEE 754 doubles); that is a genuine
+        # floating-point-underflow for every float subtype fclpy models.
+        if x < math.log(sys.float_info.min):
+            signal_error_object(lisptype.FloatingPointUnderflow(
+                "EXP: result underflows the range of the float type"))
             return
-
-        # Check for underflow. If result is 0.0, check if it's due to underflow
-        # by examining the input: if x < log(double_min), then exp(x) would underflow
-        if isinstance(x, (int, float)):
-            # log(sys.float_info.min) is approximately -744.4 for IEEE 754 doubles
-            underflow_threshold = math.log(double_min)
-            if x < underflow_threshold:
-                signal_condition(lisptype.FloatingPointUnderflow(
-                    f"EXP: result underflows the range of the float type"))
-                return
-
-        # Also check for small non-zero results that are below the minimum normal
-        if result != 0.0:
-            if abs(result) < double_min or abs(result) < short_min:
-                signal_condition(lisptype.FloatingPointUnderflow(
-                    f"EXP: result underflows the range of the float type"))
-                return
-
     return result
 
 @_registry.cl_function('LOG')

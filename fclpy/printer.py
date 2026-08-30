@@ -886,6 +886,23 @@ def _name_needs_escaping(name, ctx):
         return True
     if readtable_case == 'DOWNCASE' and any(c.isupper() for c in name):
         return True
+    # CLHS 22.1.3.3.2: under *PRINT-READABLY* the printed form must read
+    # back the same, and the read-back may run through a *different*
+    # readtable -- ansi-test's randomly-check-readability prints under a
+    # :downcase/:invert/:preserve table and reads back through
+    # (copy-readtable nil), the standard :upcase one. A name whose printed
+    # spelling the :upcase reader would case-convert cannot survive
+    # unescaped: printing |a| as "a" under :downcase/:invert/:preserve read
+    # back as A, the wrong symbol (PRINT.SYMBOL.RANDOM.1-4). The check is
+    # the :upcase reader's own per-character rule (readtable.py's
+    # convert_case_chars) applied to the *printed* spelling against the
+    # original name. Only the non-:upcase modes need this: under :upcase
+    # the two rules above already escape exactly the names that would not
+    # survive, and non-readably printing is allowed to be unreadable.
+    if ctx.readably and readtable_case != 'UPCASE':
+        printed = _apply_print_case(name, ctx)
+        if ''.join(c.upper() for c in printed) != name:
+            return True
     return False
 
 
@@ -953,6 +970,13 @@ def _package_prefix(symbol, ctx):
         return ''
 
     prefix = _apply_print_case(package.name, ctx)
+    # The readable rule covers the package name too (CLHS 22.1.3.3.2): the
+    # read-back -- a standard :upcase reader -- must find the same package,
+    # so a prefix spelling that reader would case-convert needs |...| (the
+    # reader accepts a multiple-escaped package token: |cl-user|::foo).
+    if (ctx.readably and _readtable_case() != 'UPCASE'
+            and ''.join(c.upper() for c in prefix) != package.name):
+        prefix = '|' + package.name.replace('\\', '\\\\').replace('|', '\\|') + '|'
     external = getattr(package, 'external_symbols', None)
     is_external = bool(external) and symbol.name in external
     return f'{prefix}:' if is_external else f'{prefix}::'

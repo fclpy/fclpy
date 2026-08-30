@@ -1462,15 +1462,26 @@ def eval_loop(form, env):
     # clause was parsed last silently won.
     iteration_drivers = []
 
+    # The same drivers grouped by their FOR clause (CLHS 6.1.2.1). A plain
+    # clause is a singleton group; the subclauses one AND joins (`for i from 1
+    # to 5 and j = 0 then (+ j i)`) share one group and initialize and step in
+    # parallel -- all their bound forms are evaluated before any of the
+    # group's variables is bound, and all their step forms before any variable
+    # steps (LET where a plain sequence of FOR clauses is LET*).
+    driver_groups = []
+
     # WHILE/UNTIL termination tests (CLHS 6.1.2.1.2). Also composing: a loop may
     # carry several, and they bound whatever drivers are present rather than
     # replacing them.
     #
     # Position matters. A termination test is evaluated where it is written
     # (CLHS 6.1.2.1.2), so `while x collect x` tests before accumulating while
-    # `collect x until x` accumulates and then tests -- which is why each entry
-    # records whether a main clause had already been seen when it was parsed.
-    termination_tests = []  # list of ('while'/'until', test_form, after_body)
+    # `collect x until x` accumulates and then tests. The third element is the
+    # test's position: the number of main clauses already parsed when the test
+    # was read, which is where it interleaves into the iteration (see
+    # `iteration_plan` below) -- three `while ... collect ...` pairs test and
+    # accumulate alternately, which is loop.11.12/11.22's whole point.
+    termination_tests = []  # list of ('while'/'until', test_form, position)
 
     # A WHEN/UNLESS/IF guards *the selectable-clause that follows it* (CLHS
     # 6.1.3): one selectable-clause, which may itself be another conditional
@@ -1640,6 +1651,258 @@ def eval_loop(form, env):
             i += 1
             _parse_selectable_clause(active_conditionals)
 
+    def _parse_for_subclause(clause_start, group):
+        """One for-as subclause: its variable, optional type-spec and driver
+        spec (CLHS 6.1.2.1).
+
+        `clause_start` is the index of the FOR/AS keyword -- or, for an
+        AND-joined later subclause, of the variable itself, since the FOR
+        keyword is written once for the whole clause. Returns ``(driver,
+        group, end_index)``; ``group`` is the clause's driver group, created
+        here on the first subclause and shared by every AND-joined one (a
+        group initializes and steps in parallel -- see `driver_groups`).
+        """
+        token = forms[clause_start]
+        if sym_name(token) in ('FOR', 'AS'):
+            var_pos = clause_start + 1
+        else:
+            var_pos = clause_start
+        candidate_var = forms[var_pos]
+        if not (isinstance(candidate_var, lisptype.LispSymbol)
+                or _consp_internal(candidate_var)
+                or _loop_is_discarded_var(candidate_var)):
+            raise lisptype.LispNotImplementedError('LOOP FOR requires a symbol')
+        _claim_variables(candidate_var)
+
+        clause_stop = LOOP_CLAUSE_KEYWORDS
+
+        # Parse the FOR clause into either a driver (IN/ON/ACROSS/FROM...) or an aux binding (=
+        # without FROM/IN/etc) when a driver already exists.
+        # The optional type-spec sits between the variable and the driver
+        # keyword (`for v fixnum being the hash-values of h`), so it has to
+        # be consumed before the scan below or FIXNUM reads as the end of
+        # the clause and the driver is lost.
+        j, _for_type = _loop_type_spec(forms, var_pos + 1)
+        saw_driver_keyword = False
+        driver_kind = None
+        driver_start = None
+        driver_end = None
+        driver_step = None
+        driver_list = None
+        aux_init = None
+        aux_then = None
+        driver_downward = False
+        driver_hash_part = None
+        driver_symbol_set = None
+        driver_using_part = None
+        driver_using_var = None
+        # Track the order in which FROM/TO/BY etc. are parsed (for correct evaluation order)
+        driver_eval_order = []
+
+        while j < len(forms):
+            fname = sym_name(forms[j])
+            if fname == 'FROM':
+                saw_driver_keyword = True
+                driver_start = forms[j+1]
+                driver_eval_order.append(('FROM', forms[j+1]))
+                j += 2
+            elif fname == 'UPFROM':
+                saw_driver_keyword = True
+                driver_start = forms[j+1]
+                driver_eval_order.append(('FROM', forms[j+1]))
+                j += 2
+            elif fname == 'DOWNFROM':
+                saw_driver_keyword = True
+                driver_start = forms[j+1]
+                driver_downward = True
+                driver_eval_order.append(('FROM', forms[j+1]))
+                j += 2
+            elif fname in ('TO', 'UPTO'):
+                saw_driver_keyword = True
+                driver_end = forms[j+1]
+                driver_kind = 'for-range'
+                driver_eval_order.append(('TO', forms[j+1]))
+                j += 2
+            elif fname == 'BELOW':
+                saw_driver_keyword = True
+                driver_end = forms[j+1]
+                driver_kind = 'for-below'
+                driver_eval_order.append(('BELOW', forms[j+1]))
+                j += 2
+            elif fname == 'DOWNTO':
+                saw_driver_keyword = True
+                driver_end = forms[j+1]
+                driver_kind = 'for-range'
+                driver_downward = True
+                driver_eval_order.append(('DOWNTO', forms[j+1]))
+                j += 2
+            elif fname == 'ABOVE':
+                saw_driver_keyword = True
+                driver_end = forms[j+1]
+                driver_kind = 'for-below'
+                driver_downward = True
+                driver_eval_order.append(('ABOVE', forms[j+1]))
+                j += 2
+            elif fname == 'BY':
+                saw_driver_keyword = True
+                driver_step = forms[j+1]
+                driver_eval_order.append(('BY', forms[j+1]))
+                j += 2
+            elif fname == 'IN':
+                saw_driver_keyword = True
+                driver_list = forms[j+1]
+                driver_kind = 'for-in'
+                j += 2
+            elif fname == 'ON':
+                saw_driver_keyword = True
+                driver_list = forms[j+1]
+                driver_kind = 'for-on'
+                j += 2
+            elif fname == 'BEING':
+                # being {each | the} <what> [{of | in} form] [using (<what> var)]
+                #
+                # CLHS 6.1.2.1.6 (hash tables) and 6.1.2.1.7 (packages). The
+                # previous parse recognized exactly one spelling of one of
+                # the eight -- plural SYMBOLS after THE -- and *broke out of
+                # the clause* for every other, which left driver_kind None
+                # and raised "LOOP FOR clause missing iteration spec". That
+                # is the whole of loop6.lsp (47/47) and loop7.lsp (35/35).
+                saw_driver_keyword = True
+                k = j + 1
+                if k < len(forms) and sym_name(forms[k]) in ('THE', 'EACH'):
+                    k += 1
+                what = sym_name(forms[k]) if k < len(forms) else None
+                k += 1
+                if what in LOOP_HASH_PARTS:
+                    driver_kind = 'for-being-hash'
+                    driver_hash_part = LOOP_HASH_PARTS[what]
+                elif what in LOOP_PACKAGE_SYMBOL_SETS:
+                    driver_kind = 'for-being-package'
+                    driver_symbol_set = LOOP_PACKAGE_SYMBOL_SETS[what]
+                else:
+                    raise lisptype.LispProgramError(
+                        f'LOOP BEING does not name an iterable: {what}')
+                # The source is required for a hash table and optional for a
+                # package, which defaults to *PACKAGE*.
+                if k < len(forms) and sym_name(forms[k]) in ('OF', 'IN'):
+                    driver_list = forms[k+1]
+                    k += 2
+                elif driver_kind == 'for-being-hash':
+                    raise lisptype.LispProgramError(
+                        'LOOP BEING THE HASH-KEYS/HASH-VALUES requires OF or IN')
+                # using ({hash-key | hash-value} other-var) names the other
+                # half of the entry (CLHS 6.1.2.1.6).
+                if k < len(forms) and sym_name(forms[k]) == 'USING':
+                    using_clause = forms[k+1] if (k + 1) < len(forms) else None
+                    if not _consp_internal(using_clause):
+                        raise lisptype.LispProgramError(
+                            'LOOP USING requires (hash-key var) or (hash-value var)')
+                    using_what = sym_name(car(using_clause))
+                    if using_what not in LOOP_HASH_PARTS:
+                        raise lisptype.LispProgramError(
+                            f'LOOP USING does not name a hash-table part: {using_what}')
+                    driver_using_part = LOOP_HASH_PARTS[using_what]
+                    driver_using_var = car(cdr(using_clause))
+                    _claim_variables(driver_using_var)
+                    k += 2
+                j = k
+            elif fname == 'ACROSS':
+                saw_driver_keyword = True
+                driver_list = forms[j+1]
+                driver_kind = 'for-across'
+                j += 2
+            elif fname == '=':
+                # FOR x = init-form [THEN step-form]
+                aux_init = forms[j+1]
+                j += 2
+                if j < len(forms) and sym_name(forms[j]) == 'THEN':
+                    aux_then = forms[j+1]
+                    j += 2
+                # '=' can be either a driver (if this is the first/only iteration clause)
+                # or an auxiliary binding when a driver already exists.
+                if not saw_driver_keyword and driver_kind is None:
+                    driver_kind = 'for-equals'
+                    driver_start = aux_init
+                    driver_step = aux_then
+            elif fname == 'THEN':
+                # THEN after = was already handled above
+                j += 2
+            elif fname in clause_stop:
+                break
+            else:
+                break
+
+        # If we saw FROM but no end specifier, treat as an unbounded arithmetic progression.
+        # This is valid in ANSI LOOP, and is often paired with another driver that
+        # terminates the overall loop.
+        if driver_kind is None and saw_driver_keyword and driver_start is not None:
+            driver_kind = 'for-from'
+
+        if driver_kind is None:
+            # e.g., "FOR X" without IN/FROM/=
+            raise lisptype.LispNotImplementedError('LOOP FOR clause missing iteration spec')
+
+        # DOWNTO/ABOVE count downward: BY gives a magnitude, so negate it
+        # (an explicit BY form is wrapped as "(- form)" and negated at eval time).
+        if driver_downward:
+            if driver_step is None:
+                driver_step = -1
+            elif isinstance(driver_step, int):
+                driver_step = -abs(driver_step)
+            else:
+                driver_step = cons(lisptype.LispSymbol('-'), cons(driver_step, lisptype.NIL))
+
+        driver = {
+            'var': candidate_var,
+            'kind': driver_kind,
+            'start': driver_start,
+            'end': driver_end,
+            'step': driver_step,
+            'list': driver_list,
+            'hash_part': driver_hash_part,
+            'symbol_set': driver_symbol_set,
+            'using_part': driver_using_part,
+            'using_var': driver_using_var,
+            'eval_order': driver_eval_order,
+            'downward': driver_downward,
+        }
+        if group is None:
+            group = [driver]
+            driver_groups.append(group)
+        else:
+            group.append(driver)
+        iteration_drivers.append(driver)
+        return driver, group, j
+
+    def _and_subclause_start(end_index):
+        """Where the next AND-joined for-as subclause starts, or None.
+
+        CLHS 6.1.2.1: ``for-as-clause ::= {for | as} for-as-subclause {and
+        for-as-subclause}*`` -- AND joins *subclauses*, and the FOR keyword
+        is written once for the whole clause (a redundant one after the AND
+        is tolerated). Anything else -- another clause keyword especially --
+        is not a subclause start, and the AND is left for the top-level
+        parse, as it always was. This is the check the previous parse
+        lacked: it broke the clause on AND and then dropped the token, so
+        `for i from 1 to 5 and j = 0 then (+ j i)` bound I and lost J
+        entirely -- loop.17.21's "Unbound variable: J".
+        """
+        if end_index >= len(forms) or sym_name(forms[end_index]) != 'AND':
+            return None
+        if end_index + 1 >= len(forms):
+            return None
+        token = forms[end_index + 1]
+        token_name = sym_name(token)
+        if token_name in ('FOR', 'AS'):
+            if end_index + 2 >= len(forms):
+                return None
+            return end_index + 2
+        if (_consp_internal(token) or _loop_is_discarded_var(token)
+                or (isinstance(token, lisptype.LispSymbol)
+                    and token_name not in LOOP_CLAUSE_KEYWORDS)):
+            return end_index + 1
+        return None
+
     # WITH's local variables (CLHS 6.1.1.4), as a list of *groups*. Successive
     # WITH clauses initialize sequentially -- each one sees the previous -- but
     # the specs an AND joins initialize in parallel, all from the environment
@@ -1650,7 +1913,6 @@ def eval_loop(form, env):
 
     initially_forms = []  # INITIALLY prologue, run once before the first iteration
     finally_forms = []
-    finally_return_form = None  # RETURN clause in FINALLY section (evaluated at end)
     loop_block_name = None  # NIL unless a NAMED clause gives the loop its own block name
 
     # Parse clauses
@@ -1695,215 +1957,27 @@ def eval_loop(form, env):
             # branch below and looped forever evaluating AS/X/IN as inert
             # body forms until the 10-minute LOOP_TIMEOUT_ERROR hard cap
             # fired -- exercised by ~15 tests across iteration/loop2-7.lsp.
-            candidate_var = forms[i+1]
-            if not (isinstance(candidate_var, lisptype.LispSymbol)
-                    or _consp_internal(candidate_var)
-                    or _loop_is_discarded_var(candidate_var)):
-                raise lisptype.LispNotImplementedError('LOOP FOR requires a symbol')
-            _claim_variables(candidate_var)
-
-            clause_stop = LOOP_CLAUSE_KEYWORDS
-
-            # Parse the FOR clause into either a driver (IN/ON/ACROSS/FROM...) or an aux binding (=
-            # without FROM/IN/etc) when a driver already exists.
-            # The optional type-spec sits between the variable and the driver
-            # keyword (`for v fixnum being the hash-values of h`), so it has to
-            # be consumed before the scan below or FIXNUM reads as the end of
-            # the clause and the driver is lost.
-            j, _for_type = _loop_type_spec(forms, i + 2)
-            saw_driver_keyword = False
-            driver_kind = None
-            driver_start = None
-            driver_end = None
-            driver_step = None
-            driver_list = None
-            aux_init = None
-            aux_then = None
-            driver_downward = False
-            driver_hash_part = None
-            driver_symbol_set = None
-            driver_using_part = None
-            driver_using_var = None
-            # Track the order in which FROM/TO/BY etc. are parsed (for correct evaluation order)
-            driver_eval_order = []
-
-            while j < len(forms):
-                fname = sym_name(forms[j])
-                if fname == 'FROM':
-                    saw_driver_keyword = True
-                    driver_start = forms[j+1]
-                    driver_eval_order.append(('FROM', forms[j+1]))
-                    j += 2
-                elif fname == 'UPFROM':
-                    saw_driver_keyword = True
-                    driver_start = forms[j+1]
-                    driver_eval_order.append(('FROM', forms[j+1]))
-                    j += 2
-                elif fname == 'DOWNFROM':
-                    saw_driver_keyword = True
-                    driver_start = forms[j+1]
-                    driver_downward = True
-                    driver_eval_order.append(('FROM', forms[j+1]))
-                    j += 2
-                elif fname in ('TO', 'UPTO'):
-                    saw_driver_keyword = True
-                    driver_end = forms[j+1]
-                    driver_kind = 'for-range'
-                    driver_eval_order.append(('TO', forms[j+1]))
-                    j += 2
-                elif fname == 'BELOW':
-                    saw_driver_keyword = True
-                    driver_end = forms[j+1]
-                    driver_kind = 'for-below'
-                    driver_eval_order.append(('BELOW', forms[j+1]))
-                    j += 2
-                elif fname == 'DOWNTO':
-                    saw_driver_keyword = True
-                    driver_end = forms[j+1]
-                    driver_kind = 'for-range'
-                    driver_downward = True
-                    driver_eval_order.append(('DOWNTO', forms[j+1]))
-                    j += 2
-                elif fname == 'ABOVE':
-                    saw_driver_keyword = True
-                    driver_end = forms[j+1]
-                    driver_kind = 'for-below'
-                    driver_downward = True
-                    driver_eval_order.append(('ABOVE', forms[j+1]))
-                    j += 2
-                elif fname == 'BY':
-                    saw_driver_keyword = True
-                    driver_step = forms[j+1]
-                    driver_eval_order.append(('BY', forms[j+1]))
-                    j += 2
-                elif fname == 'IN':
-                    saw_driver_keyword = True
-                    driver_list = forms[j+1]
-                    driver_kind = 'for-in'
-                    j += 2
-                elif fname == 'ON':
-                    saw_driver_keyword = True
-                    driver_list = forms[j+1]
-                    driver_kind = 'for-on'
-                    j += 2
-                elif fname == 'BEING':
-                    # being {each | the} <what> [{of | in} form] [using (<what> var)]
-                    #
-                    # CLHS 6.1.2.1.6 (hash tables) and 6.1.2.1.7 (packages). The
-                    # previous parse recognized exactly one spelling of one of
-                    # the eight -- plural SYMBOLS after THE -- and *broke out of
-                    # the clause* for every other, which left driver_kind None
-                    # and raised "LOOP FOR clause missing iteration spec". That
-                    # is the whole of loop6.lsp (47/47) and loop7.lsp (35/35).
-                    saw_driver_keyword = True
-                    k = j + 1
-                    if k < len(forms) and sym_name(forms[k]) in ('THE', 'EACH'):
-                        k += 1
-                    what = sym_name(forms[k]) if k < len(forms) else None
-                    k += 1
-                    if what in LOOP_HASH_PARTS:
-                        driver_kind = 'for-being-hash'
-                        driver_hash_part = LOOP_HASH_PARTS[what]
-                    elif what in LOOP_PACKAGE_SYMBOL_SETS:
-                        driver_kind = 'for-being-package'
-                        driver_symbol_set = LOOP_PACKAGE_SYMBOL_SETS[what]
-                    else:
-                        raise lisptype.LispProgramError(
-                            f'LOOP BEING does not name an iterable: {what}')
-                    # The source is required for a hash table and optional for a
-                    # package, which defaults to *PACKAGE*.
-                    if k < len(forms) and sym_name(forms[k]) in ('OF', 'IN'):
-                        driver_list = forms[k+1]
-                        k += 2
-                    elif driver_kind == 'for-being-hash':
-                        raise lisptype.LispProgramError(
-                            'LOOP BEING THE HASH-KEYS/HASH-VALUES requires OF or IN')
-                    # using ({hash-key | hash-value} other-var) names the other
-                    # half of the entry (CLHS 6.1.2.1.6).
-                    if k < len(forms) and sym_name(forms[k]) == 'USING':
-                        using_clause = forms[k+1] if (k + 1) < len(forms) else None
-                        if not _consp_internal(using_clause):
-                            raise lisptype.LispProgramError(
-                                'LOOP USING requires (hash-key var) or (hash-value var)')
-                        using_what = sym_name(car(using_clause))
-                        if using_what not in LOOP_HASH_PARTS:
-                            raise lisptype.LispProgramError(
-                                f'LOOP USING does not name a hash-table part: {using_what}')
-                        driver_using_part = LOOP_HASH_PARTS[using_what]
-                        driver_using_var = car(cdr(using_clause))
-                        _claim_variables(driver_using_var)
-                        k += 2
-                    j = k
-                elif fname == 'ACROSS':
-                    saw_driver_keyword = True
-                    driver_list = forms[j+1]
-                    driver_kind = 'for-across'
-                    j += 2
-                elif fname == '=':
-                    # FOR x = init-form [THEN step-form]
-                    aux_init = forms[j+1]
-                    j += 2
-                    if j < len(forms) and sym_name(forms[j]) == 'THEN':
-                        aux_then = forms[j+1]
-                        j += 2
-                    # '=' can be either a driver (if this is the first/only iteration clause)
-                    # or an auxiliary binding when a driver already exists.
-                    if not saw_driver_keyword and driver_kind is None:
-                        driver_kind = 'for-equals'
-                        driver_start = aux_init
-                        driver_step = aux_then
-                elif fname == 'THEN':
-                    # THEN after = was already handled above
-                    j += 2
-                elif fname in clause_stop:
+            #
+            # One clause may carry several AND-joined subclauses, which
+            # initialize and step in parallel (CLHS 6.1.2.1) -- that is what
+            # the group list tracks; see `driver_groups`.
+            group = None
+            clause_start = i
+            while True:
+                _, group, clause_start = _parse_for_subclause(clause_start, group)
+                nxt = _and_subclause_start(clause_start)
+                if nxt is None:
                     break
-                else:
-                    break
-
-            # If we saw FROM but no end specifier, treat as an unbounded arithmetic progression.
-            # This is valid in ANSI LOOP, and is often paired with another driver that
-            # terminates the overall loop.
-            if driver_kind is None and saw_driver_keyword and driver_start is not None:
-                driver_kind = 'for-from'
-
-            if driver_kind is None:
-                # e.g., "FOR X" without IN/FROM/=
-                raise lisptype.LispNotImplementedError('LOOP FOR clause missing iteration spec')
-
-            # DOWNTO/ABOVE count downward: BY gives a magnitude, so negate it
-            # (an explicit BY form is wrapped as "(- form)" and negated at eval time).
-            if driver_downward:
-                if driver_step is None:
-                    driver_step = -1
-                elif isinstance(driver_step, int):
-                    driver_step = -abs(driver_step)
-                else:
-                    driver_step = cons(lisptype.LispSymbol('-'), cons(driver_step, lisptype.NIL))
-
-            iteration_drivers.append({
-                'var': candidate_var,
-                'kind': driver_kind,
-                'start': driver_start,
-                'end': driver_end,
-                'step': driver_step,
-                'list': driver_list,
-                'hash_part': driver_hash_part,
-                'symbol_set': driver_symbol_set,
-                'using_part': driver_using_part,
-                'using_var': driver_using_var,
-                'eval_order': driver_eval_order,
-                'downward': driver_downward,
-            })
-
-            i = j
+                clause_start = nxt
+            i = clause_start
             continue
 
         elif name == 'WHILE':
-            termination_tests.append(('while', forms[i+1], bool(body_clauses or accumulations)))
+            termination_tests.append(('while', forms[i+1], len(main_clauses)))
             i += 2
 
         elif name == 'UNTIL':
-            termination_tests.append(('until', forms[i+1], bool(body_clauses or accumulations)))
+            termination_tests.append(('until', forms[i+1], len(main_clauses)))
             i += 2
 
         elif name == 'REPEAT':
@@ -1911,11 +1985,16 @@ def eval_loop(form, env):
             # whatever driver is present. Modelling it as an anonymous driver is
             # what makes `for x = 7 repeat 5` and `repeat 5 for x = 7` mean the
             # same thing regardless of clause order.
-            iteration_drivers.append({
+            repeat_driver = {
                 'var': None,
                 'kind': 'repeat',
                 'count': forms[i+1],
-            })
+            }
+            iteration_drivers.append(repeat_driver)
+            # The initialization phase walks `driver_groups`, so REPEAT needs
+            # its own (singleton) group there or `_remaining` is never
+            # computed and every REPEAT loop runs zero times.
+            driver_groups.append([repeat_driver])
             i += 2
 
         elif (name in ('WHEN', 'IF', 'UNLESS', 'DO', 'DOING', 'RETURN')
@@ -1941,23 +2020,15 @@ def eval_loop(form, env):
         elif name == 'FINALLY':
             i += 1
             while i < len(forms) and sym_name(forms[i]) not in LOOP_CLAUSE_KEYWORDS:
-                f = forms[i]
-                # Check if this form is (RETURN ...)
-                if _consp_internal(f):
-                    car_f = car(f)
-                    if isinstance(car_f, lisptype.LispSymbol) and car_f.name.upper() == 'RETURN':
-                        # Extract the return value from (RETURN form)
-                        cdr_f = cdr(f)
-                        if _consp_internal(cdr_f):
-                            finally_return_form = car(cdr_f)
-                        i += 1
-                    else:
-                        finally_forms.append(f)
-                        i += 1
-                else:
-                    finally_forms.append(f)
-                    i += 1
-                
+                # CLHS 6.1.6.2: the epilogue is just a progn in the loop's
+                # variable scope. A (RETURN x) here is an *ordinary return
+                # form*, evaluated like any other -- it exits through the
+                # loop's implicit block (or, for a NAMED loop, through the
+                # first enclosing NIL block further out, which is what
+                # loop.13.87 pins down) rather than naming the loop's value
+                # by special case.
+                finally_forms.append(forms[i])
+                i += 1
         else:
             # Simple loop (CLHS 6.1.1): with no iteration-control clause seen so
             # far the compound forms are the loop body. Once a driver or a
@@ -1986,6 +2057,29 @@ def eval_loop(form, env):
         if has_loop_value_accumulation and has_boolean_termination:
             raise lisptype.LispProgramError(
                 'LOOP cannot mix value-accumulation clauses without INTO with boolean-termination clauses (ALWAYS, NEVER, THEREIS)')
+
+    # One ordered execution plan per iteration (CLHS 6.1.2.1): the main
+    # clauses and the WHILE/UNTIL tests interleaved in the order they were
+    # written. Each termination test recorded the number of main clauses
+    # already parsed when it was read -- merging on that position puts
+    # `while x collect x while y collect y` in the order test-x, collect-x,
+    # test-y, collect-y. The previous two-position approximation (every test
+    # written after the first main clause ran after *all* of them) stepped
+    # every `while ... collect ...` pair once per single iteration, which is
+    # what loop.11.12/11.22 caught.
+    iteration_plan = []
+    _test_index = 0
+    for _clause_index, _entry in enumerate(main_clauses):
+        while (_test_index < len(termination_tests)
+               and termination_tests[_test_index][2] <= _clause_index):
+            iteration_plan.append(('test', termination_tests[_test_index][0],
+                                   termination_tests[_test_index][1]))
+            _test_index += 1
+        iteration_plan.append(('clause', _entry[0], _entry[1]))
+    while _test_index < len(termination_tests):
+        iteration_plan.append(('test', termination_tests[_test_index][0],
+                               termination_tests[_test_index][1]))
+        _test_index += 1
 
     # Execute the loop
     #
@@ -2152,17 +2246,26 @@ def eval_loop(form, env):
 
         CLHS 6.1.2.1: the main clauses of one iteration run *in the order
         they were written* -- a `collect` clause between two `do` clauses
-        accumulates between them, and each clause's WHEN/UNLESS guards
-        apply only to it. This used to run every `do` clause before every
-        accumulation clause (two separate lists walked back to back), so
-        `(loop repeat 2 do (push 'do1 log) collect (push 'col log) do
-        (push 'do2 log))` logged do1-do2-col instead of do1-col-do2 --
-        an observable difference, e.g. a `collect (file-length os)` that
-        must see the stream a preceding `do (open ...)` made.
+        accumulates between them, each clause's WHEN/UNLESS guards apply
+        only to it, and a WHILE/UNTIL test is evaluated at the position it
+        was written (CLHS 6.1.2.1.2), interleaved with the clauses around
+        it. All of that is one walk over `iteration_plan`.
+
+        Returns True to continue iterating, False when a termination test
+        ended the loop (or a body form returned -- `return_triggered`).
         """
         nonlocal return_triggered
 
-        for kind, clause in main_clauses:
+        for entry in iteration_plan:
+            if entry[0] == 'test':
+                _, kind, test_form = entry
+                test_result = eval(test_form, loop_env)
+                if kind == 'until' and lisptype.is_truthy(test_result):
+                    return False
+                if kind == 'while' and not lisptype.is_truthy(test_result):
+                    return False
+                continue
+            _, kind, clause = entry
             if not _conditionals_pass(clause['conditionals'], loop_env):
                 continue
             if kind == 'do':
@@ -2171,11 +2274,12 @@ def eval_loop(form, env):
                     # value (CLHS 6.1.1.4).
                     eval(f, loop_env)
                     if return_triggered:
-                        return
+                        return False
             else:
                 _execute_accumulation_clause(clause, loop_env)
                 if return_triggered:
-                    return
+                    return False
+        return True
 
     loop_watchdog = LoopWatchdog(
         'LOOP',
@@ -2200,23 +2304,6 @@ def eval_loop(form, env):
         # created in the enclosing scope so the RESOLVED/ABORTED counterpart can
         # be emitted around the whole loop, including its non-local exits.
         check_loop_timeout = loop_watchdog.tick
-
-        def _termination_break(loop_env, after_body):
-            """True if a WHILE/UNTIL clause at this position ends the loop.
-
-            after_body selects the tests written after the first main clause, so
-            `collect x until x` accumulates and then tests, while `while x
-            collect x` tests first (CLHS 6.1.2.1.2).
-            """
-            for kind, test_form, test_after_body in termination_tests:
-                if test_after_body != after_body:
-                    continue
-                test_result = eval(test_form, loop_env)
-                if kind == 'until' and lisptype.is_truthy(test_result):
-                    return True
-                if kind == 'while' and not lisptype.is_truthy(test_result):
-                    return True
-            return False
 
         def _init_driver(loop_env, driver):
             kind = driver['kind']
@@ -2358,9 +2445,26 @@ def eval_loop(form, env):
                 # symbols each of the three sets contains. The previous copy
                 # here swallowed a failed lookup with `except Exception` and
                 # iterated an empty package instead of signaling.
-                from .misc_packages import package_symbols
+                #
+                # The designator resolves through `coerce_to_package` first, so
+                # a missing package signals a real PACKAGE-ERROR (CLHS
+                # 6.1.2.1.7, with the designator on its :package slot):
+                # `coerce_to_package` raises the legacy LispError for a
+                # missing name, which HANDLER-CASE/IGNORE-ERRORS catch but
+                # `(signals-error ... 'package-error)` rightly rejects -- that
+                # conversion is exactly what loop.7.18/.19/.20 test.
+                from .misc_packages import package_symbols, coerce_to_package
+                from .evaluation_conditions import signal_error_object
                 pkg_spec = driver.get('list')
-                pkg = eval(pkg_spec, loop_env) if pkg_spec is not None else None
+                pkg_value = eval(pkg_spec, loop_env) if pkg_spec is not None else None
+                try:
+                    pkg = coerce_to_package(pkg_value)
+                except lisptype.LispError as exc:
+                    # `signal_error_object` never returns (ERROR semantics:
+                    # handlers run at the signal point, then the condition
+                    # unwinds if none took control).
+                    signal_error_object(lisptype.PackageError(
+                        package=pkg_value, message=str(exc)))
                 driver['_items'] = package_symbols(pkg, driver['symbol_set'])
                 driver['_idx'] = 0
                 return True
@@ -2554,11 +2658,34 @@ def eval_loop(form, env):
         # A driver that starts exhausted (an empty list, an empty table)
         # binds nothing here and the loop exits before the body, exactly as
         # when the first binding happened inside the while.
-        for d in iteration_drivers:
-            _init_driver(loop_env, d)
-            if d['kind'] != 'for-equals' and _driver_has_value(d):
-                _bind_driver(frame, d)
-                d['_bound_at_init'] = True
+        for group in driver_groups:
+            if len(group) == 1:
+                d = group[0]
+                _init_driver(loop_env, d)
+                if d['kind'] != 'for-equals' and _driver_has_value(d):
+                    _bind_driver(frame, d)
+                    d['_bound_at_init'] = True
+                continue
+            # CLHS 6.1.2.1: the subclauses one AND joins are processed in
+            # parallel -- every bound form is evaluated before any of the
+            # group's variables is bound (LET, not LET*). A for-equals
+            # driver's init is such a form, so it is evaluated here too and
+            # stashed; each later iteration just installs the value its step
+            # phase computed.
+            for d in group:
+                _init_driver(loop_env, d)
+            parallel_inits = []
+            for d in group:
+                if d['kind'] == 'for-equals':
+                    parallel_inits.append(
+                        (d, _primary_value(eval(d['start'], loop_env))))
+                elif _driver_has_value(d):
+                    _bind_driver(frame, d)
+                    d['_bound_at_init'] = True
+            for d, value in parallel_inits:
+                d['_parallel_equals'] = True
+                d['_pending_value'] = value
+                _bind_varspec(frame, d['var'], value)
 
         # INTO names a variable local to the loop (CLHS 6.1.3), so bind it
         # through the frame: the accumulation must not assign through to an
@@ -2595,24 +2722,44 @@ def eval_loop(form, env):
                     # exactly its first bind: its variable already holds the value
                     # its own init produced, and re-binding a `for =` driver on the
                     # first iteration would evaluate the *step* form and clobber
-                    # that value with the second one.
+                    # that value with the second one. A parallel for-equals
+                    # driver binds the value its step phase already computed.
                     for d in iteration_drivers:
                         if d.pop('_bound_at_init', False):
                             continue
+                        if d.get('_parallel_equals'):
+                            _bind_varspec(frame, d['var'], d['_pending_value'])
+                            continue
                         _bind_driver(frame, d)
 
-                    if _termination_break(loop_env, after_body=False):
+                    if not execute_iteration_body(loop_env):
                         break
 
-                    execute_iteration_body(loop_env)
                     if return_triggered:
                         break
 
-                    if _termination_break(loop_env, after_body=True):
-                        break
-
+                    # CLHS 6.1.2.1: a parallel group's step forms are all
+                    # evaluated before any of its variables steps, so a
+                    # `then` form sees every variable's pre-step value
+                    # (loop.17.21). The parallel for-equals drivers evaluate
+                    # first -- their step *is* an evaluation -- and the
+                    # structural drivers step after, mutating only their own
+                    # private cursors; the computed values are bound last.
+                    parallel_steps = []
                     for d in iteration_drivers:
-                        _step_driver(loop_env, d)
+                        if d.get('_parallel_equals'):
+                            step_form = d.get('step')
+                            value_form = (step_form if step_form is not None
+                                          else d.get('start'))
+                            parallel_steps.append(
+                                (d, _primary_value(eval(value_form, loop_env))))
+                    for d in iteration_drivers:
+                        if not d.get('_parallel_equals'):
+                            _step_driver(loop_env, d)
+                    for d, value in parallel_steps:
+                        # Stored, not bound: the next iteration's bind phase
+                        # installs it, the same channel the init value used.
+                        d['_pending_value'] = value
             except LoopFinishException:
                 # LOOP-FINISH terminates the loop immediately, skipping any
                 # remaining body forms and drivers. The FINALLY clauses still run.
@@ -2626,18 +2773,13 @@ def eval_loop(form, env):
 
         # Execute FINALLY forms -- in the loop environment, so they can see the
         # iteration variables and any INTO accumulator (CLHS 6.1.4: the epilogue
-        # is inside the loop's variable bindings). For effect only; only a
-        # FINALLY (RETURN ...) supplies a value, and it is handled below.
+        # is inside the loop's variable bindings). A (RETURN x) among them is
+        # an ordinary return form: it exits through the loop's implicit block
+        # (or the first enclosing NIL block further out for a NAMED loop), so
+        # an epilogue return transfers out of the LOOP form rather than merely
+        # naming its value.
         for f in finally_forms:
             eval(f, loop_env)
-
-        # Execute FINALLY RETURN if present (overrides early RETURN)
-        if finally_return_form is not None:
-            # CLHS 6.1.1.4: a value returned by the epilogue takes precedence
-            # over the one an accumulation clause would have produced, so this
-            # must return directly rather than fall through to the accumulation
-            # block below, which would discard it.
-            return eval(finally_return_form, loop_env)
 
         # An accumulation with INTO feeds its variable, not the loop's value;
         # only a destination-less clause supplies the value of the LOOP form.

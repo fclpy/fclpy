@@ -2158,13 +2158,17 @@ def _create_macro_function(macro_name, lambda_list, body, env,
         # (CLHS 3.4.1.4). Non-keyword atoms in the region are still skipped:
         # with &REST preceding &KEY the region holds the rest arguments too.
         #
-        # The whole scan is gated on the lambda list actually declaring &KEY
-        # (`mentions_key`, CLHS 3.4.4): without it there is no keyword region
-        # and trailing keywords are ordinary arguments -- the ansi-test
-        # harness's own `(defmacro deftest (name &rest body) ...)` passes its
-        # expected values, `:good` among them, through that &REST, and
-        # scanning them as keywords would reject the harness itself.
-        if parsed_params.get('mentions_key'):
+        # The scan is gated on the lambda list actually *naming* keyword
+        # parameters (`keyword_params`): without them there is no keyword
+        # region to check and trailing keywords are ordinary &rest/body
+        # elements -- the ansi-test harness's own `(defmacro deftest
+        # (name &rest body) ...)` passes its expected values, `:good` among
+        # them, through that &REST, and scanning them as keywords would
+        # reject the harness itself. A bare `&key` naming no parameters
+        # therefore accepts any keywords; the keyword region is a property
+        # of the lambda list, never inferred from what the arguments look
+        # like.
+        if keyword_params:
             i = keyword_start
             while i < len(call_args):
                 key = call_args[i]
