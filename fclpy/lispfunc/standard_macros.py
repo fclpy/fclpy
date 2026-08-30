@@ -35,6 +35,11 @@ def _sym(name):
     return lisptype.LispSymbol(name)
 
 
+def _kw(name):
+    """Create a keyword symbol (e.g., _kw('DATUM') -> :DATUM)."""
+    return lisptype.lispKeyword(name)
+
+
 def _quoted(x):
     return lisptype.lispCons(_sym('QUOTE'), lisptype.lispCons(x, lisptype.NIL))
 
@@ -587,9 +592,9 @@ def _or_type_form(type_specs):
 
 
 def _type_error_form(tmp, expected_type):
-    return _list(_sym('ERROR'), _sym('TYPE-ERROR'),
-                 _sym(':DATUM'), tmp,
-                 _sym(':EXPECTED-TYPE'), expected_type)
+    return _list(_sym('ERROR'), _quoted(_sym('TYPE-ERROR')),
+                 _kw('DATUM'), tmp,
+                 _kw('EXPECTED-TYPE'), expected_type)
 
 
 def _keyform_form(key_form, tmp, cond_clauses):
