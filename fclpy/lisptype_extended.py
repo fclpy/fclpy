@@ -61,6 +61,16 @@ class Environment(lispT):
         # These legacy lookups compare by symbol.name, not by symbol identity.
         self._function_map = {}
         self._variable_map = {}
+        # Identity-keyed overlay `find_func` checks *first* -- see its
+        # docstring for why the name-only cache above cannot be replaced
+        # outright: `standard_macros.py`'s expanders build fresh, uninterned
+        # operator symbols (`LispSymbol('DOLIST')`, etc.) purely to *name* an
+        # existing binding in a generated form, and those must keep resolving
+        # by name. This dict is what makes a real, interned, *shadowed*
+        # symbol (e.g. a package that `(shadow '(handler-bind))`s and
+        # `DEFMACRO`s its own) resolve to its *own* binding instead of
+        # colliding, by bare name, with `COMMON-LISP:HANDLER-BIND`'s.
+        self._function_map_by_symbol = {}
         # Legacy attributes for old API compatibility
         if parent is None:
             self.variable_bindings = None
@@ -147,6 +157,12 @@ class Environment(lispT):
             self._function_map[symbol.name] = func
         except Exception:
             pass
+        # Identity-keyed overlay -- see the __init__ comment on
+        # `_function_map_by_symbol`.
+        try:
+            self._function_map_by_symbol[symbol] = func
+        except Exception:
+            pass
         return func
     
     def lookup_function(self, symbol):
@@ -200,6 +216,8 @@ class Environment(lispT):
             raise TypeError(f"unbind_function: {symbol} is not a symbol")
 
         removed = self._function_map.pop(symbol.name, None) is not None
+        if self._function_map_by_symbol.pop(symbol, None) is not None:
+            removed = True
 
         previous = None
         node = self.function_bindings
@@ -216,7 +234,22 @@ class Environment(lispT):
         return removed
     
     def find_func(self, sym):
-        """Legacy: find a function by symbol name."""
+        """Legacy: find a function by symbol name.
+
+        Checks the identity-keyed overlay first (`_function_map_by_symbol`):
+        an exact match there means `sym` is a real, interned symbol with its
+        *own* binding, which must win over a same-named binding installed
+        under a different (e.g. shadowed-in-another-package) symbol object.
+        Only when there is no exact match does this fall back to the
+        name-only cache, which is what lets generated code reference an
+        existing binding through a fresh, uninterned symbol built purely to
+        carry a name (`standard_macros.py`'s `LispSymbol('DOLIST')`, etc.).
+        """
+        try:
+            if sym in self._function_map_by_symbol:
+                return self._function_map_by_symbol[sym]
+        except Exception:
+            pass
         try:
             if sym.name in self._function_map:
                 return self._function_map[sym.name]

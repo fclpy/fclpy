@@ -264,7 +264,42 @@ happens to miss is still a defect (plan.md §5, and the final gate in §7).
     gets its arguments evaluated eagerly before the call; a form that needs
     unevaluated arguments (macros, `DEFSETF`, `DEFPACKAGE`, ...) **must** be
     `cl_special` or `cl_macro` instead, or its arguments will be evaluated too
-    early and it will crash or silently misbehave.
+    early and it will crash or silently misbehave. **`cl_special` means
+    "unevaluated arguments", not "CLHS special operator"** — the two are
+    independent, and `SPECIAL-OPERATOR-P` answers from CLHS 3.1.2.1.2.1's
+    fixed twenty-five, not from `special_registry`.
+  - **`standard_macros.py` — every CLHS macro is a real macro** (milestone M4,
+    completed 2026-08-30: all **87** operators the CLHS dictionary types as
+    *Macro*, plus 3 of the 5 *Local Macro*s). This is what makes
+    `(macro-function 'x)` non-NIL and `MACROEXPAND`/`MACROEXPAND-1` work on
+    standard operators, and it is not cosmetic — ansi-test reaches for the
+    macro function directly (`loop-finish.error.1` FUNCALLs
+    `(macro-function 'loop-finish env)` at three wrong arities and requires a
+    PROGRAM-ERROR from each; the `destructuring-bind.error.*` family does the
+    same). `_standard_macro(name)` is the one registration path: its wrapper
+    enforces the two-argument `(whole-form, environment)` macro-function shape,
+    which is where those PROGRAM-ERRORs come from, so a hand-rolled
+    `cl_macro` registration that skips it will fail those tests.
+    Two shapes live here, and the distinction matters:
+    - **A real expansion** — `WHEN`, `COND`, `PUSH`, `ROTATEF`, `DO-SYMBOLS`,
+      … build and return a form. Prefer this.
+    - **`_reuse_definer(worker, module)`** — runs an existing
+      `eval_xxx(form, env)` worker immediately, with the real
+      macroexpansion-time `env`, and quotes its result as the nominal
+      expansion. Used where rebuilding the expansion would duplicate a
+      mechanism that already has exactly one home (LOOP's single iteration
+      engine, the condition system's `:no-error`/in-transit-transfer
+      handling, DEFSTRUCT's BOA lambda lists, SETF's place ladder). The
+      compromise it makes is *purity*: a bare `MACROEXPAND-1` of such a form
+      runs its body. That is invisible to ansi-test today and to any
+      EVAL/LOAD call site (which evaluates the expansion immediately
+      anyway), but it is why these are a staging post, not the destination —
+      converting one to a real expansion is always an improvement.
+    **`SETF` is the one that most wants converting**: its worker is still the
+    ~480-line place ladder extracted verbatim into `evaluation_core.eval_setf`,
+    which bypasses `get_setf_expansion`/`_place_accessor` for most place kinds.
+    That is the M5 place-protocol milestone, and the extraction was kept a
+    *pure move* precisely so M5 can replace it as one piece.
   - **A builtin's ANSI lambda list is its Python signature**, read by
     `evaluation_core.LambdaListShape` and enforced by `split_keyword_args` —
     the one place CLHS 3.4.1.4/3.5.1.5 is applied, for direct calls, FUNCALL
@@ -442,12 +477,23 @@ happens to miss is still a defect (plan.md §5, and the final gate in §7).
     and the wrong one for `AND`/`OR`. New combination types go in the registry
     (`register_method_combination_type`); they do not go in
     `call_generic_function`.
-  - **`CALL-METHOD` and `MAKE-METHOD` are special operators**, and their
-    arguments are read structurally, never evaluated: a method object the
-    combination spliced in, and an unevaluated body form. They were
-    `cl_function`s that evaluated both operands and discarded the
-    next-method list — the registry defect described above, in the one place
-    where it makes CALL-NEXT-METHOD structurally impossible.
+  - **`CALL-METHOD` and `MAKE-METHOD` take their arguments unevaluated**, and
+    are registered `cl_special` to get that: their operands are read
+    structurally — a method object the combination spliced in, and an
+    unevaluated body form. They were `cl_function`s that evaluated both
+    operands and discarded the next-method list — the registry defect
+    described above, in the one place where it makes CALL-NEXT-METHOD
+    structurally impossible. **`cl_special` is the registry's
+    unevaluated-arguments mechanism, not a claim that the operator is one
+    of CLHS 3.1.2.1.2.1's twenty-five special operators** — these two are
+    *local macros* (CLHS 7.6.6.2), valid only inside a
+    `DEFINE-METHOD-COMBINATION` effective-method form, and
+    `SPECIAL-OPERATOR-P` correctly answers NIL for both. They are the
+    only two CLHS macros of any kind that are not registered as real
+    macros here (M4), and deliberately so: a *global* macro definition
+    would make them expandable outside the one context CLHS defines them
+    in. Do not "fix" this by converting them without first giving
+    `DEFINE-METHOD-COMBINATION` a real local-macro environment.
   Still absent: a real class precedence list. `_specificity_key` orders by
   *ancestor count*, and `_init_builtin_classes` makes every built-in class a
   direct subclass of `T`, so `INTEGER`, `RATIONAL` and `NUMBER` are all

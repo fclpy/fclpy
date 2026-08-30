@@ -101,12 +101,10 @@ history is preserved in condensed form in [Changelog](docs/changelog.md).
 > 7. **FORMAT.LOGICAL-BLOCK.CIRCLE.1-3**: `*print-circle*` across several
 >    `~A` calls in one FORMAT needs shared circle bookkeeping in
 >    printer.py (io_write's pprint-local labelling is the model).
-> 8. **M4 phase 2**: 38 of the 90 `*cl-macro-symbols*` still lack a
->    macro function — the definer forms (defun/defmacro/defclass/...),
->    DO/DOLIST/DOTIMES, COND, SETF/PSETF, PROG/PROG*, LAMBDA, FORMATTER,
->    ASSERT, the WITH-* family's remaining names. MACRO-FUNCTION.1/.2/.3
->    pass only at full coverage. `standard_macros.py`'s
->    `_standard_macro` pattern is the established home.
+> 8. ~~**M4 phase 2**~~ — **done 2026-08-30**; all 87 CLHS *Macro* operators
+>    have a macro function. See the M4-complete note above. The successor
+>    item is a quality one: convert the `_reuse_definer` staging posts to
+>    real expansions, `SETF` first (that one is M5).
 > 9. **dcf/eval-and-compile tail**: EVERY/SOME/NOTANY/NOTEVERY `.ERROR.*`
 >    and FUNCALL.ERROR.* (bad-designator signaling), LET*/LET, PSETQ/
 >    ROTATEF/SETF.ORDER leftovers, CASE/CCASE/CTYPECASE residuals,
@@ -125,7 +123,121 @@ history is preserved in condensed form in [Changelog](docs/changelog.md).
 >    evaluator/printer surface were touched this session.
 
 
-**Latest full run: 2026-08-28. 95.4% passing, 1004 failing.**
+> ### Latest full run (2026-08-30): 98.8% passing, 265 failing — up from 95.4%
+>
+> ```
+> COMPLETENESS: total=21908 passed=21643 failed=265 accounted=21908 missing=0 extra=0
+> COMPLETENESS: OK
+> ```
+>
+> Measures the recursion fix plus the M4-phase-2 macro conversions up through
+> `DEFSETF`/`DEFINE-SETF-EXPANDER` (the run was launched before `DESTRUCTURING-
+> BIND`/`DO`/`DO*`/`DOLIST`/`DOTIMES`/`HANDLER-BIND`/`HANDLER-CASE`/
+> `RESTART-BIND`/`RESTART-CASE`/`WITH-CONDITION-RESTARTS` and the `find_func`
+> identity-overlay fix landed, all separately verified clean via targeted runs
+> and merged into the checklist as an index — see the development-loop rules
+> on what a merge does and does not establish). `docs/ansi_checklist_baseline.json`
+> refreshed from this run; gate clean, 0 regressions.
+>
+> **A pre-existing regression this run surfaced**: `data-and-control-flow`'s
+> `CCASE`/`CTYPECASE`/`ECASE` families are now the single worst file
+> (`ccase.lsp` 30 of 33 failing) — confirmed via `git stash` to already fail
+> identically before this session's changes, so it predates today's work and
+> is carried forward as debt rather than fixed here; the previous checklist
+> had drifted stale enough (last full run 08-28, five sessions of targeted
+> work since) that it still showed `ccase.lsp` at 1 failing of 33.
+>
+> **M4 phase 2 status**: see the M4-complete note below — every CLHS *Macro* is
+> now a real macro, which happened after this run was launched.
+>
+> **New mechanism, worth its own line**: `Environment._function_map_by_symbol`
+> (`lisptype_extended.py`) — an identity-keyed overlay `find_func` now checks
+> before its name-only cache. Converting `HANDLER-BIND`/`HANDLER-CASE` to real
+> macros exposed a latent defect: `find_func` resolved purely by symbol *name
+> string*, so RT's own `auxiliary/ansi-aux-macros.lsp`, which `(shadow
+> '(handler-bind handler-case ...))`s and `DEFMACRO`s its own wrapped versions
+> in `CL-TEST`, had its `cl:handler-bind` call (inside its *own* macro
+> expansion) resolve back to itself instead of the real one — infinite
+> self-expansion, a `RecursionError` before `init.lsp` finished loading. This
+> had been silently dead code the whole time: the special-form ladder matched
+> `operator.name == 'HANDLER-BIND'` by name too, but ran *before* any
+> `find_func` lookup, so CL-TEST's shadowed DEFMACRO was never actually
+> reached. The identity overlay is additive (existing name-only lookups for
+> generated code's fresh, uninterned operator symbols are unaffected), so
+> nothing needed to change in `standard_macros.py` itself once it existed.
+
+
+> ### M4 is complete (2026-08-30): all 87 CLHS macros are real macros
+>
+> Counted against the CLHS dictionary rather than against
+> `*cl-macro-symbols*`, which was the working list and is not authoritative:
+>
+> | CLHS kind | operators | real macros |
+> |---|---|---|
+> | Macro | 87 | **87** |
+> | Local Macro | 5 | 3 |
+>
+> The nine converted last were `DEFSTRUCT`, `LOOP`, `PPRINT-LOGICAL-BLOCK`,
+> `SETF`, `PSETF`, `DEFPACKAGE`, `LOOP-FINISH`, `PPRINT-POP` and
+> `PPRINT-EXIT-IF-LIST-EXHAUSTED`.
+>
+> **`SETF`/`PSETF`/`DEFPACKAGE` needed an extraction first** — they were the
+> only three whose ladder branch was a large *inline* block (481, 34 and 268
+> lines) rather than a one-line delegation to a worker. The extraction is
+> deliberately a **pure move**: the workers are `eval_setf`/`eval_psetf`/
+> `eval_defpackage` in `evaluation_core.py` *itself*, not relocated to a
+> tidier module, so every free name in those bodies resolves to exactly what
+> it resolved to inline and no place-resolution behaviour could shift
+> underneath the conversion. Keeping SETF's ladder intact is also what lets
+> **M5 replace it as one piece**: M5's whole point is to make
+> `get_setf_expansion`/`_place_accessor` the single mechanism that ladder
+> currently bypasses, and spending that risk budget inside M4 would have
+> conflated two milestones. `(macro-function 'setf)` being non-NIL is M4's
+> question; *what* it expands to is M5's.
+>
+> **`LOOP-FINISH` was an actual ANSI failure, not just a kind mismatch.** It
+> was registered `cl_special`; `loop-finish.error.1` asks a surrounding
+> MACROLET for `(macro-function 'loop-finish env)` and FUNCALLs the result at
+> three wrong arities, requiring PROGRAM-ERROR from each. `iteration/loop.lsp`
+> went 1 failing → **0**. `PPRINT-POP` and `PPRINT-EXIT-IF-LIST-EXHAUSTED`
+> were registered as zero-argument *functions*; no ansi-test test can see the
+> difference at zero arity, which is exactly why they were worth fixing —
+> "zero failures is necessary but not sufficient". All three now expand to a
+> `%`-prefixed runtime that keeps the frame-stack and `*PRINT-LENGTH*`
+> ordering mechanisms untouched.
+>
+> **The two Local Macros that remain are deliberate.** `CALL-METHOD` and
+> `MAKE-METHOD` (CLHS 7.6.6.2) are valid only inside a
+> `DEFINE-METHOD-COMBINATION` effective-method form; a *global* macro
+> definition would make them expandable outside the one context CLHS defines
+> them in. They stay `cl_special` — which is the registry's
+> unevaluated-arguments mechanism, not a claim of special-operator status —
+> and `SPECIAL-OPERATOR-P` correctly answers NIL for both, as it does for
+> every operator M4 converted. Converting them properly needs
+> `DEFINE-METHOD-COMBINATION` to establish a real local-macro environment
+> first; CLAUDE.md's CLOS section now records that, having previously called
+> them "special operators", which is the term CLHS reserves for the fixed
+> twenty-five of 3.1.2.1.2.1.
+>
+> **Verification**: `init.lsp` bootstrap probe clean after each stage (the
+> check that a targeted run structurally cannot make, and the one that caught
+> the HANDLER-BIND recursion); `scripts/gate.py` clean; and every directory
+> these operators reach either improved or held — `iteration` 12→**11**,
+> `data-and-control-flow` 92→**91**, `eval-and-compile` 4→**1**, `structures`
+> 0→0, `packages` 0→0. A full run is in flight, mandatory here because `SETF`
+> and `DEFPACKAGE` are both on the ansi-test bootstrap path.
+>
+> **One thing the gate caught that is worth recording**: the three nullary
+> macros are built by a shared closure factory, so all three registered
+> wrappers initially carried the Python `__name__` `expander`, and
+> `test_no_duplicate_python_bindings` failed — it keys on `py_name` to detect
+> one Python callable serving several Lisp operators, and three same-named
+> closures are indistinguishable from that. Fixed by naming each closure after
+> its operator. The test was right; the standing-rule-3 detector only works if
+> distinct implementations are distinguishable.
+
+<details>
+<summary>Previous full run (2026-08-28), superseded above</summary>
 
 ```
 COMPLETENESS: total=21881 passed=20877 failed=1004 accounted=21881 missing=0 extra=0
@@ -169,6 +281,8 @@ not surface it. Whoever next touches `number-comparison.lsp`, `divide.lsp`,
 `format-e.lsp` or `types-and-class.lsp` should diff their current failures
 against what 08-27's checklist recorded for them before assuming a clean
 slate.
+
+</details>
 
 > ### Same day, two full runs — why
 >
@@ -1596,8 +1710,8 @@ Milestones now describe *mechanisms*, and map onto the clusters above.
 | **M1** | Symbol, NIL, package identity | canonical CL symbol table **done**; package model outstanding | C10, C18, C19 |
 | **M2** | Environment model | **binding forms done**, and **the global environment done (2026-08-15)** — one `BindingFrame` decides lexical vs. dynamic for LET, LET* and all eight iteration forms, and a global variable has one home, the symbol's value cell. Outstanding: `is_truthy(False)`, and the lambda-list binders, which are M3's | C1, X2 |
 | **M3** | One lambda-list engine | **ordinary lambda list done (2026-08-22)** — LAMBDA/DEFUN/FLET/LABELS share `make_ordinary_function`, which binds through `BindingFrame` and signals the CLHS 3.5.1 arity errors; DEFMETHOD shares its tail binder. Outstanding: the **macro** lambda list (`_create_macro_function`) and `bind_destructuring_pattern` are still two more binders, neither signalling a PROGRAM-ERROR | C17, X2 |
-| **M4** | A real macro system | not started — ~90 standard macros are special forms. **Most ecosystem-critical** | — |
-| **M5** | `GET-SETF-EXPANSION` / places | not started — deletes ~600 lines of ladder code | C16 |
+| **M4** | A real macro system | **DONE** (2026-08-30) — all 87 CLHS *Macro* operators are real macros; 3 of 5 *Local Macro*s, the other two deliberate (see the M4-complete note in §1). Roughly half are still `_reuse_definer` staging posts rather than real expansions — a quality item, not an open milestone | — |
+| **M5** | `GET-SETF-EXPANSION` / places | not started — deletes ~600 lines of ladder code, now sitting in `evaluation_core.eval_setf` where M4's extraction left it as one replaceable piece | C16 |
 | **M6** | Multiple values, sequences | partial | C3, C5, X2, X3 |
 | **M7** | Non-local control flow | partial — name-based block/tag matching, no identity objects | — |
 | **M8** | Conditions and restarts | **signaling core done**; restart half + `DEFINE-CONDITION` + raise-site migration remain | C9, X1 |
@@ -1901,7 +2015,7 @@ Anything knowingly non-ANSI, with the milestone that removes it. Empty means
 | `DEFINE-CONDITION` creates no class | predates the class lattice | M8 |
 | `HANDLER-CASE` converts an uncaught `THROW` into `CONTROL-ERROR` | needs a catch-tag stack to decide at THROW time | M7 |
 | 114 non-ANSI symbols exported from `CL` | registry auto-export | M1 |
-| ~90 standard macros implemented as special forms | predates the macro system | M4 |
+| ~~~90 standard macros implemented as special forms~~ **resolved 2026-08-30** — all 87 CLHS *Macro* operators are real macros (M4). What remains is a *quality* item, not a deviation: roughly half go through `_reuse_definer`, which runs the existing worker at expansion time and quotes the result, so a bare `MACROEXPAND-1` of one runs its body. Invisible to ansi-test and to every EVAL/LOAD call site, but each conversion to a real expansion is an improvement | ~~M4~~ |
 | Five parallel place protocols; `GET-SETF-EXPANSION` a stub | predates the setf protocol | M5 |
 | **Two** lambda-list binders left, for the *macro* lambda list — `_create_macro_function` and `bind_destructuring_pattern`. Both ignore `&aux` and `&allow-other-keys` and signal no PROGRAM-ERROR for a malformed call | was six; the ordinary lambda list is one constructor as of 2026-08-22. These two implement a *different* lambda list (CLHS 3.4.4, nested destructuring patterns) and already share `bind_destructuring_pattern`, so folding them together is its own change | M3 |
 | Two CLOS implementations, two readers, two readtables, dead `reader.py`/`tokenizer.py` fork | historical forks | M9 / M10 |
@@ -2478,7 +2592,7 @@ cluster exists.
 | | finding | cluster |
 |---|---|---|
 | **A** | The `CL` package has no canonical membership | C8 |
-| **B** | The standard macros are not macros (~90 are special forms) | M4 |
+| **B** | The standard macros are not macros (~90 are special forms) — **resolved 2026-08-30**, all 87 CLHS *Macro* operators are real macros | ~~M4~~ |
 | **C** | Lambda lists are parsed ad-hoc and incompletely, in six places — **half-resolved 2026-08-22**: the *ordinary* lambda list has one constructor (`make_ordinary_function`) shared by LAMBDA/DEFUN/FLET/LABELS, with DEFMETHOD on the same tail binder. The **macro** lambda list (`_create_macro_function`) and `bind_destructuring_pattern` are still separate, still ignore `&aux`/`&allow-other-keys`, and still signal nothing | C17 |
 | **D** | `(declare (special ...))` is not honored — **resolved for parameters 2026-08-22** (every binder went through `Environment.add_variable`, which cannot bind dynamically; they now go through `BindingFrame`). It also surfaced two general defects that were *not* about parameters: a dynamically bound variable was invisible under an enclosing lexical one of the same name, and `%SPECIAL-REF` had a reader and no writer | M2 |
 | **E** | Conditions are Python exceptions in a trenchcoat | C2, C7 |

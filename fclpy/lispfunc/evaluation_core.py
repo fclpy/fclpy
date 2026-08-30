@@ -913,11 +913,10 @@ def eval(form, env=None):
     from .evaluation_special_forms import (
         eval_if, eval_setq, eval_macroexpand_1,
         eval_macro_function, eval_lambda, eval_declare, eval_declaim,
-        eval_defstruct,
         eval_pop, eval_push, eval_pushnew, eval_remf,
         eval_incf, eval_decf,
         eval_call_method, eval_make_method,
-        eval_destructuring_bind, eval_rotatef, eval_pprint_logical_block
+        eval_rotatef
     )
     from .evaluation_control_flow import (
         eval_block, eval_return_from, eval_catch, eval_throw,
@@ -926,17 +925,15 @@ def eval(form, env=None):
     from .evaluation_loops_conditionals import (
         eval_cond, eval_case, eval_ccase, eval_and, eval_or,
         eval_progn, eval_locally, eval_let, eval_letstar, eval_quasiquote,
-        eval_loop, eval_eval_when, eval_do, eval_do_star, eval_dolist, eval_dotimes,
+        eval_eval_when,
         eval_flet, eval_labels, eval_time,
         eval_ecase, eval_typecase, eval_etypecase, eval_ctypecase
     )
     from .utilities_functions import eval_progv
     from .evaluation_conditions import (
         eval_signal, eval_error, eval_cerror, eval_warn,
-        eval_restart_case, eval_restart_bind, eval_invoke_restart, eval_abort,
-        eval_with_condition_restarts,
+        eval_invoke_restart, eval_abort,
         eval_multiple_value_call, eval_multiple_value_prog1,
-        eval_handler_bind, eval_handler_case, eval_ignore_errors,
     )
     
     env = resolve_environment(env)
@@ -1099,521 +1096,6 @@ def eval(form, env=None):
                 return name
             elif operator.name == 'SETQ':
                 return eval_setq(form, env)
-            elif operator.name == 'SETF':
-                # SETF is a generalized assignment macro/special form
-                # (SETF place value) or (SETF place1 value1 place2 value2 ...)
-                # For simple variable places, behave like SETQ
-                # For complex places (CAR, CDR, AREF, etc.), call appropriate setter
-                from . import evaluation_special_forms as _es_forms
-                args = cdr(form)
-                result = lisptype.NIL
-                
-                while _consp_internal(args) and _consp_internal(cdr(args)):
-                    place = car(args)
-                    value_form = car(cdr(args))
-
-                    # CLHS 5.1.2.8: a symbol place may name a symbol-macro
-                    # (SYMBOL-MACROLET), in which case SETF operates on the
-                    # macro's expansion instead -- `setf-symbol-macro.*`.
-                    while isinstance(place, lisptype.LispSymbol):
-                        expansion = env.get_symbol_macro(place)
-                        if expansion is None:
-                            break
-                        place = expansion
-
-                    if isinstance(place, lisptype.LispSymbol):
-                        # Simple variable assignment - like SETQ. Only the
-                        # primary value is stored (and returned) -- CLHS
-                        # 5.1.1; `setf.4` observes this directly.
-                        result = lisptype.primary_value(eval(value_form, env))
-                        env.set_variable(place, result)
-                    elif _consp_internal(place):
-                        # Complex place like (CAR x), (CDR x), (AREF arr i), (SLOT-VALUE obj slot), etc.
-                        place_op = car(place)
-                        if isinstance(place_op, lisptype.LispSymbol):
-                            op_name = place_op.name
-                            place_args = cdr(place)
-
-                            # VALUES/THE/APPLY-as-place, a DEFSETF long-form
-                            # / DEFINE-SETF-EXPANDER registration, or a
-                            # macro place all need their subforms resolved
-                            # *before* the value-form (CLHS 5.1.1) -- unlike
-                            # the legacy branches below, which evaluate the
-                            # value-form first (a known, separate gap; see
-                            # plan.md). `_place_accessor`'s GET-SETF-
-                            # EXPANSION bridge is the one place all of this
-                            # is implemented, so route to it before falling
-                            # into the legacy ladder rather than duplicating
-                            # any of it here.
-                            if _es_forms._setf_needs_expansion_bridge(op_name, place_op, env):
-                                # CLHS 5.1.1: "the value returned by SETF is
-                                # the primary value yielded by evaluating
-                                # the storing form" -- not necessarily the
-                                # value-form's own value (a long-form
-                                # DEFSETF's body may compute something
-                                # else entirely, as `defsetf.7a` pins).
-                                getter, setter = _es_forms._place_accessor(place, env)
-                                new_value = eval(value_form, env)
-                                result = setter(new_value)
-                                args = cdr(cdr(args))
-                                continue
-
-                            # CLHS 5.1.1.1: a place's subforms are evaluated
-                            # *left to right, before the value-form*, no
-                            # matter which setter ends up doing the write.
-                            # The branches below all do their own dispatch
-                            # on op_name and now consume `eval_args`
-                            # instead of re-evaluating `place_args`. LDB /
-                            # MASK-FIELD / SUBSEQ are place-in-place: their
-                            # second subform is itself a place, and
-                            # `_place_accessor` evaluates the inner-place's
-                            # subforms once (left to right) for them. The
-                            # bytespec / start / end subforms are still
-                            # evaluated here.
-                            if op_name in ('LDB', 'MASK-FIELD') and _consp_internal(place_args) and _consp_internal(cdr(place_args)):
-                                # CLHS 5.1.1.1/5.1.2: the bytespec's
-                                # subforms, then the inner place's subforms
-                                # (evaluated once, left to right, when
-                                # `_place_accessor` builds its closures),
-                                # and only then the newvalue form --
-                                # `ldb.place.order.1`/`mask-field.place.order.1`
-                                # count each subform. The storing form's
-                                # primary value is the store value itself
-                                # (newfield, unmasked -- `ldb.place.1`
-                                # expects -1 back), not the inner place's
-                                # new value.
-                                bytespec_value = eval(car(place_args), env)
-                                inner_getter, inner_setter = _es_forms._place_accessor(
-                                    car(cdr(place_args)), env)
-                                new_val = eval(value_form, env)
-                                size, pos = bytespec_value
-                                current = inner_getter()
-                                if op_name == 'LDB':
-                                    mask = (1 << size) - 1
-                                    inner_setter(
-                                        (current & ~(mask << pos))
-                                        | ((new_val & mask) << pos))
-                                else:
-                                    mask = ((1 << size) - 1) << pos
-                                    inner_setter(
-                                        (current & ~mask) | (new_val & mask))
-                                result = new_val
-                                args = cdr(cdr(args))
-                                continue
-                            if op_name == 'SUBSEQ' and _consp_internal(place_args):
-                                # The place's subforms (seq, start, [end])
-                                # must be evaluated before the value-form
-                                # -- `_place_accessor` knows the read/write
-                                # closure pair and the in-place write
-                                # semantics (CLHS 17.1); the legacy
-                                # `pass` branch below silently dropped the
-                                # assignment.
-                                getter, setter = _es_forms._place_accessor(place, env)
-                                result = setter(eval(value_form, env))
-                                args = cdr(cdr(args))
-                                continue
-                            if op_name == 'GETF' and _consp_internal(place_args):
-                                # (SETF (GETF plist indicator [default]) val)
-                                # CLHS 5.1.2.6, dispatched before the eager
-                                # `eval_args` below on purpose:
-                                # `_place_accessor` evaluates the place's own
-                                # subforms (plist place, indicator, default)
-                                # once, left to right, before the value form
-                                # (CLHS 5.1.1.1/5.1.3) -- the same shape the
-                                # LDB/MASK-FIELD/SUBSEQ branches above follow.
-                                # Letting the ladder pre-evaluate them too
-                                # ran every subform twice, which
-                                # setf-getf.order.1/.2 observe through
-                                # counters in each subform.
-                                getter, setter = _es_forms._place_accessor(place, env)
-                                result = setter(eval(value_form, env))
-                                args = cdr(cdr(args))
-                                continue
-                            eval_args = _eval_args(place_args, env)
-                            result = eval(value_form, env)
-
-                            if op_name == 'CAR':
-                                target = eval_args[0]
-                                if _consp_internal(target):
-                                    target.car = result
-                                else:
-                                    raise lisptype.LispError("SETF CAR: target is not a cons")
-                            elif op_name in ('CDR', 'REST'):
-                                target = eval_args[0]
-                                if _consp_internal(target):
-                                    target.cdr = result
-                                else:
-                                    raise lisptype.LispError(f"SETF {op_name}: target is not a cons")
-                            elif _arrays.is_array_place(op_name):
-                                # (SETF (AREF arr i j) val), (SETF (FILL-POINTER v) n), ...
-                                _arrays.array_place_write(op_name, eval_args, result)
-                            elif op_name in ('CHAR', 'SCHAR'):
-                                # (SETF (CHAR str i) val) - now works with LispString
-                                seq = eval_args[0]
-                                idx = eval_args[1]
-                                try:
-                                    seq[idx] = result
-                                except (TypeError, IndexError) as e:
-                                    raise lisptype.LispError(f"SETF {op_name}: {e}")
-                            elif op_name == 'ELT':
-                                # (SETF (ELT seq i) val) - works on lists and vectors
-                                seq = eval_args[0]
-                                idx = eval_args[1]
-                                try:
-                                    idx = int(idx)
-                                except (ValueError, TypeError):
-                                    raise lisptype.LispTypeError(
-                                        f"SETF ELT: index must be an integer",
-                                        expected_type="INTEGER", actual_value=idx)
-                                if _consp_internal(seq):
-                                    # List - walk to nth element
-                                    current = seq
-                                    for _ in range(idx):
-                                        if not _consp_internal(current):
-                                            raise lisptype.LispTypeError(
-                                                f"SETF ELT: index {idx} is out of bounds",
-                                                expected_type=f"valid list index", actual_value=idx)
-                                        current = cdr(current)
-                                    if _consp_internal(current):
-                                        current.car = result
-                                    else:
-                                        raise lisptype.LispTypeError(
-                                            f"SETF ELT: index {idx} is out of bounds",
-                                            expected_type=f"valid list index", actual_value=idx)
-                                else:
-                                    # Vector/array/LispString - use indexing
-                                    try:
-                                        seq[idx] = result
-                                    except (TypeError, IndexError) as e:
-                                        raise lisptype.LispTypeError(
-                                            f"SETF ELT: {e}",
-                                            expected_type="valid sequence index", actual_value=idx)
-                            elif op_name == 'GETHASH':
-                                # Through the hash table's own write primitive,
-                                # which is what consults the table's test.
-                                # `table[key] = result` wrote a Python dict
-                                # entry, so an EQUAL table could not find the
-                                # key it had just stored.
-                                from .misc_hashtables import puthash
-                                key = eval_args[0]
-                                table = eval_args[1]
-                                # The optional default is a subform of the
-                                # place and is evaluated once, left to right,
-                                # even though the store ignores it
-                                # (CLHS 5.1.1.1; `gethash.order.4`).
-                                # `_eval_args` above already consumed every
-                                # place_args element for us.
-                                puthash(key, table, result)
-                            elif op_name == 'SLOT-VALUE':
-                                obj = eval_args[0]
-                                slot_name = eval_args[1]
-                                if isinstance(obj, classes.LispInstance):
-                                    # The one home of "write a CLOS instance's
-                                    # slot" is `lispfunc.misc_clos.set_slot_value`,
-                                    # the real (SETF SLOT-VALUE) -- CLHS 7.5.3
-                                    # protocol and all, including SLOT-MISSING
-                                    # for a slot-name the class doesn't define.
-                                    # The generic `__dict__` fallback below
-                                    # writes a raw Python attribute instead
-                                    # (LispInstance has no `set_slot`), which
-                                    # SLOT-VALUE's reader then never sees.
-                                    from .misc_clos import set_slot_value
-                                    set_slot_value(result, obj, slot_name)
-                                else:
-                                    # CLHS 4.3.7: a generalized instance of a
-                                    # built-in class has no accessible slots.
-                                    # Without this guard the `__dict__`
-                                    # fallback below silently wrote a Python
-                                    # attribute on any non-instance with one
-                                    # (a package, a pathname, ...) --
-                                    # slot-value.error.6 walks the built-in
-                                    # mini-universe asserting the error.
-                                    from .misc_clos import _signal_builtin_slot_access
-                                    _signal_builtin_slot_access(obj, 'SETF SLOT-VALUE')
-                                    if hasattr(obj, 'set_slot'):
-                                        obj.set_slot(slot_name, result)
-                                    elif hasattr(obj, '__dict__'):
-                                        slot_key = slot_name.name if isinstance(slot_name, lisptype.LispSymbol) else str(slot_name)
-                                        obj.__dict__[slot_key] = result
-                                    else:
-                                        raise lisptype.LispError("SETF SLOT-VALUE: cannot set slot")
-                            elif op_name == 'NTH':
-                                n = eval_args[0]
-                                lst = eval_args[1]
-                                current = lst
-                                for _ in range(n):
-                                    if not _consp_internal(current):
-                                        raise lisptype.LispError("SETF NTH: index out of bounds")
-                                    current = cdr(current)
-                                if _consp_internal(current):
-                                    current.car = result
-                                else:
-                                    raise lisptype.LispError("SETF NTH: index out of bounds")
-                            elif op_name == 'SYMBOL-VALUE':
-                                sym = eval_args[0]
-                                if isinstance(sym, lisptype.LispSymbol):
-                                    # SYMBOL-VALUE's getter reads sym.value directly
-                                    # (the same cell BOUNDP/SET/MAKUNBOUND/PROGV use) --
-                                    # its setter must write the same cell, not a
-                                    # lexical environment binding.
-                                    sym.value = result
-                                else:
-                                    raise lisptype.LispError("SETF SYMBOL-VALUE: requires a symbol")
-                            elif op_name == 'SYMBOL-FUNCTION':
-                                sym = eval_args[0]
-                                if isinstance(sym, lisptype.LispSymbol):
-                                    env.add_function(sym, result)
-                                else:
-                                    raise lisptype.LispError("SETF SYMBOL-FUNCTION: requires a symbol")
-                            elif op_name == 'FDEFINITION':
-                                from .utilities_functions import _function_spec_to_key
-                                sym = _function_spec_to_key(eval_args[0])
-                                if sym is not None:
-                                    env.add_function(sym, result)
-                                else:
-                                    raise lisptype.LispError("SETF FDEFINITION: requires a symbol")
-                            elif op_name == 'FIND-CLASS':
-                                # (SETF (FIND-CLASS name) class) registers
-                                # `class` under `name` as an alias -- it
-                                # does not rename the class (CLHS), so this
-                                # must not go through `register_class`,
-                                # which keys off the object's own mutable
-                                # `.name` and would have to rename-then-
-                                # restore around it -- a dance that
-                                # corrupts the registry once two such
-                                # aliasing operations touch the same
-                                # objects in sequence, e.g. `rotatef.35`.
-                                place_name = eval_args[0]  # e.g., n3
-                                if isinstance(place_name, lisptype.LispSymbol):
-                                    if isinstance(result, classes.LispClass):
-                                        classes.register_class_as(place_name, result)
-                                    elif _null_internal(result):
-                                        # CLHS 7.7: new-value NIL means `place_name`
-                                        # no longer denotes a class at all.
-                                        classes.unregister_class_as(place_name)
-                                    else:
-                                        raise lisptype.LispError("SETF FIND-CLASS: value must be a class or NIL")
-                                else:
-                                    raise lisptype.LispError("SETF FIND-CLASS: place name must be a symbol")
-                            elif op_name == 'MACRO-FUNCTION':
-                                # (SETF (MACRO-FUNCTION sym) val) should install a macro
-                                # Install into the global (root) environment so later
-                                # EVAL/MACROEXPAND can find the macro when expanding.
-                                sym = eval_args[0]
-                                if isinstance(sym, lisptype.LispSymbol):
-                                    global_env = env
-                                    while global_env.parent is not None:
-                                        global_env = global_env.parent
-                                    global_env.add_function(sym, result)
-                                    # Also add to current env for immediate visibility
-                                    if env is not global_env:
-                                        env.add_function(sym, result)
-                                else:
-                                    raise lisptype.LispError("SETF MACRO-FUNCTION: requires a symbol")
-                            elif op_name == 'SYMBOL-PLIST':
-                                sym = eval_args[0]
-                                if isinstance(sym, lisptype.LispSymbol):
-                                    sym.plist = result
-                                else:
-                                    raise lisptype.LispError("SETF SYMBOL-PLIST: requires a symbol")
-                            elif op_name == 'GET':
-                                sym = eval_args[0]
-                                indicator = eval_args[1]
-                                # (GET symbol indicator [default]) -- the
-                                # optional default form has been evaluated
-                                # for side effects already (it is in
-                                # `eval_args` if present), even though SETF
-                                # GET never consults its value.
-                                if isinstance(sym, lisptype.LispSymbol):
-                                    # `LispSymbol.__init__` defaults `plist`
-                                    # to a bare Python `{}`, not NIL --
-                                    # `sym.plist is None` never catches that,
-                                    # so a fresh symbol's first SETF GET
-                                    # appended onto the dict as a dotted
-                                    # tail instead of replacing it.
-                                    if not _consp_internal(sym.plist):
-                                        sym.plist = lisptype.NIL
-                                    plist = sym.plist
-                                    found = False
-                                    current = plist
-                                    while _consp_internal(current) and _consp_internal(cdr(current)):
-                                        if car(current) == indicator:
-                                            cdr(current).car = result
-                                            found = True
-                                            break
-                                        current = cdr(cdr(current))
-                                    if not found:
-                                        sym.plist = lisptype.lispCons(indicator, lisptype.lispCons(result, sym.plist))
-                                else:
-                                    raise lisptype.LispError("SETF GET: requires a symbol")
-                            elif op_name in ('FIRST', 'SECOND', 'THIRD', 'FOURTH', 'FIFTH',
-                                            'SIXTH', 'SEVENTH', 'EIGHTH', 'NINTH', 'TENTH'):
-                                # (SETF (FIRST list) val) etc.
-                                lst = eval_args[0]
-                                n = {'FIRST': 0, 'SECOND': 1, 'THIRD': 2, 'FOURTH': 3, 'FIFTH': 4,
-                                     'SIXTH': 5, 'SEVENTH': 6, 'EIGHTH': 7, 'NINTH': 8, 'TENTH': 9}[op_name]
-                                current = lst
-                                for _ in range(n):
-                                    if not _consp_internal(current):
-                                        raise lisptype.LispError(f"SETF {op_name}: list too short")
-                                    current = cdr(current)
-                                if _consp_internal(current):
-                                    current.car = result
-                                else:
-                                    raise lisptype.LispError(f"SETF {op_name}: list too short")
-                            elif _es_forms._CXR_RE.match(op_name):
-                                # Compound CAR/CDR accessors (CLHS 5.1.2.1),
-                                # 2-4 letters deep -- `_cxr_target` is the one
-                                # place that knows how to navigate them, shared
-                                # with PUSH/POP/INCF/ROTATEF's `_place_accessor`.
-                                obj = eval_args[0]
-                                parent, is_car = _es_forms._cxr_target(op_name, obj)
-                                if is_car:
-                                    parent.car = result
-                                else:
-                                    parent.cdr = result
-                            elif op_name == 'LDB':
-                                raise lisptype.LispProgramError(
-                                    f"SETF (LDB ...): malformed place form {place!r}")
-                            elif op_name == 'MASK-FIELD':
-                                raise lisptype.LispProgramError(
-                                    f"SETF (MASK-FIELD ...): malformed place form {place!r}")
-                            elif op_name == 'FILL-POINTER':
-                                # (SETF (FILL-POINTER vector) val)
-                                vec = eval_args[0]
-                                if hasattr(vec, 'fill_pointer'):
-                                    vec.fill_pointer = result
-                            elif op_name == 'ROW-MAJOR-AREF':
-                                # (SETF (ROW-MAJOR-AREF arr idx) val)
-                                arr = eval_args[0]
-                                idx = eval_args[1]
-                                try:
-                                    arr[idx] = result
-                                except (TypeError, IndexError) as e:
-                                    raise lisptype.LispError(f"SETF ROW-MAJOR-AREF: {e}")
-                            elif op_name == 'BIT':
-                                # (SETF (BIT bit-array &rest subscripts) val)
-                                arr = eval_args[0]
-                                idx = eval_args[1]
-                                try:
-                                    arr[idx] = result
-                                except (TypeError, IndexError) as e:
-                                    raise lisptype.LispError(f"SETF BIT: {e}")
-                            elif op_name == 'SBIT':
-                                # (SETF (SBIT bit-array &rest subscripts) val)
-                                arr = eval_args[0]
-                                idx = eval_args[1]
-                                try:
-                                    arr[idx] = result
-                                except (TypeError, IndexError) as e:
-                                    raise lisptype.LispError(f"SETF SBIT: {e}")
-                            else:
-                                # Check for DEFSETF-defined expander
-                                global_env = env
-                                while global_env.parent is not None:
-                                    global_env = global_env.parent
-                                if hasattr(global_env, 'setf_expanders') and op_name in global_env.setf_expanders:
-                                    expander = global_env.setf_expanders[op_name]
-                                    if expander['type'] == 'short':
-                                        update_fn_name = expander['update_fn']
-                                        update_fn = env.find_func(update_fn_name)
-                                        if update_fn is None:
-                                            py_name = _registry.get_function_py_name(update_fn_name.name)
-                                            if py_name:
-                                                update_fn = getattr(lispfunc, py_name, None)
-                                        if update_fn:
-                                            eval_place_args = []
-                                            pa = place_args
-                                            while _consp_internal(pa):
-                                                eval_place_args.append(eval(car(pa), env))
-                                                pa = cdr(pa)
-                                            eval_place_args.append(result)
-                                            update_fn(*eval_place_args)
-                                        else:
-                                            raise lisptype.LispError(f"SETF: update function {update_fn_name} not found")
-                                    else:
-                                        # Long form - just accept for now
-                                        pass
-                                else:
-                                    # Try generic struct accessor: look for SET-<accessor-name>
-                                    setter_name = f"SET-{op_name}"
-                                    setter_sym = lisptype.LispSymbol(setter_name)
-                                    setter_func = env.find_func(setter_sym)
-                                    if setter_func is None:
-                                        # Try looking up in registry
-                                        py_name = _registry.get_function_py_name(setter_name)
-                                        if py_name:
-                                            import fclpy.lispfunc as lispfunc
-                                            setter_func = getattr(lispfunc, py_name, None)
-                                    
-                                    if setter_func:
-                                        # Call the setter with the target object and all evaluated place args
-                                        target_obj = eval(car(place_args), env)
-                                        eval_place_args = [target_obj]
-                                        pa = cdr(place_args)
-                                        while _consp_internal(pa):
-                                            eval_place_args.append(eval(car(pa), env))
-                                            pa = cdr(pa)
-                                        eval_place_args.append(result)
-                                        setter_func(*eval_place_args)
-                                    else:
-                                        # (SETF (accessor arg*) value) where `accessor` has its
-                                        # own registered (SETF accessor) function (e.g. via
-                                        # (DEFUN (SETF accessor) ...) or (SETF (FDEFINITION
-                                        # '(SETF accessor)) ...)). Per ANSI, call it with the
-                                        # new value first, then the access-form's arguments.
-                                        setf_fn_sym = lisptype.LispSymbol(f"(SETF {op_name})")
-                                        setf_fn = env.find_func(setf_fn_sym)
-                                        if setf_fn is not None:
-                                            eval_place_args = [result]
-                                            pa = place_args
-                                            while _consp_internal(pa):
-                                                eval_place_args.append(eval(car(pa), env))
-                                                pa = cdr(pa)
-                                            result = setf_fn(*eval_place_args)
-                                        # else: unknown place type - silently accept (many exist)
-                        else:
-                            raise lisptype.LispNotImplementedError(f"SETF: place operator must be a symbol, got {place_op}")
-                    else:
-                        raise lisptype.LispNotImplementedError(f"SETF: place must be a symbol or form, got {place}")
-                    
-                    args = cdr(cdr(args))
-                
-                return result
-            elif operator.name == 'PSETF':
-                # PSETF is SETF's "read/write" split into two passes (CLHS
-                # 5.1.3): every place's subforms *and* value-form are
-                # evaluated, left to right, before any assignment happens.
-                # `_place_accessor` is the one place-resolution mechanism
-                # (shared with SETF/ROTATEF/SHIFTF/PUSH/POP/...) rather
-                # than a second, narrower ladder duplicating it -- the old
-                # one covered only CAR/CDR/arrays/SYMBOL-FUNCTION/
-                # FDEFINITION/FIND-CLASS/NTH/FILL-POINTER/MACRO-FUNCTION
-                # and silently did nothing for every other place kind.
-                from . import evaluation_special_forms as _es_forms
-                args = cdr(form)
-                pending = []  # (setter, new_value) pairs, in left-to-right order
-
-                while _consp_internal(args) and _consp_internal(cdr(args)):
-                    place = car(args)
-                    value_form = car(cdr(args))
-
-                    while isinstance(place, lisptype.LispSymbol):
-                        expansion = env.get_symbol_macro(place)
-                        if expansion is None:
-                            break
-                        place = expansion
-
-                    _, setter = _es_forms._place_accessor(place, env)
-                    new_value = eval(value_form, env)
-                    pending.append((setter, new_value))
-
-                    args = cdr(cdr(args))
-
-                for setter, new_value in pending:
-                    setter(new_value)
-
-                return lisptype.NIL
             elif operator.name == 'PROGN':
                 return eval_progn(form, env)
             elif operator.name == 'LOCALLY':
@@ -1662,16 +1144,10 @@ def eval(form, env=None):
                     store_form,
                     access_form,
                 )
-            elif operator.name == 'DEFSTRUCT':
-                return eval_defstruct(form, env)
-            elif operator.name == 'DESTRUCTURING-BIND':
-                return eval_destructuring_bind(form, env)
             elif operator.name == 'CALL-METHOD':
                 return eval_call_method(form, env)
             elif operator.name == 'MAKE-METHOD':
                 return eval_make_method(form, env)
-            elif operator.name == 'LOOP':
-                return eval_loop(form, env)
             elif operator.name == 'QUASIQUOTE':
                 return eval_quasiquote(form, env)
             elif operator.name == 'THE':
@@ -1686,8 +1162,6 @@ def eval(form, env=None):
                 return eval_macroexpand_1(form, env)
             elif operator.name == 'MACRO-FUNCTION':
                 return eval_macro_function(form, env)
-            elif operator.name == 'PPRINT-LOGICAL-BLOCK':
-                return eval_pprint_logical_block(form, env)
             elif operator.name == 'BLOCK':
                 return eval_block(form, env)
             elif operator.name == 'RETURN-FROM':
@@ -1708,32 +1182,14 @@ def eval(form, env=None):
                 return eval_cerror(form, env)
             elif operator.name == 'WARN':
                 return eval_warn(form, env)
-            elif operator.name == 'RESTART-CASE':
-                return eval_restart_case(form, env)
-            elif operator.name == 'RESTART-BIND':
-                return eval_restart_bind(form, env)
             elif operator.name == 'INVOKE-RESTART':
                 return eval_invoke_restart(form, env)
             elif operator.name == 'ABORT':
                 return eval_abort(form, env)
-            elif operator.name == 'WITH-CONDITION-RESTARTS':
-                return eval_with_condition_restarts(form, env)
-            elif operator.name == 'HANDLER-BIND':
-                return eval_handler_bind(form, env)
-            elif operator.name == 'HANDLER-CASE':
-                return eval_handler_case(form, env)
             elif operator.name == 'TAGBODY':
                 return eval_tagbody(form, env)
             elif operator.name == 'GO':
                 return eval_go(form, env)
-            elif operator.name == 'DO':
-                return eval_do(form, env)
-            elif operator.name == 'DO*':
-                return eval_do_star(form, env)
-            elif operator.name == 'DOLIST':
-                return eval_dolist(form, env)
-            elif operator.name == 'DOTIMES':
-                return eval_dotimes(form, env)
             elif operator.name == 'SYMBOL-MACROLET':
                 # (SYMBOL-MACROLET ((sym1 expansion1) (sym2 expansion2) ...) body-form...)
                 # Create symbol-macro bindings in a new environment and evaluate body
@@ -1878,274 +1334,6 @@ def eval(form, env=None):
                     return result
                 finally:
                     frame.unwind()
-            elif operator.name == 'DEFPACKAGE':
-                # DEFPACKAGE's option clauses are literal data (CLHS 7.2), not
-                # forms to evaluate -- so this stays a special case in the
-                # dispatcher rather than a cl_function, exactly as CLAUDE.md's
-                # registry note requires for operators like this one.
-                from .misc_packages import (
-                    _designator_to_string, shadow as _pkg_shadow,
-                    shadowing_import as _pkg_shadowing_import,
-                )
-                from .utilities_symbols import import_symbol as _pkg_import
-                from .evaluation_conditions import signal_error_object as _signal_error
-
-                def _signal_package_error(package, message):
-                    # PACKAGE-ERROR lives in the *real* condition hierarchy
-                    # (lisptype_extended.Error), not the "legacy"
-                    # lisptype.LispError one HANDLER-CASE/IGNORE-ERRORS also
-                    # catch directly -- signaling it any other way (a bare
-                    # `raise`) skips signal_condition() and every handler, and
-                    # the condition object then unwinds as a plain, unmatched
-                    # Python exception instead of being caught.
-                    _signal_error(lisptype.PackageError(package=package, message=message))
-
-                args = cdr(form)
-                if args is None or args == lisptype.NIL:
-                    raise lisptype.LispProgramError(
-                        "DEFPACKAGE: wrong number of arguments (got 0, expected at least 1)")
-
-                name_arg = car(args)
-                opt_forms = cdr(args)
-
-                def _clause_items(r):
-                    items = []
-                    while _consp_internal(r):
-                        items.append(car(r))
-                        r = cdr(r)
-                    return items
-
-                def _key_name(key):
-                    if isinstance(key, (lisptype.lispKeyword, lisptype.LispSymbol)):
-                        n = key.name.upper()
-                        return n[1:] if n.startswith(':') else n
-                    return str(key).upper()
-
-                pkg_name = _designator_to_string(name_arg)
-
-                nicknames = []
-                use_names = []
-                export_names = []
-                intern_names = []
-                shadow_names = []
-                shadowing_import_clauses = []  # [(pkg_name, [names])]
-                import_from_clauses = []       # [(pkg_name, [names])]
-                # The IMPORT-FROM and SHADOWING-IMPORT-FROM clauses, in
-                # *source order*. CLHS DEFPACKAGE fixes the processing order
-                # only *between* kinds (shadows, then :use, then imports and
-                # :intern, then :export) and the disjointness checks below
-                # make the two kinds' names disjoint, so within-kind source
-                # order is unobservable; keeping it costs nothing and makes
-                # error reporting read in the order the form was written.
-                ordered_import_clauses = []
-                size_seen = False
-                doc_seen = False
-                package_doc = None
-
-                cur = opt_forms
-                while _consp_internal(cur):
-                    clause = car(cur)
-                    if _consp_internal(clause):
-                        key_name = _key_name(car(clause))
-                        rest_items = [_designator_to_string(i) if key_name not in
-                                      ('SHADOWING-IMPORT-FROM', 'IMPORT-FROM', 'SIZE', 'DOCUMENTATION')
-                                      else i
-                                      for i in _clause_items(cdr(clause))]
-
-                        if key_name == 'USE':
-                            use_names.extend(rest_items)
-                        elif key_name == 'NICKNAMES':
-                            nicknames.extend(rest_items)
-                        elif key_name == 'INTERN':
-                            intern_names.extend(rest_items)
-                        elif key_name == 'EXPORT':
-                            export_names.extend(rest_items)
-                        elif key_name == 'SHADOW':
-                            shadow_names.extend(rest_items)
-                        elif key_name == 'SHADOWING-IMPORT-FROM':
-                            raw = _clause_items(cdr(clause))
-                            if not raw:
-                                raise lisptype.LispProgramError(
-                                    "DEFPACKAGE: :SHADOWING-IMPORT-FROM requires a package name")
-                            src_name_str = _designator_to_string(raw[0])
-                            names_str = [_designator_to_string(i) for i in raw[1:]]
-                            shadowing_import_clauses.append(
-                                (src_name_str, names_str))
-                            ordered_import_clauses.append(
-                                ('SHADOWING-IMPORT-FROM', src_name_str, names_str))
-                        elif key_name == 'IMPORT-FROM':
-                            raw = _clause_items(cdr(clause))
-                            if not raw:
-                                raise lisptype.LispProgramError(
-                                    "DEFPACKAGE: :IMPORT-FROM requires a package name")
-                            src_name_str = _designator_to_string(raw[0])
-                            names_str = [_designator_to_string(i) for i in raw[1:]]
-                            import_from_clauses.append(
-                                (src_name_str, names_str))
-                            ordered_import_clauses.append(
-                                ('IMPORT-FROM', src_name_str, names_str))
-                        elif key_name == 'SIZE':
-                            if size_seen:
-                                raise lisptype.LispProgramError(
-                                    "DEFPACKAGE: :SIZE may only be given once")
-                            size_seen = True
-                        elif key_name == 'DOCUMENTATION':
-                            if doc_seen:
-                                raise lisptype.LispProgramError(
-                                    "DEFPACKAGE: :DOCUMENTATION may only be given once")
-                            doc_seen = True
-                            # CLHS 19.2.2 / 25.1.3: the documentation string
-                            # is stored on the package object, where
-                            # `(documentation pkg t)` reads it.
-                            raw_doc = _clause_items(cdr(clause))
-                            if raw_doc:
-                                package_doc = _designator_to_string(raw_doc[0])
-                        # An unrecognized option keyword is left alone rather
-                        # than made an error -- CLHS reserves this space for
-                        # implementation extensions and no ANSI test exercises
-                        # rejecting one.
-                    cur = cdr(cur)
-
-                # CLHS 7.2p2: these four options' names must be pairwise
-                # disjoint, and :EXPORT/:INTERN must be disjoint -- checked
-                # before any mutation so a malformed DEFPACKAGE has no partial
-                # effect.
-                shadow_set = set(shadow_names)
-                shadowing_import_set = {n for _, names in shadowing_import_clauses for n in names}
-                import_set = {n for _, names in import_from_clauses for n in names}
-                intern_set = set(intern_names)
-                export_set = set(export_names)
-
-                def _require_disjoint(name_a, set_a, name_b, set_b):
-                    overlap = set_a & set_b
-                    if overlap:
-                        raise lisptype.LispProgramError(
-                            f"DEFPACKAGE: {name_a} and {name_b} must be disjoint "
-                            f"(shared {sorted(overlap)!r})")
-
-                _require_disjoint('SHADOW', shadow_set, 'SHADOWING-IMPORT-FROM', shadowing_import_set)
-                _require_disjoint('SHADOW', shadow_set, 'IMPORT-FROM', import_set)
-                _require_disjoint('SHADOW', shadow_set, 'INTERN', intern_set)
-                _require_disjoint('SHADOWING-IMPORT-FROM', shadowing_import_set, 'IMPORT-FROM', import_set)
-                _require_disjoint('SHADOWING-IMPORT-FROM', shadowing_import_set, 'INTERN', intern_set)
-                _require_disjoint('IMPORT-FROM', import_set, 'INTERN', intern_set)
-                _require_disjoint('EXPORT', export_set, 'INTERN', intern_set)
-
-                # A nickname (or the name itself) that already denotes a
-                # different existing package is a PACKAGE-ERROR (CLHS
-                # MAKE-PACKAGE/DEFPACKAGE); genuinely *continuable* handling
-                # needs the restart machinery M8 owns, so this signals the
-                # condition honestly rather than silently accepting the clash.
-                existing = lisptype.find_package(pkg_name)
-                for nn in nicknames:
-                    clash = lisptype.find_package(nn)
-                    if clash is not None and clash is not existing:
-                        _signal_package_error(nn, f"A package named {nn!r} already exists")
-
-                pkg = existing if existing is not None else lisptype.make_package(pkg_name)
-                if package_doc is not None:
-                    # CLHS 25.1.3: DEFPACKAGE's :documentation lands on the
-                    # package object for `(documentation pkg t)` to read.
-                    pkg.documentation = package_doc
-                if nicknames:
-                    # Merge rather than overwrite: DEFPACKAGE allows multiple
-                    # :NICKNAMES clauses, and each contributes its names.
-                    merged = list(pkg.nick_names) if existing is not None else []
-                    for nn in nicknames:
-                        if nn not in merged:
-                            merged.append(nn)
-                    pkg.nick_names = merged
-
-                if shadow_names:
-                    _pkg_shadow([lisptype.LispString(n) for n in shadow_names], pkg)
-
-                class _SkipClause(Exception):
-                    # Control transfer for the CONTINUE restart offered with a
-                    # correctable :IMPORT-FROM/:SHADOWING-IMPORT-FROM error.
-                    # Raised only to be caught a few frames up in this same
-                    # function, so it never escapes into the evaluator and no
-                    # pass-through tuple needs to know it exists.
-                    pass
-
-                def _apply_import_clause(kind, src_name_str, names_str):
-                    # CLHS DEFPACKAGE, Exceptional Situations: a
-                    # *correctable* error of type package-error is signaled
-                    # when one of the named symbols is not accessible in the
-                    # source package. Correctable means the signal offers a
-                    # non-abort restart -- the suite's
-                    # handle-non-abort-restart (defpackage.24/.25) checks
-                    # exactly for one -- whose invocation skips the offending
-                    # symbol and resumes with the remaining names, the same
-                    # offer CERROR makes (evaluation_conditions'
-                    # _signal_cerror_object).
-                    src_pkg = lisptype.find_package(src_name_str)
-                    if src_pkg is None:
-                        _signal_package_error(src_name_str, f"No package named {src_name_str!r}")
-                    syms = []
-                    for n in names_str:
-                        sym, _status = src_pkg.find_symbol(n)
-                        if sym is None:
-                            def _skip():
-                                raise _SkipClause()
-                            restart = lisptype.Restart(
-                                lisptype.LispSymbol('CONTINUE'), _skip)
-                            state.restart_stack.append([restart])
-                            try:
-                                _signal_package_error(
-                                    src_name_str,
-                                    f"{n!r} is not accessible in package {src_name_str!r}")
-                            except _SkipClause:
-                                continue
-                            finally:
-                                state.restart_stack.pop()
-                        syms.append(sym)
-                    if syms:
-                        if kind == 'SHADOWING-IMPORT-FROM':
-                            _pkg_shadowing_import(syms, pkg)
-                        else:
-                            _pkg_import(syms, pkg)
-
-                # CLHS DEFPACKAGE: "The order in which the options appear in
-                # a defpackage form is irrelevant. The order in which they
-                # are executed is as follows: 1. :shadow and
-                # :shadowing-import-from. 2. :use. 3. :import-from and
-                # :intern. 4. :export." Shadows go first because they may be
-                # needed to block spurious name conflicts when :use is
-                # processed; :export goes last so it can make shadowing and
-                # imported symbols external. defpackage.26 feeds DEFPACKAGE
-                # the same clause set in two written orders and requires the
-                # *same* package out of each -- with the written order
-                # honored, the form whose :export precedes its :import-from
-                # interns a fresh local L that the later :import-from then
-                # collides with, a PACKAGE-ERROR the test's ignore-errors
-                # swallows into (NIL condition) where (SUCCESS SUCCESS) is
-                # expected. Source order is preserved only *within* each
-                # kind, where the disjointness checks below make it
-                # unobservable.
-                for kind, src_name_str, names_str in ordered_import_clauses:
-                    if kind == 'SHADOWING-IMPORT-FROM':
-                        _apply_import_clause(kind, src_name_str, names_str)
-
-                use_packages = []
-                for use_pkg_name in use_names:
-                    use_pkg = lisptype.find_package(use_pkg_name)
-                    if use_pkg is None:
-                        use_pkg = lisptype.make_package(use_pkg_name)
-                    if use_pkg not in use_packages:
-                        use_packages.append(use_pkg)
-                pkg.use_packages = use_packages
-
-                for kind, src_name_str, names_str in ordered_import_clauses:
-                    if kind == 'IMPORT-FROM':
-                        _apply_import_clause(kind, src_name_str, names_str)
-                for sym_name in intern_names:
-                    pkg.intern(sym_name, external=False)
-
-                for sym_name in export_names:
-                    pkg.intern(sym_name, external=True)
-
-                return pkg
-
         # A function/macro NAME position accepts NIL: it is a symbol there
         # (CLHS 3.1.2.1.2.2) like any other, even though the reader hands
         # back the `lispNull` singleton for a bare NIL token rather than a
@@ -2559,3 +1747,814 @@ __all__ = [
     'apply_fn',
     'eval_fn',
 ]
+
+
+# ---------------------------------------------------------------------------
+# Workers extracted from the special-form ladder above so that SETF, PSETF and
+# DEFPACKAGE can be registered as real macros (M4). They live here, rather than
+# in evaluation_special_forms.py, precisely so that the extraction is a pure
+# move: every name their bodies reference is module-level in *this* file and
+# resolves exactly as it did inline.
+# ---------------------------------------------------------------------------
+
+
+def eval_setf(form, env):
+    """SETF as a worker function -- CLHS 5.1's generalized
+    assignment. Extracted verbatim from the evaluator's special-form ladder so
+    that SETF can be registered as the *macro* CLHS 5.1.2 specifies it to be
+    (`standard_macros.py`), without rewriting any of the place handling: this
+    is the identical code, in the identical module, reached through the macro
+    path instead of a hardcoded `operator.name` comparison. Every free name it
+    uses (`eval`, `_eval_args`, `_place_accessor` via `_es_forms`, ...) is
+    module-level here, so nothing about how a place resolves has changed."""
+    # SETF is a generalized assignment macro/special form
+    # (SETF place value) or (SETF place1 value1 place2 value2 ...)
+    # For simple variable places, behave like SETQ
+    # For complex places (CAR, CDR, AREF, etc.), call appropriate setter
+    from . import evaluation_special_forms as _es_forms
+    args = cdr(form)
+    result = lisptype.NIL
+
+    while _consp_internal(args) and _consp_internal(cdr(args)):
+        place = car(args)
+        value_form = car(cdr(args))
+
+        # CLHS 5.1.2.8: a symbol place may name a symbol-macro
+        # (SYMBOL-MACROLET), in which case SETF operates on the
+        # macro's expansion instead -- `setf-symbol-macro.*`.
+        while isinstance(place, lisptype.LispSymbol):
+            expansion = env.get_symbol_macro(place)
+            if expansion is None:
+                break
+            place = expansion
+
+        if isinstance(place, lisptype.LispSymbol):
+            # Simple variable assignment - like SETQ. Only the
+            # primary value is stored (and returned) -- CLHS
+            # 5.1.1; `setf.4` observes this directly.
+            result = lisptype.primary_value(eval(value_form, env))
+            env.set_variable(place, result)
+        elif _consp_internal(place):
+            # Complex place like (CAR x), (CDR x), (AREF arr i), (SLOT-VALUE obj slot), etc.
+            place_op = car(place)
+            if isinstance(place_op, lisptype.LispSymbol):
+                op_name = place_op.name
+                place_args = cdr(place)
+
+                # VALUES/THE/APPLY-as-place, a DEFSETF long-form
+                # / DEFINE-SETF-EXPANDER registration, or a
+                # macro place all need their subforms resolved
+                # *before* the value-form (CLHS 5.1.1) -- unlike
+                # the legacy branches below, which evaluate the
+                # value-form first (a known, separate gap; see
+                # plan.md). `_place_accessor`'s GET-SETF-
+                # EXPANSION bridge is the one place all of this
+                # is implemented, so route to it before falling
+                # into the legacy ladder rather than duplicating
+                # any of it here.
+                if _es_forms._setf_needs_expansion_bridge(op_name, place_op, env):
+                    # CLHS 5.1.1: "the value returned by SETF is
+                    # the primary value yielded by evaluating
+                    # the storing form" -- not necessarily the
+                    # value-form's own value (a long-form
+                    # DEFSETF's body may compute something
+                    # else entirely, as `defsetf.7a` pins).
+                    getter, setter = _es_forms._place_accessor(place, env)
+                    new_value = eval(value_form, env)
+                    result = setter(new_value)
+                    args = cdr(cdr(args))
+                    continue
+
+                # CLHS 5.1.1.1: a place's subforms are evaluated
+                # *left to right, before the value-form*, no
+                # matter which setter ends up doing the write.
+                # The branches below all do their own dispatch
+                # on op_name and now consume `eval_args`
+                # instead of re-evaluating `place_args`. LDB /
+                # MASK-FIELD / SUBSEQ are place-in-place: their
+                # second subform is itself a place, and
+                # `_place_accessor` evaluates the inner-place's
+                # subforms once (left to right) for them. The
+                # bytespec / start / end subforms are still
+                # evaluated here.
+                if op_name in ('LDB', 'MASK-FIELD') and _consp_internal(place_args) and _consp_internal(cdr(place_args)):
+                    # CLHS 5.1.1.1/5.1.2: the bytespec's
+                    # subforms, then the inner place's subforms
+                    # (evaluated once, left to right, when
+                    # `_place_accessor` builds its closures),
+                    # and only then the newvalue form --
+                    # `ldb.place.order.1`/`mask-field.place.order.1`
+                    # count each subform. The storing form's
+                    # primary value is the store value itself
+                    # (newfield, unmasked -- `ldb.place.1`
+                    # expects -1 back), not the inner place's
+                    # new value.
+                    bytespec_value = eval(car(place_args), env)
+                    inner_getter, inner_setter = _es_forms._place_accessor(
+                        car(cdr(place_args)), env)
+                    new_val = eval(value_form, env)
+                    size, pos = bytespec_value
+                    current = inner_getter()
+                    if op_name == 'LDB':
+                        mask = (1 << size) - 1
+                        inner_setter(
+                            (current & ~(mask << pos))
+                            | ((new_val & mask) << pos))
+                    else:
+                        mask = ((1 << size) - 1) << pos
+                        inner_setter(
+                            (current & ~mask) | (new_val & mask))
+                    result = new_val
+                    args = cdr(cdr(args))
+                    continue
+                if op_name == 'SUBSEQ' and _consp_internal(place_args):
+                    # The place's subforms (seq, start, [end])
+                    # must be evaluated before the value-form
+                    # -- `_place_accessor` knows the read/write
+                    # closure pair and the in-place write
+                    # semantics (CLHS 17.1); the legacy
+                    # `pass` branch below silently dropped the
+                    # assignment.
+                    getter, setter = _es_forms._place_accessor(place, env)
+                    result = setter(eval(value_form, env))
+                    args = cdr(cdr(args))
+                    continue
+                if op_name == 'GETF' and _consp_internal(place_args):
+                    # (SETF (GETF plist indicator [default]) val)
+                    # CLHS 5.1.2.6, dispatched before the eager
+                    # `eval_args` below on purpose:
+                    # `_place_accessor` evaluates the place's own
+                    # subforms (plist place, indicator, default)
+                    # once, left to right, before the value form
+                    # (CLHS 5.1.1.1/5.1.3) -- the same shape the
+                    # LDB/MASK-FIELD/SUBSEQ branches above follow.
+                    # Letting the ladder pre-evaluate them too
+                    # ran every subform twice, which
+                    # setf-getf.order.1/.2 observe through
+                    # counters in each subform.
+                    getter, setter = _es_forms._place_accessor(place, env)
+                    result = setter(eval(value_form, env))
+                    args = cdr(cdr(args))
+                    continue
+                eval_args = _eval_args(place_args, env)
+                result = eval(value_form, env)
+
+                if op_name == 'CAR':
+                    target = eval_args[0]
+                    if _consp_internal(target):
+                        target.car = result
+                    else:
+                        raise lisptype.LispError("SETF CAR: target is not a cons")
+                elif op_name in ('CDR', 'REST'):
+                    target = eval_args[0]
+                    if _consp_internal(target):
+                        target.cdr = result
+                    else:
+                        raise lisptype.LispError(f"SETF {op_name}: target is not a cons")
+                elif _arrays.is_array_place(op_name):
+                    # (SETF (AREF arr i j) val), (SETF (FILL-POINTER v) n), ...
+                    _arrays.array_place_write(op_name, eval_args, result)
+                elif op_name in ('CHAR', 'SCHAR'):
+                    # (SETF (CHAR str i) val) - now works with LispString
+                    seq = eval_args[0]
+                    idx = eval_args[1]
+                    try:
+                        seq[idx] = result
+                    except (TypeError, IndexError) as e:
+                        raise lisptype.LispError(f"SETF {op_name}: {e}")
+                elif op_name == 'ELT':
+                    # (SETF (ELT seq i) val) - works on lists and vectors
+                    seq = eval_args[0]
+                    idx = eval_args[1]
+                    try:
+                        idx = int(idx)
+                    except (ValueError, TypeError):
+                        raise lisptype.LispTypeError(
+                            f"SETF ELT: index must be an integer",
+                            expected_type="INTEGER", actual_value=idx)
+                    if _consp_internal(seq):
+                        # List - walk to nth element
+                        current = seq
+                        for _ in range(idx):
+                            if not _consp_internal(current):
+                                raise lisptype.LispTypeError(
+                                    f"SETF ELT: index {idx} is out of bounds",
+                                    expected_type=f"valid list index", actual_value=idx)
+                            current = cdr(current)
+                        if _consp_internal(current):
+                            current.car = result
+                        else:
+                            raise lisptype.LispTypeError(
+                                f"SETF ELT: index {idx} is out of bounds",
+                                expected_type=f"valid list index", actual_value=idx)
+                    else:
+                        # Vector/array/LispString - use indexing
+                        try:
+                            seq[idx] = result
+                        except (TypeError, IndexError) as e:
+                            raise lisptype.LispTypeError(
+                                f"SETF ELT: {e}",
+                                expected_type="valid sequence index", actual_value=idx)
+                elif op_name == 'GETHASH':
+                    # Through the hash table's own write primitive,
+                    # which is what consults the table's test.
+                    # `table[key] = result` wrote a Python dict
+                    # entry, so an EQUAL table could not find the
+                    # key it had just stored.
+                    from .misc_hashtables import puthash
+                    key = eval_args[0]
+                    table = eval_args[1]
+                    # The optional default is a subform of the
+                    # place and is evaluated once, left to right,
+                    # even though the store ignores it
+                    # (CLHS 5.1.1.1; `gethash.order.4`).
+                    # `_eval_args` above already consumed every
+                    # place_args element for us.
+                    puthash(key, table, result)
+                elif op_name == 'SLOT-VALUE':
+                    obj = eval_args[0]
+                    slot_name = eval_args[1]
+                    if isinstance(obj, classes.LispInstance):
+                        # The one home of "write a CLOS instance's
+                        # slot" is `lispfunc.misc_clos.set_slot_value`,
+                        # the real (SETF SLOT-VALUE) -- CLHS 7.5.3
+                        # protocol and all, including SLOT-MISSING
+                        # for a slot-name the class doesn't define.
+                        # The generic `__dict__` fallback below
+                        # writes a raw Python attribute instead
+                        # (LispInstance has no `set_slot`), which
+                        # SLOT-VALUE's reader then never sees.
+                        from .misc_clos import set_slot_value
+                        set_slot_value(result, obj, slot_name)
+                    else:
+                        # CLHS 4.3.7: a generalized instance of a
+                        # built-in class has no accessible slots.
+                        # Without this guard the `__dict__`
+                        # fallback below silently wrote a Python
+                        # attribute on any non-instance with one
+                        # (a package, a pathname, ...) --
+                        # slot-value.error.6 walks the built-in
+                        # mini-universe asserting the error.
+                        from .misc_clos import _signal_builtin_slot_access
+                        _signal_builtin_slot_access(obj, 'SETF SLOT-VALUE')
+                        if hasattr(obj, 'set_slot'):
+                            obj.set_slot(slot_name, result)
+                        elif hasattr(obj, '__dict__'):
+                            slot_key = slot_name.name if isinstance(slot_name, lisptype.LispSymbol) else str(slot_name)
+                            obj.__dict__[slot_key] = result
+                        else:
+                            raise lisptype.LispError("SETF SLOT-VALUE: cannot set slot")
+                elif op_name == 'NTH':
+                    n = eval_args[0]
+                    lst = eval_args[1]
+                    current = lst
+                    for _ in range(n):
+                        if not _consp_internal(current):
+                            raise lisptype.LispError("SETF NTH: index out of bounds")
+                        current = cdr(current)
+                    if _consp_internal(current):
+                        current.car = result
+                    else:
+                        raise lisptype.LispError("SETF NTH: index out of bounds")
+                elif op_name == 'SYMBOL-VALUE':
+                    sym = eval_args[0]
+                    if isinstance(sym, lisptype.LispSymbol):
+                        # SYMBOL-VALUE's getter reads sym.value directly
+                        # (the same cell BOUNDP/SET/MAKUNBOUND/PROGV use) --
+                        # its setter must write the same cell, not a
+                        # lexical environment binding.
+                        sym.value = result
+                    else:
+                        raise lisptype.LispError("SETF SYMBOL-VALUE: requires a symbol")
+                elif op_name == 'SYMBOL-FUNCTION':
+                    sym = eval_args[0]
+                    if isinstance(sym, lisptype.LispSymbol):
+                        env.add_function(sym, result)
+                    else:
+                        raise lisptype.LispError("SETF SYMBOL-FUNCTION: requires a symbol")
+                elif op_name == 'FDEFINITION':
+                    from .utilities_functions import _function_spec_to_key
+                    sym = _function_spec_to_key(eval_args[0])
+                    if sym is not None:
+                        env.add_function(sym, result)
+                    else:
+                        raise lisptype.LispError("SETF FDEFINITION: requires a symbol")
+                elif op_name == 'FIND-CLASS':
+                    # (SETF (FIND-CLASS name) class) registers
+                    # `class` under `name` as an alias -- it
+                    # does not rename the class (CLHS), so this
+                    # must not go through `register_class`,
+                    # which keys off the object's own mutable
+                    # `.name` and would have to rename-then-
+                    # restore around it -- a dance that
+                    # corrupts the registry once two such
+                    # aliasing operations touch the same
+                    # objects in sequence, e.g. `rotatef.35`.
+                    place_name = eval_args[0]  # e.g., n3
+                    if isinstance(place_name, lisptype.LispSymbol):
+                        if isinstance(result, classes.LispClass):
+                            classes.register_class_as(place_name, result)
+                        elif _null_internal(result):
+                            # CLHS 7.7: new-value NIL means `place_name`
+                            # no longer denotes a class at all.
+                            classes.unregister_class_as(place_name)
+                        else:
+                            raise lisptype.LispError("SETF FIND-CLASS: value must be a class or NIL")
+                    else:
+                        raise lisptype.LispError("SETF FIND-CLASS: place name must be a symbol")
+                elif op_name == 'MACRO-FUNCTION':
+                    # (SETF (MACRO-FUNCTION sym) val) should install a macro
+                    # Install into the global (root) environment so later
+                    # EVAL/MACROEXPAND can find the macro when expanding.
+                    sym = eval_args[0]
+                    if isinstance(sym, lisptype.LispSymbol):
+                        global_env = env
+                        while global_env.parent is not None:
+                            global_env = global_env.parent
+                        global_env.add_function(sym, result)
+                        # Also add to current env for immediate visibility
+                        if env is not global_env:
+                            env.add_function(sym, result)
+                    else:
+                        raise lisptype.LispError("SETF MACRO-FUNCTION: requires a symbol")
+                elif op_name == 'SYMBOL-PLIST':
+                    sym = eval_args[0]
+                    if isinstance(sym, lisptype.LispSymbol):
+                        sym.plist = result
+                    else:
+                        raise lisptype.LispError("SETF SYMBOL-PLIST: requires a symbol")
+                elif op_name == 'GET':
+                    sym = eval_args[0]
+                    indicator = eval_args[1]
+                    # (GET symbol indicator [default]) -- the
+                    # optional default form has been evaluated
+                    # for side effects already (it is in
+                    # `eval_args` if present), even though SETF
+                    # GET never consults its value.
+                    if isinstance(sym, lisptype.LispSymbol):
+                        # `LispSymbol.__init__` defaults `plist`
+                        # to a bare Python `{}`, not NIL --
+                        # `sym.plist is None` never catches that,
+                        # so a fresh symbol's first SETF GET
+                        # appended onto the dict as a dotted
+                        # tail instead of replacing it.
+                        if not _consp_internal(sym.plist):
+                            sym.plist = lisptype.NIL
+                        plist = sym.plist
+                        found = False
+                        current = plist
+                        while _consp_internal(current) and _consp_internal(cdr(current)):
+                            if car(current) == indicator:
+                                cdr(current).car = result
+                                found = True
+                                break
+                            current = cdr(cdr(current))
+                        if not found:
+                            sym.plist = lisptype.lispCons(indicator, lisptype.lispCons(result, sym.plist))
+                    else:
+                        raise lisptype.LispError("SETF GET: requires a symbol")
+                elif op_name in ('FIRST', 'SECOND', 'THIRD', 'FOURTH', 'FIFTH',
+                                'SIXTH', 'SEVENTH', 'EIGHTH', 'NINTH', 'TENTH'):
+                    # (SETF (FIRST list) val) etc.
+                    lst = eval_args[0]
+                    n = {'FIRST': 0, 'SECOND': 1, 'THIRD': 2, 'FOURTH': 3, 'FIFTH': 4,
+                         'SIXTH': 5, 'SEVENTH': 6, 'EIGHTH': 7, 'NINTH': 8, 'TENTH': 9}[op_name]
+                    current = lst
+                    for _ in range(n):
+                        if not _consp_internal(current):
+                            raise lisptype.LispError(f"SETF {op_name}: list too short")
+                        current = cdr(current)
+                    if _consp_internal(current):
+                        current.car = result
+                    else:
+                        raise lisptype.LispError(f"SETF {op_name}: list too short")
+                elif _es_forms._CXR_RE.match(op_name):
+                    # Compound CAR/CDR accessors (CLHS 5.1.2.1),
+                    # 2-4 letters deep -- `_cxr_target` is the one
+                    # place that knows how to navigate them, shared
+                    # with PUSH/POP/INCF/ROTATEF's `_place_accessor`.
+                    obj = eval_args[0]
+                    parent, is_car = _es_forms._cxr_target(op_name, obj)
+                    if is_car:
+                        parent.car = result
+                    else:
+                        parent.cdr = result
+                elif op_name == 'LDB':
+                    raise lisptype.LispProgramError(
+                        f"SETF (LDB ...): malformed place form {place!r}")
+                elif op_name == 'MASK-FIELD':
+                    raise lisptype.LispProgramError(
+                        f"SETF (MASK-FIELD ...): malformed place form {place!r}")
+                elif op_name == 'FILL-POINTER':
+                    # (SETF (FILL-POINTER vector) val)
+                    vec = eval_args[0]
+                    if hasattr(vec, 'fill_pointer'):
+                        vec.fill_pointer = result
+                elif op_name == 'ROW-MAJOR-AREF':
+                    # (SETF (ROW-MAJOR-AREF arr idx) val)
+                    arr = eval_args[0]
+                    idx = eval_args[1]
+                    try:
+                        arr[idx] = result
+                    except (TypeError, IndexError) as e:
+                        raise lisptype.LispError(f"SETF ROW-MAJOR-AREF: {e}")
+                elif op_name == 'BIT':
+                    # (SETF (BIT bit-array &rest subscripts) val)
+                    arr = eval_args[0]
+                    idx = eval_args[1]
+                    try:
+                        arr[idx] = result
+                    except (TypeError, IndexError) as e:
+                        raise lisptype.LispError(f"SETF BIT: {e}")
+                elif op_name == 'SBIT':
+                    # (SETF (SBIT bit-array &rest subscripts) val)
+                    arr = eval_args[0]
+                    idx = eval_args[1]
+                    try:
+                        arr[idx] = result
+                    except (TypeError, IndexError) as e:
+                        raise lisptype.LispError(f"SETF SBIT: {e}")
+                else:
+                    # Check for DEFSETF-defined expander
+                    global_env = env
+                    while global_env.parent is not None:
+                        global_env = global_env.parent
+                    if hasattr(global_env, 'setf_expanders') and op_name in global_env.setf_expanders:
+                        expander = global_env.setf_expanders[op_name]
+                        if expander['type'] == 'short':
+                            update_fn_name = expander['update_fn']
+                            update_fn = env.find_func(update_fn_name)
+                            if update_fn is None:
+                                py_name = _registry.get_function_py_name(update_fn_name.name)
+                                if py_name:
+                                    update_fn = getattr(lispfunc, py_name, None)
+                            if update_fn:
+                                eval_place_args = []
+                                pa = place_args
+                                while _consp_internal(pa):
+                                    eval_place_args.append(eval(car(pa), env))
+                                    pa = cdr(pa)
+                                eval_place_args.append(result)
+                                update_fn(*eval_place_args)
+                            else:
+                                raise lisptype.LispError(f"SETF: update function {update_fn_name} not found")
+                        else:
+                            # Long form - just accept for now
+                            pass
+                    else:
+                        # Try generic struct accessor: look for SET-<accessor-name>
+                        setter_name = f"SET-{op_name}"
+                        setter_sym = lisptype.LispSymbol(setter_name)
+                        setter_func = env.find_func(setter_sym)
+                        if setter_func is None:
+                            # Try looking up in registry
+                            py_name = _registry.get_function_py_name(setter_name)
+                            if py_name:
+                                import fclpy.lispfunc as lispfunc
+                                setter_func = getattr(lispfunc, py_name, None)
+
+                        if setter_func:
+                            # Call the setter with the target object and all evaluated place args
+                            target_obj = eval(car(place_args), env)
+                            eval_place_args = [target_obj]
+                            pa = cdr(place_args)
+                            while _consp_internal(pa):
+                                eval_place_args.append(eval(car(pa), env))
+                                pa = cdr(pa)
+                            eval_place_args.append(result)
+                            setter_func(*eval_place_args)
+                        else:
+                            # (SETF (accessor arg*) value) where `accessor` has its
+                            # own registered (SETF accessor) function (e.g. via
+                            # (DEFUN (SETF accessor) ...) or (SETF (FDEFINITION
+                            # '(SETF accessor)) ...)). Per ANSI, call it with the
+                            # new value first, then the access-form's arguments.
+                            setf_fn_sym = lisptype.LispSymbol(f"(SETF {op_name})")
+                            setf_fn = env.find_func(setf_fn_sym)
+                            if setf_fn is not None:
+                                eval_place_args = [result]
+                                pa = place_args
+                                while _consp_internal(pa):
+                                    eval_place_args.append(eval(car(pa), env))
+                                    pa = cdr(pa)
+                                result = setf_fn(*eval_place_args)
+                            # else: unknown place type - silently accept (many exist)
+            else:
+                raise lisptype.LispNotImplementedError(f"SETF: place operator must be a symbol, got {place_op}")
+        else:
+            raise lisptype.LispNotImplementedError(f"SETF: place must be a symbol or form, got {place}")
+
+        args = cdr(cdr(args))
+
+    return result
+
+
+def eval_psetf(form, env):
+    """PSETF as a worker function -- see `eval_setf`
+    above for why this is an extraction rather than a rewrite."""
+    # PSETF is SETF's "read/write" split into two passes (CLHS
+    # 5.1.3): every place's subforms *and* value-form are
+    # evaluated, left to right, before any assignment happens.
+    # `_place_accessor` is the one place-resolution mechanism
+    # (shared with SETF/ROTATEF/SHIFTF/PUSH/POP/...) rather
+    # than a second, narrower ladder duplicating it -- the old
+    # one covered only CAR/CDR/arrays/SYMBOL-FUNCTION/
+    # FDEFINITION/FIND-CLASS/NTH/FILL-POINTER/MACRO-FUNCTION
+    # and silently did nothing for every other place kind.
+    from . import evaluation_special_forms as _es_forms
+    args = cdr(form)
+    pending = []  # (setter, new_value) pairs, in left-to-right order
+
+    while _consp_internal(args) and _consp_internal(cdr(args)):
+        place = car(args)
+        value_form = car(cdr(args))
+
+        while isinstance(place, lisptype.LispSymbol):
+            expansion = env.get_symbol_macro(place)
+            if expansion is None:
+                break
+            place = expansion
+
+        _, setter = _es_forms._place_accessor(place, env)
+        new_value = eval(value_form, env)
+        pending.append((setter, new_value))
+
+        args = cdr(cdr(args))
+
+    for setter, new_value in pending:
+        setter(new_value)
+
+    return lisptype.NIL
+
+
+def eval_defpackage(form, env):
+    """DEFPACKAGE as a worker function -- see
+    `eval_setf` above. Its option clauses are literal data (CLHS 7.2), never
+    evaluated, which is exactly what a macro receives, so moving it off the
+    ladder changes nothing about how they are read."""
+    # DEFPACKAGE's option clauses are literal data (CLHS 7.2), not
+    # forms to evaluate -- so this stays a special case in the
+    # dispatcher rather than a cl_function, exactly as CLAUDE.md's
+    # registry note requires for operators like this one.
+    from .misc_packages import (
+        _designator_to_string, shadow as _pkg_shadow,
+        shadowing_import as _pkg_shadowing_import,
+    )
+    from .utilities_symbols import import_symbol as _pkg_import
+    from .evaluation_conditions import signal_error_object as _signal_error
+
+    def _signal_package_error(package, message):
+        # PACKAGE-ERROR lives in the *real* condition hierarchy
+        # (lisptype_extended.Error), not the "legacy"
+        # lisptype.LispError one HANDLER-CASE/IGNORE-ERRORS also
+        # catch directly -- signaling it any other way (a bare
+        # `raise`) skips signal_condition() and every handler, and
+        # the condition object then unwinds as a plain, unmatched
+        # Python exception instead of being caught.
+        _signal_error(lisptype.PackageError(package=package, message=message))
+
+    args = cdr(form)
+    if args is None or args == lisptype.NIL:
+        raise lisptype.LispProgramError(
+            "DEFPACKAGE: wrong number of arguments (got 0, expected at least 1)")
+
+    name_arg = car(args)
+    opt_forms = cdr(args)
+
+    def _clause_items(r):
+        items = []
+        while _consp_internal(r):
+            items.append(car(r))
+            r = cdr(r)
+        return items
+
+    def _key_name(key):
+        if isinstance(key, (lisptype.lispKeyword, lisptype.LispSymbol)):
+            n = key.name.upper()
+            return n[1:] if n.startswith(':') else n
+        return str(key).upper()
+
+    pkg_name = _designator_to_string(name_arg)
+
+    nicknames = []
+    use_names = []
+    export_names = []
+    intern_names = []
+    shadow_names = []
+    shadowing_import_clauses = []  # [(pkg_name, [names])]
+    import_from_clauses = []       # [(pkg_name, [names])]
+    # The IMPORT-FROM and SHADOWING-IMPORT-FROM clauses, in
+    # *source order*. CLHS DEFPACKAGE fixes the processing order
+    # only *between* kinds (shadows, then :use, then imports and
+    # :intern, then :export) and the disjointness checks below
+    # make the two kinds' names disjoint, so within-kind source
+    # order is unobservable; keeping it costs nothing and makes
+    # error reporting read in the order the form was written.
+    ordered_import_clauses = []
+    size_seen = False
+    doc_seen = False
+    package_doc = None
+
+    cur = opt_forms
+    while _consp_internal(cur):
+        clause = car(cur)
+        if _consp_internal(clause):
+            key_name = _key_name(car(clause))
+            rest_items = [_designator_to_string(i) if key_name not in
+                          ('SHADOWING-IMPORT-FROM', 'IMPORT-FROM', 'SIZE', 'DOCUMENTATION')
+                          else i
+                          for i in _clause_items(cdr(clause))]
+
+            if key_name == 'USE':
+                use_names.extend(rest_items)
+            elif key_name == 'NICKNAMES':
+                nicknames.extend(rest_items)
+            elif key_name == 'INTERN':
+                intern_names.extend(rest_items)
+            elif key_name == 'EXPORT':
+                export_names.extend(rest_items)
+            elif key_name == 'SHADOW':
+                shadow_names.extend(rest_items)
+            elif key_name == 'SHADOWING-IMPORT-FROM':
+                raw = _clause_items(cdr(clause))
+                if not raw:
+                    raise lisptype.LispProgramError(
+                        "DEFPACKAGE: :SHADOWING-IMPORT-FROM requires a package name")
+                src_name_str = _designator_to_string(raw[0])
+                names_str = [_designator_to_string(i) for i in raw[1:]]
+                shadowing_import_clauses.append(
+                    (src_name_str, names_str))
+                ordered_import_clauses.append(
+                    ('SHADOWING-IMPORT-FROM', src_name_str, names_str))
+            elif key_name == 'IMPORT-FROM':
+                raw = _clause_items(cdr(clause))
+                if not raw:
+                    raise lisptype.LispProgramError(
+                        "DEFPACKAGE: :IMPORT-FROM requires a package name")
+                src_name_str = _designator_to_string(raw[0])
+                names_str = [_designator_to_string(i) for i in raw[1:]]
+                import_from_clauses.append(
+                    (src_name_str, names_str))
+                ordered_import_clauses.append(
+                    ('IMPORT-FROM', src_name_str, names_str))
+            elif key_name == 'SIZE':
+                if size_seen:
+                    raise lisptype.LispProgramError(
+                        "DEFPACKAGE: :SIZE may only be given once")
+                size_seen = True
+            elif key_name == 'DOCUMENTATION':
+                if doc_seen:
+                    raise lisptype.LispProgramError(
+                        "DEFPACKAGE: :DOCUMENTATION may only be given once")
+                doc_seen = True
+                # CLHS 19.2.2 / 25.1.3: the documentation string
+                # is stored on the package object, where
+                # `(documentation pkg t)` reads it.
+                raw_doc = _clause_items(cdr(clause))
+                if raw_doc:
+                    package_doc = _designator_to_string(raw_doc[0])
+            # An unrecognized option keyword is left alone rather
+            # than made an error -- CLHS reserves this space for
+            # implementation extensions and no ANSI test exercises
+            # rejecting one.
+        cur = cdr(cur)
+
+    # CLHS 7.2p2: these four options' names must be pairwise
+    # disjoint, and :EXPORT/:INTERN must be disjoint -- checked
+    # before any mutation so a malformed DEFPACKAGE has no partial
+    # effect.
+    shadow_set = set(shadow_names)
+    shadowing_import_set = {n for _, names in shadowing_import_clauses for n in names}
+    import_set = {n for _, names in import_from_clauses for n in names}
+    intern_set = set(intern_names)
+    export_set = set(export_names)
+
+    def _require_disjoint(name_a, set_a, name_b, set_b):
+        overlap = set_a & set_b
+        if overlap:
+            raise lisptype.LispProgramError(
+                f"DEFPACKAGE: {name_a} and {name_b} must be disjoint "
+                f"(shared {sorted(overlap)!r})")
+
+    _require_disjoint('SHADOW', shadow_set, 'SHADOWING-IMPORT-FROM', shadowing_import_set)
+    _require_disjoint('SHADOW', shadow_set, 'IMPORT-FROM', import_set)
+    _require_disjoint('SHADOW', shadow_set, 'INTERN', intern_set)
+    _require_disjoint('SHADOWING-IMPORT-FROM', shadowing_import_set, 'IMPORT-FROM', import_set)
+    _require_disjoint('SHADOWING-IMPORT-FROM', shadowing_import_set, 'INTERN', intern_set)
+    _require_disjoint('IMPORT-FROM', import_set, 'INTERN', intern_set)
+    _require_disjoint('EXPORT', export_set, 'INTERN', intern_set)
+
+    # A nickname (or the name itself) that already denotes a
+    # different existing package is a PACKAGE-ERROR (CLHS
+    # MAKE-PACKAGE/DEFPACKAGE); genuinely *continuable* handling
+    # needs the restart machinery M8 owns, so this signals the
+    # condition honestly rather than silently accepting the clash.
+    existing = lisptype.find_package(pkg_name)
+    for nn in nicknames:
+        clash = lisptype.find_package(nn)
+        if clash is not None and clash is not existing:
+            _signal_package_error(nn, f"A package named {nn!r} already exists")
+
+    pkg = existing if existing is not None else lisptype.make_package(pkg_name)
+    if package_doc is not None:
+        # CLHS 25.1.3: DEFPACKAGE's :documentation lands on the
+        # package object for `(documentation pkg t)` to read.
+        pkg.documentation = package_doc
+    if nicknames:
+        # Merge rather than overwrite: DEFPACKAGE allows multiple
+        # :NICKNAMES clauses, and each contributes its names.
+        merged = list(pkg.nick_names) if existing is not None else []
+        for nn in nicknames:
+            if nn not in merged:
+                merged.append(nn)
+        pkg.nick_names = merged
+
+    if shadow_names:
+        _pkg_shadow([lisptype.LispString(n) for n in shadow_names], pkg)
+
+    class _SkipClause(Exception):
+        # Control transfer for the CONTINUE restart offered with a
+        # correctable :IMPORT-FROM/:SHADOWING-IMPORT-FROM error.
+        # Raised only to be caught a few frames up in this same
+        # function, so it never escapes into the evaluator and no
+        # pass-through tuple needs to know it exists.
+        pass
+
+    def _apply_import_clause(kind, src_name_str, names_str):
+        # CLHS DEFPACKAGE, Exceptional Situations: a
+        # *correctable* error of type package-error is signaled
+        # when one of the named symbols is not accessible in the
+        # source package. Correctable means the signal offers a
+        # non-abort restart -- the suite's
+        # handle-non-abort-restart (defpackage.24/.25) checks
+        # exactly for one -- whose invocation skips the offending
+        # symbol and resumes with the remaining names, the same
+        # offer CERROR makes (evaluation_conditions'
+        # _signal_cerror_object).
+        src_pkg = lisptype.find_package(src_name_str)
+        if src_pkg is None:
+            _signal_package_error(src_name_str, f"No package named {src_name_str!r}")
+        syms = []
+        for n in names_str:
+            sym, _status = src_pkg.find_symbol(n)
+            if sym is None:
+                def _skip():
+                    raise _SkipClause()
+                restart = lisptype.Restart(
+                    lisptype.LispSymbol('CONTINUE'), _skip)
+                state.restart_stack.append([restart])
+                try:
+                    _signal_package_error(
+                        src_name_str,
+                        f"{n!r} is not accessible in package {src_name_str!r}")
+                except _SkipClause:
+                    continue
+                finally:
+                    state.restart_stack.pop()
+            syms.append(sym)
+        if syms:
+            if kind == 'SHADOWING-IMPORT-FROM':
+                _pkg_shadowing_import(syms, pkg)
+            else:
+                _pkg_import(syms, pkg)
+
+    # CLHS DEFPACKAGE: "The order in which the options appear in
+    # a defpackage form is irrelevant. The order in which they
+    # are executed is as follows: 1. :shadow and
+    # :shadowing-import-from. 2. :use. 3. :import-from and
+    # :intern. 4. :export." Shadows go first because they may be
+    # needed to block spurious name conflicts when :use is
+    # processed; :export goes last so it can make shadowing and
+    # imported symbols external. defpackage.26 feeds DEFPACKAGE
+    # the same clause set in two written orders and requires the
+    # *same* package out of each -- with the written order
+    # honored, the form whose :export precedes its :import-from
+    # interns a fresh local L that the later :import-from then
+    # collides with, a PACKAGE-ERROR the test's ignore-errors
+    # swallows into (NIL condition) where (SUCCESS SUCCESS) is
+    # expected. Source order is preserved only *within* each
+    # kind, where the disjointness checks below make it
+    # unobservable.
+    for kind, src_name_str, names_str in ordered_import_clauses:
+        if kind == 'SHADOWING-IMPORT-FROM':
+            _apply_import_clause(kind, src_name_str, names_str)
+
+    use_packages = []
+    for use_pkg_name in use_names:
+        use_pkg = lisptype.find_package(use_pkg_name)
+        if use_pkg is None:
+            use_pkg = lisptype.make_package(use_pkg_name)
+        if use_pkg not in use_packages:
+            use_packages.append(use_pkg)
+    pkg.use_packages = use_packages
+
+    for kind, src_name_str, names_str in ordered_import_clauses:
+        if kind == 'IMPORT-FROM':
+            _apply_import_clause(kind, src_name_str, names_str)
+    for sym_name in intern_names:
+        pkg.intern(sym_name, external=False)
+
+    for sym_name in export_names:
+        pkg.intern(sym_name, external=True)
+
+    return pkg

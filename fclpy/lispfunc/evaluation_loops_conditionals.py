@@ -2991,12 +2991,21 @@ def eval_dotimes(form, env):
 # hand-rolled loops that used to live here.
 
 
-@_registry.cl_special('LOOP-FINISH')
+@_registry.cl_function('%LOOP-FINISH')
 def eval_loop_finish(*args):
     """Terminate the current LOOP immediately, proceeding to FINALLY clauses.
 
     CLHS 6.1.5: The LOOP-FINISH macro causes the immediate termination
     of a loop and the execution of the loop epilogue (FINALLY clauses).
+
+    This is the *runtime*, `%`-prefixed: CLHS 6.2 makes LOOP-FINISH a
+    macro, and it was registered here as a special operator instead. That
+    is not a cosmetic distinction -- `loop-finish.error.1` asks a
+    surrounding MACROLET for `(macro-function 'loop-finish env)` and then
+    FUNCALLs the result at three wrong arities, requiring a PROGRAM-ERROR
+    from each. `standard_macros.py` registers the macro that expands to a
+    call of this; its `_standard_macro` wrapper is what enforces the
+    two-argument macro-function shape those three FUNCALLs violate.
     """
     raise LoopFinishException()
 

@@ -1457,9 +1457,16 @@ def _pprint_length():
     return _printer._as_count(_printer.resolve_control('*PRINT-LENGTH*'))
 
 
-@_registry.cl_function('PPRINT-EXIT-IF-LIST-EXHAUSTED')
+@_registry.cl_function('%PPRINT-EXIT-IF-LIST-EXHAUSTED')
 def pprint_exit_if_list_exhausted():
     """Exit the enclosing `PPRINT-LOGICAL-BLOCK` if its list is used up (CLHS 22.2.2).
+
+    Registered under a `%`-prefixed name because CLHS 22.2.2 specifies
+    `PPRINT-EXIT-IF-LIST-EXHAUSTED` itself as a *macro*, not a function;
+    `standard_macros.py` registers that macro and expands it to a call of
+    this runtime. The two are not interchangeable even at zero arity --
+    only a macro answers `MACRO-FUNCTION`, and `#'pprint-pop` must not
+    name a function.
 
     Three outcomes, checked in this order against the innermost frame's
     remaining tail:
@@ -1498,9 +1505,13 @@ def pprint_exit_if_list_exhausted():
     return lisptype.NIL
 
 
-@_registry.cl_function('PPRINT-POP')
+@_registry.cl_function('%PPRINT-POP')
 def pprint_pop():
     """Pop the next element from the enclosing `PPRINT-LOGICAL-BLOCK`'s list (CLHS 22.2.2).
+
+    `%`-prefixed for the same reason as
+    `%PPRINT-EXIT-IF-LIST-EXHAUSTED` above: the CLHS operator is a macro,
+    and this is the runtime its expansion calls.
 
     Unlike `PPRINT-EXIT-IF-LIST-EXHAUSTED`, the `*PRINT-LENGTH*` check here
     fires *before* the "remaining is NIL" check, but only when either the

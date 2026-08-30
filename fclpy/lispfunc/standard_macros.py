@@ -1327,6 +1327,192 @@ _standard_macro('DEFINE-CONDITION')(
 _standard_macro('DEFTYPE')(_reuse_definer('eval_deftype'))
 _standard_macro('DEFSETF')(_reuse_definer('eval_defsetf'))
 _standard_macro('DEFINE-SETF-EXPANDER')(_reuse_definer('eval_define_setf_expander'))
+# DESTRUCTURING-BIND is the one _reuse_definer user whose "return value" is
+# not a name/object but whatever its *body* computes -- an ordinary value,
+# not a form, so quoting it is still correct once evaluated. The purity
+# question this raises for the other members of this family (would a bare
+# `(macroexpand-1 '(destructuring-bind ...))`, never itself evaluated,
+# wrongly run the body as a side effect of "just expanding"?) has no test
+# anywhere in ansi-test for this macro specifically (checked: no
+# `macroexpand`+`destructuring-bind` co-occurrence in the suite, and
+# destructuring-bind.error.7/.8/.9 only funcall the macro-function at the
+# wrong arity, which `_standard_macro`'s wrapper already turns into
+# PROGRAM-ERROR before `eval_destructuring_bind` ever runs). Every real
+# call site immediately evaluates the expansion anyway (this interpreter
+# has no separate compile-then-later-run phase for ordinary EVAL/LOAD), so
+# there is no *observable* behavior change from the special-form version.
+_standard_macro('DESTRUCTURING-BIND')(_reuse_definer('eval_destructuring_bind'))
+# DO/DO*/DOLIST/DOTIMES: same reasoning as DESTRUCTURING-BIND above --
+# their return value is whatever the loop's result-form(s) compute (or
+# NIL), an ordinary value rather than a name. `eval_do`/`eval_do_star`/
+# `eval_dolist`/`eval_dotimes` (evaluation_loops_conditionals.py) already
+# implement CLHS's binding/stepping/implicit-NIL-block semantics via the
+# one shared `BindingFrame` mechanism; reusing them keeps that mechanism
+# exactly as-is (no rewrite into a BLOCK/LET/TAGBODY/PSETQ expansion,
+# which would replace working, previously-hard-won iteration code for no
+# behavioral gain), and only moves the trigger from the evaluator's
+# hardcoded ladder to the macro path.
+_standard_macro('DO')(
+    _reuse_definer('eval_do', module_name='evaluation_loops_conditionals'))
+_standard_macro('DO*')(
+    _reuse_definer('eval_do_star', module_name='evaluation_loops_conditionals'))
+_standard_macro('DOLIST')(
+    _reuse_definer('eval_dolist', module_name='evaluation_loops_conditionals'))
+_standard_macro('DOTIMES')(
+    _reuse_definer('eval_dotimes', module_name='evaluation_loops_conditionals'))
+# HANDLER-BIND/HANDLER-CASE/RESTART-BIND/RESTART-CASE/WITH-CONDITION-
+# RESTARTS: same reuse-and-quote pattern again, and deliberately NOT a
+# rewrite into HANDLER-BIND/BLOCK/LET (CLHS's own reference expansion for
+# HANDLER-CASE, mirroring IGNORE-ERRORS's expansion above) -- these five
+# have hard-won edge-case handling (a :no-error clause, an in-transit
+# RestartCaseTransfer, an in-transit THROW with a live catch further out,
+# a ConditionException backstop for a condition raised without being
+# signaled) that a from-scratch CLHS expansion would have to reproduce
+# exactly to avoid a silent regression in the condition system. Reusing
+# the existing `eval_xxx` unchanged carries none of that risk: only the
+# trigger moves, from the ladder to the macro path.
+_standard_macro('RESTART-CASE')(
+    _reuse_definer('eval_restart_case', module_name='evaluation_conditions'))
+_standard_macro('RESTART-BIND')(
+    _reuse_definer('eval_restart_bind', module_name='evaluation_conditions'))
+_standard_macro('WITH-CONDITION-RESTARTS')(
+    _reuse_definer('eval_with_condition_restarts', module_name='evaluation_conditions'))
+# HANDLER-BIND/HANDLER-CASE: converting these first exposed a real
+# mechanism bug rather than a test-vs-code mismatch -- discovered live
+# (2026-08-30). RT's own `auxiliary/ansi-aux-macros.lsp` DEFMACROs a
+# *shadowed* `handler-bind`/`handler-case` in CL-TEST
+# (`(shadow '(handler-case handler-bind ...))`), expanding to `(let ()
+# (cl:handler-bind ,handlers (normally (progn ,@body))))`.
+# `Environment.find_func` used to resolve by symbol *name string* only,
+# not package-qualified identity, so once HANDLER-BIND was reachable
+# through the macro path, the `cl:handler-bind` call *inside that
+# macro's own expansion* resolved back to the same CL-TEST macro instead
+# of the real one -- infinite self-expansion, one extra `(normally
+# (progn ...))` wrapper per pass, a RecursionError before `init.lsp`
+# finished loading. The special-form ladder never hit this because
+# `operator.name == 'HANDLER-BIND'` also matched by name only, but
+# ladder dispatch ran *before* any `find_func` lookup, so CL-TEST's
+# DEFMACRO was simply never reached -- harmless dead code, not a working
+# shadow. The real fix is in `lisptype_extended.py`'s `Environment`: an
+# identity-keyed overlay (`_function_map_by_symbol`) that `find_func`
+# checks before the name-only cache, so a genuinely distinct (e.g.
+# shadowed-in-another-package) symbol object gets its *own* binding
+# instead of colliding with same-named ones -- while a fresh, uninterned
+# symbol built just to *name* an operator in generated code (this file's
+# own `_sym(...)` calls) still falls through to the name-only cache
+# exactly as before. That is what makes HANDLER-BIND/HANDLER-CASE safe
+# to convert below.
+_standard_macro('HANDLER-BIND')(
+    _reuse_definer('eval_handler_bind', module_name='evaluation_conditions'))
+_standard_macro('HANDLER-CASE')(
+    _reuse_definer('eval_handler_case', module_name='evaluation_conditions'))
+# DEFSTRUCT / LOOP / PPRINT-LOGICAL-BLOCK: the last three operators whose
+# ladder branch was already a one-line delegation to an `eval_xxx(form,
+# env)` worker, so converting them is purely a change of *trigger* -- the
+# same function runs, with the same `env`, on the same unevaluated form.
+# Each of the three is also a case where rebuilding a CLHS expansion from
+# scratch would be actively wrong to attempt here: DEFSTRUCT's is not
+# specified as a macro expansion at all (CLHS 3.4.6 leaves the generated
+# constructor/accessor/copier/predicate set implementation-defined, and
+# this one's BOA-lambda-list handling was hard-won -- see plan.md's
+# history); LOOP has the single iteration engine CLAUDE.md's architecture
+# map names as having exactly one home, which a second, expansion-shaped
+# parse would immediately duplicate; and PPRINT-LOGICAL-BLOCK drives the
+# pretty-printer's own engine, whose dynamic per-block state is
+# established by that engine rather than by a surrounding form.
+_standard_macro('DEFSTRUCT')(_reuse_definer('eval_defstruct'))
+_standard_macro('LOOP')(
+    _reuse_definer('eval_loop', module_name='evaluation_loops_conditionals'))
+_standard_macro('PPRINT-LOGICAL-BLOCK')(
+    _reuse_definer('eval_pprint_logical_block'))
+# SETF / PSETF / DEFPACKAGE: the last three, and the only ones whose ladder
+# branch was a large *inline* block rather than a delegation, so converting
+# them needed the block extracted first. That extraction is deliberately a
+# pure move -- the workers live in `evaluation_core` itself
+# (`eval_setf`/`eval_psetf`/`eval_defpackage`), not in a "better" module, so
+# every free name in those several hundred lines resolves to exactly what it
+# resolved to inline and no place-resolution behaviour can shift underneath
+# the conversion.
+#
+# SETF in particular is *not* rebuilt here into its CLHS 5.1.2 expansion
+# (`(let* ((tmp sub)...) (let ((store val)) store-form))` via
+# GET-SETF-EXPANSION). That rewrite is real work with real risk -- the
+# ladder's place handling covers VALUES/THE/APPLY places, symbol-macro
+# places, the LDB/MASK-FIELD/SUBSEQ/GETF place-in-place cases and their
+# subform-evaluation *order* (which `setf-getf.order.*`,
+# `ldb.place.order.1` and `mask-field.place.order.1` each count directly),
+# plus the known left-to-right gap in the legacy branches that plan.md
+# already tracks. Doing it properly is the M5 place-protocol milestone,
+# whose whole point is to make `_place_accessor`/`get_setf_expansion` the
+# single mechanism the ladder's remaining branches currently bypass. M4's
+# question is a narrower one -- is `(macro-function 'setf)` non-NIL, does
+# the operator dispatch through the macro path -- and that is what this
+# answers, without spending M5's risk budget early.
+_standard_macro('SETF')(
+    _reuse_definer('eval_setf', module_name='evaluation_core'))
+_standard_macro('PSETF')(
+    _reuse_definer('eval_psetf', module_name='evaluation_core'))
+_standard_macro('DEFPACKAGE')(
+    _reuse_definer('eval_defpackage', module_name='evaluation_core'))
+
+
+# ---------------------------------------------------------------------------
+# PPRINT-POP / PPRINT-EXIT-IF-LIST-EXHAUSTED (CLHS 22.2.2)
+# ---------------------------------------------------------------------------
+#
+# Both are specified as *macros* taking no arguments, and were registered
+# here as ordinary zero-argument functions. At zero arity the difference is
+# invisible to every test ansi-test actually runs -- which is exactly why
+# this is worth fixing rather than leaving: CLAUDE.md's standard is that a
+# defect the suite happens to miss is still a defect. What a caller can
+# observe is `(macro-function 'pprint-pop)` (must be non-NIL) and
+# `#'pprint-pop` (must *not* name a function), neither of which the
+# function registration can satisfy.
+#
+# The expansion is a call to the `%`-prefixed runtime in `io_write.py`,
+# which keeps the frame-stack mechanism (`_current_pprint_frame`, the
+# `*PRINT-LENGTH*` ordering that `pprint-pop.5`/`.6` and
+# `pprint-exit-if-list-exhausted.1`/`.3` pin down between them) entirely
+# untouched -- only the operator's *kind* changes.
+
+def _nullary_runtime_macro(runtime_name):
+    """A zero-argument macro expanding to `(runtime_name)`.
+
+    Shared by the three CLHS operators that are specified as macros taking
+    no arguments but were registered here as a function or a special
+    operator: PPRINT-POP, PPRINT-EXIT-IF-LIST-EXHAUSTED and LOOP-FINISH.
+
+    Arity is checked at expansion time rather than left to the runtime's
+    Python signature: CLHS makes a wrong-argument-count macro call a
+    PROGRAM-ERROR, and a Python TypeError from the underlying function is
+    not a condition (CLAUDE.md's `signal_file_error` note makes the same
+    point for FILE-ERROR).
+    """
+    def expander(form, env):
+        args = _form_args(form)
+        if args:
+            raise lisptype.LispProgramError(
+                f"{runtime_name.lstrip('%')} takes no arguments")
+        return _list(_sym(runtime_name))
+    # A distinct `__name__` per operator, not cosmetic: `_standard_macro`
+    # copies it onto the registered wrapper and the registry stores it as
+    # `py_name`, which `test_no_duplicate_python_bindings` uses to detect
+    # one Python callable serving several Lisp operators -- exactly the
+    # standing-rule-3 defect class. Three closures all named `expander`
+    # are indistinguishable from that, and would mask a genuine one.
+    expander.__name__ = '_%s_expander' % runtime_name.lstrip('%').lower().replace('-', '_')
+    return expander
+
+
+_standard_macro('PPRINT-POP')(_nullary_runtime_macro('%PPRINT-POP'))
+_standard_macro('PPRINT-EXIT-IF-LIST-EXHAUSTED')(
+    _nullary_runtime_macro('%PPRINT-EXIT-IF-LIST-EXHAUSTED'))
+# LOOP-FINISH (CLHS 6.2) is the same shape -- a zero-argument macro that
+# was registered as a special operator. Unlike the two above, ansi-test
+# does test this one directly: `loop-finish.error.1` reaches for
+# `(macro-function 'loop-finish env)` from inside a MACROLET and FUNCALLs
+# it at three wrong arities, each of which must signal PROGRAM-ERROR.
+_standard_macro('LOOP-FINISH')(_nullary_runtime_macro('%LOOP-FINISH'))
 
 
 @_standard_macro('DEFINE-SYMBOL-MACRO')
