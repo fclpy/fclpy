@@ -767,7 +767,8 @@ def eval_signal(form, env):
     """
     args = cdr(form)
     if not _consp_internal(args):
-        raise lisptype.LispNotImplementedError("SIGNAL requires a condition argument")
+        signal_error_object(lisptype.ProgramError(
+            message="SIGNAL requires a condition argument"))
 
     condition = _build_condition_from_forms(car(args), cdr(args), env, lisptype.SimpleCondition)
     return signal_condition_object(condition)
@@ -960,7 +961,8 @@ def eval_warn(form, env):
 
     args = cdr(form)
     if not _consp_internal(args):
-        raise lisptype.LispProgramError("WARN requires at least one argument")
+        signal_error_object(lisptype.ProgramError(
+            message="WARN requires at least one argument"))
 
     datum = eval(car(args), env)
     arguments = [eval(a, env) for a in _iter_list(cdr(args))]
@@ -1009,8 +1011,8 @@ def eval_cerror(form, env):
 
     args = cdr(form)
     if not _consp_internal(args) or not _consp_internal(cdr(args)):
-        raise lisptype.LispProgramError(
-            "CERROR requires a continue-format-control and a datum")
+        signal_error_object(lisptype.ProgramError(
+            message="CERROR requires a continue-format-control and a datum"))
 
     continue_format = eval(car(args), env)
     condition_form = car(cdr(args))
@@ -1212,7 +1214,8 @@ def eval_restart_case(form, env):
 
     args = cdr(form)
     if not _consp_internal(args):
-        raise lisptype.LispProgramError("RESTART-CASE requires a protected form")
+        signal_error_object(lisptype.ProgramError(
+            message="RESTART-CASE requires a protected form"))
 
     protected_form = car(args)
     tag = RestartCaseTag()
@@ -1294,7 +1297,8 @@ def eval_restart_bind(form, env):
 
     args = cdr(form)
     if not _consp_internal(args):
-        raise lisptype.LispProgramError("RESTART-BIND requires a binding list")
+        signal_error_object(lisptype.ProgramError(
+            message="RESTART-BIND requires a binding list"))
 
     binding_clauses = car(args)
     body_forms = cdr(args)
@@ -1402,19 +1406,31 @@ def eval_invoke_restart(form, env):
 
     args = cdr(form)
     if not _consp_internal(args):
-        raise lisptype.LispProgramError("INVOKE-RESTART requires a restart designator")
+        signal_error_object(lisptype.ProgramError(
+            message="INVOKE-RESTART requires a restart designator"))
 
     designator = eval(car(args), env)
     call_args = [eval(a, env) for a in _iter_list(cdr(args))]
 
-    if isinstance(designator, lisptype.Restart):
-        restart = designator
-    else:
-        restart = find_restart_obj(designator)
-        if restart is None:
-            name = designator.name if isinstance(designator, lisptype.LispSymbol) else str(designator)
-            return signal_error_object(lisptype.ControlError(
-                message=f"No restart named {name} is currently active."))
+    # One resolution for every designator kind (CLHS 9.1): a name finds the
+    # innermost active restart so named, and a restart *object* is used only
+    # if it is still active -- `find_restart_obj` answers both. Skipping the
+    # liveness check for an object used to invoke its transfer closure
+    # anyway, whose RestartCaseTransfer then reached a frame that had already
+    # exited and surfaced as "Uncaught THROW #<restart-case-tag ...>"
+    # (CLHS: a designator naming no active restart signals CONTROL-ERROR).
+    restart = find_restart_obj(designator)
+    if restart is None:
+        if isinstance(designator, lisptype.Restart):
+            name = (designator.name.name
+                    if isinstance(designator.name, lisptype.LispSymbol)
+                    else str(designator))
+        elif isinstance(designator, lisptype.LispSymbol):
+            name = designator.name
+        else:
+            name = str(designator)
+        return signal_error_object(lisptype.ControlError(
+            message=f"No restart named {name} is currently active."))
     return invoke_restart_obj(restart, call_args)
 
 
@@ -1455,8 +1471,8 @@ def eval_with_condition_restarts(form, env):
 
     args = cdr(form)
     if not (_consp_internal(args) and _consp_internal(cdr(args))):
-        raise lisptype.LispProgramError(
-            "WITH-CONDITION-RESTARTS requires a condition form and a restarts form")
+        signal_error_object(lisptype.ProgramError(
+            message="WITH-CONDITION-RESTARTS requires a condition form and a restarts form"))
 
     condition = eval(car(args), env)
     restarts_value = eval(car(cdr(args)), env)

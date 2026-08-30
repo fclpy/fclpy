@@ -1106,6 +1106,7 @@ _NEAREST_CLASS_FOR_TYPELESS_NAME = {
 
 def _arg_matches_specializer(arg: Any, spec: Any) -> bool:
     """Does one argument satisfy one specializer (CLHS 7.6.2)?"""
+    global _SPECIALIZER_MATCH_USED_TYPEP
     if spec is None:
         return True
     if isinstance(spec, EqlSpecializer):
@@ -1127,13 +1128,37 @@ def _arg_matches_specializer(arg: Any, spec: Any) -> bool:
             for cls in arg_class.get_linearized_superclasses():
                 if cls is spec:
                     return True
+        # The walk missed: either the answer is genuinely NIL, or the class
+        # graph is less inclusive than the type lattice for spec's name.
+        # TYPEP decides, but the answer for a given (argument class,
+        # specializer class) pair is constant -- class-level information --
+        # so it is memoized; recomputing it per call is what made recursive
+        # CLOS-based Lisp code (the ansi-test suite's is-similar* over
+        # 100-node trees) pay a full type-system query per non-matching
+        # (argument, method) pair. LispArray is the one representation
+        # whose typep discriminating power exceeds its class_of (element
+        # types: bit-vector vs string vs general), so its answers stay
+        # per-object and never memoized -- and dispatches that consult
+        # TYPEP at all are never stored in the effective-method cache
+        # (the _SPECIALIZER_MATCH_USED_TYPEP flag).
         from fclpy.lispfunc.comparison import typep as _typep
-        return _typep(arg, spec.name) is T
+        if _arg_is_array(arg):
+            _SPECIALIZER_MATCH_USED_TYPEP = True
+            return _typep(arg, spec.name) is T
+        memo_key = (id(arg_class), id(spec))
+        try:
+            answer = _TYPEP_FALLBACK_MEMO[memo_key]
+        except KeyError:
+            _SPECIALIZER_MATCH_USED_TYPEP = True
+            answer = _typep(arg, spec.name) is T
+            _TYPEP_FALLBACK_MEMO[memo_key] = answer
+        return answer
     # A specializer symbol that named no modeled LispClass at all (a CLHS
     # type this codebase has no class object for): still ask TYPEP, so any
     # type name is usable as a specializer, not only the ones in
-    # _init_builtin_classes's list.
+    # _init_builtin_classes's list. Value-dependent like the fallback above.
     from fclpy.lispfunc.comparison import typep as _typep
+    _SPECIALIZER_MATCH_USED_TYPEP = True
     return _typep(arg, spec) is T
 
 
@@ -1293,16 +1318,104 @@ def register_default_method_installer(name, installer: Callable[[GenericFunction
     _default_method_installers[name_str] = installer
 
 
+_DISPATCH_CACHE_ATTR = '_applicable_methods_cache'
+
+# Set by `_arg_matches_specializer` when a match had to consult the full
+# type system. Such a match is value-dependent, not class-dependent, so a
+# dispatch that used it must never be cached (the flag is reset before each
+# fill; matching is pure, so no re-entrant dispatch can run inside the
+# window between reset and store).
+_SPECIALIZER_MATCH_USED_TYPEP = False
+
+# (argument class id, specializer class id) -> bool: the CPL-miss fallback's
+# answer, memoized. Class-level information for every modeled class; the
+# one representation whose typep answer varies within one class_of --
+# LispArray's element types -- bypasses this memo entirely (see
+# `_arg_matches_specializer`).
+_TYPEP_FALLBACK_MEMO: Dict[tuple, bool] = {}
+
+
+def _arg_is_array(obj: Any) -> bool:
+    """Is `obj` an array in the arrays-module sense (any representation)?"""
+    try:
+        from fclpy.lispfunc.arrays import is_array as _is_array
+        return bool(_is_array(obj))
+    except Exception:
+        return False
+
+
+def _methods_signature(gf: "GenericFunction") -> tuple:
+    """Identity sequence of the generic function's method objects -- the
+    cache's validity stamp. Every mutation (add, remove, congruent
+    replacement, wholesale reassignment -- wherever it happens, including
+    paths outside add_method/remove_method) changes at least one id, so a
+    stale entry can never be hit."""
+    return tuple(map(id, gf.methods))
+
+
+def _dispatch_key(args: List[Any]) -> tuple:
+    """Cache key: the class identity of each required argument.
+
+    Applicability and specificity for class/None specializers depend only
+    on each argument's class precedence list (CLHS 7.6.2, 7.6.6.1), so the
+    class identity is the whole per-argument state -- provided no
+    specializer anywhere in the generic function is an EqlSpecializer
+    (value-dependent) and the fill-time match never reached the
+    value-dependent TYPEP fallback. `_maybe_store_dispatch` enforces both
+    before storing."""
+    return tuple(id(class_of(a)) for a in args)
+
+
+def _maybe_store_dispatch(gf: "GenericFunction", key: Optional[tuple],
+                          applicable: List["Method"]) -> None:
+    """Store a computed applicable-methods list, if this dispatch was fully
+    decided by class-level information."""
+    if key is None or _SPECIALIZER_MATCH_USED_TYPEP:
+        return
+    for m in gf.methods:
+        for s in m.specializers:
+            if isinstance(s, EqlSpecializer):
+                return
+    cache = getattr(gf, _DISPATCH_CACHE_ATTR, None)
+    if cache is None:
+        cache = {}
+        setattr(gf, _DISPATCH_CACHE_ATTR, cache)
+    cache[(key, _methods_signature(gf))] = applicable
+
+
 def compute_applicable_methods(gf: GenericFunction, args: List[Any]) -> List[Method]:
     """Every method of `gf` applicable to `args`, most-specific-first (CLHS
     7.6.6.1) -- the one selection every caller uses, so COMPUTE-APPLICABLE-
-    METHODS cannot disagree with what a real call would invoke."""
+    METHODS cannot disagree with what a real call would invoke.
+
+    The result is memoized per (argument classes, method-set) for generic
+    functions whose specializers are all classes or T: recursive Lisp code
+    built on CLOS (the ansi-test suite's `is-similar*`, a defgeneric with
+    per-type defmethods compared over 100-node trees) otherwise pays a full
+    specializer match per node per call, and the match's TYPEP fallback is
+    expensive enough to dominate whole test files. Entries carry the
+    method-set signature, so no mutation path can leave a stale method
+    running; value-dependent dispatch (EQL specializers, TYPEP fallback)
+    is never stored."""
     if not isinstance(gf, GenericFunction):
         # Reached from the COMPUTE-APPLICABLE-METHODS operator, which any
         # value can be handed. Signalling beats letting Python's
         # AttributeError surface as the form's value (standing rule 2).
         raise LispProgramError(
             f"COMPUTE-APPLICABLE-METHODS: {gf!r} is not a generic function")
+    cache = getattr(gf, _DISPATCH_CACHE_ATTR, None)
+    key = None
+    if cache is not None:
+        try:
+            key = _dispatch_key(args)
+        except Exception:
+            key = None
+        if key is not None:
+            entry = cache.get((key, _methods_signature(gf)))
+            if entry is not None:
+                return entry
+    global _SPECIALIZER_MATCH_USED_TYPEP
+    _SPECIALIZER_MATCH_USED_TYPEP = False
     applicable = [m for m in gf.methods if _matches_specializers(args, m.specializers)]
     # Ascending: _specificity_key ranks more-specific lower. Stable, so
     # methods still tied after a real CPL comparison (e.g. two specializers
@@ -1310,6 +1423,7 @@ def compute_applicable_methods(gf: GenericFunction, args: List[Any]) -> List[Met
     # keep definition order rather than an arbitrary one.
     applicable.sort(key=lambda m: _specificity_key(args, m.specializers,
                                                    gf.argument_precedence_order))
+    _maybe_store_dispatch(gf, key, applicable)
     return applicable
 
 

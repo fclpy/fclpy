@@ -1141,6 +1141,18 @@ class Readtable:
             # One character, case preserved.
             return lisptype.Character(chars[0])
         name = ''.join(convert_case_chars(chars, escaped, 'UPCASE'))
+        # CLHS 22.1.3.2's #\U+XXXX notation (the printer's output for a
+        # character with no name/graphic form) is the reader's job too:
+        # name-char answers it, so PRINT.CHAR.8/.9's write/read round-trip
+        # needs READ to accept it back. `u+hex` in any case is a code, not
+        # a name; the character is built exactly as CODE-CHAR builds one
+        # so printer, NAME-CHAR and reader agree on the object.
+        if len(name) > 2 and name[:2] == 'U+' \
+                and all(d in '0123456789ABCDEF' for d in name[2:]):
+            try:
+                return lisptype.Character(chr(int(name[2:], 16)))
+            except ValueError:
+                raise _reader_error(f"#\\U+{name[2:]}: not a valid character code")
         from .lispfunc import characters as _chars
         try:
             return _chars.character(name)

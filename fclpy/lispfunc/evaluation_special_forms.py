@@ -1611,6 +1611,76 @@ def _check_ordinary_arity(parsed, call_args, name):
             f"at most {maximum}")
 
 
+def _signal_program_error(message):
+    """Raise CLHS 3.5.1's PROGRAM-ERROR as a Lisp *condition*, not a Python
+    exception.
+
+    The binders that run at macroexpansion time need this rather than a bare
+    `LispProgramError`: the ordinary-call path converts that Python exception
+    into a condition (eval's call try), but the macroexpansion dispatch does
+    not -- it propagates conditions unchanged. Raising the condition directly
+    is therefore what lets `signals-error`'s handler match a program-error,
+    the same reasoning as `coerce_to_function`, which raises its
+    UNDEFINED-FUNCTION condition directly.
+    """
+    from .evaluation_core import ConditionException
+    raise ConditionException(
+        lisptype.ProgramError(message=message), recoverable=False)
+
+
+def _check_destructuring_arity(pattern, value, name):
+    """CLHS 3.5.1.2 for a destructuring lambda list (CLHS 3.4.4/3.4.5): the
+    pattern's required parameters consume one element each, so a value that
+    supplies too few is a PROGRAM-ERROR -- not the silent binding of NIL to
+    every element that is missing. Nested required patterns are checked
+    against their own element, and so is a nested &WHOLE pattern against the
+    whole value.
+
+    &OPTIONAL/&KEY/&AUX positions are deliberately *not* checked: an absent
+    element takes its default, and validating a nested pattern against that
+    default would mean evaluating a default form here -- running program code
+    a pure arity check must not run. Surplus elements are also not an error:
+    a destructuring lambda list simply ignores them, because only &REST/
+    &BODY would name them.
+    """
+    if isinstance(pattern, lisptype.LispSymbol) or pattern is None \
+            or pattern is lisptype.NIL:
+        return
+    if not _consp_internal(pattern):
+        return
+
+    from .evaluation_core import parse_lambda_list
+    parsed = parse_lambda_list(pattern)
+
+    # How many elements the value supplies -- an atom supplies none, which is
+    # the same walk `bind_destructuring_pattern` performs when it would have
+    # bound NIL to everything missing.
+    supplied = 0
+    cur = value
+    while _consp_internal(cur):
+        supplied += 1
+        cur = cdr(cur)
+
+    required = parsed.get('required', [])
+    if len(required) > supplied:
+        _signal_program_error(
+            "{}: the destructuring pattern {} requires {} element(s), but "
+            "the value {} supplies {}".format(
+                name, pattern, len(required), value, supplied))
+        return
+
+    cur = value
+    for param in required:
+        element = car(cur) if _consp_internal(cur) else lisptype.NIL
+        if _consp_internal(param):
+            _check_destructuring_arity(param, element, name)
+        cur = cdr(cur) if _consp_internal(cur) else cur
+
+    whole = parsed.get('whole')
+    if whole is not None and _consp_internal(whole):
+        _check_destructuring_arity(whole, value, name)
+
+
 def make_ordinary_function(lambda_list, body, env, block_name=None, name=None):
     """Build the callable for a function defined by an *ordinary* lambda list.
 
@@ -1886,6 +1956,82 @@ def _create_macro_function(macro_name, lambda_list, body, env,
                 bind_destructuring_pattern(whole_param, lisptype.NIL, macro_env, frame)
                 arg_idx = 1
 
+        # CLHS 3.5.1.2/3.5.1.3 for the macro lambda list (CLHS 3.4.4): too
+        # few or too many arguments is a PROGRAM-ERROR, the same rule
+        # make_ordinary_function applies to ordinary lambda lists --
+        # `_check_ordinary_arity` is the one home of that decision, and this
+        # reuses it rather than a second copy. The count covers the
+        # *positional* arguments: after the macroexpander's trailing
+        # expansion-environment argument has been stripped, and, when &WHOLE
+        # is declared, accounting for the whole form it consumes. The error
+        # is signalled as a condition (`_signal_program_error`), because the
+        # macroexpansion dispatch propagates conditions, not Python
+        # exceptions, and `signals-error`'s handler must see program-error.
+        positional = (call_args[1:] if len(call_args) > 0 else call_args) \
+            if whole_param is not None else call_args
+
+        # parse_lambda_list records only *bindable* required parameters: a
+        # required parameter that is the empty-list pattern binds nothing
+        # and is dropped from that list (macrolet.39's `(())`), but it still
+        # consumes one positional argument. Count the dropped shapes so the
+        # arity check sees the real positional capacity.
+        dropped_required = 0
+        ll_cursor = lambda_list
+        while _consp_internal(ll_cursor):
+            item = car(ll_cursor)
+            if isinstance(item, lisptype.LispSymbol) and item.name.startswith('&'):
+                marker = item.name.upper()
+                if marker in ('&WHOLE', '&ENVIRONMENT'):
+                    # Their parameter is not a positional slot; skip it.
+                    ll_cursor = cdr(cdr(ll_cursor))
+                    continue
+                break
+            if not isinstance(item, lisptype.LispSymbol) \
+                    and not _consp_internal(item):
+                dropped_required += 1
+            ll_cursor = cdr(ll_cursor)
+        check_parsed = dict(parsed_params)
+        if dropped_required:
+            check_parsed['required'] = list(required_params) \
+                + [None] * dropped_required
+
+        def _looks_like_macro_funcall_convention(args):
+            """CLHS's macro-function calling convention delivers the whole
+            macro form and the expansion environment -- macro-function.7
+            FUNCALLs `(macro-function '%m)` as `(fn '(%m) nil)`. The whole
+            form is a compound form whose operator is *this* macro, and the
+            trailing argument is the (possibly NIL) environment; anything
+            else is an ordinary dispatch-convention call.
+            """
+            if not args or not _consp_internal(args[0]):
+                return False
+            head = car(args[0])
+            if not isinstance(head, lisptype.LispSymbol) \
+                    or not isinstance(macro_name, lisptype.LispSymbol) \
+                    or head.name.upper() != macro_name.name.upper():
+                return False
+            if len(args) == 1:
+                return True
+            tail = args[-1]
+            return tail is None or tail is lisptype.NIL \
+                or isinstance(tail, lisptype.Environment)
+
+        try:
+            _check_ordinary_arity(check_parsed, positional, macro_name)
+        except lisptype.LispProgramError as e:
+            if not _looks_like_macro_funcall_convention(positional):
+                _signal_program_error(str(e))
+            # The excess is the macro-function convention's own
+            # (whole-form, environment) pair: bind nothing for it, exactly
+            # as this binder always did for the surplus of a direct FUNCALL.
+
+        # A required parameter may itself be a nested destructuring pattern
+        # (CLHS 3.4.4); its element must supply the nested pattern's own
+        # required parameters (CLHS 3.5.1.2, the same rule one level down).
+        for index, param in enumerate(required_params):
+            if _consp_internal(param) and index < len(positional):
+                _check_destructuring_arity(param, positional[index], macro_name)
+
         # Bind &ENVIRONMENT to the expansion-time environment if provided
         # The macro callable may be invoked with an extra trailing Environment
         # argument by the macroexpander. If so, prefer that; otherwise fall
@@ -2005,16 +2151,55 @@ def _create_macro_function(macro_name, lambda_list, body, env,
         # ELEMENT-TYPE itself later read as.
         keyword_start = arg_idx
         supplied = {}
-        i = keyword_start
-        while i < len(call_args) - 1:
-            key = call_args[i]
-            if isinstance(key, lisptype.lispKeyword):
-                key_name = key.name.upper()
-                if key_name not in supplied:
-                    supplied[key_name] = call_args[i + 1]
-                i += 2
-            else:
-                i += 1
+        # CLHS 3.5.1.4/3.5.1.5: an odd number of keyword arguments is a
+        # PROGRAM-ERROR (a keyword with no value), and so is a keyword the
+        # lambda list does not name -- unless &ALLOW-OTHER-KEYS was declared
+        # or the call itself carried a non-NIL :allow-other-keys marker
+        # (CLHS 3.4.1.4). Non-keyword atoms in the region are still skipped:
+        # with &REST preceding &KEY the region holds the rest arguments too.
+        #
+        # The whole scan is gated on the lambda list actually declaring &KEY
+        # (`mentions_key`, CLHS 3.4.4): without it there is no keyword region
+        # and trailing keywords are ordinary arguments -- the ansi-test
+        # harness's own `(defmacro deftest (name &rest body) ...)` passes its
+        # expected values, `:good` among them, through that &REST, and
+        # scanning them as keywords would reject the harness itself.
+        if parsed_params.get('mentions_key'):
+            i = keyword_start
+            while i < len(call_args):
+                key = call_args[i]
+                if isinstance(key, lisptype.lispKeyword):
+                    if i + 1 >= len(call_args):
+                        _signal_program_error(
+                            "odd number of keyword arguments: :{} has no "
+                            "value".format(key.name))
+                    key_name = key.name.upper()
+                    if key_name not in supplied:
+                        supplied[key_name] = call_args[i + 1]
+                    i += 2
+                else:
+                    i += 1
+
+            if keyword_params and not parsed_params.get('allow_other_keys'):
+                if not lisptype.is_truthy(supplied.get('ALLOW-OTHER-KEYS',
+                                                       lisptype.NIL)):
+                    # keyword_params holds full specs -- `((:foo bar) default)`
+                    # or plain `foo` -- and the keyword name is the spec's
+                    # first part, the same split the binding loop below
+                    # performs.
+                    declared = set()
+                    for param_spec in keyword_params:
+                        param = car(param_spec) if _consp_internal(param_spec) \
+                            else param_spec
+                        kw_name, _var_pattern = _kw_parts(param)
+                        if kw_name is not None:
+                            declared.add(kw_name)
+                    for key_name in supplied:
+                        if key_name != 'ALLOW-OTHER-KEYS' \
+                                and key_name not in declared:
+                            _signal_program_error(
+                                "unrecognized keyword argument: "
+                                ":{}".format(key_name))
 
         for param_spec in keyword_params:
             if _consp_internal(param_spec):
@@ -2042,6 +2227,23 @@ def _create_macro_function(macro_name, lambda_list, body, env,
                 _bind_pattern(var_pattern, default_value)
                 if supplied_p is not None:
                     frame.bind(supplied_p, lisptype.NIL)
+
+        # Bind &aux parameters (CLHS 3.4.4 includes &aux in the macro lambda
+        # list): sequential like LET*, each init form evaluated in an
+        # environment where the parameters bound before it are already
+        # bound. A bare &aux variable binds `unsupplied_default` (NIL for a
+        # macro, `*` for a DEFTYPE), the same default an absent &OPTIONAL
+        # init-form takes here.
+        for aux_spec in parsed_params.get('aux', []):
+            if isinstance(aux_spec, lisptype.LispSymbol):
+                _bind_pattern(aux_spec, unsupplied_default)
+            elif _consp_internal(aux_spec):
+                aux_name = car(aux_spec)
+                aux_rest = cdr(aux_spec)
+                init_form = car(aux_rest) if _consp_internal(aux_rest) else None
+                init_value = eval(init_form, macro_env) if init_form is not None \
+                    else unsupplied_default
+                _bind_pattern(aux_name, init_value)
 
         try:
             frame.install_free_declarations()
@@ -2393,6 +2595,13 @@ def eval_destructuring_bind(form, env):
 
     # Evaluate the expression to destructure
     expr_val = eval(expr_form, env)
+
+    # CLHS 3.5.1.2: the pattern's required parameters consume one element
+    # each, so a value with too few is a PROGRAM-ERROR -- exactly as for a
+    # function call -- instead of the silent NIL bindings the binder below
+    # would give every missing element. Checked after the expression is
+    # evaluated, so an error in the value form still wins.
+    _check_destructuring_arity(pattern, expr_val, 'DESTRUCTURING-BIND')
 
     # Create a new environment for the bindings
     bind_env = lisptype.Environment(parent=env)
