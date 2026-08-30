@@ -978,16 +978,18 @@ def _direct_macroexpand_1(form, environment):
 def macro_expansion_evaluates(form, environment):
     """True when macroexpanding FORM would *run* it rather than rewrite it.
 
-    `standard_macros._reuse_definer` builds expanders that call the
-    operator's existing `eval_xxx(form, env)` worker immediately and quote
-    the result, so for that family -- LOOP, DO/DOLIST/DOTIMES, RESTART-CASE,
-    HANDLER-CASE, WITH-CONDITION-RESTARTS, DEFSTRUCT, the DEF* definers --
-    "macroexpansion" *is* evaluation. That is the purity compromise CLAUDE.md
-    records, and it is fine for a caller that was going to evaluate the
-    expansion anyway. It is not fine for a caller that macroexpands only to
-    *inspect a form's shape*: that inspection executes the program, and the
-    real evaluation then runs it a second time. Such a caller asks this first
-    and stops expanding when it answers true.
+    Kept as the one predicate inspection sites consult before expanding a
+    form to look at its shape. The `standard_macros._reuse_definer` family
+    (LOOP, DO/DOLIST/DOTIMES, RESTART-CASE, HANDLER-CASE, DEFSTRUCT, the
+    DEF* definers, SETF/PSETF/DEFPACKAGE) used to expand by *running* the
+    form and quoting the result -- the purity compromise plan.md finding 12
+    records, which made every shape-inspecting caller execute the program
+    (RESTART-CASE evaluated its protected form twice). That family now
+    expands to a pure `(%FCLPY-DEFERRED-EXPANSION ...)` form that defers
+    the worker to evaluation time, so this predicate answers False for all
+    of them; it remains here for any future macro whose expander is not
+    pure, so an inspection site has something to ask instead of being
+    silently wrong.
     """
     from .evaluation_core import _consp_internal
     from .core import car as _car

@@ -106,9 +106,11 @@ def _standard_macro(lisp_name, documentation=None):
         expander.__is_macro__ = True
         expander.__expects_whole__ = True
         expander.__expects_environment__ = True
-        # Carried through from the wrapped expander: `_reuse_definer` sets it,
-        # and `misc_packages.macro_expansion_evaluates` reads it off the bound
-        # macro function, which is this wrapper and not `fn`.
+        # Carried through from the wrapped expander: a macro whose expander
+        # is not pure may set it, and `misc_packages.macro_expansion_evaluates`
+        # reads it off the bound macro function, which is this wrapper and
+        # not `fn`. Nothing in this module sets it any more: `_reuse_definer`
+        # expands to a pure deferred form.
         expander.__runs_body__ = getattr(fn, '__runs_body__', False)
         _registry.cl_macro(lisp_name, documentation=documentation)(expander)
         return fn
@@ -1295,31 +1297,49 @@ def _define_modify_macro_expander(form, env):
 
 
 def _reuse_definer(worker_name, module_name='evaluation_special_forms'):
-    """A macro expander that runs an existing `eval_defxxx(form, env)`
-    definer immediately (installing whatever it installs, in the exact
-    same `env` the evaluator would have handed the old ladder branch --
-    no fidelity is lost, since nothing here defers the work into a form
-    evaluated later) and quotes its CLHS-specified return value as the
-    nominal expansion. See `_define_modify_macro_expander` above for why
-    this is the right shape for a *definer*: its return value is always
-    a name (or similar small, side-effect-free datum), not the arbitrary,
-    possibly-effectful result of running a body -- the closure/lexical-
-    environment problem an expansion-form-building macro would otherwise
-    hit is exactly what installing immediately, rather than building a
-    form for later, sidesteps."""
+    """A macro expander whose expansion *defers* an existing
+    `eval_xxx(form, env)` worker to evaluation time, instead of running it
+    at expansion time.
+
+    The expansion is `(%FCLPY-DEFERRED-EXPANSION "module" "worker" '<form>)`
+    -- a pure form: macroexpanding one of these macros now has **no side
+    effects**, and the worker runs exactly once, at evaluation time, with
+    the evaluation-time environment. The earlier shape ran the worker at
+    *expansion* time and quoted its result, which made every caller that
+    macroexpands only to *inspect* a form's shape execute the program --
+    plan.md finding 12: RESTART-CASE's protected-form shape check expanded
+    `(loop repeat 3 do (incf x))` and so ran it, then evaluated it again,
+    counting to 6 instead of 3. That family now expands like any other
+    macro, so `misc_packages.macro_expansion_evaluates` answers False for
+    all of them and no inspection site needs a guard.
+
+    Reusing the existing `eval_xxx` unchanged (rather than rebuilding a CLHS
+    expansion) keeps each one's hard-won mechanism as the single copy it is:
+    LOOP's one iteration engine, the condition system's `:no-error` and
+    in-transit-transfer handling, DEFSTRUCT's BOA lambda lists, SETF's place
+    ladder. Only the *trigger* is deferred, from expansion time to evaluation
+    time -- and for ordinary EVAL/LOAD, where macroexpansion is immediately
+    followed by evaluation of the expansion in the same environment, that is
+    the same moment it always happened. COMPILE-FILE is unaffected either
+    way: it identifies compile-time operators by name on the raw form and
+    never macroexpands (`misc_macros._compile_time_forms`).
+
+    `worker_name`/`module_name` are carried in the expansion as data so the
+    runtime helper (`evaluation_core`'s `%FCLPY-DEFERRED-EXPANSION` ladder
+    branch) can resolve the worker at evaluation time. They also name this
+    expander, which keeps one Python callable distinguishable per Lisp
+    operator for the duplicate-detection tests.
+    """
     def expander(form, env):
-        import importlib
-        worker_module = importlib.import_module(f'.{module_name}', package='fclpy.lispfunc')
-        worker = getattr(worker_module, worker_name)
-        return _quoted(worker(form, env))
+        return lisptype.lispCons(
+            _sym('%FCLPY-DEFERRED-EXPANSION'),
+            lisptype.lispCons(
+                module_name,
+                lisptype.lispCons(
+                    worker_name,
+                    lisptype.lispCons(_quoted(form), lisptype.NIL))))
     expander.__name__ = worker_name
-    expander.__doc__ = f"Definer macro reusing `{worker_name}` -- see _reuse_definer."
-    # This family's "expansion" *is* evaluation: the worker runs the form and
-    # the result is quoted. Anything that macroexpands only to inspect a
-    # form's shape must therefore stop here rather than expand -- see
-    # `misc_packages.macro_expansion_evaluates`, and the RESTART-CASE
-    # protected-form inspector that reads it.
-    expander.__runs_body__ = True
+    expander.__doc__ = f"Definer macro deferring `{worker_name}` -- see _reuse_definer."
     return expander
 
 
@@ -1329,11 +1349,8 @@ _standard_macro('DEFCONSTANT')(_reuse_definer('eval_defconstant'))
 _standard_macro('DEFUN')(_reuse_definer('eval_defun'))
 _standard_macro('DEFMACRO')(_reuse_definer('eval_defmacro'))
 # DEFCLASS/DEFGENERIC/DEFMETHOD return the class/generic-function/method
-# *object* (CLHS 7.7/7.7/7.6.2), not a name -- `_quoted` holds any Python
-# object as a literal just as well as a symbol, and the COMPILE-FILE
-# externalizer's `_walk_quoted` already has a dedicated branch for a
-# quoted `LispClass` payload (turns it into `(FIND-CLASS 'name)`), so this
-# is not a new shape for that path to handle.
+# *object* (CLHS 7.7/7.7/7.6.2), not a name -- the deferral makes that the
+# expansion's value directly, with no quoted-constant detour.
 _standard_macro('DEFCLASS')(_reuse_definer('eval_defclass'))
 _standard_macro('DEFGENERIC')(_reuse_definer('eval_defgeneric'))
 _standard_macro('DEFMETHOD')(_reuse_definer('eval_defmethod'))
@@ -1345,31 +1362,21 @@ _standard_macro('DEFINE-CONDITION')(
 _standard_macro('DEFTYPE')(_reuse_definer('eval_deftype'))
 _standard_macro('DEFSETF')(_reuse_definer('eval_defsetf'))
 _standard_macro('DEFINE-SETF-EXPANDER')(_reuse_definer('eval_define_setf_expander'))
-# DESTRUCTURING-BIND is the one _reuse_definer user whose "return value" is
-# not a name/object but whatever its *body* computes -- an ordinary value,
-# not a form, so quoting it is still correct once evaluated. The purity
-# question this raises for the other members of this family (would a bare
-# `(macroexpand-1 '(destructuring-bind ...))`, never itself evaluated,
-# wrongly run the body as a side effect of "just expanding"?) has no test
-# anywhere in ansi-test for this macro specifically (checked: no
-# `macroexpand`+`destructuring-bind` co-occurrence in the suite, and
-# destructuring-bind.error.7/.8/.9 only funcall the macro-function at the
-# wrong arity, which `_standard_macro`'s wrapper already turns into
-# PROGRAM-ERROR before `eval_destructuring_bind` ever runs). Every real
-# call site immediately evaluates the expansion anyway (this interpreter
-# has no separate compile-then-later-run phase for ordinary EVAL/LOAD), so
-# there is no *observable* behavior change from the special-form version.
+# DESTRUCTURING-BIND's "return value" is whatever its *body* computes -- an
+# ordinary value rather than a name. Since the deferral, the worker runs at
+# evaluation time and its return value is the expansion's value directly,
+# so even a multiple-valued result survives (the old run-and-quote shape
+# flattened it through a quoted constant).
 _standard_macro('DESTRUCTURING-BIND')(_reuse_definer('eval_destructuring_bind'))
-# DO/DO*/DOLIST/DOTIMES: same reasoning as DESTRUCTURING-BIND above --
-# their return value is whatever the loop's result-form(s) compute (or
-# NIL), an ordinary value rather than a name. `eval_do`/`eval_do_star`/
-# `eval_dolist`/`eval_dotimes` (evaluation_loops_conditionals.py) already
-# implement CLHS's binding/stepping/implicit-NIL-block semantics via the
-# one shared `BindingFrame` mechanism; reusing them keeps that mechanism
-# exactly as-is (no rewrite into a BLOCK/LET/TAGBODY/PSETQ expansion,
-# which would replace working, previously-hard-won iteration code for no
-# behavioral gain), and only moves the trigger from the evaluator's
-# hardcoded ladder to the macro path.
+# DO/DO*/DOLIST/DOTIMES: their value is whatever the loop's result-form(s)
+# compute (or NIL). `eval_do`/`eval_do_star`/`eval_dolist`/`eval_dotimes`
+# (evaluation_loops_conditionals.py) already implement CLHS's binding/
+# stepping/implicit-NIL-block semantics via the one shared `BindingFrame`
+# mechanism; reusing them keeps that mechanism exactly as-is (no rewrite
+# into a BLOCK/LET/TAGBODY/PSETQ expansion, which would replace working,
+# previously-hard-won iteration code for no behavioral gain), and only
+# moves the trigger to the macro path -- deferred, so macroexpanding one
+# of these no longer runs its body.
 _standard_macro('DO')(
     _reuse_definer('eval_do', module_name='evaluation_loops_conditionals'))
 _standard_macro('DO*')(
@@ -1379,16 +1386,17 @@ _standard_macro('DOLIST')(
 _standard_macro('DOTIMES')(
     _reuse_definer('eval_dotimes', module_name='evaluation_loops_conditionals'))
 # HANDLER-BIND/HANDLER-CASE/RESTART-BIND/RESTART-CASE/WITH-CONDITION-
-# RESTARTS: same reuse-and-quote pattern again, and deliberately NOT a
-# rewrite into HANDLER-BIND/BLOCK/LET (CLHS's own reference expansion for
-# HANDLER-CASE, mirroring IGNORE-ERRORS's expansion above) -- these five
-# have hard-won edge-case handling (a :no-error clause, an in-transit
-# RestartCaseTransfer, an in-transit THROW with a live catch further out,
-# a ConditionException backstop for a condition raised without being
-# signaled) that a from-scratch CLHS expansion would have to reproduce
-# exactly to avoid a silent regression in the condition system. Reusing
-# the existing `eval_xxx` unchanged carries none of that risk: only the
-# trigger moves, from the ladder to the macro path.
+# RESTARTS: deliberately NOT a rewrite into HANDLER-BIND/BLOCK/LET (CLHS's
+# own reference expansion for HANDLER-CASE, mirroring IGNORE-ERRORS's
+# expansion above) -- these five have hard-won edge-case handling (a
+# :no-error clause, an in-transit RestartCaseTransfer, an in-transit THROW
+# with a live catch further out, a ConditionException backstop for a
+# condition raised without being signaled) that a from-scratch CLHS
+# expansion would have to reproduce exactly to avoid a silent regression
+# in the condition system. Reusing the existing `eval_xxx` unchanged --
+# deferred to evaluation time by `_reuse_definer` -- carries none of that
+# risk, and macroexpanding one of these is now side-effect-free, which is
+# what RESTART-CASE's own protected-form shape check needs.
 _standard_macro('RESTART-CASE')(
     _reuse_definer('eval_restart_case', module_name='evaluation_conditions'))
 _standard_macro('RESTART-BIND')(

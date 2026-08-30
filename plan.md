@@ -122,7 +122,12 @@ history is preserved in condensed form in [Changelog](docs/changelog.md).
 > 8. ~~**M4 phase 2**~~ — **done 2026-08-30**; all 87 CLHS *Macro* operators
 >    have a macro function. See the M4-complete note above. The successor
 >    item is a quality one: convert the `_reuse_definer` staging posts to
->    real expansions, `SETF` first (that one is M5).
+>    real expansions, `SETF` first (that one is M5). The purity half of it
+>    is **done 2026-08-30** (finding 12) — every member of the family now
+>    expands to a pure deferred form, so the *defect* is gone; what remains
+>    under this heading is only M5's rewrite of `eval_setf` onto the place
+>    protocol, which changes what SETF expands to, not whether expanding is
+>    safe.
 > 9. **dcf/eval-and-compile tail**: EVERY/SOME/NOTANY/NOTEVERY `.ERROR.*`
 >    and FUNCALL.ERROR.* (bad-designator signaling), LET*/LET, PSETQ/
 >    ROTATEF/SETF.ORDER leftovers, CASE/CCASE/CTYPECASE residuals,
@@ -164,15 +169,35 @@ history is preserved in condensed form in [Changelog](docs/changelog.md).
 >      reads that mark; RESTART-CASE's shape check stops at such a macro.
 >      Separately `_direct_macroexpand_1` now re-raises control transfers
 >      instead of logging them (Finding K).
->    - *Owner:* **leftover M4 work, and it has no milestone.** M4 is DONE by
->      its own definition (every macro has a macro function). Converting
->      these shortcuts into real expansions is unowned -- **except `SETF`,
->      which is M5.**
->    - *What to do next:* every *other* place that expands a form to inspect
->      it has the same latent bug. One more is known:
->      `get_setf_expansion`'s CLHS 5.1.2.7 place branch. Guarding each call
->      site one at a time is not the fix -- converting the shortcut macros
->      into real expansions is.
+>    - *Fixed properly 2026-08-30, later the same day:* the family now
+>      expands to a **pure deferred form**,
+>      `(%FCLPY-DEFERRED-EXPANSION "module" "worker" '<form>)`, whose
+>      runtime — a ladder branch of the same name in `evaluation_core.py`,
+>      sibling of `%SPECIAL-REF` — invokes the existing worker at
+>      **evaluation** time with the evaluation-time env. `__runs_body__`/
+>      `macro_expansion_evaluates` are now tripwires for future macros, not
+>      load-bearing guards; the RESTART-CASE shape check no longer needs its
+>      stop, and `get_setf_expansion`'s CLHS 5.1.2.7 branch is safe for this
+>      family. One mechanism at the factory, not a guard per inspection
+>      site. Verified behaviour-neutral against HEAD with targeted ANSI runs
+>      (iteration, conditions, data-and-control-flow, eval-and-compile,
+>      packages/types-and-classes/system-construction, objects, the pprint
+>      files — identical failing sets or 0) plus pytest 2097 green and the
+>      duplicates gate clean. The `structures` +45 seen during that sweep
+>      (`(typep (find-class 's) 'structure-class)` → NIL, DEFSTRUCT classes
+>      are STANDARD-CLASS) fails identically at HEAD — the CLOS class
+>      hierarchy gap, not this change.
+>    - *Owner:* ~~leftover M4 work~~ **closed** — the shortcut is gone; the
+>      only conversion left in this area is **M5's SETF** (a real CLHS
+>      5.1.2 expansion over the place protocol, replacing the `eval_setf`
+>      ladder), which was always its own milestone.
+>    - *What to do next:* ~~every *other* place that expands a form to
+>      inspect it has the same latent bug~~ **closed by the deferral** — a
+>      macroexpansion of this family can no longer run anything, so the
+>      known remaining site (`get_setf_expansion`'s CLHS 5.1.2.7 place
+>      branch) and every future one are safe for these macros. A *user*
+>      DEFMACRO may still run arbitrary code at expansion time — that is
+>      what macros are, not a defect.
 
 > ### Latest full run (2026-08-30): 98.8% passing, 265 failing — up from 95.4%
 >
@@ -2066,7 +2091,7 @@ Anything knowingly non-ANSI, with the milestone that removes it. Empty means
 | `DEFINE-CONDITION` creates no class | predates the class lattice | M8 |
 | `HANDLER-CASE` converts an uncaught `THROW` into `CONTROL-ERROR` | needs a catch-tag stack to decide at THROW time | M7 |
 | 114 non-ANSI symbols exported from `CL` | registry auto-export | M1 |
-| **Macroexpanding these macros RUNS them.** About half the M4 conversions use `_reuse_definer`, which executes the form and quotes the answer instead of rewriting it. So expanding one has side effects | This row used to say the shortcut was "invisible to ansi-test and to every EVAL/LOAD call site." **That was wrong, and it cost a wrong answer the same day** — see §1 finding 12: RESTART-CASE ran its protected form twice, so `(restart-case (loop repeat 3 do (incf x)) …)` counted to 6 instead of 3. Now guarded at the one known inspection site, which is a patch, not a fix | Unowned M4 leftover. The `SETF` slice of it is **M5** |
+| **Macroexpanding these macros RUNS them.** About half the M4 conversions use `_reuse_definer`, which executes the form and quotes the answer instead of rewriting it. So expanding one has side effects | This row used to say the shortcut was "invisible to ansi-test and to every EVAL/LOAD call site." **That was wrong, and it cost a wrong answer the same day** — see §1 finding 12: RESTART-CASE ran its protected form twice, so `(restart-case (loop repeat 3 do (incf x)) …)` counted to 6 instead of 3. **Closed 2026-08-30:** the family now expands to a pure `(%FCLPY-DEFERRED-EXPANSION …)` form and the worker runs at evaluation time — expanding is side-effect-free for all of them | ~~Unowned M4 leftover~~ **Closed**. The `SETF` slice that remains is **M5** (a real place-protocol expansion, not a purity fix) |
 | Five parallel place protocols; `GET-SETF-EXPANSION` a stub | predates the setf protocol | M5 |
 | **Two** lambda-list binders left, for the *macro* lambda list — `_create_macro_function` and `bind_destructuring_pattern`. Both ignore `&aux` and `&allow-other-keys` and signal no PROGRAM-ERROR for a malformed call | was six; the ordinary lambda list is one constructor as of 2026-08-22. These two implement a *different* lambda list (CLHS 3.4.4, nested destructuring patterns) and already share `bind_destructuring_pattern`, so folding them together is its own change | M3 |
 | Two CLOS implementations, two readers, two readtables, dead `reader.py`/`tokenizer.py` fork | historical forks | M9 / M10 |

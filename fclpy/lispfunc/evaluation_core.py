@@ -1131,6 +1131,28 @@ def eval(form, env=None):
                 # (`_get_special_reference`/`_set_special_reference`), so the
                 # SETF branch above cannot drift from this one.
                 return _get_special_reference(car(cdr(form)), env)
+            elif operator.name == '%FCLPY-DEFERRED-EXPANSION':
+                # Internal helper `standard_macros._reuse_definer` expands
+                # to: (%FCLPY-DEFERRED-EXPANSION "module" "worker"
+                # '<original-form>). That family's macros used to run their
+                # form *at expansion time* and quote the result, which made
+                # every caller that macroexpands only to inspect a form's
+                # shape execute the program (plan.md finding 12: RESTART-CASE
+                # ran its protected form twice). The expansion is now pure --
+                # it defers the work to here, evaluation time, where the
+                # worker runs exactly once with the evaluation-time `env`.
+                # The worker is invoked *directly*, never through `eval` of
+                # the original form: that would resolve the operator to the
+                # same macro again and re-expand forever.
+                import importlib
+                rest = cdr(form)
+                module_name = car(rest)
+                worker_name = car(cdr(rest))
+                quoted = car(cdr(cdr(rest)))
+                original = car(cdr(quoted))
+                worker_module = importlib.import_module(
+                    f'.{module_name}', package='fclpy.lispfunc')
+                return getattr(worker_module, worker_name)(original, env)
             elif operator.name == 'PROGV':
                 return eval_progv(form, env)
             elif operator.name == 'MULTIPLE-VALUE-PROG1':

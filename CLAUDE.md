@@ -283,18 +283,20 @@ happens to miss is still a defect (plan.md §5, and the final gate in §7).
     Two shapes live here, and the distinction matters:
     - **A real expansion** — `WHEN`, `COND`, `PUSH`, `ROTATEF`, `DO-SYMBOLS`,
       … build and return a form. Prefer this.
-    - **`_reuse_definer(worker, module)`** — runs an existing
-      `eval_xxx(form, env)` worker immediately, with the real
-      macroexpansion-time `env`, and quotes its result as the nominal
-      expansion. Used where rebuilding the expansion would duplicate a
-      mechanism that already has exactly one home (LOOP's single iteration
-      engine, the condition system's `:no-error`/in-transit-transfer
-      handling, DEFSTRUCT's BOA lambda lists, SETF's place ladder). The
-      compromise it makes is *purity*: a bare `MACROEXPAND-1` of such a form
-      runs its body. That is invisible to ansi-test today and to any
-      EVAL/LOAD call site (which evaluates the expansion immediately
-      anyway), but it is why these are a staging post, not the destination —
-      converting one to a real expansion is always an improvement.
+    - **`_reuse_definer(worker, module)`** — expands to a *pure* deferred
+      form, `(%FCLPY-DEFERRED-EXPANSION "module" "worker" '<form>)`, whose
+      runtime (the ladder branch of the same name in `evaluation_core.py`)
+      invokes the existing `eval_xxx(form, env)` worker at **evaluation**
+      time with the evaluation-time env. Used where rebuilding the expansion
+      would duplicate a mechanism that already has exactly one home (LOOP's
+      single iteration engine, the condition system's `:no-error`/
+      in-transit-transfer handling, DEFSTRUCT's BOA lambda lists, SETF's
+      place ladder). Earlier these expanded by *running* the worker and
+      quoting its result, so a bare `MACROEXPAND-1` executed the program
+      (plan.md finding 12: RESTART-CASE evaluated its protected form twice);
+      the deferral removed that whole defect class at the factory —
+      macroexpansion of the family is now side-effect-free and
+      `macro_expansion_evaluates` answers False for all of it.
     **`SETF` is the one that most wants converting**: its worker is still the
     ~480-line place ladder extracted verbatim into `evaluation_core.eval_setf`,
     which bypasses `get_setf_expansion`/`_place_accessor` for most place kinds.

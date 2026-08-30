@@ -1099,13 +1099,14 @@ def _restart_case_signal_target(protected_form, env):
     expanded = protected_form
     for _ in range(20):
         # This loop asks a question about the protected form's *shape*, so it
-        # must not run the program to answer it. Every `_reuse_definer` macro
-        # (LOOP, DO*, RESTART-CASE, WITH-CONDITION-RESTARTS, ...) expands by
-        # *evaluating* its form and quoting the result, so expanding one here
-        # executed the protected form and then `_run_protected` evaluated it
-        # again -- `(restart-case (loop repeat 3 do (incf x)) ...)` left X at
-        # 6. None of those operators is SIGNAL/ERROR/CERROR/WARN, so stopping
-        # at one loses nothing this function is looking for.
+        # must not run the program to answer it. The `_reuse_definer` family
+        # used to expand by *evaluating* its form -- expanding
+        # `(loop repeat 3 do (incf x))` here ran it, and `_run_protected`
+        # ran it again, leaving X at 6 (plan.md finding 12). Those macros
+        # now expand to a pure deferred form, and this guard remains as the
+        # tripwire for any future macro whose expander is not pure: none of
+        # those operators is SIGNAL/ERROR/CERROR/WARN, so stopping at one
+        # loses nothing this function is looking for.
         if macro_expansion_evaluates(expanded, env):
             break
         if isinstance(expanded, lisptype.LispSymbol):
