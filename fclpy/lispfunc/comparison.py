@@ -375,12 +375,36 @@ def null(obj):
 
 
 @_registry.cl_function('TYPEP')
-def typep(object, type_specifier):
-    """Test if object is of given type."""
+def typep(object, type_specifier, environment=None):
+    """Test if object is of given type.
+
+    Accepts an optional environment argument for checking in a specific
+    lexical context (e.g., for DEFTYPE with local variables).
+    """
     # Import classes here to avoid circular dependencies
     from fclpy import classes
     from fractions import Fraction
     from .core import _consp_internal
+
+    # Try to use typespec for compound types with parameters, which handles
+    # DEFTYPE expansion and SATISFIES predicates correctly. This is a
+    # targeted fix for specific failure cases, not a full refactor of TYPEP.
+    from fclpy import typespec
+    if _consp_internal(type_specifier) or isinstance(type_specifier, lisptype.LispSymbol):
+        try:
+            result = typespec.type_contains(object, type_specifier, environment)
+            return lisptype.T if result else lisptype.NIL
+        except typespec.LispTypeSpecError:
+            # Invalid type specifier - signal a TYPE-ERROR as per CLHS 4.2.3
+            from .evaluation_conditions import signal_error_object
+            signal_error_object(lisptype.TypeError(
+                datum=type_specifier,
+                expected_type=lisptype.LispSymbol('TYPE'),
+                message=f"Invalid type specifier: {type_specifier}"))
+        except Exception:
+            # For other exceptions (e.g., recursion in expanding DEFTYPEs),
+            # fall through to the legacy implementation
+            pass
     
     # The fixnum boundary, from its one home. This used to be a local
     # `2**29 - 1`, a second copy of a constant `typespec.py` already owns --
