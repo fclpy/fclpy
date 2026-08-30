@@ -14,18 +14,23 @@ def _function_spec_to_key(spec):
     the environment/registry: a plain symbol as-is, or a (SETF name) list
     to the same synthetic "(SETF NAME)" symbol DEFUN uses to store setf
     functions. Returns None if spec isn't a recognizable function name.
-    
+
     Valid forms are:
     - A symbol (any symbol)
     - A proper list (SETF symbol) with exactly two elements
-    
+
     Invalid forms (return None):
     - Non-symbol, non-list values
     - Improper lists like (SETF symbol . extra)
     - Lists with wrong head or structure like (setf) or (SETF symbol extra)
     """
-    if isinstance(spec, lisptype.LispSymbol):
+    # Handle all symbol forms: LispSymbol, NIL (Python None or lispNull), or lispKeyword
+    if isinstance(spec, (lisptype.LispSymbol, lisptype.lispKeyword)):
         return spec
+    if spec is None or isinstance(spec, lisptype.lispNull):
+        # NIL is a valid symbol (it's the symbol in package COMMON-LISP).
+        # Return the canonical NIL symbol, not the lispNull singleton.
+        return lisptype.COMMON_LISP_PACKAGE.intern_symbol('NIL')
     if _consp_internal(spec):
         head = car(spec)
         rest = cdr(spec)

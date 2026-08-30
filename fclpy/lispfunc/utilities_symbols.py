@@ -35,6 +35,9 @@ def symbol_name(*args):
             f"SYMBOL-NAME: wrong number of arguments (got {len(args)}, expected 1)"
         )
     symbol = _require_symbol(args[0], 'SYMBOL-NAME')
+    # NIL can appear as None, lispNull, or a LispSymbol named "NIL"
+    if symbol is None or isinstance(symbol, lisptype.lispNull):
+        return lisptype.LispString("NIL")
     if hasattr(symbol, 'name'):
         # A symbol's name is returned exactly as it is. There used to be a
         # `raw.startswith('|') and raw.endswith('|')` branch stripping the
@@ -58,6 +61,10 @@ def symbol_package(*args):
             f"SYMBOL-PACKAGE: wrong number of arguments (got {len(args)}, expected 1)"
         )
     symbol = _require_symbol(args[0], 'SYMBOL-PACKAGE')
+    # NIL can appear as None, lispNull, or a LispSymbol named "NIL"
+    # NIL is in the COMMON-LISP package, but return None per CLHS 13.1.1
+    if symbol is None or isinstance(symbol, lisptype.lispNull):
+        return lisptype.NIL
     return getattr(symbol, 'package', None)
 
 

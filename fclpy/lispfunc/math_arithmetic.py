@@ -608,15 +608,26 @@ def _make_lisp_complex(real, imag):
     return LispComplex(real, imag)
 
 
-def _lisp_complex_wrap(real, imag, a, b):
-    """Build a `LispComplex` (or collapse to real) for the result of
-    `a OP b`, honoring both `complex.1`/`.3`'s rational-imag=0
-    coalescing rule and the *.3/+.3 rule that says a complex with a
-    zero imag stays a complex when either operand was a complex.
+def _lisp_complex_wrap(real, imag):
+    """Build the result of `a OP b` over complex parts, honoring CLHS
+    12.1.5.3's canonical representation: a *rational* complex with a zero
+    imaginary part is never constructed -- the result is the real part
+    itself (`(* #c(1 2) #c(1 -2))` is the integer 5, `(* 0 #c(2 2))` is
+    the integer 0). A complex with float parts is never canonicalized
+    away: a float zero imag stays (`(* #c(1.0 2.0) 0)` is `#c(0.0 0.0)`),
+    and one float operand makes the result's parts float -- which the
+    test on the *result's* part type expresses directly, and which is
+    what keeps the float rows of `expt.29` and `conjugate`'s signed-zero
+    tests passing.
+
+    The old criterion keyed on whether an *operand* was complex, so
+    `(* 0 #c(2 2))` answered `#c(0 0)` -- a complex the canonical
+    representation rule forbids -- while `(expt 0 #c(2 2))` answered a
+    float complex; `expt.29` compares the two with EQL and could only
+    pass while EQL conflated complex part types numerically.
     """
-    either_complex = isinstance(a, (LispComplex, complex)) or \
-                     isinstance(b, (LispComplex, complex))
-    if imag == 0 and not either_complex:
+    from fractions import Fraction
+    if imag == 0 and isinstance(real, (int, Fraction)):
         return real
     return LispComplex(real, imag)
 
@@ -646,7 +657,7 @@ def _lisp_complex_add(a, b):
     br, bi = _complex_parts(b)
     new_real = ar + br
     new_imag = ai + bi
-    return _lisp_complex_wrap(new_real, new_imag, a, b)
+    return _lisp_complex_wrap(new_real, new_imag)
 
 
 def _lisp_complex_sub(a, b):
@@ -654,7 +665,7 @@ def _lisp_complex_sub(a, b):
     br, bi = _complex_parts(b)
     new_real = ar - br
     new_imag = ai - bi
-    return _lisp_complex_wrap(new_real, new_imag, a, b)
+    return _lisp_complex_wrap(new_real, new_imag)
 
 
 def _lisp_complex_mul(a, b):
@@ -662,7 +673,7 @@ def _lisp_complex_mul(a, b):
     br, bi = _complex_parts(b)
     new_real = ar * br - ai * bi
     new_imag = ar * bi + ai * br
-    return _lisp_complex_wrap(new_real, new_imag, a, b)
+    return _lisp_complex_wrap(new_real, new_imag)
 
 
 def _lisp_complex_div(a, b):
@@ -674,21 +685,25 @@ def _lisp_complex_div(a, b):
         return
     both_complex = isinstance(a, (LispComplex, complex)) and \
                    isinstance(b, (LispComplex, complex))
+    # Every result below goes through `_lisp_complex_wrap`, not a bare
+    # `LispComplex`: CLHS 12.1.5.3 forbids a rational complex with zero
+    # imag, so `(/ #c(1 2) #c(1 2))` is the integer 1, while float-parts
+    # results stay complex.
     if bi == 0:
         if not both_complex and ai == 0:
             return _exact_div(ar, br)
         if ai == 0:
-            return LispComplex(_exact_div(ar, br), 0)
-        return LispComplex(_exact_div(ar, br), _exact_div(ai, br))
+            return _lisp_complex_wrap(_exact_div(ar, br), 0)
+        return _lisp_complex_wrap(_exact_div(ar, br), _exact_div(ai, br))
     if ai == 0 and not both_complex:
         denom = br * br + bi * bi
-        return LispComplex(_exact_div(ar * br, denom),
-                           _exact_div(-ar * bi, denom))
+        return _lisp_complex_wrap(_exact_div(ar * br, denom),
+                                  _exact_div(-ar * bi, denom))
     denom = br * br + bi * bi
     new_real = (ar * br + ai * bi)
     new_imag = (ai * br - ar * bi)
-    return LispComplex(_exact_div(new_real, denom),
-                       _exact_div(new_imag, denom))
+    return _lisp_complex_wrap(_exact_div(new_real, denom),
+                              _exact_div(new_imag, denom))
 
 
 def _lisp_complex_neg(a):

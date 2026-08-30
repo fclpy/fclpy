@@ -253,10 +253,17 @@ def expt(base, power):
             # int/float base 0
             if isinstance(power, complex):
                 if power.real > 0:
-                    # Python contagion: integer * complex = complex; preserve that.
-                    if isinstance(power, float) or isinstance(power.real, float) or isinstance(power.imag, float):
+                    # CLHS 12.1.4.1.1/12.1.5.3 contagion: all-rational
+                    # operands with a rational result give the *rational*
+                    # zero (a rational complex with zero imag is never
+                    # constructed), while a float anywhere gives a
+                    # float-parts complex zero. expt.29 compares this
+                    # against `(* 0 y)` under EQL, and the * contagion
+                    # rule coalesces the same way.
+                    if isinstance(base, float) or isinstance(power, float) or \
+                            isinstance(power.real, float) or isinstance(power.imag, float):
                         return complex(0.0, 0.0)
-                    return complex(0, 0)
+                    return 0
                 if power.real == 0 and power.imag != 0:
                     from fclpy.lispfunc.evaluation_conditions import signal_condition
                     signal_condition(lisptype.DivisionByZero(

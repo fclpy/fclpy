@@ -151,7 +151,12 @@ def boundp(*args):
         raise lisptype.LispTypeError(f"BOUNDP: {symbol} is not a symbol", expected_type='symbol', actual_value=symbol)
 
     # T, NIL, and keywords are self-evaluating and therefore always bound.
-    if symbol is lisptype.T or symbol.name in ('T', 'NIL') or isinstance(symbol, lisptype.lispKeyword):
+    # Check identity for T and NIL to avoid matching fresh copies with the same name.
+    if (symbol is lisptype.T or
+        symbol is lisptype.NIL or
+        isinstance(symbol, lisptype.lispKeyword) or
+        (isinstance(symbol, lisptype.LispSymbol) and symbol.name == 'T' and
+         symbol.package is lisptype.COMMON_LISP_PACKAGE)):
         return lisptype.T
 
     # A symbol is considered bound if its value cell is present (even if NIL)
