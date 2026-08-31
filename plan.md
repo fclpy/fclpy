@@ -26,6 +26,54 @@ history is preserved in condensed form in [Changelog](docs/changelog.md).
 
 ## 1. Status
 
+> ### Latest full run (2026-08-31): 99.64% passing, 78 failing — up from 98.8%
+>
+> ```
+> COMPLETENESS: total=21908 passed=21830 failed=78 accounted=21908 missing=0 extra=0
+> COMPLETENESS: OK
+> ```
+>
+> ~3h41m real time (13294s), completed cleanly to `run_all_tests.log`/`.err` —
+> the recursion-depth issue flagged at session handoff (below) did *not* wedge
+> this run; it only cost the five tests that hit it
+> (NINTERSECTION.12/UNION.24/NUNION.24/SET-DIFFERENCE.13/NSET-DIFFERENCE.13,
+> recorded as failures via RecursionError, not a hang). `docs/ansi_checklist.md`
+> regenerated from `ansi_results/{passed,failed}.txt` (written 07:32). Worst
+> files now: `sequences/elt.lsp` and `types-and-classes/types-and-class.lsp`/
+> `type-of.lsp` (5 each), `symbols/cl-symbols.lsp` and `cons/nintersection.lsp`
+> (4 each) — every directory but printer/types-and-classes/symbols/cons/
+> sequences/iteration/numbers/conditions/data-and-control-flow/files/
+> environment/objects/reader is at 100%.
+>
+> **Baseline NOT refreshed.** `scripts/gate.py` reports two problems, neither
+> cleared by this run:
+> - `ansi-checklist --baseline` (vs. the 2026-08-30 14:18 baseline): one file
+>   worse — `data-and-control-flow/values.lsp` +1 (1 → 2). This is the
+>   already-known **VALUES.20/21** nested-`SETF (VALUES place)` gap (see the
+>   2026-08-31 HANDOFF's "known open items" below), not new debt from this
+>   run — but it is still an open regression against the baseline and the
+>   baseline must not be refreshed over it silently.
+> - `pytest -q`: 3 new failures, all
+>   `test_loop_clauses.py::TestDuplicateVariables::test_binding_a_name_twice_is_a_program_error`.
+>   The LOOP expansion-time duplicate-variable check (`validate_loop_form`,
+>   flagged in the HANDOFF below as "needs RT verification next run") now
+>   signals via `signal_error_object`, which raises `ConditionException`
+>   wrapping the `PROGRAM-ERROR` — correct per the condition-system
+>   architecture (CLAUDE.md's `evaluation_conditions.py` note: ERROR never
+>   returns, it propagates as `ConditionException` after the handler walk).
+>   The unit test still does `pytest.raises(lisptype.LispProgramError)`
+>   directly and was never updated for that, so it now fails on a
+>   *correctly*-signaling call. Fix is either in the test (assert on the
+>   unwrapped condition/`ConditionException.args`) or a decision that
+>   top-level PROGRAM-ERRORs should still surface as the bare exception type —
+>   not decided here; flagging for the next session rather than choosing
+>   unilaterally while just updating the checklist.
+>
+> Once both are resolved (or the values.lsp gap is accepted in writing), refresh
+> with `pipenv run python scripts/ansi_checklist.py --save-baseline docs/ansi_checklist_baseline.json`
+> from this same `ansi_results/` snapshot — do not require another full run
+> just to save the baseline.
+
 > ### Multi-agent round (2026-08-30): checklist index 597 → ~333
 >
 > Amended-index movement from one orchestration session (three parallel
