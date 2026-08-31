@@ -1846,12 +1846,17 @@ _ATOMIC_UNIONS = {
 }
 
 
-def parse_type(spec, environment=None, depth=0):
+def parse_type(spec, environment=None, depth=0, discrimination=False):
     """A type specifier as a `Ctype`.
 
     Raises `LispTypeSpecError` when `spec` does not name a type at all -- the
     caller decides whether that is an error (TYPEP must signal) or merely
     undecided (SUBTYPEP may answer NIL NIL).
+
+    `discrimination` marks a TYPEP-shaped use (CLHS 4.2.3 "discrimination"):
+    the list form of the `function` type specifier "can be used only for
+    declaration and not for discrimination", so it is an error there while
+    SUBTYPEP (a declaration-shaped use) may still compare the parts.
     """
     if depth > 32:
         raise _GiveUp('type specifier nested too deeply')
@@ -1862,7 +1867,7 @@ def parse_type(spec, environment=None, depth=0):
         return top()
 
     if _cons_p(spec):
-        return _parse_compound(spec, environment, depth)
+        return _parse_compound(spec, environment, depth, discrimination)
 
     # A class object used as a type specifier: `(find-class 'array)` appears
     # directly in ansi-test `subtypep.array.1`, and every CL class name must be
@@ -1873,13 +1878,13 @@ def parse_type(spec, environment=None, depth=0):
     if isinstance(spec, _classes.LispClass):
         name = _type_name(spec.name)
         if name is not None and _is_known_atomic(name, environment):
-            return _parse_atomic(name, environment, depth)
+            return _parse_atomic(name, environment, depth, discrimination)
         return _region_type(SORT_CLASS, SortSet(SORT_CLASS, CellBulk(_class_cone(spec))))
 
     name = _type_name(spec)
     if name is None:
         raise LispTypeSpecError('not a type specifier: %r' % (spec,))
-    return _parse_atomic(name, environment, depth)
+    return _parse_atomic(name, environment, depth, discrimination)
 
 
 def _real_union(sorts, low=None, low_ex=False, high=None, high_ex=False):
@@ -1977,7 +1982,7 @@ def _is_known_atomic(name, environment):
     return True
 
 
-def _parse_atomic(name, environment, depth):
+def _parse_atomic(name, environment, depth, discrimination=False):
     if name == 'T':
         return top()
     if name in ('NIL', 'EXTENDED-CHAR'):
@@ -2022,9 +2027,11 @@ def _parse_atomic(name, environment, depth):
     if name == 'CONS':
         return _region_type(SORT_CONS, SortSet(SORT_CONS, ConsBulk.universe()))
     if name == 'LIST':
-        return _parse_atomic('CONS', environment, depth).union(_eql_type(lisptype.NIL))
+        return _parse_atomic('CONS', environment, depth,
+                             discrimination).union(_eql_type(lisptype.NIL))
     if name == 'ATOM':
-        return _parse_atomic('CONS', environment, depth).complement()
+        return _parse_atomic('CONS', environment, depth,
+                             discrimination).complement()
     if name == 'SEQUENCE':
         return (_parse_atomic('LIST', environment, depth)
                 .union(_array_type('VECTOR', (), environment, depth)))
@@ -2074,7 +2081,7 @@ def _find_clos_class(name):
     return cls if isinstance(cls, _classes.LispClass) else None
 
 
-def _parse_compound(spec, environment, depth):
+def _parse_compound(spec, environment, depth, discrimination=False):
     head = _type_name(spec.car)
     args = _lisp_list(spec.cdr)
 
@@ -2084,17 +2091,20 @@ def _parse_compound(spec, environment, depth):
     if head == 'AND':
         result = top()
         for arg in args:
-            result = result.intersect(parse_type(arg, environment, depth + 1))
+            result = result.intersect(parse_type(arg, environment, depth + 1,
+                                                 discrimination))
         return result
     if head == 'OR':
         result = bottom()
         for arg in args:
-            result = result.union(parse_type(arg, environment, depth + 1))
+            result = result.union(parse_type(arg, environment, depth + 1,
+                                             discrimination))
         return result
     if head == 'NOT':
         if len(args) != 1:
             raise LispTypeSpecError('(NOT ...) takes one type')
-        return parse_type(args[0], environment, depth + 1).complement()
+        return parse_type(args[0], environment, depth + 1,
+                          discrimination).complement()
 
     if head == 'MEMBER':
         result = bottom()
@@ -2149,7 +2159,8 @@ def _parse_compound(spec, environment, depth):
         part = args[0] if args else None
         if part is None or _is_wild(part):
             return _real_union((SORT_COMPLEX,))
-        if parse_type(part, environment, depth + 1).is_definitely_empty():
+        if parse_type(part, environment, depth + 1,
+                      discrimination).is_definitely_empty():
             return bottom()
         return _real_union((SORT_COMPLEX,))
 
@@ -2157,9 +2168,11 @@ def _parse_compound(spec, environment, depth):
         car_spec = args[0] if len(args) > 0 else None
         cdr_spec = args[1] if len(args) > 1 else None
         car_type = (top() if car_spec is None or _is_wild(car_spec)
-                    else parse_type(car_spec, environment, depth + 1))
+                    else parse_type(car_spec, environment, depth + 1,
+                                    discrimination))
         cdr_type = (top() if cdr_spec is None or _is_wild(cdr_spec)
-                    else parse_type(cdr_spec, environment, depth + 1))
+                    else parse_type(cdr_spec, environment, depth + 1,
+                                    discrimination))
         if car_type.is_definitely_empty() or cdr_type.is_definitely_empty():
             # ansi-test subtypep.cons.2: `(cons nil t)` is the empty type, and
             # the bottom must propagate out of the product rather than
@@ -2177,6 +2190,16 @@ def _parse_compound(spec, environment, depth):
         # explicitly allows SUBTYPEP to punt; treated as an opaque refinement of
         # FUNCTION so that `(function (t) integer)` is still known to be a
         # function and still cancels against itself.
+        #
+        # The *list* form "can be used only for declaration and not for
+        # discrimination" (CLHS System Class FUNCTION) -- so a TYPEP-shaped
+        # use raises, which `comparison.typep` turns into a TYPE-ERROR, while
+        # SUBTYPEP keeps comparing the parts (subtypep-function.3/.4 need
+        # those answers).
+        if discrimination:
+            raise LispTypeSpecError(
+                'the list form of the function type specifier can be used '
+                'only for declaration and not for discrimination: %s' % (head,))
         base = _class_type('FUNCTION')
         if not args:
             return base
@@ -2187,7 +2210,7 @@ def _parse_compound(spec, environment, depth):
 
     expansion = _deftype_expansion(head, args, environment)
     if expansion is not None:
-        return parse_type(expansion, environment, depth + 1)
+        return parse_type(expansion, environment, depth + 1, discrimination)
 
     raise LispTypeSpecError('unknown compound type: %s' % (head,))
 
@@ -2343,8 +2366,13 @@ def _deftype_expansion(name, args, environment):
 # ---------------------------------------------------------------------------
 
 def type_contains(obj, spec, environment=None):
-    """TYPEP: is `obj` of type `spec`?"""
-    return parse_type(spec, environment).contains(obj)
+    """TYPEP: is `obj` of type `spec`?
+
+    This is the *discrimination* face of `parse_type` (CLHS 4.2.3): the list
+    form of the `function` type specifier is declaration-only, so asking
+    TYPEP about it signals rather than answers. SUBTYPEP parses with
+    `discrimination=False` and may still compare the parts."""
+    return parse_type(spec, environment, discrimination=True).contains(obj)
 
 
 def type_subtypep(spec1, spec2, environment=None):
