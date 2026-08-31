@@ -405,118 +405,131 @@ def _is_aggregate(value):
 def _compute_circle_map(value, ctx):
     """Populate `ctx.circle_map` with labels for every shared/cyclic aggregate.
 
-    The standard ``*PRINT-CIRCLE*`` algorithm: a depth-first walk of the
-    object graph, recording the path of aggregates currently being printed
-    (an `id`-keyed stack) and a per-object visit count for non-path visits.
-    An object gets a label if it is reached twice (i.e. shared in a DAG) or
-    if it is on the current path and a self/ancestor is reached again
-    (i.e. it is part of a cycle). Atoms are never labelled.
+    The standard ``*PRINT-CIRCLE*`` algorithm, in its linear form: one walk
+    of the object graph that counts the *references* to each object. An
+    object gets a label when a second reference to it is seen -- whether
+    that second reference comes from a different parent (a DAG) or the same
+    one (``(cons x x)``, whose car and cdr are two references to ``x``) --
+    or when a walk meets an object already on its own path (a cycle; the
+    back-edge target is the entry that carries the ``#N=``). Atoms are
+    labelled the same way, per reference, which is what makes
+    ``print.cons.5``/``.6``'s shared gensyms print as ``#1=#:X . #1#``.
 
-    The pass is bounded by `ctx.budget` so a deeply cyclic graph cannot make
-    it run forever; once the budget is exhausted, no further objects are
-    labelled, and the print falls back to ``...`` for the unlabelled cycle
-    paths -- which is the same elision ``*PRINT-LENGTH*`` uses.
+    The previous version of this pass tracked the *set of parents* that
+    reached each aggregate and re-walked every reachable subtree once per
+    incoming path. Both halves were wrong:
 
-    The shape of the graph: a cons is visited by recursing into its `car`
-    and `cdr`, a vector/list/tuple by recursing into each element. The
-    cycle case is when one of those sub-objects is the visited aggregate
-    itself or any other aggregate on the current DFS path -- both of which
-    the path-stack set catches.
+    - **Per-parent sets missed same-parent sharing.** A cons referenced by
+      the car and the cdr of one parent -- the shape ``print.cons.random.2``
+      builds at random -- has a one-element parent set and so got no label;
+      the print then re-walked it at every occurrence, producing output that
+      was exponential in the graph's simple paths, elided with ``...`` where
+      the re-walk re-entered an ancestor, and could not be read back.
+    - **Re-walking made the pass itself exponential.** It ran on the same
+      `ctx.budget` the print spends, so a random 20-cons graph could drain
+      the budget before the print even started, leaving later cycle entries
+      unlabelled.
 
-    **Atoms can be shared too** (a gensym appears twice in the same cons
-    graph, e.g. ``print.cons.5``/``.6``). Atoms are not recursed into, but
-    the *first* pass over a shared atom's two parent aggregates still gives
-    it a count of 2, which is enough to assign a label -- so we visit the
-    root's *transitive* sub-objects here, including atoms, even though the
-    recursive descent stops at aggregates.
+    Counting references instead of parents needs no re-walk: a second
+    reference is counted and labelled without descending again, which keeps
+    the walk linear in the number of *objects* (each unique aggregate is
+    entered once) and keeps the inner conses of a shared aggregate from
+    looking "shared" merely because their parent is.
 
-    **Why the count is per-parent, not per-visit.** A cdr chain visits
-    every cons in the chain from the same parent (its predecessor), so
-    each cons has one *incoming pointer* from that predecessor alone. An
-    object with a single incoming pointer is not "shared" in the sense
-    ``*PRINT-CIRCLE*`` cares about, even if it is visited many times. The
-    earlier algorithm counted visits globally and labelled any object
-    visited more than once, which over-labelled the conses *inside* a
-    shared cons (`print.cons.6`'s `(list s1 s2 s1 s2)`: every cell inside
-    `s1`/`s2` would be re-walked, and the re-walks from different paths
-    made the inner conses look "shared"). Here `visit` tracks, per object,
-    the *set* of parent objects that reached it, and only labels when that
-    set is bigger than one (or when the parent is the object itself,
-    which is the self-cycle case).
+    The cdr chain of a cons is walked iteratively, mirroring `_write_cons`,
+    so list length does not become recursion depth; only the cars recurse.
+    The pass is still bounded by `ctx.budget`, as a belt against a graph so
+    large the walk itself matters.
     """
-    parents_of = {}  # `id(obj) -> {id(parent), ...}` for aggregates
-    atom_counts = {}  # `id(obj) -> int` for atoms (no per-parent filter)
+    counts = {}  # `id(obj) -> reference count`, aggregates and atoms alike
     on_path = set()
-    path_stack = []
     map_ = ctx.circle_map
     next_label = [1]
 
-    def visit(obj, parent):
+    def label(key):
+        if key not in map_:
+            map_[key] = next_label[0]
+            next_label[0] += 1
+
+    def note(key):
+        """One more reference to an already-seen object: shared, so labelled."""
+        counts[key] = counts.get(key, 0) + 1
+        if counts[key] > 1:
+            label(key)
+
+    def visit(obj):
         if ctx.budget[0] <= 0:
             return
         if obj is None or obj is lisptype.NIL:
             return
-        # Atoms and non-aggregates: a simple visit count. A gensym that is
-        # the car and cdr of the same cons (e.g. ``(cons s s)`` in
+        key = id(obj)
+        # Atoms and non-aggregates: a per-reference count. A gensym that is
+        # both the car and the cdr of one cons (e.g. ``(cons s s)`` in
         # `print.cons.5`) is "shared" -- it appears twice in the printed
-        # output -- so the count must fire on a single parent pointing at
-        # the same atom twice. The per-parent rule below is only for
-        # aggregates, where walking a cdr chain visits each cell from the
-        # same predecessor.
+        # output -- so the count fires on two references from one parent.
         if isinstance(obj, (bool, int, float, complex, str, bytes, Character,
                             LispString, LispSymbol, lispKeyword, type, Fraction)):
-            key = id(obj)
-            atom_counts[key] = atom_counts.get(key, 0) + 1
-            if atom_counts[key] > 1 and key not in map_:
-                map_[key] = next_label[0]
-                next_label[0] += 1
+            note(key)
             return
         pieces = _aggregate_pieces(obj)
         if pieces is None:
             return
-        key = id(obj)
         if key in on_path:
-            # A back-edge: `obj` is already on the current DFS path, so
-            # labelling it makes the cycle print as `#1=(... . #1#)` rather
-            # than as `...`. The *entry* of the cycle (the cell whose
-            # cdr/sub contains a back-edge to itself or an ancestor) is
-            # already on the path -- but the *target* of the back-edge is
-            # also where the label is needed, because the back-edge itself
-            # is the cycle point.
-            if key not in map_:
-                map_[key] = next_label[0]
-                next_label[0] += 1
+            # A back-edge: `obj` is an ancestor of the reference, so it is
+            # part of a cycle and the entry that carries the `#N=` label.
+            label(key)
             return
-        ps = parents_of.setdefault(key, set())
-        if parent is not None:
-            ps.add(id(parent))
-        if len(ps) > 1 and key not in map_:
-            # Reached from two or more distinct parents off the path:
-            # genuinely shared. The two parents must be *different* objects
-            # (cd(id(parent))-incoming-edge from the same parent, even via
-            # different paths, is not "shared" in the user's sense).
-            map_[key] = next_label[0]
-            next_label[0] += 1
-        on_path.add(key)
-        path_stack.append(obj)
+        if key in counts:
+            # Already walked once: count this reference, do not descend
+            # again. Descending is what made the pass exponential and made
+            # the inner conses of a shared aggregate look shared.
+            note(key)
+            return
+        counts[key] = 1
         ctx.budget[0] -= 1
+        on_path.add(key)
         try:
-            for sub in pieces:
-                if sub is obj:
-                    # Direct self-cycle (e.g. `(setf (cdr a) a)`). Label
-                    # the parent so the cycle point has its own `#N=`.
-                    if key not in map_:
-                        map_[key] = next_label[0]
-                        next_label[0] += 1
-                    continue
-                if sub is None or sub is lisptype.NIL:
-                    continue
-                visit(sub, obj)
+            if not isinstance(obj, lispCons):
+                for sub in pieces:
+                    if sub is None or sub is lisptype.NIL:
+                        continue
+                    visit(sub)
+                return
+            # A cons walks its own cdr chain iteratively (mirroring
+            # `_write_cons`), recursing into cars only.
+            current = obj
+            walked = []
+            try:
+                while isinstance(current, lispCons) and ctx.budget[0] > 0:
+                    car, cdr = current.car, current.cdr
+                    if car is not None and car is not lisptype.NIL:
+                        visit(car)
+                    if cdr is None or isinstance(cdr, lispNull):
+                        break
+                    if not isinstance(cdr, lispCons):
+                        visit(cdr)
+                        break
+                    ckey = id(cdr)
+                    if ckey in on_path:
+                        # Back-edge closing the chain -- the self-cycle
+                        # `(setf (cdr a) a)` reaches here too.
+                        label(ckey)
+                        break
+                    if ckey in counts:
+                        note(ckey)
+                        break
+                    counts[ckey] = 1
+                    ctx.budget[0] -= 1
+                    on_path.add(ckey)
+                    walked.append(ckey)
+                    current = cdr
+            finally:
+                for walked_key in walked:
+                    on_path.discard(walked_key)
         finally:
-            path_stack.pop()
             on_path.discard(key)
 
-    visit(value, None)
+    visit(value)
     ctx.next_label = next_label[0]
 
 
@@ -1179,6 +1192,31 @@ def _write_cons(value, ctx, depth):
             else:
                 parts.append('...')
             break
+        if ctx.circle and (id(current) in ctx.in_progress
+                           or (id(current) in ctx.circle_map
+                               and ctx.circle_map[id(current)] in ctx.label_seen)):
+            # The cdr is a cons *other than a cell of this chain* whose body
+            # is already spoken for: an ancestor still being printed higher
+            # up (a cycle through cars), or a shared cons already emitted
+            # under its `#N=` (`print.cons.random.2`'s random graph is full
+            # of both). Inlining its elements as the continuation of this
+            # list would splice another object's cells into it -- the read
+            # back is then a different graph. Reference it instead; the cdr
+            # is a cons, so the reference is a dotted terminator.
+            label = ctx.circle_map.get(id(current))
+            if label is not None:
+                parts.append(f'. #{label}#')
+            else:
+                parts.append('...')
+            break
+        if ctx.circle and id(current) in ctx.circle_map:
+            # Labelled but not yet emitted anywhere: this dotted reference
+            # is the definition. Delegate to `_write` so `#N=` prefixes the
+            # body (inlining the elements here would never emit the `#N=`
+            # and leave every other `#N#` dangling).
+            parts.append('.')
+            parts.append(_write(current, ctx, depth + 1))
+            break
     return prefix + '(' + ' '.join(parts) + ')'
 
 
@@ -1237,6 +1275,12 @@ def _write_vector(value, ctx, depth):
         return '#'
     if not ctx.array:
         return _unreadable(value, 'VECTOR')
+    prefix = _circle_prefix(value, ctx)
+    if prefix and not prefix.endswith('='):
+        # A back-reference: the body was already emitted under the matching
+        # `#N=` (`_write_cons`'s rule -- a second walk would print the
+        # elements twice, once after the reference that already names them).
+        return prefix
     elements = _vector_elements(value)
     parts = []
     for index, element in enumerate(elements):
@@ -1244,7 +1288,7 @@ def _write_vector(value, ctx, depth):
             parts.append('...')
             break
         parts.append(_write(element, ctx, depth + 1))
-    return _circle_prefix(value, ctx) + '#(' + ' '.join(parts) + ')'
+    return prefix + '#(' + ' '.join(parts) + ')'
 
 
 def _write_bit_vector(value, ctx):
@@ -1315,7 +1359,12 @@ def _write_array(value, ctx, depth):
     # so a dimension of length 0 yields `()` and the shape still prints --
     # e.g. a 2x0 array as `#2A(() ())`, which reads back (2 0). A *leading*
     # zero dimension is the lossy case guarded above.
-    return _circle_prefix(value, ctx) + f'#{value.rank}A' + nested([], 0)
+    prefix = _circle_prefix(value, ctx)
+    if prefix and not prefix.endswith('='):
+        # A back-reference: the body was already emitted under the matching
+        # `#N=` (`_write_cons`'s rule).
+        return prefix
+    return prefix + f'#{value.rank}A' + nested([], 0)
 
 
 def _write_structure(value, ctx, depth):
