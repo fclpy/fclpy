@@ -70,54 +70,54 @@ Run it to move the official scoreboard or close a milestone.
 
 ## types-and-classes — 12 failing of 545
 
-- [ ] `types-and-classes/types-and-class.lsp` — **5** failing of 28
+- [ ] `types-and-classes/types-and-class.lsp` — **5** failing of 28  **(-2 since baseline)**
       `pipenv run python scripts/run_ansi.py types-and-classes/types-and-class.lsp`
 - [ ] `types-and-classes/type-of.lsp` — **5** failing of 14
       `pipenv run python scripts/run_ansi.py types-and-classes/type-of.lsp`
 - [ ] `types-and-classes/subtypep-cons.lsp` — **1** failing of 44
       `pipenv run python scripts/run_ansi.py types-and-classes/subtypep-cons.lsp`
-- [ ] `types-and-classes/typep.lsp` — **1** failing of 31
+- [ ] `types-and-classes/typep.lsp` — **1** failing of 31  **(-6 since baseline)**
       `pipenv run python scripts/run_ansi.py types-and-classes/typep.lsp`
 
 ## printer — 12 failing of 788
 
 - [ ] `printer/print-cons.lsp` — **2** failing of 20
       `pipenv run python scripts/run_ansi.py printer/print-cons.lsp`
+- [ ] `printer/print.lsp` — **1** failing of 5
+      `pipenv run python scripts/run_ansi.py printer/print.lsp`
 - [ ] `printer/prin1-to-string.lsp` — **1** failing of 4
       `pipenv run python scripts/run_ansi.py printer/prin1-to-string.lsp`
 - [ ] `printer/print-vector.lsp` — **1** failing of 39
       `pipenv run python scripts/run_ansi.py printer/print-vector.lsp`
-- [ ] `printer/print-backquote.lsp` — **1** failing of 14
-      `pipenv run python scripts/run_ansi.py printer/print-backquote.lsp`
-- [ ] `printer/prin1.lsp` — **1** failing of 5
-      `pipenv run python scripts/run_ansi.py printer/prin1.lsp`
-- [ ] `printer/format/formatter-c.lsp` — **1** failing of 8
-      `pipenv run python scripts/run_ansi.py printer/format/formatter-c.lsp`
-- [ ] `printer/print.lsp` — **1** failing of 5
-      `pipenv run python scripts/run_ansi.py printer/print.lsp`
-- [ ] `printer/write-to-string.lsp` — **1** failing of 7
-      `pipenv run python scripts/run_ansi.py printer/write-to-string.lsp`
 - [ ] `printer/format/format-s.lsp` — **1** failing of 19
       `pipenv run python scripts/run_ansi.py printer/format/format-s.lsp`
+- [ ] `printer/format/formatter-c.lsp` — **1** failing of 8
+      `pipenv run python scripts/run_ansi.py printer/format/formatter-c.lsp`
+- [ ] `printer/prin1.lsp` — **1** failing of 5
+      `pipenv run python scripts/run_ansi.py printer/prin1.lsp`
 - [ ] `printer/format/format-c.lsp` — **1** failing of 10
       `pipenv run python scripts/run_ansi.py printer/format/format-c.lsp`
+- [ ] `printer/write-to-string.lsp` — **1** failing of 7  **(-1 since baseline)**
+      `pipenv run python scripts/run_ansi.py printer/write-to-string.lsp`
 - [ ] `printer/print-random-state.lsp` — **1** failing of 1
       `pipenv run python scripts/run_ansi.py printer/print-random-state.lsp`
+- [ ] `printer/print-backquote.lsp` — **1** failing of 14
+      `pipenv run python scripts/run_ansi.py printer/print-backquote.lsp`
 
 ## symbols — 10 failing of 1145
 
-- [ ] `symbols/cl-symbols.lsp` — **4** failing of 1002
+- [ ] `symbols/cl-symbols.lsp` — **4** failing of 1002  **(-1 since baseline)**
       `pipenv run python scripts/run_ansi.py symbols/cl-symbols.lsp`
 - [ ] `symbols/symbol-function.lsp` — **2** failing of 6
       `pipenv run python scripts/run_ansi.py symbols/symbol-function.lsp`
-- [ ] `symbols/get.lsp` — **1** failing of 15
-      `pipenv run python scripts/run_ansi.py symbols/get.lsp`
 - [ ] `symbols/boundp.lsp` — **1** failing of 13
       `pipenv run python scripts/run_ansi.py symbols/boundp.lsp`
+- [ ] `symbols/copy-symbol.lsp` — **1** failing of 7  **(-2 since baseline)**
+      `pipenv run python scripts/run_ansi.py symbols/copy-symbol.lsp`
+- [ ] `symbols/get.lsp` — **1** failing of 15
+      `pipenv run python scripts/run_ansi.py symbols/get.lsp`
 - [ ] `symbols/special-operator-p.lsp` — **1** failing of 6
       `pipenv run python scripts/run_ansi.py symbols/special-operator-p.lsp`
-- [ ] `symbols/copy-symbol.lsp` — **1** failing of 7
-      `pipenv run python scripts/run_ansi.py symbols/copy-symbol.lsp`
 
 ## conditions — 3 failing of 303
 
@@ -128,10 +128,10 @@ Run it to move the official scoreboard or close a milestone.
 
 - [ ] `sequences/map.lsp` — **1** failing of 77
       `pipenv run python scripts/run_ansi.py sequences/map.lsp`
-- [ ] `sequences/make-sequence.lsp` — **1** failing of 81
-      `pipenv run python scripts/run_ansi.py sequences/make-sequence.lsp`
 - [ ] `sequences/concatenate.lsp` — **1** failing of 53
       `pipenv run python scripts/run_ansi.py sequences/concatenate.lsp`
+- [ ] `sequences/make-sequence.lsp` — **1** failing of 81
+      `pipenv run python scripts/run_ansi.py sequences/make-sequence.lsp`
 
 ## files — 2 failing of 87
 
