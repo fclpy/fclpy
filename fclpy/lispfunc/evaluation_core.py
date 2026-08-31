@@ -81,6 +81,51 @@ def _leave_lisp_call():
     _LISP_CALL_DEPTH -= 1
 
 
+# Ladder branches in `eval` that are NOT registered in `_registry.special_registry`
+# (verified by enumeration, 2026-08-31). `_inline_user_callee` must not treat a
+# form headed by one of these as a plain function call, and the registry alone
+# does not say so. The user-closure requirement in that predicate already
+# excludes them -- none of these has a `make_ordinary_function` binding -- but
+# they are named here so the guard does not depend on that coincidence.
+_NOT_INLINABLE_OPERATORS = frozenset(('THE', 'LOCALLY', 'LOAD-TIME-VALUE'))
+
+
+def _inline_user_callee(argform, env):
+    """The closure to invoke inline for `argform`, or None to evaluate it normally.
+
+    recursion-plan.md Step 6 target 2. `eval`'s argument loop uses this to
+    decide whether an argument can be evaluated on its explicit continuation
+    stack -- in `eval`'s own Python frame -- instead of by a recursive `eval`
+    call that holds a frame for the whole descent.
+
+    Deliberately conservative: it answers a callee only for a plain call to a
+    *user-defined* function, which is exactly the deep-recursion case
+    (`make-scaffold-copy` and friends) and is the narrowest condition that
+    fixes it. Everything else -- special forms, macros, builtins, a symbol with
+    no function binding, an operator that is not a symbol -- falls back to the
+    recursive path, so this cannot change *which* semantics apply to a form,
+    only how many host frames evaluating it costs.
+
+    The `__lisp_lambda_list__` marker is what identifies a closure built by
+    `make_ordinary_function`; a special operator or builtin never carries one.
+    """
+    if not isinstance(argform, lisptype.lispCons):
+        return None
+    op = car(argform)
+    if not isinstance(op, lisptype.LispSymbol):
+        return None
+    if op.name in _NOT_INLINABLE_OPERATORS:
+        return None
+    if _registry.get_special_py_name(op.name):
+        return None
+    func = lisptype.primary_value(env.find_func(op))
+    if not callable(func) or getattr(func, '__is_macro__', False):
+        return None
+    if not hasattr(func, '__lisp_lambda_list__'):
+        return None
+    return func
+
+
 class TailCall:
     """A self tail call, deferred so the closure can loop instead of recursing.
 
@@ -1065,7 +1110,40 @@ def eval(form, env=None, *, tail_target=None):
     )
     
     env = resolve_environment(env)
-    
+
+    # recursion-plan.md Step 6, target 1: resolve a chain of IF forms in *this*
+    # frame. IF is by far the most common form in a recursive function's body,
+    # and dispatching it through `eval_if` cost three frames per Lisp level --
+    # `eval` (to dispatch), `eval_if`, and `eval` again (for the chosen
+    # branch). Rewriting `form` in place and falling through to the ladder
+    # below costs one, so a non-tail Lisp recursion drops from 5 Python frames
+    # per level to 3 (measured; see the frame census in recursion-plan.md).
+    #
+    # This sits *above* the self-evaluating checks on purpose: a branch may be
+    # absent (`(if nil 1)`) or a literal, and letting it fall into the existing
+    # normalization below is what keeps the semantics identical to `eval_if`'s
+    # rather than duplicating them. `eval_if` itself stays: the ladder still
+    # reaches it for a malformed IF (which is where it signals), and it remains
+    # the entry point for callers outside this function.
+    #
+    # `tail_target` survives untouched, which is the point -- the branch really
+    # is in tail position, so a self call there is still a Step 4 tail call.
+    while (isinstance(form, lisptype.lispCons)
+           and isinstance(car(form), lisptype.LispSymbol)
+           and car(form).name == 'IF'):
+        _if_args = cdr(form)
+        if not _consp_internal(_if_args):
+            break               # malformed; the ladder's eval_if signals it
+        _if_else = cdr(cdr(_if_args))
+        if lisptype.is_truthy(eval(car(_if_args), env)):
+            form = car(cdr(_if_args))
+        elif _consp_internal(_if_else):
+            form = car(_if_else)
+        else:
+            # `eval_if` answers Python None for a false test with no else
+            # branch; preserved exactly rather than "improved" to NIL here.
+            return None
+
     # Self-evaluating forms
     # Normalize Python-level sentinels into Lisp equivalents to avoid type
     # mismatches (e.g., Python True vs Lisp symbol T) leaking into Lisp code.
@@ -1639,128 +1717,170 @@ def eval(form, env=None, *, tail_target=None):
                 raise ConditionException(cond, recoverable=False)
             raise lisptype.LispError(f"Not a function: {operator}")
         
-        # Evaluate arguments left to right. Ordinary function-call arguments
-        # are single-value contexts: a MultipleValues result reduces to its
-        # primary value (NIL if it returned zero values), per ANSI.
-        eval_args = []
-        current = args
-        while _consp_internal(current):
-            eval_args.append(lisptype.primary_value(eval(car(current), env)))
-            current = cdr(current)
-
-        # Split evaluated arguments into positionals and &key pairs -- the
-        # one shared decision (split_keyword_args), also used by APPLY and
-        # FUNCALL so an indirect call recognizes keywords the same way a
-        # direct one does.
-        eval_args, kwargs = split_keyword_args(func, eval_args)
-
-        # recursion-plan.md Step 4: a self tail call becomes a loop in the
-        # closure's own frame rather than another ~6 Python frames. Produced
-        # only when the closure being called *is* the one that declared it
-        # would unwind a marker (`tail_target`), so the marker cannot escape
-        # to a caller that would treat it as a value -- see `TailCall`.
+        # recursion-plan.md Step 6 target 2: argument evaluation runs on an
+        # explicit continuation stack, in *this* Python frame, instead of a
+        # recursive `eval` call per nested argument. Combined with the IF
+        # chain loop above, this takes a non-tail Lisp recursion from 5 host
+        # frames per level to 2 (`eval` + the closure), which is what makes
+        # `make-scaffold-copy` reach the 334 levels NINTERSECTION.10/.11 need
+        # -- its recursive calls sit in *argument* position, so Step 4's
+        # tail-call transform cannot help it.
         #
-        # This is what makes ansi-test's own helpers finish at the default
-        # recursion limit: `check-cons-copy` (auxiliary/cons-aux.lsp) recurses
-        # on the cdr spine in tail position, so its depth is the *list length*
-        # -- 700 for COPY-TREE.2's `*universe*`, ~4200 Python frames before
-        # this.
-        if tail_target is not None and func is tail_target:
-            return TailCall(eval_args, kwargs)
+        # Invariants preserved, each of them observable:
+        #  - left-to-right order: a pushed continuation resumes at exactly the
+        #    argument after the one that suspended it;
+        #  - an argument is a single-value context (`primary_value`) while the
+        #    outermost result keeps all its values;
+        #  - dynamic bindings: a record carries the env its remaining subforms
+        #    must be evaluated in, and nothing is unwound early -- each inlined
+        #    callee still manages its own BindingFrame inside `call`;
+        #  - handlers/restarts: the signal point is unchanged, so
+        #    `signal_condition` walks `state.handler_stack` exactly as before;
+        #  - non-local exits: RETURN-FROM/THROW/GO propagate out of this one
+        #    frame and the whole pending stack dies with it, abandoning every
+        #    suspended argument -- which is what unwinding past them means.
+        pending = []
+        cur_func = func
+        cur_forms = args
+        cur_vals = []
+        cur_env = env
+        cur_tail = tail_target
 
-        # Call function with exception handling
-        try:
-            if kwargs:
-                result = func(*eval_args, **kwargs)
-            else:
-                result = func(*eval_args)
-        except ConditionException:
-            # Re-raise Lisp conditions without wrapping them
-            raise
-        except (ReturnFromException, ThrowException, GoException):
-            # Control-flow exceptions used for non-local exits should
-            # propagate unchanged so enclosing forms like BLOCK, CATCH,
-            # and TAGBODY can handle them.
-            raise
-        except lisptype.LispProgramError as e:
-            # Convert Lisp program errors to PROGRAM-ERROR condition
-            condition = lisptype.ProgramError(message=str(e))
-            raise ConditionException(condition, recoverable=False)
-        except lisptype.LispTypeError as e:
-            # Convert Lisp type errors to TYPE-ERROR condition
-            condition = lisptype.TypeError(
-                datum=getattr(e, 'actual_value', None), 
-                expected_type=getattr(e, 'expected_type', None), 
-                message=str(e)
-            )
-            raise ConditionException(condition, recoverable=False)
-        except lisptype.LispNotImplementedError as e:
-            # Convert not implemented errors to appropriate condition
-            condition = lisptype.Error(message=f"Not implemented: {str(e)}")
-            raise ConditionException(condition, recoverable=False)
-        except lisptype.LispEndOfFileError as e:
-            # Convert to END-OF-FILE, not the generic ERROR the LispError
-            # branch below would give it -- END-OF-FILE is a STREAM-ERROR
-            # subtype (CLHS Figure 9-1) that ansi-test's `signals-error*`
-            # checks for by name, so it must survive as that specific type.
-            condition = lisptype.EndOfFile(stream=getattr(e, 'stream', None), message=str(e))
-            raise ConditionException(condition, recoverable=False)
-        except lisptype.LispStreamError as e:
-            # Convert to STREAM-ERROR (CLHS 21.1), same reasoning as EOF above.
-            condition = lisptype.StreamError(stream=getattr(e, 'stream', None), message=str(e))
-            raise ConditionException(condition, recoverable=False)
-        except lisptype.LispError as e:
-            # Convert other Lisp errors to Error condition
-            condition = lisptype.Error(message=str(e))
-            raise ConditionException(condition, recoverable=False)
-        except TypeError as e:
-            # Check if this is an argument count error (function signature problem)
-            error_str = str(e)
-            if is_arity_mismatch_message(error_str):
-                # Argument count mismatch - PROGRAM-ERROR per ANSI CL spec
-                condition = lisptype.ProgramError(message=error_str)
+        while True:
+            # Ordinary function-call arguments are single-value contexts: a
+            # MultipleValues result reduces to its primary value (NIL if it
+            # returned zero values), per ANSI.
+            while _consp_internal(cur_forms):
+                argform = car(cur_forms)
+                cur_forms = cdr(cur_forms)
+                inlined = _inline_user_callee(argform, cur_env)
+                if inlined is None:
+                    cur_vals.append(
+                        lisptype.primary_value(eval(argform, cur_env)))
+                    continue
+                # Suspend this call and evaluate the argument here.
+                pending.append(
+                    (cur_func, cur_vals, cur_forms, cur_env, cur_tail))
+                cur_func = inlined
+                cur_forms = cdr(argform)
+                cur_vals = []
+                # An argument is never in tail position.
+                cur_tail = None
+
+            # Split evaluated arguments into positionals and &key pairs -- the
+            # one shared decision (split_keyword_args), also used by APPLY and
+            # FUNCALL so an indirect call recognizes keywords the same way a
+            # direct one does.
+            call_vals, kwargs = split_keyword_args(cur_func, cur_vals)
+
+            # Step 4: a self tail call becomes a loop in the closure's own
+            # frame. Produced only when the closure being called *is* the one
+            # that declared it would unwind a marker (`tail_target`), so the
+            # marker cannot escape to a caller that would treat it as a
+            # value. `cur_tail` is None for every inlined argument above,
+            # because an argument is not a tail position.
+            if cur_tail is not None and cur_func is cur_tail:
+                return TailCall(call_vals, kwargs)
+
+            # Call function with exception handling
+            try:
+                if kwargs:
+                    result = cur_func(*call_vals, **kwargs)
+                else:
+                    result = cur_func(*call_vals)
+            except ConditionException:
+                # Re-raise Lisp conditions without wrapping them
+                raise
+            except (ReturnFromException, ThrowException, GoException):
+                # Control-flow exceptions used for non-local exits should
+                # propagate unchanged so enclosing forms like BLOCK, CATCH,
+                # and TAGBODY can handle them.
+                raise
+            except lisptype.LispProgramError as e:
+                # Convert Lisp program errors to PROGRAM-ERROR condition
+                condition = lisptype.ProgramError(message=str(e))
                 raise ConditionException(condition, recoverable=False)
-            else:
-                # Other TypeErrors (e.g., type mismatches in function calls)
+            except lisptype.LispTypeError as e:
+                # Convert Lisp type errors to TYPE-ERROR condition
                 condition = lisptype.TypeError(
-                    datum=None,
-                    expected_type='callable',
-                    message=error_str
+                    datum=getattr(e, 'actual_value', None), 
+                    expected_type=getattr(e, 'expected_type', None), 
+                    message=str(e)
                 )
                 raise ConditionException(condition, recoverable=False)
-        except AttributeError as e:
-            # Handle attribute errors
-            condition = lisptype.Error(message=f"Attribute error: {str(e)}")
-            raise ConditionException(condition, recoverable=False)
-        except ZeroDivisionError as e:
-            # Handle division by zero
-            condition = lisptype.DivisionByZero(message=str(e))
-            raise ConditionException(condition, recoverable=False)
-        except ArithmeticError as e:
-            # Handle other arithmetic errors
-            condition = lisptype.ArithmeticError(message=str(e))
-            raise ConditionException(condition, recoverable=False)
-        except RecursionError as e:
-            # Last-resort net (recursion-plan.md Step 5): the depth budget in
-            # `_enter_lisp_call` signals STORAGE-CONDITION while Python stack
-            # remains; if exhaustion still reaches here, it is the ANSI-specified
-            # condition, never `Error("Python error in function call:
-            # RecursionError ...")` -- a Python exception recorded as a Lisp value,
-            # and the wedge of the 08-31 full run once it hit RT's failure printer.
-            condition = lisptype.StorageCondition(
-                message=f"STORAGE-CONDITION: stack exhaustion: {e}")
-            raise ConditionException(condition, recoverable=False)
-        except Exception as e:
-            # Catch-all for any other Python exceptions
-            condition = lisptype.Error(message=f"Python error in function call: {type(e).__name__}: {str(e)}")
-            raise ConditionException(condition, recoverable=False)
+            except lisptype.LispNotImplementedError as e:
+                # Convert not implemented errors to appropriate condition
+                condition = lisptype.Error(message=f"Not implemented: {str(e)}")
+                raise ConditionException(condition, recoverable=False)
+            except lisptype.LispEndOfFileError as e:
+                # Convert to END-OF-FILE, not the generic ERROR the LispError
+                # branch below would give it -- END-OF-FILE is a STREAM-ERROR
+                # subtype (CLHS Figure 9-1) that ansi-test's `signals-error*`
+                # checks for by name, so it must survive as that specific type.
+                condition = lisptype.EndOfFile(stream=getattr(e, 'stream', None), message=str(e))
+                raise ConditionException(condition, recoverable=False)
+            except lisptype.LispStreamError as e:
+                # Convert to STREAM-ERROR (CLHS 21.1), same reasoning as EOF above.
+                condition = lisptype.StreamError(stream=getattr(e, 'stream', None), message=str(e))
+                raise ConditionException(condition, recoverable=False)
+            except lisptype.LispError as e:
+                # Convert other Lisp errors to Error condition
+                condition = lisptype.Error(message=str(e))
+                raise ConditionException(condition, recoverable=False)
+            except TypeError as e:
+                # Check if this is an argument count error (function signature problem)
+                error_str = str(e)
+                if is_arity_mismatch_message(error_str):
+                    # Argument count mismatch - PROGRAM-ERROR per ANSI CL spec
+                    condition = lisptype.ProgramError(message=error_str)
+                    raise ConditionException(condition, recoverable=False)
+                else:
+                    # Other TypeErrors (e.g., type mismatches in function calls)
+                    condition = lisptype.TypeError(
+                        datum=None,
+                        expected_type='callable',
+                        message=error_str
+                    )
+                    raise ConditionException(condition, recoverable=False)
+            except AttributeError as e:
+                # Handle attribute errors
+                condition = lisptype.Error(message=f"Attribute error: {str(e)}")
+                raise ConditionException(condition, recoverable=False)
+            except ZeroDivisionError as e:
+                # Handle division by zero
+                condition = lisptype.DivisionByZero(message=str(e))
+                raise ConditionException(condition, recoverable=False)
+            except ArithmeticError as e:
+                # Handle other arithmetic errors
+                condition = lisptype.ArithmeticError(message=str(e))
+                raise ConditionException(condition, recoverable=False)
+            except RecursionError as e:
+                # Last-resort net (recursion-plan.md Step 5): the depth budget in
+                # `_enter_lisp_call` signals STORAGE-CONDITION while Python stack
+                # remains; if exhaustion still reaches here, it is the ANSI-specified
+                # condition, never `Error("Python error in function call:
+                # RecursionError ...")` -- a Python exception recorded as a Lisp value,
+                # and the wedge of the 08-31 full run once it hit RT's failure printer.
+                condition = lisptype.StorageCondition(
+                    message=f"STORAGE-CONDITION: stack exhaustion: {e}")
+                raise ConditionException(condition, recoverable=False)
+            except Exception as e:
+                # Catch-all for any other Python exceptions
+                condition = lisptype.Error(message=f"Python error in function call: {type(e).__name__}: {str(e)}")
+                raise ConditionException(condition, recoverable=False)
 
-        # Normalize common Python return values into Lisp objects.
-        if result is None:
-            return lisptype.NIL
-        if isinstance(result, bool):
-            return lisptype.T if result else lisptype.NIL
-        return result
+
+            # Normalize common Python return values into Lisp objects.
+            if result is None:
+                result = lisptype.NIL
+            elif isinstance(result, bool):
+                result = lisptype.T if result else lisptype.NIL
+
+            if not pending:
+                return result
+            # Resume the suspended call with this value as its argument.
+            cur_func, cur_vals, cur_forms, cur_env, cur_tail = pending.pop()
+            cur_vals.append(lisptype.primary_value(result))
     
     return form
 

@@ -96,18 +96,13 @@ class TestNonTailRecursionDepth:
         result = _ev('(%mk (make-list 100 :initial-element 1))')
         assert result is not None
 
-    @pytest.mark.xfail(
-        reason='recursion-plan.md Step 6, not yet implemented: argument '
-               'evaluation is still recursive descent, so a non-tail Lisp '
-               'recursion costs ~3 Python frames per level and 334 levels do '
-               'not fit in the default 1000-frame limit. This is '
-               'NINTERSECTION.10/.11, whose make-scaffold-copy walks a '
-               '334-element list. Converting argument evaluation to an '
-               'explicit continuation stack is what removes this; when it '
-               'lands, delete this marker.',
-        strict=True)
     def test_non_tail_recursion_at_334_levels(self):
-        """NINTERSECTION.10/.11's depth, the deepest the suite demands."""
+        """NINTERSECTION.10/.11's depth, the deepest the suite demands.
+
+        Passes since recursion-plan.md Step 6 put argument evaluation on an
+        explicit continuation stack: 5 host frames per Lisp level -> 2, and the
+        max non-tail depth 149 -> 372 at the default limit.
+        """
         self._define_scaffold_shape()
         result = _ev('(%mk (make-list 334 :initial-element 1))')
         assert result is not None

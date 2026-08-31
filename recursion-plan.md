@@ -1,9 +1,28 @@
 # recursion-plan.md — RecursionError as an architecture defect
 
-**Status:** Steps 1-3 and 5 **implemented and verified** (2026-08-31); see
-"Outcome" at the end. `gate.py` green (pytest 2097 passed, no duplicates, no
-per-file ANSI regressions). A full `run_all_tests.py` run is still mandatory
-before moving the official scoreboard.
+**Status:** **All steps implemented** (2026-08-31). Steps 1-3 and 5 first (see
+"Outcome" mid-document), then **Step 4** (self tail-call elimination) and
+**Step 6** (IF chains resolved in-frame + explicit continuation stack for
+argument evaluation) — both at the end of this file, which is where the
+current numbers live.
+
+Net effect at the **default** 1000-frame limit, which is what
+`run_all_tests.py` runs at:
+
+| | before | after |
+|---|---|---|
+| Python frames per Lisp level | 5 | **2** |
+| max non-tail recursion depth | 149 | **372** |
+| max tail recursion depth | 186 | **unbounded** |
+
+That clears the deepest thing the suite demands (334 levels, `make-scaffold-copy`
+in NINTERSECTION.10/.11) without raising the recursion limit, which this plan
+forbids. `STORAGE-CONDITION` remains the condition for genuine
+implementation-resource exhaustion.
+
+A full `run_all_tests.py` run is still mandatory before moving the official
+scoreboard — Step 6 changes the argument-evaluation path of every user function
+call.
 **Source:** 2026-08-31 full run (`run_all_tests.log`), cross-referenced with
 plan.md §1 item 3 and §"Discovered issues" (the 08-31 wedge note).
 
@@ -518,7 +537,79 @@ Two design decisions worth keeping:
   mean Step 4 never fires for a named function); sound because the block's
   extent genuinely ends when the tail call is taken.
 
-### Step 6 — explicit continuation stack for argument evaluation (OPEN)
+### Step 6 — IMPLEMENTED 2026-08-31. Frames per level 5 → 2, depth 149 → 372
+
+Both targets landed in `evaluation_core.eval`. Measured at the **default**
+limit throughout:
+
+| | HEAD | + target 1 | + target 2 |
+|---|---|---|---|
+| Python frames per Lisp level | 5 | 3 | **2** |
+| max **non-tail** recursion depth | 149 | 248 | **372** |
+| `make-scaffold-copy` shape at 334 | fail | fail | **OK** |
+| max **tail** depth (Step 4) | 186 | unbounded | unbounded |
+
+The repeating unit is now just `eval` + the closure's `call`.
+
+**Target 1 — IF chains resolved in `eval`'s own frame.** A pre-dispatch `while`
+loop that only rewrites `form`, so the 740-line ladder needed no
+re-indentation. It sits *above* the self-evaluating checks deliberately: a
+branch may be absent (`(if nil 1)`, whose value is Python `None` — preserved
+exactly, not "improved" to NIL) or a literal, and letting it fall into the
+existing normalization is what keeps the semantics identical to `eval_if`'s
+instead of duplicating them. `eval_if` remains: the ladder still reaches it for
+a malformed IF, and it is still the entry point for callers outside `eval`.
+`tail_target` passes through untouched, so a self call in a branch is still a
+Step 4 tail call.
+
+**Target 2 — explicit continuation stack for argument evaluation.** A `pending`
+list of `(func, vals, remaining_forms, env, tail_target)` records, looping in
+one `eval` frame. Eligibility is decided by `_inline_user_callee`, which is
+deliberately narrow: a plain call to a **user-defined** closure (identified by
+the `__lisp_lambda_list__` marker only `make_ordinary_function` sets), not a
+macro, not a special form, operator a symbol with a function binding. Anything
+else falls back to the recursive path, so the change alters *how many host
+frames* a form costs, never *which semantics* apply to it — which is what keeps
+it from becoming a second evaluator.
+
+Note `_registry.special_registry` does **not** contain every ladder branch:
+`THE`, `LOCALLY` and `LOAD-TIME-VALUE` are absent (verified by enumeration), so
+`_NOT_INLINABLE_OPERATORS` names them. The user-closure requirement already
+excludes them, but the guard should not depend on that coincidence.
+
+**Invariants, each verified by direct evaluation rather than assumed:**
+
+| invariant | probe | result |
+|---|---|---|
+| left-to-right order | `(list (p 1) (p 2) (p 3))` with a side-effecting `p` | `(1 2 3)` |
+| argument is single-value | `(list (values 1 2 3))` | `(1)` |
+| top level keeps all values | `(multiple-value-list (values 1 2 3))` | `(1 2 3)` |
+| dynamic binding live in callee | `(let ((*dv* 42)) (rd))` | `42` |
+| handlers see the signal | `(handler-case (list 1 (error "boom") 3) (error () :caught))` | `:CAUGHT` |
+| RETURN-FROM through an argument | `(block b (list 1 (return-from b :escaped) 3))` | `:ESCAPED` |
+| THROW through an argument | `(catch 'tg (list 1 (throw 'tg :thrown) 3))` | `:THROWN` |
+
+The non-local-exit case is *structurally* safer than the recursive version: the
+whole pending stack lives in one Python frame and dies with it, so unwinding
+past suspended arguments abandons them by construction rather than relying on a
+`finally` to discard them.
+
+`STORAGE-CONDITION` is untouched and still raised by the depth budget for
+genuine exhaustion — the shape at 400 levels signals it correctly.
+
+**Verified:** pytest **2102 passed / 3 xfailed** (the three pre-existing,
+unrelated); `tests/test_recursion_depth.py`'s 334-level test is now a real
+passing test with its strict xfail removed. Targeted sweep of cons +
+data-and-control-flow + eval-and-compile + iteration + conditions + objects
+after target 1: **6002 passed, 4 failed, 0 unaccounted**, and all four
+(`CONDITION-16/17/18-REPORT.1`, `DEFGENERIC.30`) are pre-existing entries in
+`ansi_results/failed.txt`.
+
+**A full run is mandatory before this moves any scoreboard** — it changes the
+argument-evaluation path of every user function call.
+
+<details>
+<summary>Original Step 6 plan (kept for the frame census and invariant list)</summary>
 
 **The complete solution, per the maintainer's direction: audit the evaluator's
 recursive descent and convert every depth-proportional host-stack path into an
@@ -578,6 +669,8 @@ ansi-test coverage):
 is `xfail(strict=True)` with this step named as the reason — it will fail
 loudly the moment Step 6 makes it pass, which is the signal to delete the
 marker.
+
+</details>
 
 ### Two process defects found alongside it (neither fixed)
 
