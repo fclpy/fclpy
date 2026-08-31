@@ -4457,9 +4457,12 @@ def get_setf_expansion(place, env):
         raise lisptype.LispError("GET-SETF-EXPANSION: not a valid place")
 
     op = car(place)
-    if not isinstance(op, lisptype.LispSymbol):
+    if not lisptype.is_symbol(op):
         raise lisptype.LispError("GET-SETF-EXPANSION: place operator must be a symbol")
-    op_name = op.name
+    # A call place names its operator by symbol name -- NIL's included
+    # (`(setf (nil) 10)` is a `(SETF NIL)` call, flet.51 exercises it), and
+    # the canonical NIL object is not a LispSymbol instance.
+    op_name = getattr(op, 'name', None) or 'NIL'
     place_args = _setf_form_args(cdr(place))
 
     # CLHS 5.1.2.3 -- a place naming several subplaces at once.

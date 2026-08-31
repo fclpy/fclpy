@@ -39,9 +39,13 @@ def _function_spec_to_key(spec):
             if _consp_internal(rest):
                 name_sym = car(rest)
                 name_rest = cdr(rest)
-                # Check that name is a symbol and rest is NIL (proper list with 2 elements)
-                if isinstance(name_sym, lisptype.LispSymbol) and name_rest is lisptype.NIL:
-                    return lisptype.LispSymbol(f"(SETF {name_sym.name})")
+                # Any symbol spelling names a function -- NIL's included:
+                # `(setf nil)` is a valid function name (flet.51 binds one),
+                # and NIL reaches Python as `None` or the `lispNull`
+                # singleton as well as a LispSymbol.
+                if lisptype.is_symbol(name_sym) and name_rest is lisptype.NIL:
+                    return lisptype.LispSymbol(
+                        f"(SETF {getattr(name_sym, 'name', None) or 'NIL'})")
     return None
 
 
