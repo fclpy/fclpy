@@ -1240,9 +1240,24 @@ def directory(pathname, **kwargs):
 def truename(pathname):
     from .evaluation_conditions import signal_file_error
 
+    # A logical pathname designator truename's to its *translation*: the
+    # components the translation filled in are the canonical spelling of the
+    # file for that designator (CLHS 19.4), while the OS path the file sits
+    # at may differ in case -- on a case-insensitive filesystem "FOO.TXT" and
+    # "foo.txt" name the same file, and whichever spelling happened to be
+    # used at creation is not recoverable from the file itself. Rebuilding
+    # the answer from the OS path (as the physical branch below does) made
+    # `(pathname-name (truename "CLTEST:foo.txt"))` answer the on-disk case
+    # instead of the translated FOO, which is what truename.5 compares
+    # against. On a case-sensitive filesystem the two spellings must agree
+    # anyway, or the existence check below fails first.
+    translated = translate_logical_pathname(pathname) \
+        if _coerce_pathname_designator(pathname, 'TRUENAME').logical else None
     path_str = resolve_filespec(pathname)
     if not os.path.exists(path_str):
         return signal_file_error(pathname, f"TRUENAME: file not found: {path_str}")
+    if translated is not None:
+        return translated
     try:
         return pathname_from_os_path(os.path.realpath(path_str))
     except (OSError, ValueError):

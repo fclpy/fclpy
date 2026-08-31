@@ -1202,31 +1202,35 @@ def _class_cone(node):
         for child, parents in _CLASS_PARENTS.items():
             if node in parents:
                 cells |= _class_cone(child)
-        if node in ('STANDARD-OBJECT', 'STRUCTURE-OBJECT'):
-            # Both roots are real registered `classes.LispClass` objects
-            # (classes.py's `_init_builtin_classes`), not just cells in
-            # this string-keyed table -- so which CLOS classes actually
-            # descend from *this* root is a real ancestry question, not
-            # "every CLOS class there is". Before DEFSTRUCT grew its own
-            # LispClass hierarchy rooted at STRUCTURE-OBJECT, every CLOS
-            # class *did* descend from STANDARD-OBJECT (`defclass` adds it
-            # when no superclass is given), so the old blanket
-            # `cells |= _clos_cells()` happened to agree with this; once a
-            # structure class exists, unioning in every CLOS cell here
-            # would also mark it a STANDARD-OBJECT subtype, and vice versa
-            # for STRUCTURE-OBJECT, when the two are meant to be disjoint
-            # (structures/structure-00.lsp's *disjoint-types-list* check
-            # via `subtypep`).
-            from fclpy import classes as _classes
-            root_class = _classes.find_class(node)
-            if root_class is not None:
-                for candidate in _clos_classes():
-                    try:
-                        supers = candidate.get_linearized_superclasses()
-                    except Exception:
-                        continue
-                    if any(sup is root_class for sup in supers):
-                        cells.add(_cell_key(candidate))
+        # Every name in `_BUILTIN_CLASS_NAMES` is also a real registered
+        # `classes.LispClass` object (classes.py's `_init_builtin_classes`),
+        # not just a cell in this string-keyed table -- so which CLOS classes
+        # actually descend from *this* name is a real ancestry question, not
+        # "every CLOS class there is". (The old blanket `cells |=
+        # _clos_cells()` happened to agree only while every CLOS class
+        # descended from STANDARD-OBJECT; once DEFSTRUCT grew its own
+        # LispClass hierarchy rooted at STRUCTURE-OBJECT, unioning in every
+        # CLOS cell would also mark it a STANDARD-OBJECT subtype, and vice
+        # versa, when the two are meant to be disjoint -- see
+        # structures/structure-00.lsp's *disjoint-types-list*.) A user
+        # subclass of a built-in class -- `(defclass
+        # substandard-generic-function (standard-generic-function) ...)`,
+        # defgeneric.30 -- is a CLOS cell the string table knows nothing
+        # about, and its instances land in that cell (`_class_cell_of`
+        # records the class a DEFGENERIC's :generic-function-class option
+        # named), so the cone of the *string* must contain it for
+        # `(typep fn 'standard-generic-function)` to stay T while
+        # `(typep fn 'substandard-generic-function)` becomes T too.
+        from fclpy import classes as _classes
+        root_class = _classes.find_class(node)
+        if root_class is not None:
+            for candidate in _clos_classes():
+                try:
+                    supers = candidate.get_linearized_superclasses()
+                except Exception:
+                    continue
+                if any(sup is root_class for sup in supers):
+                    cells.add(_cell_key(candidate))
         return cells
     if isinstance(node, type):
         seen = {node}
@@ -1288,6 +1292,19 @@ def _class_cell_of(obj):
         # ansi-test's STRUCT-TEST-nn/14 and STRUCTURE-1-13 assert.
         return getattr(obj, 'metaclass_name', 'STANDARD-CLASS')
     if isinstance(obj, _classes.GenericFunction):
+        # A generic function is an instance of the class its DEFGENERIC's
+        # :generic-function-class option named (CLHS 7.7) -- STANDARD-GENERIC-
+        # FUNCTION when the option is absent. Defgeneric.30 typep's the object
+        # against both, so the recorded class must be the one CLASS-OF answers
+        # -- and this is the *cell* CLASS-OF answers, not merely the name:
+        # TYPEP decides by cell membership, so recording only a name here made
+        # `(typep fn 'substandard-generic-function)` NIL even while CLASS-OF
+        # answered the right class and `(typep fn 'standard-generic-function)`
+        # stayed T (the name's cone reaches the subclass cell through the
+        # ancestry walk in `_class_cone`).
+        gf_class = getattr(obj, 'gf_class', None)
+        if gf_class is not None:
+            return _cell_key(gf_class)
         return 'STANDARD-GENERIC-FUNCTION'
     from fclpy.lispfunc.misc_hashtables import is_hash_table
     if is_hash_table(obj):
