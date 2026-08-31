@@ -26,6 +26,101 @@ history is preserved in condensed form in [Changelog](docs/changelog.md).
 
 ## 1. Status
 
+> ### Latest full run (2026-08-31, 18:28–21:21): **99.71% passing, 63 failing**
+>
+> ```
+> COMPLETENESS: total=21908 passed=21845 failed=63 accounted=21908 missing=0 extra=0
+> COMPLETENESS: OK
+> ```
+>
+> 2h52m. **Run with the bare `run_all_tests.py` at CPython's default 1000-frame
+> limit** — no wrapper, no raised recursion limit. That matters: this is the
+> first full run that measures fclpy under the *same* host limits the
+> development loop uses, because the recursion work below removed the need for
+> the deep stack rather than the deep stack hiding the need for the work.
+> Snapshot (results + log + err) at
+> `ansi_results/snapshots/2026-08-31-run4-full/`.
+>
+> `docs/ansi_checklist.md` regenerated from it: 63 failing across 35 files
+> (+5 unattributable), a **pure full-run regeneration with no merge
+> amendments**. `gate.py` green.
+>
+> **The `git diff` on the checklist reads 62 → 63. That is not a regression,
+> and the comparison is invalid** — it is the trap plan.md warns about two
+> sections down ("a merged total is an **index**; the official number moves
+> only on a full run"). The committed 62 was *"the last full run amended by 78
+> targeted run(s)"*, and those targeted runs came from `scripts/run_ansi.py`,
+> which raises the recursion limit to 60000. They therefore already credited
+> `cons`, `iteration` and `data-and-control-flow` at **100%** — while at the
+> default limit those very tests still failed and a bare `run_all_tests.py`
+> *aborted* on them. The index was writing a cheque the scoreboard could not
+> cash. This run is what makes the claim true.
+>
+> Compared like with like, **full run to full run: 78 → 63.**
+>
+> | | count | note |
+> |---|---|---|
+> | fixed | **16** | 10 recursion (COPY-TREE.2, INTERSECTION.12, NINTERSECTION.3/.10/.11/.12, N/UNION.24, N/SET-DIFFERENCE.13), 4 LOOP (LOOP.4.7/.4.8, LOOP.5.ERROR.3/.4), 2 VALUES (.20/.21) |
+> | newly failing | **1** | `FORMAT.E.26` — **flaky, not a regression**: it draws `(random 4)` over short/single/double/long-float and fails whenever the draw needs float-subtype range tracking fclpy lacks (§1 item 5). Measured 4 consecutive targeted runs: pass, **fail**, pass, pass. It passed at 07:32 and failed here by luck. |
+>
+> Note the per-file `--baseline` check reported **no** regression for it,
+> because the baseline is three runs old (97 files / 261 failures) and that file
+> already had failures. Two weaknesses worth knowing: per-file counts hide
+> test-level churn, and a file that reaches **zero** drops off the checklist
+> with no annotation at all — which is why the 10 fixed `cons` tests were
+> invisible in the diff while 6 unrelated `-N since baseline` markers showed.
+> For a real ledger, diff the *test name lists* between two full runs, as was
+> done above.
+>
+> **The suite has at least one non-deterministic test.** Treat any single
+> full-run count as ±1 rather than exact.
+>
+> **Fourteen directories are now at 100%**, including `cons`, `iteration` and
+> `data-and-control-flow`, which the recursion work closed out:
+>
+> | dir | failed | rate | | dir | failed | rate |
+> |---|---|---|---|---|---|---|
+> | printer | 15 | 98.1% | | objects | 1 | 99.9% |
+> | types-and-classes | 12 | 97.8% | | reader | 1 | 99.4% |
+> | symbols | 10 | 99.1% | | **cons** | **0** | **100%** |
+> | sequences | 8 | 99.7% | | **iteration** | **0** | **100%** |
+> | numbers | 4 | 99.7% | | **data-and-control-flow** | **0** | **100%** |
+> | conditions | 3 | 99.0% | | eval-and-compile, arrays, hash-tables, | | |
+> | files | 2 | 97.7% | | packages, structures, strings, characters, | 0 | 100% |
+> | environment | 2 | 99.0% | | pathnames, streams, system-construction, misc | | |
+>
+> **The recursion cluster is closed.** All eleven of recursion-plan.md §1's
+> RecursionError tests are free of recursion failure; **ten pass outright in
+> this run** (COPY-TREE.2, INTERSECTION.12, NINTERSECTION.3/.10/.11/.12,
+> UNION.24, NUNION.24, SET-DIFFERENCE.13, NSET-DIFFERENCE.13). The eleventh,
+> `PRINT.BACKQUOTE.RANDOM.14`, no longer overflows or aborts the run — it fails
+> on a **radix round-trip** (`908` prints as `#24r1DK`, reads back as `13701`),
+> a printer/reader defect of a different class. Four mechanisms got there, none
+> of them raising the recursion limit (see recursion-plan.md Steps 4, 6, 6b):
+>
+> | | frames/level | max depth |
+> |---|---|---|
+> | before | 5 (9 through CLOS) | 149 non-tail, 186 tail |
+> | after | **2** (8 through CLOS) | **372** non-tail, **unbounded** tail |
+>
+> Commits: `386a881` (self tail-call trampoline), `4a3bae2` (IF chains resolved
+> in `eval`'s frame + explicit continuation stack for argument evaluation),
+> `5ebdb05` (CLOS dispatch 9→8, AND/OR last-operand deferral).
+>
+> **Baseline NOT refreshed** — there are no regressions to hide, and
+> `--save-baseline` is the maintainer's call (§7). Refreshing it from this run
+> is legitimate whenever you want it; the run is full, complete, and clean.
+>
+> **Still host-stack-proportional, and this is the next architectural step** if
+> recursion depth is to be bounded only by memory (CL's actual model — no
+> specified limit, `STORAGE-CONDITION` on exhaustion): the `eval`+`call` pair
+> per activation (2 frames, on *every* recursion), the CLOS chain (8), and the
+> reader's and printer's nested-descent paths (untouched). Argument evaluation
+> is already heap-based.
+
+<details>
+<summary>Previous full run (2026-08-31, 07:32): 99.64% passing, 78 failing</summary>
+
 > ### Latest full run (2026-08-31): 99.64% passing, 78 failing — up from 98.8%
 >
 > ```
@@ -73,6 +168,8 @@ history is preserved in condensed form in [Changelog](docs/changelog.md).
 > with `pipenv run python scripts/ansi_checklist.py --save-baseline docs/ansi_checklist_baseline.json`
 > from this same `ansi_results/` snapshot — do not require another full run
 > just to save the baseline.
+
+</details>
 
 > ### Multi-agent round (2026-08-30): checklist index 597 → ~333
 >
