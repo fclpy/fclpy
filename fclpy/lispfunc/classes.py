@@ -388,6 +388,26 @@ def make_instance(class_spec, *args, **kwargs):
     return classes.call_generic_function(gf, [class_designator] + initargs)
 
 
+# The function cell of MAKE-INSTANCE must hold the GenericFunction object
+# itself, not this wrapper (CLHS 7.1: MAKE-INSTANCE is a standard generic
+# function). A plain callable answers CLASS-OF => FUNCTION, so a method
+# specialized on GENERIC-FUNCTION or STANDARD-GENERIC-FUNCTION never sees it
+# as applicable -- standard-generic-function.1/.2 dispatch on exactly that.
+# A DEFMETHOD on MAKE-INSTANCE already replaces the binding with the bare gf
+# (eval_defmethod's install_function_binding), and its default method
+# (misc_clos.py's `_default_make_instance`) resolves a symbol designator
+# itself, so the wrapper's resolve-before-dispatch is only ever reachable
+# while no user method exists -- a state in which the default method answers
+# identically. Patching the *registry entry* (not a live environment) is
+# what makes every setup_standard_environment rebind the same object; the
+# wrapper above stays for Python-level callers that pass **kwargs. The gf
+# is the one `ensure_generic_function` keys by name, so the default method
+# misc_clos.py installs lands on this same object whichever module imports
+# first.
+_registry.function_registry['MAKE-INSTANCE'].func = classes.ensure_generic_function(
+    lisptype.COMMON_LISP_PACKAGE.intern_symbol('MAKE-INSTANCE'))
+
+
 # SLOT-VALUE, (SETF SLOT-VALUE), SLOT-BOUNDP and SLOT-MAKUNBOUND live in
 # `misc_clos.py` -- the one place that implements their full CLHS 7.5.3
 # protocol (SLOT-MISSING for a slot the class doesn't define, SLOT-UNBOUND

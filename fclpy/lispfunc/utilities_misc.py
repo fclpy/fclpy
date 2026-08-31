@@ -29,7 +29,6 @@ from .misc_hashtables import (
 
 from .misc_clos import (
     find_class,
-    make_instance,
     allocate_instance,
     initialize_instance,
     reinitialize_instance,
@@ -70,6 +69,14 @@ from .misc_clos import (
     generic_function_name,
     make_load_form,
 )
+
+# MAKE-INSTANCE's one implementation lives in `classes.py` -- the
+# registration there binds the MAKE-INSTANCE GenericFunction itself into
+# every function cell (CLHS 7.1), and this module only re-exports the
+# Python-level callable for `from .utilities import *` consumers. The
+# second, initarg-dropping copy this used to import from `misc_clos` is
+# deleted (standing rule 3).
+from .classes import make_instance
 
 from .misc_packages import (
     make_package,

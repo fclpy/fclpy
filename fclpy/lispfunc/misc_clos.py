@@ -958,16 +958,6 @@ def find_class(name, errorp=True, environment=None):
         return lisptype.NIL
 
 
-@_registry.cl_function('MAKE-INSTANCE')
-def make_instance(class_designator, *initargs):
-    """Create an instance using classes.make_instance. Initargs currently ignored."""
-    try:
-        # classes.make_instance accepts a LispSymbol or string
-        return classes.make_instance(class_designator)
-    except Exception as e:
-        raise lisptype.LispError(str(e))
-
-
 @_registry.cl_function('ALLOCATE-INSTANCE')
 def allocate_instance(class_obj, *initargs):
     """Allocate a raw instance: dispatches through the ALLOCATE-INSTANCE
