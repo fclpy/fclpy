@@ -3792,17 +3792,16 @@ def _format_directive(control_string, cursor, pos, emitted=None):
         val = get_arg()
         if isinstance(val, lisptype.Character):
             if colon_flag:
-                # Pretty print special characters. A non-graphic character
-                # prints as its CHAR-NAME (CLHS 22.3.1.4's ~:C is "as the
-                # character would be printed by PRINC with its name spelled
-                # out" -- ansi-test compares ~(format nil "~:C" c) directly
-                # against (char-name c), so the name table lives in one
-                # place: CHAR-NAME. Unnamed characters print as themselves.
-                if not val.char.isprintable() or val.char == ' ':
-                    from .characters import char_name
-                    result = char_name(val) or val.char
-                else:
-                    result = val.char
+                # ~:C prints the character "as it would be printed by PRINC
+                # with its name spelled out" (CLHS 22.3.1.4) -- ansi-test
+                # string-compares `(format nil "~:c" c)` against
+                # `(char-name c)` for every non-graphic character
+                # (format.c.4a/formatter.c.4a), so the name table lives in
+                # one place, CHAR-NAME, and ~:C is its delegation. A
+                # graphic character has no name and prints as itself;
+                # CHAR-NAME answers "Space" for the space.
+                from .characters import char_name
+                result = char_name(val) or val.char
             elif at_flag:
                 # Lisp readable form
                 char_names = {' ': '#\\Space', '\n': '#\\Newline', '\t': '#\\Tab', '\r': '#\\Return'}

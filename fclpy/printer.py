@@ -702,40 +702,34 @@ def _write_complex(value, ctx):
 # Characters and strings
 # ---------------------------------------------------------------------------
 
-#: Printed names for the characters that have them (CLHS 13.1.7). Kept here so
-#: there is one table: ``Character.__repr__``, ``Character.__str__``,
-#: ``printer._print_character`` and ``FORMAT``'s ``~C`` each had their own and
-#: they disagreed on coverage.
-CHARACTER_NAMES = {
-    ' ': 'Space',
-    '\n': 'Newline',
-    '\t': 'Tab',
-    '\r': 'Return',
-    '\b': 'Backspace',
-    '\f': 'Page',
-    '\x7f': 'Rubout',
-    '\0': 'Null',
-    '\x1b': 'Escape',
-}
-
-
 def character_name(char):
     """The printed name of `char` after ``#\\``.
 
-    ``isprintable()`` takes priority over ``CHARACTER_NAMES`` for every name
-    except Newline. `printer/print-characters.lsp`'s `PRINT.CHAR.3`/`.4`/`.9`
-    (under ``*print-readably*`` NIL, CLHS 22.1.3.6's non-readable mode, where
-    the printer is explicitly *not* required to produce something that reads
-    back) print Space as a bare space -- `"#\\ "` -- not `#\\Space`, and
-    `.3`'s loop over `+base-chars+` explicitly excludes `#\\Space` from the
-    "named form required" check. Newline is the one exception CLHS still
-    names explicitly (`.5`/`.9`), so it keeps its standard name even though
+    ``isprintable()`` takes priority over the name: `printer/print-
+    characters.lsp`'s `PRINT.CHAR.3`/`.4`/`.9` (under ``*print-readably*``
+    NIL, CLHS 22.1.3.6's non-readable mode, where the printer is explicitly
+    *not* required to produce something that reads back) print Space as a
+    bare space -- `"#\\ "` -- not `#\\Space`, and `.3`'s loop over
+    `+base-chars+` explicitly excludes `#\\Space` from the "named form
+    required" check. Newline is the one exception CLHS still names
+    explicitly (`.5`/`.9`), so it keeps its standard name even though
     Python considers it non-printable anyway.
+
+    A non-printable character's name comes from CHAR-NAME
+    (`lispfunc/characters.py`, the one home of the character-name
+    concept) -- not from a second table here. Two tables was how
+    `format.s.8` came to compare `#\\~:c`'s "Bell" against the printer's
+    "U+0007" for the same character and fail. The ``U+XXXX`` fallback is
+    dead code while CHAR-NAME answers a name for every non-printable
+    character, and stays as the belt for a character CHAR-NAME does not
+    know.
     """
     if char.isprintable():
         return char
-    if char in CHARACTER_NAMES:
-        return CHARACTER_NAMES[char]
+    from fclpy.lispfunc.characters import char_name
+    name = char_name(Character(char))
+    if name is not None:
+        return name
     # Fallback for non-printable characters without standard names is
     # implementation-defined; we use Unicode hex notation. This cannot be read
     # back, so it violates *PRINT-READABLY*, which is handled in _write_character.

@@ -253,14 +253,26 @@ def char_name(character):
     `(string= (char-name #\\Space) "Space")` expects -- capitalized, not
     upper-case).
 
-    Only a character with a name in `_CHAR_DISPLAY_NAME` gets one back: a
-    made-up name for every other unprintable character (this used to
-    return `f"CHAR-{code}"`) cannot round-trip through NAME-CHAR, and
-    `char-name.1.fn` checks exactly that round trip for every character
-    in the implementation's code range.
+    A character with no name in `_CHAR_DISPLAY_NAME` answers CLHS
+    22.1.3.4's ``U+XXXX`` spelling when it is not graphic. That is not a
+    courtesy: `format.c.4a`/`formatter.c.4a` string-compare
+    `(format nil "~:c" c)` against `(char-name c)` for *every*
+    non-graphic character, so a NIL here fails at the `string=` -- `~:C`
+    delegates to this function, so the two can only agree if this answers
+    a string for each of them. The spelling is the one the printer's
+    ``#\\`` output already uses and the reader's `#\\` handler already
+    reads back (`readtable._sharp_character`), and `name_char` below
+    inverts it, so `char-name.1.fn`'s
+    `(eql c (name-char (char-name c)))` round trip holds for the
+    ``U+XXXX`` names too.
     """
     text = _require_char_text(character, 'CHAR-NAME')
-    return _CHAR_DISPLAY_NAME.get(text)
+    name = _CHAR_DISPLAY_NAME.get(text)
+    if name is not None:
+        return name
+    if not text.isprintable():
+        return f'U+{ord(text):04X}'
+    return None
 
 
 # Case sensitive character comparisons
