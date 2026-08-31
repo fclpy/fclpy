@@ -466,12 +466,14 @@ def _split_inferred_keywords(shape, values):
              or (shape.wildcard and isinstance(value, lisptype.LispSymbol)))
                 and len(pos_args) >= shape.num_required):
             if (shape.wildcard and not isinstance(value, lisptype.lispKeyword)
-                    and not (allow_other_keys or saw_marker)):
+                    and not allow_other_keys):
                 # CLHS 3.5.1.5: a pair name that is not a symbol in the
                 # KEYWORD package is invalid unless the call carries a
-                # true-valued :allow-other-keys (the callee's own
+                # *true-valued* :allow-other-keys -- a marker pair bound to
+                # NIL suppresses nothing (`substitute.error.5`'s
+                # 'bad t :allow-other-keys nil). The callee's own
                 # &allow-other-keys is not visible to a lambda list whose
-                # keys are inferred). `write-to-string.3` passes a gensym
+                # keys are inferred. `write-to-string.3` passes a gensym
                 # name and is legal only because of its :allow-other-keys t.
                 raise lisptype.LispProgramError(
                     f"{value.name!r} is not a valid keyword argument name")
