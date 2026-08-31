@@ -1751,7 +1751,12 @@ def call_generic_function(gf: GenericFunction, args: List[Any]) -> Any:
         # long-form combination whose body maps over an empty method group
         # otherwise happily produces `(vector)` and returns #().
         _no_applicable_method(gf, args)
-    return method_combination_of(gf).invoke(gf, applicable, args)
+    # The combination's type is asked directly, not through
+    # MethodCombination.invoke: that method is a one-line delegation, and its
+    # frame sits on the stack for every level of a recursive generic function
+    # (recursion-plan.md, the PRINT.BACKQUOTE.RANDOM.14 diagnosis).
+    return method_combination_of(gf).type.invoke(gf, applicable, args,
+                                                 method_combination_of(gf).options)
 
 
 _UNSET_KEYWORD_CONTEXT = object()

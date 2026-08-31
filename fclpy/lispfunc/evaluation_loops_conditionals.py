@@ -871,21 +871,7 @@ def eval_and(form, env):
     truthiness, including the last, discarded the last form's real
     value(s) whenever its primary value happened to be NIL.
     """
-    from .evaluation_core import eval
-
-    args = cdr(form)
-    if not _consp_internal(args):
-        return lisptype.T  # AND with no arguments is T
-
-    while True:
-        current = car(args)
-        rest = cdr(args)
-        result = eval(current, env)
-        if not _consp_internal(rest):
-            return result
-        if not lisptype.is_truthy(result):
-            return lisptype.NIL
-        args = rest
+    return _eval_logic(cdr(form), env, 'AND')
 
 
 def eval_or(form, env):
@@ -895,20 +881,54 @@ def eval_or(form, env):
     exactly, whatever they are, rather than being reduced to NIL when its
     primary value is falsy.
     """
+    return _eval_logic(cdr(form), env, 'OR')
+
+
+def _eval_logic(args, env, pol):
+    """Evaluate an AND/OR operand chain, one frame for the whole chain.
+
+    Two things used to cost two Python frames per nesting level *per level of
+    Lisp recursion* (recursion-plan.md Step 3): each AND/OR went through a
+    dispatch frame plus its handler's, and an operand that was itself an
+    AND/OR recursed. A user function whose recursion test is
+    `(and A (or B (and C D)))` -- `check-scaffold-copy` in the ansi-test
+    helpers, ~143 levels deep -- cost 8 Python frames per level, past the
+    default limit. Nested logic forms are stepped into here instead, and a
+    nested form in *last* position (its value is this level's value, the only
+    shape a recursive helper like that produces) never leaves this frame.
+
+    The evaluation order and the values are the operators' own: non-last
+    operands decide by `is_truthy` of their primary, the last operand's
+    result is returned exactly whatever it is, `(and)` is T and `(or)` is NIL.
+    """
     from .evaluation_core import eval
 
-    args = cdr(form)
-    if not _consp_internal(args):
-        return lisptype.NIL  # OR with no arguments is NIL
-
     while True:
+        if not _consp_internal(args):
+            return lisptype.T if pol == 'AND' else lisptype.NIL
         current = car(args)
         rest = cdr(args)
+        # A nested logic form in last position: its value is this level's
+        # value, so step into it here instead of evaluating it through
+        # eval + handler + eval.
+        if not _consp_internal(rest) and _consp_internal(current):
+            op = car(current)
+            if isinstance(op, lisptype.LispSymbol) and (op.name == 'AND' or op.name == 'OR'):
+                pol, args = op.name, cdr(current)
+                continue
         result = eval(current, env)
         if not _consp_internal(rest):
             return result
-        if lisptype.is_truthy(result):
-            return result
+        if pol == 'AND':
+            if not lisptype.is_truthy(result):
+                return lisptype.NIL
+        else:
+            # CLHS 5.3: a form other than the last that evaluates to true
+            # contributes only its **primary** value (OR.6 -- the macro pins
+            # this by binding the form into a single-value gensym); only the
+            # last form's full values are the OR's values.
+            if lisptype.is_truthy(result):
+                return _primary_value(result)
         args = rest
 
 
@@ -1520,8 +1540,13 @@ def eval_loop(form, env):
     def _claim_variables(varspec):
         for var_name in _loop_varspec_names(varspec):
             if var_name in bound_variable_names:
-                raise lisptype.LispProgramError(
-                    f'LOOP binds {var_name} twice')
+                # The same condition `validate_loop_form`'s expansion-time
+                # pre-check signals -- not a bare LispProgramError raise, so
+                # signals-error's handler and RT's own error handler match it
+                # by type (CLHS 6.1.1.7).
+                from .evaluation_conditions import signal_error_object
+                signal_error_object(lisptype.ProgramError(
+                    message=f'LOOP binds {var_name} twice'))
             bound_variable_names.append(var_name)
 
     # Parse loop clauses into structured form
@@ -2877,37 +2902,69 @@ def eval_loop(form, env):
             frame.unwind()
 
 
-def _run_with_nil_block(thunk, block_name=None, env=None):
-    """Run thunk() inside the implicit block DO/DO*/DOLIST/DOTIMES/LOOP and
-    every function-definition body establishes (CLHS 6.1.1 / 3.1.2.1.2.3).
+class _implicit_block_frame:
+    """The implicit NIL/NAMED block of DO/DO*/DOLIST/DOTIMES/LOOP and every
+    function-definition body (CLHS 6.1.1 / 3.1.2.1.2.3), as a context manager.
+
+    This is the same mechanism `_run_with_nil_block` wraps, in the shape a
+    *caller with its own body loop* needs: a `with` statement holds no frame
+    while the body runs, where going through the thunk face costs two frames
+    per nesting level (`_run_with_nil_block`'s own frame plus the thunk's) --
+    and those frames sit on the stack for every level of Lisp recursion,
+    which is how the default 1000-frame limit capped user recursion at ~140
+    levels (recursion-plan.md Step 3). A RETURN-FROM targeting this block is
+    caught here; `value`/`caught` carry its result out, because a context
+    manager cannot `return` on the protected body's behalf.
 
     block_name is the target block's name: None/NIL for the ordinary implicit
-    NIL block every one of these forms gets by default, or a symbol for a
-    LOOP that used a NAMED clause (CLHS 6.1: NAMED gives the loop its own
-    block instead of NIL, so a bare (RETURN x) -- which is (RETURN-FROM NIL
-    x) -- must NOT be caught here; it has to keep propagating to find an
-    actual enclosing NIL block).
+    NIL block, or a symbol for a LOOP that used a NAMED clause (CLHS 6.1) --
+    a bare (RETURN x) must NOT be caught by a NAMED block; it has to keep
+    propagating to find an actual enclosing NIL block.
 
-    env is the environment the form's body evaluates in, and is where the
-    implicit block's frame is registered (see
+    env is the environment the body evaluates in, and is where the implicit
+    block's frame is registered (see
     evaluation_control_flow.establish_block_frame), so RETURN-FROM resolves
     its target through the lexical chain: a closure defined inside the body
     returns to *this* implicit block, while the same transfer raised from
     code lexically outside it is re-raised instead of being caught by name.
     """
-    from .evaluation_core import ReturnFromException
-    from .evaluation_control_flow import (
-        establish_block_frame, deactivate_frame)
+    __slots__ = ('block_name', 'env', 'frame', 'value', 'caught')
 
-    frame = establish_block_frame(env, block_name)
-    try:
+    def __init__(self, block_name=None, env=None):
+        self.block_name = block_name
+        self.env = env
+        self.frame = None
+        self.value = None
+        self.caught = False
+
+    def __enter__(self):
+        from .evaluation_control_flow import establish_block_frame
+        self.frame = establish_block_frame(self.env, self.block_name)
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        from .evaluation_core import ReturnFromException
+        from .evaluation_control_flow import deactivate_frame
+        deactivate_frame(self.frame)
+        if exc_type is ReturnFromException and exc.block_frame is self.frame:
+            self.value = exc.value
+            self.caught = True
+            return True
+        return False
+
+
+def _run_with_nil_block(thunk, block_name=None, env=None):
+    """Run thunk() inside the implicit block DO/DO*/DOLIST/DOTIMES/LOOP and
+    every function-definition body establishes (CLHS 6.1.1 / 3.1.2.1.2.3).
+
+    The context-manager face of this mechanism is `_implicit_block_frame`;
+    use that when the caller runs its own body and cannot afford the two
+    frames a thunk call costs.
+    """
+    blk = _implicit_block_frame(block_name, env)
+    with blk:
         return thunk()
-    except ReturnFromException as e:
-        if e.block_frame is frame:
-            return e.value
-        raise
-    finally:
-        deactivate_frame(frame)
+    return blk.value
 
 
 def _exec_iteration_body(body, env):

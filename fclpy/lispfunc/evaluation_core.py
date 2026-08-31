@@ -26,6 +26,61 @@ import fclpy.lispfunc as lispfunc
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Lisp call depth -> STORAGE-CONDITION (recursion-plan.md Step 5)
+# ---------------------------------------------------------------------------
+
+# Depth of *user-function* calls (the closures `make_ordinary_function` and
+# `_make_method_function` build). CPython's own ~1000-frame limit surfaces a
+# RecursionError -- a Python exception as the value of a Lisp form, recorded
+# by RT as the test's actual value, and the known wedge of the 08-31 full run
+# once stack exhaustion reached RT's failure printer. Signalling a real
+# STORAGE-CONDITION (CLHS 9.1, `universe.lsp`) *while Python stack remains*
+# is the software analogue of a stack check: the program still fails, but as
+# the ANSI-specified condition, diagnosably, instead of as `Error("Python
+# error in function call: RecursionError ...")`.
+#
+# The counter alone cannot decide (Python frames per Lisp call level varies
+# from ~4 to ~19 by call shape), so it is only the trigger: past
+# _LISP_DEPTH_FLOOR the *actual* Python stack is measured against
+# `sys.getrecursionlimit() - _STACK_MARGIN`, which adapts to
+# `run_ansi.run_with_deep_stack`'s raised limit on its own. Single-threaded
+# runs only (the runners and pytest are).
+_LISP_CALL_DEPTH = 0
+_LISP_DEPTH_FLOOR = 40
+_STACK_MARGIN = 250
+
+
+def _python_stack_depth():
+    depth = 0
+    frame = sys._getframe(1)
+    while frame is not None:
+        depth += 1
+        frame = frame.f_back
+    return depth
+
+
+def _enter_lisp_call(closure_name):
+    """Depth bookkeeping for a user-function entry; True if over budget.
+
+    The caller (which is about to consume its own frames binding parameters)
+    raises the STORAGE-CONDITION itself.
+    """
+    global _LISP_CALL_DEPTH
+    _LISP_CALL_DEPTH += 1
+    if _LISP_CALL_DEPTH > _LISP_DEPTH_FLOOR:
+        margin = sys.getrecursionlimit() - _STACK_MARGIN
+        if _python_stack_depth() > margin:
+            _LISP_CALL_DEPTH -= 1
+            return True
+    return False
+
+
+def _leave_lisp_call():
+    global _LISP_CALL_DEPTH
+    _LISP_CALL_DEPTH -= 1
+
+
 def is_arity_mismatch_message(error_str):
     """True if a Python `TypeError` string names a call-arity problem.
 
@@ -952,7 +1007,8 @@ def eval(form, env=None):
         eval_progn, eval_locally, eval_let, eval_letstar, eval_quasiquote,
         eval_eval_when,
         eval_flet, eval_labels, eval_time,
-        eval_ecase, eval_typecase, eval_etypecase, eval_ctypecase
+        eval_ecase, eval_typecase, eval_etypecase, eval_ctypecase,
+        eval_when, eval_unless, _eval_logic,
     )
     from .utilities_functions import eval_progv
     from .evaluation_conditions import (
@@ -1123,6 +1179,33 @@ def eval(form, env=None):
                 return eval_setq(form, env)
             elif operator.name == 'PROGN':
                 return eval_progn(form, env)
+            elif operator.name == 'COND':
+                # Dispatched to its evaluator, not through the macro
+                # pipeline. COND is a CLHS macro, but its expansion is a
+                # chain of nested IFs with a recursive COND in each else --
+                # one eval + macro frame + eval_if pair *per clause*. On a
+                # user function built from COND (every ansi-test aux helper,
+                # split-list/shuffle) that cost ~4 Python frames per clause
+                # per level of Lisp recursion and capped default-limit
+                # recursion at ~50 levels (recursion-plan.md Step 3).
+                # eval_cond evaluates the clauses in this frame with the same
+                # semantics; the macro binding stays intact for
+                # MACROEXPAND/MACRO-FUNCTION. A MACROLET shadowing one of
+                # these names is bypassed here, exactly as it is for the
+                # special operators above.
+                return eval_cond(form, env)
+            elif operator.name == 'AND':
+                # `_eval_logic` directly, not through eval_and/eval_or: those
+                # are one-line delegations, and the extra frame sits on the
+                # stack for every level of Lisp recursion through a user
+                # function whose test is an AND/OR chain.
+                return _eval_logic(cdr(form), env, 'AND')
+            elif operator.name == 'OR':
+                return _eval_logic(cdr(form), env, 'OR')
+            elif operator.name == 'WHEN':
+                return eval_when(form, env)
+            elif operator.name == 'UNLESS':
+                return eval_unless(form, env)
             elif operator.name == 'LOCALLY':
                 return eval_locally(form, env)
             elif operator.name == 'LET':
@@ -1595,6 +1678,16 @@ def eval(form, env=None):
         except ArithmeticError as e:
             # Handle other arithmetic errors
             condition = lisptype.ArithmeticError(message=str(e))
+            raise ConditionException(condition, recoverable=False)
+        except RecursionError as e:
+            # Last-resort net (recursion-plan.md Step 5): the depth budget in
+            # `_enter_lisp_call` signals STORAGE-CONDITION while Python stack
+            # remains; if exhaustion still reaches here, it is the ANSI-specified
+            # condition, never `Error("Python error in function call:
+            # RecursionError ...")` -- a Python exception recorded as a Lisp value,
+            # and the wedge of the 08-31 full run once it hit RT's failure printer.
+            condition = lisptype.StorageCondition(
+                message=f"STORAGE-CONDITION: stack exhaustion: {e}")
             raise ConditionException(condition, recoverable=False)
         except Exception as e:
             # Catch-all for any other Python exceptions

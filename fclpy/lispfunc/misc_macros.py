@@ -1079,11 +1079,41 @@ def copy_tree(obj):
     Recursion follows both car and cdr, which is what distinguishes COPY-TREE
     from COPY-LIST: a dotted tail is a leaf and is shared, but a sublist in
     either position is copied.
+
+    **The cdr spine is walked iteratively, not recursed into** -- the same
+    rule `equal` in comparison.py documents: a list's length is unbounded in
+    a way its nesting depth is not, so recursing on the cdr costs one Python
+    frame per *element* and `(copy-tree (make-list 2000))` overflowed the
+    default 1000-frame limit (recursion-plan.md, Step 1; COPY-TREE.2 copies
+    the whole of `*UNIVERSE*`). Only the car recurses, so the Python depth is
+    the tree's *depth*, bounded by the data in the way a list's length is not.
+
+    A circular spine is signalled, not walked: the recursive version this
+    replaced died with a RecursionError on one, so raising keeps the
+    operator terminating without introducing a hang (the one failure mode
+    worse than an error).
     """
     from .core import _consp_internal
     if not _consp_internal(obj):
         return obj
-    return lisptype.lispCons(copy_tree(obj.car), copy_tree(obj.cdr))
+    # First pass: walk the spine, remembering the cells whose cars must be
+    # copied. `tail` ends as the spine's terminator -- NIL or a dotted tail,
+    # a leaf either way, so it is shared, never copied.
+    cells = []
+    seen = set()
+    tail = obj
+    while _consp_internal(tail):
+        if id(tail) in seen:
+            raise lisptype.LispError("COPY-TREE: the list is circular")
+        seen.add(id(tail))
+        cells.append(tail)
+        tail = tail.cdr
+    # Second pass: build the copy from the end, copying each car -- the only
+    # recursive step, and its depth is the tree's nesting depth.
+    result = tail
+    for cell in reversed(cells):
+        result = lisptype.lispCons(copy_tree(cell.car), result)
+    return result
 
 
 # Note: INCF is now implemented as a special form in evaluation_special_forms.py

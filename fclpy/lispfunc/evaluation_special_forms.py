@@ -104,26 +104,44 @@ def _extract_tail_symbol_from_rest(rest_param):
     return None
 
 def eval_if(form, env):
-    """Evaluate IF special form."""
+    """Evaluate IF special form.
+
+    **A chain of IFs through the else branch is evaluated in this frame**, not
+    one `eval`+`eval_if` pair per link. The else of an IF is very often
+    another IF -- COND's expansion is exactly such a chain, and every level of
+    a user function written with COND therefore paid two Python frames per
+    clause per level of Lisp recursion (~17 frames/level for `split-list` in
+    the ansi-test helpers, capping default-limit recursion at ~50 levels).
+    The tests of the chain are still evaluated in order here; only the
+    *branch dispatch* is flattened, so the semantics are the chain's.
+    """
     # Import eval lazily to avoid circular imports
     from .evaluation_core import eval
     import sys
-    
-    args = cdr(form)
-    if not _consp_internal(args):
-        raise lisptype.LispNotImplementedError("IF requires at least 2 arguments")
-    
-    test_form = car(args)
-    then_form = car(cdr(args))
-    else_form = car(cdr(cdr(args))) if _consp_internal(cdr(cdr(args))) else None
-    
-    test_result = eval(test_form, env)
-    if lisptype.is_truthy(test_result):
-        return eval(then_form, env)
-    elif else_form is not None:
+
+    current = form
+    while True:
+        args = cdr(current)
+        if not _consp_internal(args):
+            raise lisptype.LispNotImplementedError("IF requires at least 2 arguments")
+
+        test_form = car(args)
+        then_form = car(cdr(args))
+        else_form = car(cdr(cdr(args))) if _consp_internal(cdr(cdr(args))) else None
+
+        test_result = eval(test_form, env)
+        if lisptype.is_truthy(test_result):
+            return eval(then_form, env)
+        if else_form is None:
+            return None
+        # The else of an IF is very often another IF -- step into it in this
+        # frame instead of recursing through eval + eval_if per link.
+        if _consp_internal(else_form):
+            op = car(else_form)
+            if isinstance(op, lisptype.LispSymbol) and op.name == 'IF':
+                current = else_form
+                continue
         return eval(else_form, env)
-    else:
-        return None
 
 
 def eval_setq(form, env):
@@ -1710,7 +1728,7 @@ def make_ordinary_function(lambda_list, body, env, block_name=None, name=None):
       function rather than returning from it -- FLET.6 asserts exactly that.
     """
     from .evaluation_core import eval, parse_lambda_list
-    from .evaluation_loops_conditionals import _run_with_nil_block
+    from .evaluation_loops_conditionals import _implicit_block_frame
     from .binding import BindingFrame
 
     parsed = parse_lambda_list(lambda_list)
@@ -1735,44 +1753,72 @@ def make_ordinary_function(lambda_list, body, env, block_name=None, name=None):
         display_name = 'anonymous function'
 
     def call(*call_args):
-        call_args = tuple(_canonicalize_nil_symbol(a) for a in call_args)
-
-        _check_ordinary_arity(parsed, call_args, display_name)
-
-        func_env = lisptype.Environment(env)
-        frame = BindingFrame(func_env, body=declaration_body,
-                             bound_vars=parameters,
-                             defer_free_declarations=True)
+        from .evaluation_core import _enter_lisp_call, _leave_lisp_call, ConditionException
+        if _enter_lisp_call(display_name):
+            # CLHS STORAGE-CONDITION, signalled while Python stack remains
+            # (recursion-plan.md Step 5) -- not a RecursionError later.
+            raise ConditionException(
+                lisptype.StorageCondition(
+                    message=f"Stack overflow calling {display_name}: "
+                            f"Lisp recursion exceeded the available stack"),
+                recoverable=False)
         try:
-            for index, param in enumerate(required_params):
-                frame.bind(param, call_args[index])
+            call_args = tuple(_canonicalize_nil_symbol(a) for a in call_args)
 
-            _bind_ordinary_lambda_list_tail(
-                parsed, call_args, len(required_params), func_env, eval, frame)
+            _check_ordinary_arity(parsed, call_args, display_name)
 
-            if environment_param is not None:
-                frame.bind(environment_param, env)
+            func_env = lisptype.Environment(env)
+            frame = BindingFrame(func_env, body=declaration_body,
+                                 bound_vars=parameters,
+                                 defer_free_declarations=True)
+            try:
+                for index, param in enumerate(required_params):
+                    frame.bind(param, call_args[index])
 
-            frame.install_free_declarations()
+                _bind_ordinary_lambda_list_tail(
+                    parsed, call_args, len(required_params), func_env, eval, frame)
 
-            def run_body():
-                result = lisptype.NIL
-                current = forms
-                while _consp_internal(current):
-                    result = eval(car(current), func_env)
-                    current = cdr(current)
+                if environment_param is not None:
+                    frame.bind(environment_param, env)
+
+                frame.install_free_declarations()
+
+                # The body loop runs directly in this frame -- no `run_body`
+                # thunk, and the implicit block via `_implicit_block_frame`,
+                # whose `with` holds no frame while the body runs. Going
+                # through `_run_with_nil_block(run_body, ...)` here cost two
+                # held frames per level of Lisp recursion (~8 Python frames
+                # per level, capping default-limit recursion at ~140 levels --
+                # recursion-plan.md Step 3); every level this closure saves is
+                # multiplied by the recursion depth of the program being run.
+                if block_name is None:
+                    result = lisptype.NIL
+                    current = forms
+                    while _consp_internal(current):
+                        result = eval(car(current), func_env)
+                        current = cdr(current)
+                    return result
+
+                # The implicit block's frame is registered on `func_env` only
+                # here, after the parameters are bound, so the body forms (and
+                # closures they define) resolve a RETURN-FROM to it through the
+                # lexical chain -- while an &aux/&key init form, evaluated in
+                # `func_env` *before* this registration, sees no block and its
+                # RETURN-FROM leaves the function (CLHS FLET.6).
+                blk = _implicit_block_frame(block_name, func_env)
+                with blk:
+                    result = lisptype.NIL
+                    current = forms
+                    while _consp_internal(current):
+                        result = eval(car(current), func_env)
+                        current = cdr(current)
+                if blk.caught:
+                    return blk.value
                 return result
-
-            if block_name is None:
-                return run_body()
-            # The implicit block's frame is registered on `func_env`, so the
-            # body forms (and closures they define) resolve a RETURN-FROM to
-            # it through the lexical chain -- while an &aux/&key init form,
-            # evaluated in `func_env` *before* this registration, sees no
-            # block and its RETURN-FROM leaves the function (CLHS FLET.6).
-            return _run_with_nil_block(run_body, block_name, func_env)
+            finally:
+                frame.unwind()
         finally:
-            frame.unwind()
+            _leave_lisp_call()
 
     call.__lisp_docstring__ = docstring
     call.__lisp_lambda_list__ = lambda_list
@@ -4314,8 +4360,29 @@ def get_setf_expansion(place, env):
         temps, vals, stores, store_forms, access_forms = [], [], [], [], []
         for p in place_args:
             t, v, s, sf, af = get_setf_expansion(p, env)
-            temps += t; vals += v; stores += s
-            store_forms.append(sf); access_forms.append(af)
+            temps += t; vals += v
+            access_forms.append(af)
+            if len(s) == 1:
+                stores.append(s[0])
+                store_forms.append(sf)
+            else:
+                # CLHS 5.1.2.5 + 5.1.3: the store clause of the outer VALUES
+                # place has ONE store variable per *direct* sub-place, and
+                # each receives exactly one value of the value form -- a
+                # nested VALUES place (whose own expansion has one store per
+                # of its own sub-places) is handed that single value as its
+                # first store and NIL for the rest. Binding every nested
+                # store var directly from the value form flattened the
+                # distribution ((setf (values a (values b c)) (values 0 1 2))
+                # wrote C when CLHS leaves it NIL) -- the values.20/.21 pair.
+                outer = _gensym_fn()
+                from .sequence_protocol import make_lisp_list as _mk_list
+                bindings = _mk_list([
+                    _setf_form(sj, outer if j == 0 else lisptype.NIL)
+                    for j, sj in enumerate(s)])
+                store_forms.append(
+                    _setf_form('LET', bindings, sf))
+                stores.append(outer)
         store_form = _setf_form('PROGN', *(store_forms + [_setf_form('VALUES', *stores)]))
         access_form = _setf_form('VALUES', *access_forms)
         return temps, vals, stores, store_form, access_form
@@ -5546,7 +5613,7 @@ def _make_method_function(required_params, optional_lambda_list, body, captured_
     function, so a bare (RETURN-FROM gf-name ...) inside the method body
     returns from the method rather than escaping further out.
     """
-    from .evaluation_loops_conditionals import _run_with_nil_block
+    from .evaluation_loops_conditionals import _implicit_block_frame
     from .evaluation_core import eval
     from .binding import BindingFrame
 
@@ -5566,78 +5633,93 @@ def _make_method_function(required_params, optional_lambda_list, body, captured_
                          or optional_lambda_list.get('allow_other_keys'))
 
     def method_func(*call_args):
-        # CLHS 3.5.1: a wrong argument count is a PROGRAM-ERROR -- the
-        # dispatch above only checks specializer applicability, not arity,
-        # so a method whose lambda list is `(x)` called with two arguments
-        # used to silently drop the surplus (defmethod.error.13,
-        # make-load-form.error.2).
-        if len(call_args) < n_required:
-            raise lisptype.LispProgramError(
-                f"method takes {n_required} required argument(s), got {len(call_args)}")
-        if not accepts_extra and len(call_args) > n_required + n_optional:
-            raise lisptype.LispProgramError(
-                f"method takes {n_required + n_optional} argument(s), got {len(call_args)}")
-        method_env = lisptype.Environment(captured_env)
-        # A method's parameters obey the same CLHS 3.4.1/11.1.2.1.2 rule as
-        # any other function's: one declared SPECIAL binds dynamically and
-        # is undone on exit. `BindingFrame` is the one place that decides which.
-        frame = BindingFrame(method_env, body=declaration_body,
-                             bound_vars=parameters,
-                             defer_free_declarations=True)
+        from .evaluation_core import _enter_lisp_call, _leave_lisp_call, ConditionException
+        if _enter_lisp_call(block_name or 'method'):
+            raise ConditionException(
+                lisptype.StorageCondition(
+                    message=f"Stack overflow in a method of {block_name}: "
+                            f"Lisp recursion exceeded the available stack"),
+                recoverable=False)
         try:
-            arg_index = 0
-            for param in required_params:
-                if arg_index < len(call_args):
-                    frame.bind(param, call_args[arg_index])
-                    arg_index += 1
-                else:
-                    frame.bind(param, lisptype.NIL)
+            # CLHS 3.5.1: a wrong argument count is a PROGRAM-ERROR -- the
+            # dispatch above only checks specializer applicability, not arity,
+            # so a method whose lambda list is `(x)` called with two arguments
+            # used to silently drop the surplus (defmethod.error.13,
+            # make-load-form.error.2).
+            if len(call_args) < n_required:
+                raise lisptype.LispProgramError(
+                    f"method takes {n_required} required argument(s), got {len(call_args)}")
+            if not accepts_extra and len(call_args) > n_required + n_optional:
+                raise lisptype.LispProgramError(
+                    f"method takes {n_required + n_optional} argument(s), got {len(call_args)}")
+            method_env = lisptype.Environment(captured_env)
+            # A method's parameters obey the same CLHS 3.4.1/11.1.2.1.2 rule as
+            # any other function's: one declared SPECIAL binds dynamically and
+            # is undone on exit. `BindingFrame` is the one place that decides which.
+            frame = BindingFrame(method_env, body=declaration_body,
+                                 bound_vars=parameters,
+                                 defer_free_declarations=True)
+            try:
+                arg_index = 0
+                for param in required_params:
+                    if arg_index < len(call_args):
+                        frame.bind(param, call_args[arg_index])
+                        arg_index += 1
+                    else:
+                        frame.bind(param, lisptype.NIL)
 
-            _bind_ordinary_lambda_list_tail(
-                optional_lambda_list, call_args, arg_index, method_env, eval, frame)
-            frame.install_free_declarations()
+                _bind_ordinary_lambda_list_tail(
+                    optional_lambda_list, call_args, arg_index, method_env, eval, frame)
+                frame.install_free_declarations()
 
-            # CALL-NEXT-METHOD and NEXT-METHOD-P have *indefinite extent*
-            # (CLHS 7.6.6.2): a method may return the function itself --
-            # `(defmethod f (x) #'call-next-method)` -- and the caller may
-            # FUNCALL it long after the method finished. What it closes
-            # over is the frame `classes.call_method` pushed for this very
-            # invocation; binding them as local functions of the method's
-            # environment (which is what a FLET would do) is what makes
-            # both the bare-operator and the #'-quoted uses resolve to the
-            # frame-capturing closures instead of the frame-less global
-            # operator.
-            cnm_frame = _clos_classes.current_call_frame()
-            if cnm_frame is not None:
-                captured = cnm_frame
+                # CALL-NEXT-METHOD and NEXT-METHOD-P have *indefinite extent*
+                # (CLHS 7.6.6.2): a method may return the function itself --
+                # `(defmethod f (x) #'call-next-method)` -- and the caller may
+                # FUNCALL it long after the method finished. What it closes
+                # over is the frame `classes.call_method` pushed for this very
+                # invocation; binding them as local functions of the method's
+                # environment (which is what a FLET would do) is what makes
+                # both the bare-operator and the #'-quoted uses resolve to the
+                # frame-capturing closures instead of the frame-less global
+                # operator.
+                cnm_frame = _clos_classes.current_call_frame()
+                if cnm_frame is not None:
+                    captured = cnm_frame
 
-                def _local_call_next_method(*cnm_args):
-                    return _clos_classes.call_next_method_in_frame(captured, *cnm_args)
+                    def _local_call_next_method(*cnm_args):
+                        return _clos_classes.call_next_method_in_frame(captured, *cnm_args)
 
-                def _local_next_method_p():
-                    return lisptype.lisp_bool(bool(captured['next']))
+                    def _local_next_method_p():
+                        return lisptype.lisp_bool(bool(captured['next']))
 
-                method_env.add_function(
-                    lisptype.intern_symbol('CALL-NEXT-METHOD'),
-                    _local_call_next_method)
-                method_env.add_function(
-                    lisptype.intern_symbol('NEXT-METHOD-P'),
-                    _local_next_method_p)
+                    method_env.add_function(
+                        lisptype.intern_symbol('CALL-NEXT-METHOD'),
+                        _local_call_next_method)
+                    method_env.add_function(
+                        lisptype.intern_symbol('NEXT-METHOD-P'),
+                        _local_next_method_p)
 
-            def _run_body():
-                result = lisptype.NIL
-                body_current = forms
-                while _consp_internal(body_current):
-                    result = eval(car(body_current), method_env)
-                    body_current = cdr(body_current)
+                # The body loop runs directly in this frame, and the implicit
+                # block via `_implicit_block_frame`, whose `with` holds no frame
+                # while the body runs -- the same flattening
+                # `make_ordinary_function` got (recursion-plan.md Step 3). A
+                # recursive generic function (`is-similar*` in the ansi-test
+                # helpers) pays these frames per level; the old
+                # `_run_with_nil_block(_run_body, ...)` shape cost two.
+                blk = _implicit_block_frame(block_name, method_env)
+                with blk:
+                    result = lisptype.NIL
+                    body_current = forms
+                    while _consp_internal(body_current):
+                        result = eval(car(body_current), method_env)
+                        body_current = cdr(body_current)
+                if blk.caught:
+                    return blk.value
                 return result
-
-            # The implicit block's frame is registered on `method_env`, so a
-            # (RETURN-FROM gf-name ...) in the body resolves to it through
-            # the lexical chain (CLHS 7.6.5).
-            return _run_with_nil_block(_run_body, block_name, method_env)
+            finally:
+                frame.unwind()
         finally:
-            frame.unwind()
+            _leave_lisp_call()
     # CLHS 7.6.2: a method body may open with a documentation string.
     # `split_function_body` already extracted it -- attach it to the callable
     # so `eval_defmethod` can store it on the Method object for

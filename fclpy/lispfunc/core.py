@@ -238,11 +238,9 @@ def make_package_fn(name, nicknames=None, use_list=None):
     return lisptype.make_package(name, nicknames or [], use_list or [])
 
 
-def copy_tree(tree):
-    """Create a copy of a tree structure."""
-    if atom(tree):
-        return tree
-    return cons(copy_tree(tree.car), copy_tree(tree.cdr))
+# COPY-TREE lives once, in misc_macros.copy_tree (the registered COPY-TREE);
+# the unregistered recursive copy that used to sit here competed for the name
+# and recursed on the cdr spine -- see recursion-plan.md Step 1.
 
 
 # Car/Cdr combinations

@@ -273,8 +273,14 @@ class TestDuplicateVariables:
         "(loop for a in '(1) for a in '(2) collect a)",
     ])
     def test_binding_a_name_twice_is_a_program_error(self, source):
-        with pytest.raises(lisptype.LispProgramError):
+        # The signal is a real PROGRAM-ERROR *condition* (CLHS 6.1.1.7), not a
+        # bare Python LispProgramError: it is raised at macro-expansion time,
+        # and ansi-test's signals-error matches conditions by type -- which is
+        # what LOOP.4.7/.4.8 and LOOP.5.ERROR.3/.4 reach for.
+        from fclpy.lispfunc.evaluation_core import ConditionException
+        with pytest.raises(ConditionException) as exc_info:
             ev(source)
+        assert isinstance(exc_info.value.condition, lisptype.ProgramError)
 
     def test_one_accumulation_destination_may_be_named_repeatedly(self):
         """INTO destinations are not variable *bindings* in that sense -- two

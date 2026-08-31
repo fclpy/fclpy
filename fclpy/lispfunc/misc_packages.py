@@ -894,7 +894,8 @@ def _direct_macroexpand_1(form, environment):
     with forms that are themselves quoted lists such as (QUOTE FOO).
     """
     from .evaluation_core import (_consp_internal, ReturnFromException,
-                                  ThrowException, GoException)
+                                  ThrowException, GoException,
+                                  ConditionException)
     from .core import car as _car, cdr as _cdr
 
     # CLHS 3.8: a *symbol* that names a symbol-macro also expands, not only
@@ -916,7 +917,21 @@ def _direct_macroexpand_1(form, environment):
     if not isinstance(operator, lisptype.LispSymbol):
         return form, False
 
-    # Need an environment to look up macros
+    # Need an environment to look up macros. CLHS 3.8: the environment
+    # argument of MACROEXPAND/MACROEXPAND-1 defaults to nil, which is the
+    # *null lexical environment* -- the global environment's bindings are
+    # visible in it, not "no environment at all". Treating nil as "cannot
+    # look up" made every `(macroexpand '(loop ...))` through the *function*
+    # (the path ansi-test's SIGNALS-ERROR takes: LOOP.4.7/.4.8,
+    # LOOP.5.ERROR.3/.4) report "not a macro call" and never run the
+    # expander, while the special-operator path (which uses the current
+    # lexical env) expanded fine -- the two MACROEXPAND-1s disagreeing.
+    if environment is None:
+        import fclpy.state as _state
+        from .binding import root_environment as _root_environment
+        base = _state.current_environment
+        if base is not None:
+            environment = _root_environment(base)
     if environment is None:
         return form, False
 
@@ -961,7 +976,7 @@ def _direct_macroexpand_1(form, environment):
         # answer "not a valid place" for it (`incf.22`/`decf.22`).
         expanded = lisptype.primary_value(macro_func(*call_args))
         return expanded, True
-    except (ReturnFromException, ThrowException, GoException):
+    except (ReturnFromException, ThrowException, GoException, ConditionException):
         # A control transfer is not an expansion failure -- it is the program
         # transferring control, and it must reach the frame that established
         # its target. Catching it here turned an invoked restart into "this
@@ -969,6 +984,14 @@ def _direct_macroexpand_1(form, environment):
         # Finding K's defect class); `RestartCaseTransfer` and
         # `HandlerCaseTransfer` are `ThrowException` subclasses precisely so
         # a pass-through tuple like this one covers them.
+        #
+        # A ConditionException is likewise the *program's* error, not an
+        # expansion failure: LOOP's expansion-time duplicate-variable
+        # PROGRAM-ERROR (CLHS 6.1.1.7; LOOP.4.7/.4.8, LOOP.5.ERROR.3/.4)
+        # signals through the conditions system from inside the expander, and
+        # the blanket catch below used to swallow it and report "this was not
+        # a macro call" -- the same defect `eval_macroexpand_1`'s blanket
+        # catch was removed for.
         raise
     except Exception:
         logger.error(f"[_direct_macroexpand_1] error expanding {operator}", exc_info=True)

@@ -551,15 +551,34 @@ def tree_equal(tree1, tree2, *, test=None, test_not=None):
     and since a string is an atom here, TREE-EQUAL must answer NIL for them.
     Sharing `_make_matcher` is what supplies EQL, :test-not and the
     designator coercion, instead of a bare `lambda x, y: x == y`.
+
+    **The cdr spine is walked iteratively, not recursed into** -- the same
+    rule `equal` in comparison.py and COPY-TREE (recursion-plan.md Steps 1-2)
+    document: recursing on the cdr costs one Python frame per *element*, so
+    two long lists overflowed the default frame limit before either tree's
+    nesting was deep. Only the car recurses, so the Python depth is the
+    trees' *depth*.
+
+    A circular spine is signalled, not walked: the recursive version this
+    replaced died with a RecursionError on one, so raising keeps the
+    operator terminating without introducing a hang.
     """
     from .sequences_search import _make_matcher
     matcher = _make_matcher(test=test, test_not=test_not)
 
     def compare(a, b):
-        a_atom, b_atom = _atom(a), _atom(b)
-        if a_atom or b_atom:
-            return a_atom and b_atom and matcher(a, b)
-        return compare(car(a), car(b)) and compare(cdr(a), cdr(b))
+        seen = set()
+        while True:
+            a_atom, b_atom = _atom(a), _atom(b)
+            if a_atom or b_atom:
+                return a_atom and b_atom and matcher(a, b)
+            key = (id(a), id(b))
+            if key in seen:
+                raise lisptype.LispError("TREE-EQUAL: the trees are circular")
+            seen.add(key)
+            if not compare(car(a), car(b)):
+                return False
+            a, b = cdr(a), cdr(b)
 
     return lisptype.lisp_bool(compare(tree1, tree2))
 

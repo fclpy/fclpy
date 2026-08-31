@@ -1,6 +1,9 @@
 # recursion-plan.md — RecursionError as an architecture defect
 
-**Status:** planning (2026-08-31). No code changed under this plan yet.
+**Status:** Steps 1-3 and 5 **implemented and verified** (2026-08-31); see
+"Outcome" at the end. `gate.py` green (pytest 2097 passed, no duplicates, no
+per-file ANSI regressions). A full `run_all_tests.py` run is still mandatory
+before moving the official scoreboard.
 **Source:** 2026-08-31 full run (`run_all_tests.log`), cross-referenced with
 plan.md §1 item 3 and §"Discovered issues" (the 08-31 wedge note).
 
@@ -268,3 +271,96 @@ the catch-all at `evaluation_core.py:1599` as a Lisp value.
 - `comparison.py:153-176` — the in-repo pattern for spine-iterative rewrites.
 - `misc_macros.py:626` — prior art for the same idea ("the spine (`cdr`) is
   walked iteratively, not recursively").
+
+## Outcome (2026-08-31)
+
+### What was implemented
+
+- **Step 1 — COPY-TREE** (`misc_macros.copy_tree`): cdr spine walked
+  iteratively (build from the tail backwards), car recursion only; a circular
+  spine signals instead of hanging (the old code died with RecursionError, so
+  raising preserves termination semantics). The dead unregistered `copy_tree`
+  in `core.py` is deleted. `(copy-tree (make-list 2000))` works at the default
+  limit (baseline: failed at 2000, passed at 700).
+- **Step 2 — TREE-EQUAL** (`sequences_compose.tree_equal`): same shape, same
+  circularity guard. Verified on 2000-element spines and all 29
+  tree-equal ansi tests.
+- **Step 3 — the call path, flattened.** The measured repeating units were:
+  plain defun ~5 frames/level, COND-based user code **19** (a macro frame +
+  `eval`+`eval_if` pair per clause), alternating and/or **8**, CLOS method
+  **19**. The cuts, each one mechanism:
+  - `make_ordinary_function` and `_make_method_function`: body loop inline in
+    the closure, implicit block via the new `_implicit_block_frame` context
+    manager (`evaluation_loops_conditionals`), whose `with` holds no frame;
+    `_run_with_nil_block` remains as the thunk face for the iteration forms
+    (now implemented on the same class).
+  - `eval_if`: a chain of IFs through the else branch (COND's expansion shape)
+    is stepped through in one frame.
+  - `eval`'s ladder dispatches COND/AND/OR/WHEN/UNLESS to their existing
+    in-frame evaluators (`eval_cond`/`_eval_logic`) instead of through the
+    macro pipeline; the macro definitions stay for MACROEXPAND/MACRO-FUNCTION.
+    `_eval_logic` steps a nested logic form in last position in-frame.
+  - CLOS: `call_generic_function` calls the combination type directly (past
+    `MethodCombination.invoke`'s delegation frame).
+- **Step 5 — depth budget → STORAGE-CONDITION.** `_enter_lisp_call`/
+  `_leave_lisp_call` in `evaluation_core`: user-function depth is counted; past
+  a floor the *actual* Python stack is measured against
+  `sys.getrecursionlimit() - 250` (adapts to the deep-stack wrapper), and over
+  budget a real `STORAGE-CONDITION` is signalled while stack remains. The
+  call-site catch-all converts a residual `RecursionError` into the same
+  condition instead of `Error("Python error in function call: ...")`.
+  Verified: an unbounded loop signals `StorageCondition`,
+  `handler-case` matches it via a `storage-condition` clause and NOT via
+  `error` (CLHS 9.1).
+- **Step 4's full trampoline was not needed**: the narrower mechanisms above
+  carried every failing test, and argument-position recursion (which a
+  trampoline cannot help) was the binding constraint only until the per-level
+  cost dropped.
+
+### Measured outcome
+
+- Max Lisp recursion depth (plain defun, default limit): **140 → 197**.
+- The 10 set-operation/copy-tree acceptance forms: **10/10 pass** at the
+  default limit (baseline: 0/10).
+- The PRINT.BACKQUOTE.RANDOM.14 workload (500 random backquoted forms,
+  print/read/is-similar round trips): **500/500 pass** at the default limit
+  (baseline: RecursionError at iteration ~176).
+- `cons` directory: **1882/1882 (100%)**. `objects` 861/862 (the documented
+  pre-existing DEFGENERIC.30), `data-and-control-flow` and `iteration` fully
+  green after the fixes below.
+- PRINT.BACKQUOTE.RANDOM.14 itself still fails 1/14 — but now on a
+  *pre-existing printer-similarity mismatch* (printed vs reread forms differ
+  under random `*print-*` settings), a different defect class from recursion,
+  visible only under the deep-stack runner and present at HEAD.
+
+### Fixed in passing (standing-rule discoveries)
+
+- **pytest regression** (3 `test_loop_clauses` failures, introduced by an
+  earlier commit today converting LOOP's duplicate-binding signal to a
+  condition without updating the tests): the engine's own claim check now
+  signals the same PROGRAM-ERROR condition as the expansion-time pre-check,
+  and the tests pin the condition. The fix also required
+  `_direct_macroexpand_1` to (a) pass `ConditionException` through its blanket
+  catch (the sibling defect `eval_macroexpand_1`'s catch removal fixed) and
+  (b) treat a NIL environment as the *global* environment (CLHS 3.8's "null
+  lexical environment"), not "cannot look up macros".
+- **Four pre-existing ansi failures** fell out of the same fix:
+  LOOP.4.7/.4.8 and LOOP.5.ERROR.3/.4 (macroexpand-time PROGRAM-ERROR) now
+  pass.
+- **VALUES place distribution** (`values.20`/`.21`, the checklist's last
+  flagged regression): the store clause of a VALUES place has one store
+  variable per *direct* sub-place, each receiving one value of the value form;
+  a nested VALUES place is handed that single value (its remaining sub-places
+  get NIL, CLHS 5.1.3). The old expansion flattened every nested store var
+  against the value form's values.
+
+### Remaining
+
+- The full `run_all_tests.py` run (mandatory for the scoreboard; also the only
+  measurement of these fixes end to end).
+- The printer-similarity defect behind PRINT.BACKQUOTE.RANDOM.14's remaining
+  failure — a FORMAT/printer matter, not recursion.
+- `eval_and`/`eval_or` are now thin delegating wrappers over `_eval_logic`
+  (the ladder calls `_eval_logic` directly); they exist only as the
+  `evaluation.py` export surface. The second MACROEXPAND-1 implementation
+  (`misc_packages`, recorded in its docstring as standing-rule debt) remains.
