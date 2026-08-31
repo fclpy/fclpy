@@ -814,6 +814,63 @@ def _default_set_documentation(doc, x, doc_type=None):
         f"(SETF DOCUMENTATION): cannot set documentation on {x!r}")
 
 
+# Default methods for the remaining CLHS 7 standard generic functions. Each
+# delegates, at call time, to the same Python implementation the plain
+# `cl_function` registration carries -- which is what makes these real
+# generic functions (CLHS 7.7: every one of these names is a standard
+# generic function) without duplicating the mechanism: the symbol's function
+# cell holds the GenericFunction object, and the implementation runs as its
+# default (unspecialized) method. ansi-test's
+# all-standard-generic-functions-are-instances-of-that-class checks exactly
+# that: `(symbol-function 'add-method)` must be TYPEP of both
+# GENERIC-FUNCTION and STANDARD-GENERIC-FUNCTION.
+#
+# The delegations resolve the implementations through module globals (and
+# lazy imports for the two that live in other modules) because the wrappers
+# are defined before the implementations are.
+
+def _default_add_method(gf, method):
+    return add_method(gf, method)
+
+
+def _default_remove_method(gf, method):
+    return remove_method(gf, method)
+
+
+def _default_find_method(gf, qualifiers, specializers, errorp=True):
+    return find_method(gf, qualifiers, specializers, errorp)
+
+
+def _default_method_qualifiers(method):
+    return method_qualifiers(method)
+
+
+def _default_no_applicable_method(gf, *arguments):
+    return no_applicable_method(gf, *arguments)
+
+
+def _default_no_next_method(gf, method, *arguments):
+    return no_next_method(gf, method, *arguments)
+
+
+def _default_compute_applicable_methods(gf, arguments):
+    return compute_applicable_methods(gf, arguments)
+
+
+def _default_make_instances_obsolete(cls):
+    return make_instances_obsolete(cls)
+
+
+def _default_print_object(obj, stream):
+    from .misc_macros import print_object as _print_object
+    return _print_object(obj, stream)
+
+
+def _default_function_keywords(method):
+    from .utilities_functions import function_keywords as _function_keywords
+    return _function_keywords(method)
+
+
 # The CLHS lambda list of each protocol generic function (CLHS 7.1/7.2/7.5's
 # own lambda lists). Installed on the generic function when the default
 # method is, so that (a) a user DEFMETHOD on these names is congruence-
@@ -867,6 +924,32 @@ _PROTOCOL_DEFAULTS = [
     # above `_default_documentation`.
     ('DOCUMENTATION', [None, None], _default_documentation, None),
     ('(SETF DOCUMENTATION)', [None, None, None], _default_set_documentation, None),
+    # The CLHS 7.6 method-protocol generic functions -- see the block comment
+    # above `_default_add_method`.
+    ('ADD-METHOD', [None, None], _default_add_method,
+     '(generic-function method)'),
+    ('REMOVE-METHOD', [None, None], _default_remove_method,
+     '(generic-function method)'),
+    ('FIND-METHOD', [None, None, None], _default_find_method,
+     '(generic-function qualifiers specializers &optional errorp)'),
+    ('METHOD-QUALIFIERS', [None], _default_method_qualifiers,
+     '(method)'),
+    ('NO-APPLICABLE-METHOD', [None], _default_no_applicable_method,
+     '(generic-function &rest args)'),
+    ('NO-NEXT-METHOD', [None, None], _default_no_next_method,
+     '(generic-function method &rest args)'),
+    ('COMPUTE-APPLICABLE-METHODS', [None, None], _default_compute_applicable_methods,
+     '(generic-function arguments)'),
+    ('MAKE-INSTANCES-OBSOLETE', [None], _default_make_instances_obsolete,
+     '(class)'),
+    # CLHS 22.1.3 / 25.1.2: PRINT-OBJECT is the standard generic function the
+    # printer's default representation dispatches through, and
+    # FUNCTION-KEYWORDS (CLHS 7.6.5) is the standard generic function a
+    # method-combination author calls on a method.
+    ('PRINT-OBJECT', [None, None], _default_print_object,
+     '(object stream)'),
+    ('FUNCTION-KEYWORDS', [None], _default_function_keywords,
+     '(method)'),
 ]
 
 
@@ -938,6 +1021,47 @@ _current_env = _state.current_environment
 if _current_env is not None:
     _setf_class_name_gf = _protocol_gf('(SETF CLASS-NAME)')
     _current_env.bind_function(lisptype.COMMON_LISP_PACKAGE.intern_symbol('(SETF CLASS-NAME)'), _setf_class_name_gf)
+
+# Every name CLHS 7 (and 22.1.3/25.1.2) defines as a *standard generic
+# function* is bound to its GenericFunction object, not to the plain
+# `cl_function` wrapper -- `(symbol-function 'make-instance)` must be
+# TYPEP of STANDARD-GENERIC-FUNCTION (ansi-test
+# all-standard-generic-functions-are-instances-of-that-class), and a user
+# DEFMETHOD on any of them extends the very object that is bound. The
+# default method each one carries (the `_PROTOCOL_DEFAULTS` entries above)
+# delegates to the same implementation the wrapper held, so calls behave
+# identically while going through ordinary dispatch.
+_STANDARD_GENERIC_FUNCTION_NAMES = (
+    'ADD-METHOD',
+    'ALLOCATE-INSTANCE',
+    'CHANGE-CLASS',
+    'CLASS-NAME',
+    'COMPUTE-APPLICABLE-METHODS',
+    'DESCRIBE-OBJECT',
+    'DOCUMENTATION',
+    'FIND-METHOD',
+    'FUNCTION-KEYWORDS',
+    'INITIALIZE-INSTANCE',
+    'MAKE-INSTANCE',
+    'MAKE-INSTANCES-OBSOLETE',
+    'MAKE-LOAD-FORM',
+    'METHOD-QUALIFIERS',
+    'NO-APPLICABLE-METHOD',
+    'NO-NEXT-METHOD',
+    'PRINT-OBJECT',
+    'REINITIALIZE-INSTANCE',
+    'REMOVE-METHOD',
+    'SHARED-INITIALIZE',
+    'SLOT-MISSING',
+    'SLOT-UNBOUND',
+    'UPDATE-INSTANCE-FOR-DIFFERENT-CLASS',
+    'UPDATE-INSTANCE-FOR-REDEFINED-CLASS',
+)
+if _current_env is not None:
+    for _gf_name in _STANDARD_GENERIC_FUNCTION_NAMES:
+        _current_env.bind_function(
+            lisptype.COMMON_LISP_PACKAGE.intern_symbol(_gf_name),
+            _protocol_gf(_gf_name))
 del _current_env, _setf_class_name_gf
 
 
