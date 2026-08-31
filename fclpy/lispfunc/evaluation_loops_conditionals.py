@@ -894,8 +894,17 @@ def eval_or(form, env, *, tail_target=None):
     return _eval_logic(cdr(form), env, 'OR', tail_target=tail_target)
 
 
-def _eval_logic(args, env, pol, *, tail_target=None):
+def _eval_logic(args, env, pol, *, tail_target=None, defer_last=False):
     """Evaluate an AND/OR operand chain, one frame for the whole chain.
+
+    With `defer_last`, the final operand is **not** evaluated here: it comes
+    back wrapped in an `evaluation_core.DeferredForm` for the caller to
+    evaluate in its own frame. Only `eval`'s pre-dispatch loop passes it, and
+    only because it can then `continue` with that form -- which releases this
+    function's frame *and* the nested `eval` frame that would have held the
+    whole descent beneath the last operand. That was 2 of the 9 Python frames
+    per level of CLOS recursion (recursion-plan.md Step 6). Everything about
+    *which* operand is the value, and how the earlier ones decide, stays here.
 
     Two things used to cost two Python frames per nesting level *per level of
     Lisp recursion* (recursion-plan.md Step 3): each AND/OR went through a
@@ -930,6 +939,9 @@ def _eval_logic(args, env, pol, *, tail_target=None):
             # The last operand's value is the chain's value: tail position
             # (recursion-plan.md Step 4). This is the shape that matters --
             # `check-cons-copy`'s self call is the last operand of its AND.
+            if defer_last:
+                from .evaluation_core import DeferredForm
+                return DeferredForm(current)
             return eval(current, env, tail_target=tail_target)
         result = eval(current, env)
         if pol == 'AND':

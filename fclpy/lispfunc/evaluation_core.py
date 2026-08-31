@@ -126,6 +126,34 @@ def _inline_user_callee(argform, env):
     return func
 
 
+class DeferredForm:
+    """"Evaluate this form in *your* frame" -- `_eval_logic`'s answer to `eval`.
+
+    recursion-plan.md Step 6. An AND/OR chain's value is its last operand's
+    value, so evaluating that operand inside `_eval_logic` holds two Python
+    frames (`_eval_logic`'s and the nested `eval`'s) for the whole descent
+    beneath it. Measured on the CLOS path behind PRINT.BACKQUOTE.RANDOM.14,
+    that was 2 of the 9 frames per `is-similar*` recursion level.
+
+    Instead `_eval_logic` evaluates every operand *but* the last -- those are
+    decided by truthiness and do not nest -- and hands the last one back in
+    one of these. `_eval_logic` then returns, releasing its frame, and `eval`
+    loops with the form. The two frames are no longer held during the descent.
+
+    The alternative, re-implementing the AND/OR rules inside `eval`, would be a
+    second copy of `_eval_logic`'s semantics (the primary-value reduction for a
+    non-last true OR operand, `(and)` => T, `(or)` => NIL, and the in-frame
+    stepping of a nested logic form in last position). Standing rule 3 exists
+    for exactly that; this keeps one copy and moves only *where* the final
+    operand is evaluated.
+    """
+
+    __slots__ = ('form',)
+
+    def __init__(self, form):
+        self.form = form
+
+
 class TailCall:
     """A self tail call, deferred so the closure can loop instead of recursing.
 
@@ -1128,21 +1156,37 @@ def eval(form, env=None, *, tail_target=None):
     #
     # `tail_target` survives untouched, which is the point -- the branch really
     # is in tail position, so a self call there is still a Step 4 tail call.
+    # AND/OR are here for the same reason and by the same rule: the chain's
+    # value is its last operand's, so `_eval_logic` hands that operand back in
+    # a `DeferredForm` and this loop evaluates it in this frame. That removed 2
+    # of the 9 Python frames per level of CLOS recursion -- the path behind
+    # PRINT.BACKQUOTE.RANDOM.14, where `is-similar*`'s method body is
+    # `(and (is-similar* (car a) (car b)) (is-similar* (cdr a) (cdr b)))`.
+    # `_eval_logic` keeps every rule about *which* operand decides.
     while (isinstance(form, lisptype.lispCons)
-           and isinstance(car(form), lisptype.LispSymbol)
-           and car(form).name == 'IF'):
-        _if_args = cdr(form)
-        if not _consp_internal(_if_args):
-            break               # malformed; the ladder's eval_if signals it
-        _if_else = cdr(cdr(_if_args))
-        if lisptype.is_truthy(eval(car(_if_args), env)):
-            form = car(cdr(_if_args))
-        elif _consp_internal(_if_else):
-            form = car(_if_else)
+           and isinstance(car(form), lisptype.LispSymbol)):
+        _op_name = car(form).name
+        if _op_name == 'IF':
+            _if_args = cdr(form)
+            if not _consp_internal(_if_args):
+                break           # malformed; the ladder's eval_if signals it
+            _if_else = cdr(cdr(_if_args))
+            if lisptype.is_truthy(eval(car(_if_args), env)):
+                form = car(cdr(_if_args))
+            elif _consp_internal(_if_else):
+                form = car(_if_else)
+            else:
+                # `eval_if` answers Python None for a false test with no else
+                # branch; preserved exactly rather than "improved" to NIL.
+                return None
+        elif _op_name == 'AND' or _op_name == 'OR':
+            _logic = _eval_logic(cdr(form), env, _op_name,
+                                 tail_target=tail_target, defer_last=True)
+            if type(_logic) is not DeferredForm:
+                return _logic   # decided by an earlier operand, or empty
+            form = _logic.form
         else:
-            # `eval_if` answers Python None for a false test with no else
-            # branch; preserved exactly rather than "improved" to NIL here.
-            return None
+            break
 
     # Self-evaluating forms
     # Normalize Python-level sentinels into Lisp equivalents to avoid type

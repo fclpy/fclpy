@@ -605,6 +605,69 @@ after target 1: **6002 passed, 4 failed, 0 unaccounted**, and all four
 (`CONDITION-16/17/18-REPORT.1`, `DEFGENERIC.30`) are pre-existing entries in
 `ansi_results/failed.txt`.
 
+### Step 6b — the CLOS dispatch path: 9 → 8 frames per level
+
+The Step 6 work above fixed the ordinary call path but left
+`PRINT.BACKQUOTE.RANDOM.14` aborting the run: `is-similar*`
+(`auxiliary/ansi-aux.lsp`) recurses over conses **through generic-function
+dispatch**, which §2A rightly calls the most frames per level of anything here.
+Measured unit, at 9 frames per level (~83 levels available, and the test builds
+100-deep backquoted forms):
+
+```
+invoke:1529 -> run_core:1523 -> call_method:1296 -> method_func:5778
+  -> eval:1327 -> _eval_logic:934 -> eval:1790 -> __call__:694
+  -> call_generic_function:1758
+```
+
+Two changes, both keeping one copy of their logic:
+
+1. **AND/OR's last operand is deferred to `eval`'s frame.** `_eval_logic` gains
+   `defer_last`, answering an `evaluation_core.DeferredForm` instead of
+   evaluating the final operand itself; `eval`'s pre-dispatch loop (the same
+   loop that resolves IF chains) then evaluates it in its own frame. Every rule
+   about *which* operand decides stays in `_eval_logic` — re-implementing them
+   in `eval` would have been a second copy of the primary-value reduction for a
+   non-last true OR operand, `(and)` => T, `(or)` => NIL, and the in-frame
+   stepping of a nested logic form. **Note this helps only a *tail*-position
+   operand**; `is-similar*` recurses on its AND's *first* operand (the car),
+   which is not in tail position, so this one did not move that census.
+2. **`StandardMethodCombination.invoke` runs the effective method in its own
+   frame** instead of a nested `run_core` closure. The naive inline would
+   duplicate the before → primary → after sequencing, so instead the
+   `:around` path re-enters `invoke` with the arounds stripped
+   (`core = [m for m in applicable if _qualifier_names(m) != {'AROUND'}]`).
+   One copy of the order; the rare `:around` path pays one extra `invoke`
+   frame, the per-level common path saves one. **9 → 8 frames.**
+
+**Outcome — priority 1 met.** All eleven of §1's RecursionError tests are now
+free of recursion failure, measured at the **default** limit:
+
+- the ten `cons` ones (COPY-TREE.2, INTERSECTION.12, NINTERSECTION.3/.10/.11/.12,
+  UNION.24, NUNION.24, SET-DIFFERENCE.13, NSET-DIFFERENCE.13):
+  **324 passed, 0 failed, 0 unaccounted**;
+- `printer/print-backquote.lsp`: **13 passed, 1 failed, 0 unaccounted** — the
+  run *completes* rather than aborting, and there is **no** stack-overflow
+  message in it (the six `STORAGE-CONDITION` strings in the log are the
+  *symbol* appearing as random data inside the generated forms).
+  `PRINT.BACKQUOTE.RANDOM.14` now fails on a **radix round-trip**:
+  `908` prints as `#24r1DK` and reads back as `13701`. That is the
+  printer/reader similarity defect already recorded in the Outcome section
+  above, a different defect class, and out of scope for this plan.
+
+**Not yet memory-bounded.** Argument evaluation is now heap-based, so that
+dimension is limited by RAM. Still host-stack-proportional, and this is the
+remaining architectural step if depth is to be bounded only by memory (which is
+CL's actual model — there is no specified recursion limit, only
+`STORAGE-CONDITION` on exhaustion):
+
+| path | frames per level | note |
+|---|---|---|
+| `eval` + `call` per activation | 2 | on *every* recursion; needs the closure body to run on the heap continuation stack rather than a nested `call` |
+| CLOS dispatch | 8 | `__call__`/`call_generic_function` could be collapsed to one (invert which is the single home) for 7 |
+| reader nested-form descent | untouched | one frame per nesting level of a read form |
+| printer nested-structure descent | untouched | same, on output |
+
 **A full run is mandatory before this moves any scoreboard** — it changes the
 argument-evaluation path of every user function call.
 

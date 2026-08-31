@@ -1515,19 +1515,34 @@ class StandardMethodCombination(MethodCombinationType):
                     f":BEFORE, :AFTER and :AROUND qualifiers, not "
                     f"{[str(q) for q in m.qualifiers]}")
 
-        def run_core(*_args):
-            if not primaries:
-                _no_applicable_method(gf, args)
-            for m in befores:
-                call_method(m, [], args)
-            result = call_method(primaries[0], primaries[1:], args)
-            for m in reversed(afters):
-                call_method(m, [], args)
-            return result
+        if arounds:
+            # The core is *this same method* with the :around methods removed,
+            # so the sequencing below has exactly one copy (standing rule 3 --
+            # a second copy of the effective-method order is precisely the kind
+            # of duplication that drifts). This costs the :around path one
+            # extra `invoke` frame, which is the right trade: the no-arounds
+            # path is what a recursive generic function pays *per level*, and
+            # it now runs in this frame instead of a nested `run_core` one.
+            core = [m for m in applicable
+                    if _qualifier_names(m) != {'AROUND'}]
+            return call_method(
+                arounds[0],
+                arounds[1:] + [MakeMethod(
+                    lambda *_args: self.invoke(gf, core, args, options), gf)],
+                args)
 
-        if not arounds:
-            return run_core()
-        return call_method(arounds[0], arounds[1:] + [MakeMethod(run_core, gf)], args)
+        # No :around methods -- the common case, and the hot path for a
+        # recursive generic function (recursion-plan.md Step 6: this removed
+        # one of the 9 Python frames per level of `is-similar*` recursion,
+        # the path behind PRINT.BACKQUOTE.RANDOM.14).
+        if not primaries:
+            _no_applicable_method(gf, args)
+        for m in befores:
+            call_method(m, [], args)
+        result = call_method(primaries[0], primaries[1:], args)
+        for m in reversed(afters):
+            call_method(m, [], args)
+        return result
 
 
 def _gf_name(gf) -> str:
