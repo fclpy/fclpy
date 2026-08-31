@@ -1078,6 +1078,14 @@ _CLASS_PARENTS = {
     'BUILT-IN-CLASS': ('CLASS',),
     'STANDARD-CLASS': ('CLASS',),
     'STRUCTURE-CLASS': ('CLASS',),
+    # The condition metaclass (classes.py's _BUILTIN_CLASS_TABLE): a
+    # condition class object's cell is its metaclass name, so without this
+    # row `(typep (find-class 'condition) 'class)` would lose the CLASS
+    # ancestor. It is deliberately *not* under STANDARD-CLASS or
+    # BUILT-IN-CLASS -- that exclusion is what
+    # all-standard-classes-are-subtypes-of-standard-object and
+    # slot-boundp.error.5/slot-makunbound.error.4 both turn on.
+    'CONDITION-CLASS': ('CLASS',),
     'LOGICAL-PATHNAME': ('PATHNAME',),
     'BROADCAST-STREAM': ('STREAM',),
     'CONCATENATED-STREAM': ('STREAM',),

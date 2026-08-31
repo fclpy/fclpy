@@ -2006,6 +2006,11 @@ _BUILTIN_CLASS_TABLE = {
     'STANDARD-CLASS': (['CLASS'], 'STANDARD-CLASS'),
     'BUILT-IN-CLASS': (['CLASS'], 'STANDARD-CLASS'),
     'STRUCTURE-CLASS': (['CLASS'], 'STANDARD-CLASS'),
+    # The metaclass of the standardized condition classes (CLHS 9.1.1 leaves
+    # it unspecified; see the conditions block below). CONDITION-CLASS is
+    # deliberately neither STANDARD-CLASS nor BUILT-IN-CLASS, for the two
+    # ansi-test walks that branch on a class object's metaclass.
+    'CONDITION-CLASS': (['CLASS'], 'STANDARD-CLASS'),
     'STANDARD-OBJECT': (['T'], 'STANDARD-CLASS'),
     'STRUCTURE-OBJECT': (['T'], 'STRUCTURE-CLASS'),
     # -- other system classes --
@@ -2032,41 +2037,45 @@ _BUILTIN_CLASS_TABLE = {
     # and requires both the type and the class object to be subtypes of
     # standard-object -- and the CPL of CONDITION is (condition t), which
     # contains no STANDARD-OBJECT. SBCL and CCL resolve this the same way,
-    # with a dedicated condition metaclass; a BUILT-IN-CLASS instance is the
-    # equivalent choice among the metaclasses this table already models. The
-    # def-cond-cpl-tests are unaffected: they observe a condition *instance's*
-    # class CPL, not the metaclass.
-    'CONDITION': (['T'], 'BUILT-IN-CLASS'),
-    'SERIOUS-CONDITION': (['CONDITION'], 'BUILT-IN-CLASS'),
-    'WARNING': (['CONDITION'], 'BUILT-IN-CLASS'),
-    'STYLE-WARNING': (['WARNING'], 'BUILT-IN-CLASS'),
-    'STORAGE-CONDITION': (['SERIOUS-CONDITION'], 'BUILT-IN-CLASS'),
-    'ERROR': (['SERIOUS-CONDITION'], 'BUILT-IN-CLASS'),
-    'SIMPLE-CONDITION': (['CONDITION'], 'BUILT-IN-CLASS'),
-    'SIMPLE-ERROR': (['SIMPLE-CONDITION', 'ERROR'], 'BUILT-IN-CLASS'),
-    'SIMPLE-WARNING': (['SIMPLE-CONDITION', 'WARNING'], 'BUILT-IN-CLASS'),
-    'SIMPLE-TYPE-ERROR': (['SIMPLE-CONDITION', 'TYPE-ERROR'], 'BUILT-IN-CLASS'),
-    'TYPE-ERROR': (['ERROR'], 'BUILT-IN-CLASS'),
-    'PARSE-ERROR': (['ERROR'], 'BUILT-IN-CLASS'),
-    'PROGRAM-ERROR': (['ERROR'], 'BUILT-IN-CLASS'),
-    'CONTROL-ERROR': (['ERROR'], 'BUILT-IN-CLASS'),
-    'CELL-ERROR': (['ERROR'], 'BUILT-IN-CLASS'),
-    'UNBOUND-VARIABLE': (['CELL-ERROR'], 'BUILT-IN-CLASS'),
-    'UNDEFINED-VARIABLE': (['CELL-ERROR'], 'BUILT-IN-CLASS'),
-    'UNDEFINED-FUNCTION': (['CELL-ERROR'], 'BUILT-IN-CLASS'),
-    'UNBOUND-SLOT': (['CELL-ERROR'], 'BUILT-IN-CLASS'),
-    'ARITHMETIC-ERROR': (['ERROR'], 'BUILT-IN-CLASS'),
-    'DIVISION-BY-ZERO': (['ARITHMETIC-ERROR'], 'BUILT-IN-CLASS'),
-    'FLOATING-POINT-INEXACT': (['ARITHMETIC-ERROR'], 'BUILT-IN-CLASS'),
-    'FLOATING-POINT-INVALID-OPERATION': (['ARITHMETIC-ERROR'], 'BUILT-IN-CLASS'),
-    'FLOATING-POINT-OVERFLOW': (['ARITHMETIC-ERROR'], 'BUILT-IN-CLASS'),
-    'FLOATING-POINT-UNDERFLOW': (['ARITHMETIC-ERROR'], 'BUILT-IN-CLASS'),
-    'STREAM-ERROR': (['ERROR'], 'BUILT-IN-CLASS'),
-    'END-OF-FILE': (['STREAM-ERROR'], 'BUILT-IN-CLASS'),
-    'FILE-ERROR': (['ERROR'], 'BUILT-IN-CLASS'),
-    'PACKAGE-ERROR': (['ERROR'], 'BUILT-IN-CLASS'),
-    'PRINT-NOT-READABLE': (['ERROR'], 'BUILT-IN-CLASS'),
-    'READER-ERROR': (['PARSE-ERROR', 'STREAM-ERROR'], 'BUILT-IN-CLASS'),
+    # with a dedicated condition metaclass; fclpy models that metaclass as
+    # CONDITION-CLASS below. It must not be BUILT-IN-CLASS either: ansi-test's
+    # slot-boundp.error.5/slot-makunbound.error.4 signal exactly on elements
+    # of *mini-universe* whose (class-of (class-of e)) is the BUILT-IN-CLASS
+    # class, and a condition class object carrying that metaclass pulls every
+    # condition instance into their loop. The def-cond-cpl-tests are
+    # unaffected: they observe a condition *instance's* class CPL, not the
+    # metaclass.
+    'CONDITION': (['T'], 'CONDITION-CLASS'),
+    'SERIOUS-CONDITION': (['CONDITION'], 'CONDITION-CLASS'),
+    'WARNING': (['CONDITION'], 'CONDITION-CLASS'),
+    'STYLE-WARNING': (['WARNING'], 'CONDITION-CLASS'),
+    'STORAGE-CONDITION': (['SERIOUS-CONDITION'], 'CONDITION-CLASS'),
+    'ERROR': (['SERIOUS-CONDITION'], 'CONDITION-CLASS'),
+    'SIMPLE-CONDITION': (['CONDITION'], 'CONDITION-CLASS'),
+    'SIMPLE-ERROR': (['SIMPLE-CONDITION', 'ERROR'], 'CONDITION-CLASS'),
+    'SIMPLE-WARNING': (['SIMPLE-CONDITION', 'WARNING'], 'CONDITION-CLASS'),
+    'SIMPLE-TYPE-ERROR': (['SIMPLE-CONDITION', 'TYPE-ERROR'], 'CONDITION-CLASS'),
+    'TYPE-ERROR': (['ERROR'], 'CONDITION-CLASS'),
+    'PARSE-ERROR': (['ERROR'], 'CONDITION-CLASS'),
+    'PROGRAM-ERROR': (['ERROR'], 'CONDITION-CLASS'),
+    'CONTROL-ERROR': (['ERROR'], 'CONDITION-CLASS'),
+    'CELL-ERROR': (['ERROR'], 'CONDITION-CLASS'),
+    'UNBOUND-VARIABLE': (['CELL-ERROR'], 'CONDITION-CLASS'),
+    'UNDEFINED-VARIABLE': (['CELL-ERROR'], 'CONDITION-CLASS'),
+    'UNDEFINED-FUNCTION': (['CELL-ERROR'], 'CONDITION-CLASS'),
+    'UNBOUND-SLOT': (['CELL-ERROR'], 'CONDITION-CLASS'),
+    'ARITHMETIC-ERROR': (['ERROR'], 'CONDITION-CLASS'),
+    'DIVISION-BY-ZERO': (['ARITHMETIC-ERROR'], 'CONDITION-CLASS'),
+    'FLOATING-POINT-INEXACT': (['ARITHMETIC-ERROR'], 'CONDITION-CLASS'),
+    'FLOATING-POINT-INVALID-OPERATION': (['ARITHMETIC-ERROR'], 'CONDITION-CLASS'),
+    'FLOATING-POINT-OVERFLOW': (['ARITHMETIC-ERROR'], 'CONDITION-CLASS'),
+    'FLOATING-POINT-UNDERFLOW': (['ARITHMETIC-ERROR'], 'CONDITION-CLASS'),
+    'STREAM-ERROR': (['ERROR'], 'CONDITION-CLASS'),
+    'END-OF-FILE': (['STREAM-ERROR'], 'CONDITION-CLASS'),
+    'FILE-ERROR': (['ERROR'], 'CONDITION-CLASS'),
+    'PACKAGE-ERROR': (['ERROR'], 'CONDITION-CLASS'),
+    'PRINT-NOT-READABLE': (['ERROR'], 'CONDITION-CLASS'),
+    'READER-ERROR': (['PARSE-ERROR', 'STREAM-ERROR'], 'CONDITION-CLASS'),
 }
 
 # The condition classes in most-specific-first order. `class_of` walks this
