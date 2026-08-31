@@ -532,13 +532,13 @@ def write(object, *, stream=None, **kwargs):
 def prin1_to_string(object):
     """The escaped printed representation, as a string (CLHS 22.3.1).
 
-    Like `prin1` itself, this binds `*PRINT-READABLY*` to NIL for the print
-    (X3J13 PRINC-READABLY): prin1's output is already escaped, and leaving
-    `*print-readably*` inherited would force `*print-level*`/`*print-length*`
-    to NIL under `with-standard-io-syntax` and silently drop the caller's
-    abbreviation request.
+    ``prin1-to-string`` acts like ``write-to-string`` with ``:escape t`` --
+    `*PRINT-ESCAPE*` is bound to true for the print, overriding whatever the
+    caller had (the same binding ``prin1`` itself makes). ``*PRINT-READABLY*``
+    is *not* bound: CLHS's note is explicit that prin1 and print do not bind
+    it, so readable output requested by the caller stays readable.
     """
-    return lisptype.LispString(_dispatch_print(object, {'readably': False}, None))
+    return lisptype.LispString(_dispatch_print(object, {'escape': True}, None))
 
 
 @_registry.cl_function('PRINC-TO-STRING')
@@ -571,9 +571,13 @@ def print_fn(object, stream=None):
     """Newline, then the object escaped, then a space (CLHS 22.3.1).
 
     The order matters and was reversed: PRINT is defined as a `TERPRI`, then a
-    `PRIN1`, then a space -- not `PRIN1` followed by a newline.
+    `PRIN1`, then a space -- not `PRIN1` followed by a newline. Like `prin1`,
+    it binds `*PRINT-ESCAPE*` to true -- an enclosing escape-nil binding
+    (e.g. the random printer-control draws of `random-print-test`) must not
+    turn it off, or the output stops being readable. `*PRINT-READABLY*` is
+    not bound (CLHS's note on WRITE/PRIN1/PRINT).
     """
-    write_text('\n' + _dispatch_print(object, {}, stream) + ' ', stream)
+    write_text('\n' + _dispatch_print(object, {'escape': True}, stream) + ' ', stream)
     return object
 
 
@@ -581,11 +585,12 @@ def print_fn(object, stream=None):
 def prin1(object, stream=None):
     """Print an object escaped, with no surrounding whitespace (CLHS 22.3.1).
 
-    Binds `*PRINT-READABLY*` to NIL like PRIN1 itself does (X3J13
-    PRINC-READABLY): the output is already escaped and readable by
-    construction.
+    ``(prin1 object output-stream) == (write object :stream output-stream
+    :escape t)`` -- `*PRINT-ESCAPE*` is bound to true for the print, so an
+    enclosing escape-nil binding does not affect the output. `*PRINT-READABLY*`
+    is not bound (CLHS's note: prin1 and print do not bind it).
     """
-    write_text(_dispatch_print(object, {'readably': False}, stream), stream)
+    write_text(_dispatch_print(object, {'escape': True}, stream), stream)
     return object
 
 
