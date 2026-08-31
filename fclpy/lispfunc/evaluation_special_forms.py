@@ -1195,9 +1195,9 @@ def eval_pprint_logical_block(form, env):
 
 
 def _canonicalize_nil_symbol(value):
-    """Canonicalize a non-keyword symbol spelled NIL to the singleton, so a
-    parameter bound from it compares EQ to NIL (CLAUDE.md: "NIL has three
-    Python spellings").
+    """Canonicalize an *interned* non-keyword symbol spelled NIL to the
+    singleton, so a parameter bound from it compares EQ to NIL (CLAUDE.md:
+    "NIL has three Python spellings").
 
     A KEYWORD named NIL (`:NIL`) is not one of those spellings -- CLHS makes
     it a distinct, ordinary (and truthy) symbol, and `(eq :nil nil)` is NIL --
@@ -1209,8 +1209,17 @@ def _canonicalize_nil_symbol(value):
     structure with a slot literally named NIL) turned `:NIL` into NIL at the
     front door and then failed keyword-argument binding on "NIL is not a
     valid keyword argument name".
+
+    An *uninterned* symbol named NIL is equally not a spelling of NIL:
+    `(eq (make-symbol "NIL") nil)` is NIL (CLHS eq), and ansi-test's
+    `*universe*` carries one (`#:nil` from `*uninterned-symbols*`), which is
+    how BOOLEAN-TYPE.3 caught this -- the predicate argument path rewrote
+    `#:nil` to NIL so `is-t-or-nil` answered T for it while `(typep #:nil
+    'boolean)` answered NIL. "Interned" is the same test `_null_internal`
+    applies (`package is not None`), so the two cannot drift apart.
     """
     if (isinstance(value, lisptype.LispSymbol) and not isinstance(value, lisptype.lispKeyword)
+            and value.package is not None
             and value.name.upper() == 'NIL'):
         return lisptype.NIL
     return value
