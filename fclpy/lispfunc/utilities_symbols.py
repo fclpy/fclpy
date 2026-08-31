@@ -26,6 +26,32 @@ def _require_symbol(value, operator):
     return value
 
 
+def is_constant_symbol(symbol):
+    """Answer whether `symbol` is one of the always-bound constant symbols:
+    the canonical T and NIL -- in every spelling NIL takes here, including
+    Python `None` and `lispNull` -- and every keyword, which is
+    self-evaluating (CLHS 10.2).
+
+    SYMBOL-VALUE and BOUNDP both answer through this one helper, because
+    they are two faces of the same question and used to disagree:
+    SYMBOL-VALUE matched any symbol whose *name* was "T" or "NIL", so
+    `(symbol-value (copy-symbol 't t))` answered the fresh copy instead of
+    the constant value the copy holds, and copy-symbol.3's
+    `(eqt (symbol-value x) (symbol-value y))` failed on the copy of T. The
+    test is *identity*-based: a fresh LispSymbol that merely shares the
+    name is an ordinary symbol whose value cell rules apply.
+    """
+    if symbol is lisptype.T or symbol is lisptype.NIL:
+        return True
+    if symbol is None or isinstance(symbol, lisptype.lispNull):
+        return True
+    if isinstance(symbol, lisptype.lispKeyword):
+        return True
+    return (isinstance(symbol, lisptype.LispSymbol)
+            and symbol.name == 'T'
+            and symbol.package is lisptype.COMMON_LISP_PACKAGE)
+
+
 # --- Symbol operations ---
 @_registry.cl_function('SYMBOL-NAME')
 def symbol_name(*args):
@@ -76,13 +102,12 @@ def symbol_value(*args):
             f"SYMBOL-VALUE: wrong number of arguments (got {len(args)}, expected 1)"
         )
     symbol = _require_symbol(args[0], 'SYMBOL-VALUE')
-    # T, NIL, and keywords are self-evaluating and therefore always bound.
-    # NIL can appear as None, lispNull, or a LispSymbol named "NIL", so
-    # check explicitly for each form before checking the name attribute.
-    if (symbol is lisptype.T or symbol is None or symbol is lisptype.NIL
-            or isinstance(symbol, lisptype.lispNull)
-            or isinstance(symbol, lisptype.lispKeyword)
-            or getattr(symbol, 'name', None) in ('T', 'NIL')):
+    # T, NIL and keywords are constants: always bound, with the symbol
+    # itself as their value. The test is identity-based -- see
+    # `is_constant_symbol`; a name-based check here also matched any fresh
+    # LispSymbol whose *name* was "T" or "NIL" and returned the copy as its
+    # own value, which is what broke copy-symbol.3 on the copy of T.
+    if is_constant_symbol(symbol):
         return symbol
     value = getattr(symbol, 'value', None)
     if value is None:

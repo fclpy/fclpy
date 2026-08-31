@@ -100,9 +100,9 @@ def _topological_cpl(cls: 'LispClass') -> List['LispClass']:
         free = [c for c in remaining
                 if not (predecessors.get(id(c), set()) - {id(p) for p in result})]
         if not free:
-            names = ", ".join(c.name.name for c in remaining)
+            names = ", ".join(c.name_string for c in remaining)
             raise LispProgramError(
-                f"Inconsistent class precedence list for {cls.name.name} "
+                f"Inconsistent class precedence list for {cls.name_string} "
                 f"-- cannot linearize among: {names}")
         if len(free) == 1:
             chosen = free[0]
@@ -206,6 +206,18 @@ class LispClass:
                 out.append(cls)
             pending.extend(cls.direct_superclasses)
         return out
+
+    @property
+    def name_string(self) -> str:
+        """The class name as a Python string, for registry keys and reprs.
+
+        The class named NIL (the NULL class, CLHS 4.2) holds the `lispNull`
+        singleton as its name symbol -- COMMON-LISP's "NIL" entry *is* the
+        canonical NIL object (see lisptype_extended's seeding), which has no
+        `.name` of its own -- so the string must be derived the way every
+        other consumer of a symbol spelling does.
+        """
+        return self.name.name if isinstance(self.name, LispSymbol) else str(self.name)
 
     def get_linearized_superclasses(self) -> List['LispClass']:
         """This class's class precedence list (CLHS 4.3.5), most specific
@@ -315,7 +327,7 @@ class LispClass:
         return result
 
     def __repr__(self):
-        return f"#<STANDARD-CLASS {self.name.name}>"
+        return f"#<STANDARD-CLASS {self.name_string}>"
 
 
 @dataclass
@@ -350,7 +362,7 @@ class ClassRegistry:
     
     def register_class(self, cls: LispClass) -> LispClass:
         """Register a class in the registry."""
-        self._classes[cls.name.name] = cls
+        self._classes[cls.name_string] = cls
         return cls
 
     def invalidate_cpl_caches(self) -> None:

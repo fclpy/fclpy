@@ -1604,7 +1604,7 @@ def _write(value, ctx, depth):
         return _write_unreadable_checked(
             value, _apply_print_case(value.lisp_class.name.name, ctx), ctx)
     if isinstance(value, LispClass):
-        return f'#<STANDARD-CLASS {_apply_print_case(value.name.name, ctx)}>'
+        return f'#<STANDARD-CLASS {_apply_print_case(value.name_string, ctx)}>'
 
     if isinstance(value, type) and issubclass(value, lisptype.Condition):
         # FIND-CLASS returns the raw Python class for a condition type

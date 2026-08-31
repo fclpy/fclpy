@@ -596,7 +596,8 @@ def symbol_plist(*args):
         raise lisptype.LispProgramError(
             f"SYMBOL-PLIST: wrong number of arguments (got {len(args)}, expected 1)"
         )
-    symbol = args[0]
+    from .utilities_symbols import _require_symbol
+    symbol = _require_symbol(args[0], 'SYMBOL-PLIST')
     if hasattr(symbol, 'plist') and symbol.plist:
         plist = symbol.plist
         # If stored as a Python dict, convert to Lisp plist

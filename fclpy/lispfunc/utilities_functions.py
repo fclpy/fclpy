@@ -159,7 +159,8 @@ def symbol_function(*args):
         raise lisptype.LispProgramError(
             f"SYMBOL-FUNCTION: wrong number of arguments (got {len(args)}, expected 1)"
         )
-    symbol = args[0]
+    from .utilities_symbols import _require_symbol
+    symbol = _require_symbol(args[0], 'SYMBOL-FUNCTION')
     try:
         return fdefinition(symbol)
     except Exception:
@@ -580,7 +581,8 @@ def special_operator_p(*args):
         raise lisptype.LispProgramError(
             f"SPECIAL-OPERATOR-P: wrong number of arguments (got {len(args)}, expected 1)"
         )
-    symbol = args[0]
+    from .utilities_symbols import _require_symbol
+    symbol = _require_symbol(args[0], 'SPECIAL-OPERATOR-P')
     if isinstance(symbol, lisptype.LispSymbol):
         # The canonical ANSI list of 25 special operators (CLHS 3.1.2.1.2.1).
         # Note DEFUN/DEFVAR/COND/AND/OR/WHEN/UNLESS/LAMBDA are ordinary

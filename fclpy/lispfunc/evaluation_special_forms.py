@@ -4188,6 +4188,8 @@ _registry.function_registry['%FCLPY-ARRAY-PLACE-APPLY'] = _registry.RegistryEntr
 
 
 def _fclpy_setf_symbol_value(sym, value):
+    from .utilities_symbols import _require_symbol
+    _require_symbol(sym, 'SYMBOL-VALUE')
     sym.value = value
     return value
 
@@ -4202,8 +4204,8 @@ def _fclpy_setf_symbol_function(sym, value):
     with it (fboundp answered NIL immediately after the setf), and even at
     the site it would have overwritten a lexical FLET binding instead of
     the global cell."""
-    if not isinstance(sym, lisptype.LispSymbol):
-        raise lisptype.LispError("SETF SYMBOL-FUNCTION: requires a symbol")
+    from .utilities_symbols import _require_symbol
+    _require_symbol(sym, 'SYMBOL-FUNCTION')
     env = state.current_environment
     while env is not None and env.parent is not None:
         env = env.parent
@@ -4212,6 +4214,8 @@ def _fclpy_setf_symbol_function(sym, value):
 
 
 def _fclpy_setf_symbol_plist(sym, value):
+    from .utilities_symbols import _require_symbol
+    _require_symbol(sym, 'SYMBOL-PLIST')
     sym.plist = value
     return value
 
@@ -4303,8 +4307,8 @@ def _fclpy_setf_fdefinition(name, value):
 
 def _fclpy_setf_get(sym, indicator, value):
     """Set property value in symbol's plist."""
-    if not isinstance(sym, lisptype.LispSymbol):
-        raise lisptype.LispError("GET place: requires a symbol")
+    from .utilities_symbols import _require_symbol
+    _require_symbol(sym, 'GET')
     if not _consp_internal(sym.plist):
         sym.plist = lisptype.NIL
     cur = sym.plist
@@ -5563,7 +5567,7 @@ def eval_defclass(form, env):
                 and getattr(sc, 'metaclass_name', 'STANDARD-CLASS') == 'BUILT-IN-CLASS'):
             raise lisptype.LispProgramError(
                 f"DEFCLASS: cannot define a subclass of the built-in class "
-                f"{sc.name.name}")
+                f"{sc.name_string}")
     existing_named = fclpy.classes.find_class(
         class_name.name if isinstance(class_name, lisptype.LispSymbol) else str(class_name))
     if (existing_named is not None

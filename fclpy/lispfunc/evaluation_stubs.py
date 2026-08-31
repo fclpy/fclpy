@@ -128,35 +128,18 @@ def boundp(*args):
         raise lisptype.LispProgramError(
             f"BOUNDP: wrong number of arguments (got {len(args)}, expected 1)"
         )
-    if len(args) != 1:
-        raise lisptype.LispProgramError(
-            f"BOUNDP: wrong number of arguments (got {len(args)}, expected 1)"
-        )
     symbol = args[0]
-    # Type check
-    # Accept the special NIL (lispNull) as the symbol NIL per Common Lisp
-    if symbol is lisptype.NIL:
-        # Convert to the canonical NIL symbol in the COMMON-LISP package
-        try:
-            symbol = lisptype.intern_symbol('NIL', lisptype.COMMON_LISP_PACKAGE)
-        except Exception:
-            # Raise a Python-level LispTypeError which the evaluator will
-            # convert into a Lisp TYPE-ERROR condition.
-            raise lisptype.LispTypeError(f"BOUNDP: {symbol} is not a symbol", expected_type='symbol', actual_value=symbol)
-
-    if not isinstance(symbol, lisptype.LispSymbol):
-        # For non-symbol arguments raise a Python-level LispTypeError; the
-        # evaluator will convert this into a Lisp TYPE-ERROR condition so
-        # it can be handled by Lisp-level handlers.
+    if not lisptype.is_symbol(symbol):
+        # The evaluator converts this Python-level LispTypeError into a Lisp
+        # TYPE-ERROR condition so Lisp-level handlers can catch it.
         raise lisptype.LispTypeError(f"BOUNDP: {symbol} is not a symbol", expected_type='symbol', actual_value=symbol)
 
     # T, NIL, and keywords are self-evaluating and therefore always bound.
-    # Check identity for T and NIL to avoid matching fresh copies with the same name.
-    if (symbol is lisptype.T or
-        symbol is lisptype.NIL or
-        isinstance(symbol, lisptype.lispKeyword) or
-        (isinstance(symbol, lisptype.LispSymbol) and symbol.name == 'T' and
-         symbol.package is lisptype.COMMON_LISP_PACKAGE)):
+    # Identity, not name: a fresh LispSymbol that merely shares the name
+    # "T" is an ordinary symbol (`is_constant_symbol` is the one home of
+    # this rule, shared with SYMBOL-VALUE).
+    from .utilities_symbols import is_constant_symbol
+    if is_constant_symbol(symbol):
         return lisptype.T
 
     # A symbol is considered bound if its value cell is present (even if NIL)

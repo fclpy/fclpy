@@ -750,12 +750,26 @@ class Package(lispT):
 KEYWORD_PACKAGE = Package("KEYWORD")
 COMMON_LISP_PACKAGE = Package("COMMON-LISP", nick_names=['CL'])
 
-# CRITICAL: Inject the canonical T symbol into COMMON-LISP package
+# CRITICAL: Inject the canonical T and NIL symbols into COMMON-LISP package
 # T is created without a package in lisptype_basic.py
 # We must register it in the COMMON-LISP package so that intern_symbol finds it
 COMMON_LISP_PACKAGE.symbols['T'] = T
 COMMON_LISP_PACKAGE.external_symbols.add('T')
 T.package = COMMON_LISP_PACKAGE
+
+# NIL needs exactly the same seeding: it is the `lispNull` singleton, not a
+# LispSymbol at all, but `(intern "NIL" :cl)` and `(find-symbol "NIL" :cl)`
+# must answer *the* symbol NIL -- eql to the object the reader returns for
+# the token `nil` (lispreader.py special-cases the two tokens identically).
+# Without the seeding, the bootstrap's interning of the 978 ANSI names grew
+# COMMON-LISP a second, *distinct* LispSymbol named "NIL", so
+# `(eq (intern "NIL" :cl) nil)` was false and every EQL-based list operation
+# failed to see the two as one symbol -- ansi-test's `boundp.5` collects
+# NIL out of `*cl-non-variable-constant-symbols*` exactly because that
+# set-difference compares with EQL and *cl-symbols* interns its names while
+# *cl-constant-symbols* quotes them.
+COMMON_LISP_PACKAGE.symbols['NIL'] = NIL
+COMMON_LISP_PACKAGE.external_symbols.add('NIL')
 
 COMMON_LISP_USER_PACKAGE = Package("COMMON-LISP-USER", use_packages=["COMMON-LISP"], nick_names=['CL-USER'])
 

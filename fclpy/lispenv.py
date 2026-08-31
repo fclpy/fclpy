@@ -13,13 +13,16 @@ if state.current_environment is None:
 current_environment = state.current_environment
 
 
-# CLHS Figure 25-1, the standard variables. Every one of these is proclaimed
-# special, which is what makes a binding form bind it in the symbol's value
-# cell -- the one home a global variable has (see `Environment`) and the only
-# one the Python-side readers in printer.py / readtable.py / streams.py can
-# reach. This is the authoritative list rather than a record of which
-# variables the bootstrap below happens to give a value to: proclaiming a
-# variable special does not require it to be bound, so the two cannot drift.
+# CLHS Figure 25-1, the standard variables, plus the ten top-level loop
+# variables of CLHS 25.1.1 (`-`, `+`, `++`, `+++`, `*`, `**`, `***`, `/`,
+# `//`, `///`), which are dynamic variables of the same kind. Every one of
+# these is proclaimed special, which is what makes a binding form bind it
+# in the symbol's value cell -- the one home a global variable has (see
+# `Environment`) and the only one the Python-side readers in printer.py /
+# readtable.py / streams.py can reach. This is the authoritative list rather
+# than a record of which variables the bootstrap below happens to give a
+# value to: proclaiming a variable special does not require it to be bound,
+# so the two cannot drift.
 STANDARD_SPECIAL_VARIABLES = (
     '*BREAK-ON-SIGNALS*', '*COMPILE-FILE-PATHNAME*', '*COMPILE-FILE-TRUENAME*',
     '*COMPILE-PRINT*', '*COMPILE-VERBOSE*', '*DEBUG-IO*', '*DEBUGGER-HOOK*',
@@ -34,6 +37,8 @@ STANDARD_SPECIAL_VARIABLES = (
     '*READ-DEFAULT-FLOAT-FORMAT*', '*READ-EVAL*', '*READ-SUPPRESS*',
     '*READTABLE*', '*STANDARD-INPUT*', '*STANDARD-OUTPUT*', '*TERMINAL-IO*',
     '*TRACE-OUTPUT*',
+    # CLHS 25.1.1 top-level loop variables
+    '-', '+', '++', '+++', '*', '**', '***', '/', '//', '///',
 )
 
 
@@ -180,11 +185,16 @@ def setup_standard_environment():
     # so that symbols like T and NIL evaluate to their Lisp values rather
     # than resolving to function bindings when no variable binding exists.
     try:
-        for name, val in (('T', fclpy.lisptype.T), ('NIL', fclpy.lisptype.NIL)):
-            sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol(name)
-            fclpy.lisptype.COMMON_LISP_PACKAGE.export_symbol(sym)
-            if state.current_environment.find_variable(sym) is None:
-                state.current_environment.add_variable(sym, val)
+        # T is a LispSymbol and gets a value-cell binding like any constant.
+        # NIL is *not* bound here: it is the `lispNull` singleton (not a
+        # LispSymbol, which `Environment.add_variable` rejects), it is
+        # self-evaluating (eval special-cases it), and it is always bound
+        # (`is_constant_symbol` answers for it directly) -- so it has no
+        # value cell to fill.
+        sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('T')
+        fclpy.lisptype.COMMON_LISP_PACKAGE.export_symbol(sym)
+        if state.current_environment.find_variable(sym) is None:
+            state.current_environment.add_variable(sym, fclpy.lisptype.T)
     except Exception:
         # Defensive: if lisptype is not fully available yet, ignore
         pass
@@ -391,6 +401,34 @@ def setup_standard_environment():
         from fclpy.lispfunc.utilities_system import RandomState
         state.current_environment.add_variable(random_state_sym, RandomState())
 
+    # === The REPL loop variables (CLHS 25.1.1) and the condition/macroexpansion
+    # hooks (CLHS 9.1.1, 3.1.2.1.1) ===
+    #
+    # All of these are *bound* in a fresh image -- `cl-variable-symbols.1`
+    # collects every COMMON-LISP variable boundp answers NIL for, and these
+    # were the unbound ones: the ten top-level loop variables (all NIL until
+    # a REPL writes them), *BREAK-ON-SIGNALS* (initially false) and
+    # *DEBUGGER-HOOK* (initially nil). *MACROEXPAND-HOOK*'s initial value is
+    # the FUNCALL function (CLHS: "The initial value of *macroexpand-hook* is
+    # funcall"). They are proclaimed special above; proclamation alone left
+    # the value cells empty, which is what boundp answers NIL to.
+    for repl_var_name in ('-', '+', '++', '+++', '*', '**', '***',
+                          '/', '//', '///',
+                          '*BREAK-ON-SIGNALS*', '*DEBUGGER-HOOK*'):
+        repl_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol(repl_var_name)
+        fclpy.lisptype.COMMON_LISP_PACKAGE.export_symbol(repl_sym)
+        if state.current_environment.find_variable(repl_sym) is None:
+            state.current_environment.add_variable(repl_sym, fclpy.lisptype.NIL)
+
+    macroexpand_hook_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*MACROEXPAND-HOOK*')
+    fclpy.lisptype.COMMON_LISP_PACKAGE.export_symbol(macroexpand_hook_sym)
+    if state.current_environment.find_variable(macroexpand_hook_sym) is None:
+        funcall_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('FUNCALL')
+        hook_value = state.current_environment.find_func(funcall_sym)
+        state.current_environment.add_variable(
+            macroexpand_hook_sym,
+            hook_value if hook_value is not None else fclpy.lisptype.NIL)
+
     # === The standard constant variables (CLHS 1.9, 12.1.3, 15.1.1, 25.1.4.1) ===
     #
     # Every name below is a *constant variable*: an external symbol of
@@ -523,55 +561,14 @@ def setup_standard_environment():
         if state.current_environment.find_variable(_symbol) is None:
             state.current_environment.add_variable(_symbol, _value)
 
-    # === Type Specifier Symbols (ANSI CL type system) ===
-    # These symbols should evaluate to themselves - they are used as type specifiers
-    # Note: We EXCLUDE type names that are also function names (LIST, CONS, etc.)
-    # Those work as types when quoted: (typep x 'list), not (typep x list)
-    type_symbols = [
-        # Basic types (excluding LIST, CONS which are functions)
-        'NULL', 'ATOM',
-        # Numeric types  
-        'NUMBER', 'REAL', 'RATIONAL', 'INTEGER', 'FIXNUM', 'BIGNUM',
-        'RATIO', 'FLOAT', 'SHORT-FLOAT', 'SINGLE-FLOAT', 'DOUBLE-FLOAT', 'LONG-FLOAT',
-        'COMPLEX', 'BIT',
-        # Character types
-        'CHARACTER', 'BASE-CHAR', 'STANDARD-CHAR', 'EXTENDED-CHAR',
-        # Sequence types (excluding STRING, VECTOR which may be functions)
-        'SEQUENCE', 'SIMPLE-STRING', 'BASE-STRING', 'SIMPLE-BASE-STRING',
-        'SIMPLE-VECTOR', 'BIT-VECTOR', 'SIMPLE-BIT-VECTOR',
-        'ARRAY', 'SIMPLE-ARRAY',
-        # Function types
-        'COMPILED-FUNCTION',
-        # Other built-in types (excluding PATHNAME which is a function)
-        'HASH-TABLE', 'PACKAGE', 'LOGICAL-PATHNAME',
-        'STREAM', 'FILE-STREAM', 'STRING-STREAM', 'BROADCAST-STREAM',
-        'CONCATENATED-STREAM', 'ECHO-STREAM', 'SYNONYM-STREAM', 'TWO-WAY-STREAM',
-        'RANDOM-STATE', 'READTABLE', 'RESTART',
-        # Structure/class types
-        'STRUCTURE-OBJECT', 'STANDARD-OBJECT', 'CLASS', 'STRUCTURE-CLASS',
-        'STANDARD-CLASS', 'BUILT-IN-CLASS', 'METHOD', 'STANDARD-METHOD',
-        'METHOD-COMBINATION', 'GENERIC-FUNCTION', 'STANDARD-GENERIC-FUNCTION',
-        # Condition types
-        'CONDITION', 'SIMPLE-WARNING', 'STYLE-WARNING',
-        'SERIOUS-CONDITION', 'SIMPLE-ERROR', 'CELL-ERROR',
-        'TYPE-ERROR', 'SIMPLE-TYPE-ERROR', 'PARSE-ERROR', 'PROGRAM-ERROR',
-        'CONTROL-ERROR', 'PACKAGE-ERROR', 'STREAM-ERROR', 'END-OF-FILE',
-        'FILE-ERROR', 'PRINT-NOT-READABLE', 'READER-ERROR',
-        'ARITHMETIC-ERROR', 'DIVISION-BY-ZERO', 'FLOATING-POINT-OVERFLOW',
-        'FLOATING-POINT-UNDERFLOW', 'FLOATING-POINT-INEXACT',
-        'FLOATING-POINT-INVALID-OPERATION', 'STORAGE-CONDITION',
-        'UNBOUND-SLOT', 'UNBOUND-VARIABLE',
-        # Boolean
-        'BOOLEAN',
-    ]
-        
-    for type_name in type_symbols:
-        sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol(type_name)
-        fclpy.lisptype.COMMON_LISP_PACKAGE.export_symbol(sym)
-        # Type symbols evaluate to themselves
-        if state.current_environment.find_variable(sym) is None:
-            state.current_environment.add_variable(sym, sym)
-            
+    # Type specifier symbols (NUMBER, ARRAY, CONDITION, ...) get **no
+    # variable binding** here: they are *type names*, not variables, and a
+    # type name is only ever used quoted -- `(typep x 'number)`, never
+    # `(typep x number)`. Binding each one's value cell (to the symbol
+    # itself, as this block once did "so they evaluate to themselves") made
+    # every one of the 82 class names answer T to `boundp`, which
+    # `boundp.5` collects over and asserts NIL: in Common Lisp a class
+    # lives in its class cell (`FIND-CLASS`), never in the value cell.
 
     # Update module-level variable for backward compatibility with code that uses lispenv.current_environment
     global current_environment

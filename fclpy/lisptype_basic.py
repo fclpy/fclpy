@@ -112,6 +112,15 @@ class lispList(lispSequence):
     pass
 
 class lispNull(lispList):
+    # The symbol NIL's *name* is the string "NIL" (CLHS 13.1.2), the same
+    # attribute every LispSymbol carries. GENERIC symbol code (`Environment.
+    # find_func`, the printer, `SYMBOL-NAME`, ...) reads `.name` off whatever
+    # symbol it was handed, and since COMMON-LISP's "NIL" entry is the
+    # canonical NIL object itself (seeded in lisptype_extended), that code
+    # receives this singleton -- an AttributeError here used to be the
+    # failure mode of e.g. `(fboundp nil)` inside COPY-SYMBOL.2's `every`.
+    name = 'NIL'
+
     def __str__(self):
         return "NIL"
     def __repr__(self):

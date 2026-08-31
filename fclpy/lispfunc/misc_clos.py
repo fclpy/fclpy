@@ -274,7 +274,7 @@ def _check_initargs_valid(instance, cls, initargs):
     if unknown:
         raise lisptype.LispError(
             "not a valid initialization argument for "
-            f"{cls.name.name}: :{unknown[0]}")
+            f"{cls.name_string}: :{unknown[0]}")
 
 
 def _check_no_builtin_instance(obj, what):
@@ -285,7 +285,7 @@ def _check_no_builtin_instance(obj, what):
     if (isinstance(obj, classes.LispClass)
             and getattr(obj, 'metaclass_name', 'STANDARD-CLASS') == 'BUILT-IN-CLASS'):
         raise lisptype.LispError(
-            f"{what}: {obj.name.name} is a built-in class; the operation "
+            f"{what}: {obj.name_string} is a built-in class; the operation "
             f"is not permitted on it")
 
 
@@ -327,9 +327,9 @@ def _default_allocate_instance(cls, *initargs):
     # -- and silently, since the missing superclass contributes nothing.
     pending = cls.unfinalized_superclasses() if isinstance(cls, classes.LispClass) else []
     if pending:
-        names = ", ".join(sorted(c.name.name for c in pending))
+        names = ", ".join(sorted(c.name_string for c in pending))
         raise lisptype.LispError(
-            f"ALLOCATE-INSTANCE: class {cls.name.name} is not finalized -- "
+            f"ALLOCATE-INSTANCE: class {cls.name_string} is not finalized -- "
             f"undefined superclass(es): {names}")
     return classes.LispInstance(lisp_class=cls)
 
@@ -1301,7 +1301,7 @@ def _signal_builtin_slot_access(instance, op):
             and getattr(cls, 'metaclass_name', 'STANDARD-CLASS') == 'BUILT-IN-CLASS'):
         raise lisptype.LispTypeError(
             f"{op}: {instance!r} is a generalized instance of the built-in "
-            f"class {cls.name.name}; its slots are not accessible",
+            f"class {cls.name_string}; its slots are not accessible",
             expected_type='STANDARD-OBJECT', actual_value=instance)
 
 
