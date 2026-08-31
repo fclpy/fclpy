@@ -419,6 +419,25 @@ def _type_name(designator):
     return name.upper() if isinstance(name, str) else None
 
 
+def _union_element_type(kind, element_type):
+    """The upgraded element type a branch of an `OR` result type contributes.
+
+    The ansi-test note `:result-type-element-type-by-subtype` defines the
+    element type of a result type as "the type X such that result-type is a
+    subtype of (vector X)", which for a union exists only when every branch
+    upgrades to the *same* element type. A branch that names none explicitly
+    contributes its kind's upgrade: `(vector *)` and a bare `(vector 5)`-style
+    branch mean T, a STRING branch CHARACTER, a BIT-VECTOR branch BIT.
+    """
+    if element_type is not None and element_type != '*':
+        return element_type
+    if kind == 'STRING':
+        return 'CHARACTER'
+    if kind == 'BIT-VECTOR':
+        return 'BIT'
+    return 'T'
+
+
 def parse_sequence_type(result_type, what='sequence function'):
     """Resolve a CLHS sequence type specifier to `(kind, size, element_type)`.
 
@@ -453,21 +472,40 @@ def parse_sequence_type(result_type, what='sequence function'):
     if name == 'NIL' or name == 'NULL':
         return ('NIL', None, None)
     # A union result type like `(or (vector t 10) (vector t 5))` is a CLHS
-    # `type-union`; each branch names a legal sequence type. Pick the first
-    # branch whose `kind` and `element_type` match a recognised sequence
-    # type -- MAP, CONCATENATE and MAKE-SEQUENCE all accept a union when
-    # each branch is itself a sequence type specifier (`map.48`). The caller
-    # decides later whether the constructed sequence satisfies the size
-    # constraints; here we just decode the branch.
+    # `type-union`. Per the `:result-type-element-type-by-subtype` note, its
+    # element type is the X such that the union is a subtype of (vector X),
+    # which exists only when every *inhabited* branch names the same one --
+    # so `(or (vector t 10) (vector t 5))` constrains just the size, while
+    # `(or (vector bit) (vector t))` names no element type at all and is an
+    # error for MAKE-SEQUENCE, MAP, CONCATENATE, MERGE and COERCE alike
+    # (`make-sequence.error.15`, `map.error.10`, `concatenate.error.6`,
+    # `coerce.error.10`). A LIST branch is a subtype of (vector X) for no X,
+    # so any union containing one is undetermined too. The caller decides
+    # later whether the constructed sequence satisfies the size constraints
+    # (`map.48`); here we just decode the first inhabited branch.
     if name == 'OR':
+        branches = []
         for branch in rest:
             branch_kind, branch_size, branch_et = parse_sequence_type(
                 branch, what)
             if branch_kind != 'NIL':
-                return (branch_kind, branch_size, branch_et)
-        raise lisptype.LispTypeError(
-            f"{what}: {result_type!r} does not name a sequence type",
-            expected_type="LIST, VECTOR, STRING, or BIT-VECTOR", actual_value=result_type)
+                branches.append((branch_kind, branch_size, branch_et))
+        if not branches:
+            raise lisptype.LispTypeError(
+                f"{what}: {result_type!r} does not name a sequence type",
+                expected_type="LIST, VECTOR, STRING, or BIT-VECTOR", actual_value=result_type)
+        head_kind, head_size, head_et = branches[0]
+        head_upgrade = _union_element_type(head_kind, head_et)
+        for branch_kind, _branch_size, branch_et in branches[1:]:
+            if (branch_kind == 'LIST' or head_kind == 'LIST'
+                    or _union_element_type(branch_kind, branch_et) != head_upgrade):
+                raise lisptype.LispTypeError(
+                    f"{what}: {result_type!r} does not determine a unique "
+                    f"element type",
+                    expected_type="sequence type specifier with a determined "
+                                  "element type",
+                    actual_value=result_type)
+        return branches[0]
 
     element_type = None
     size = None
