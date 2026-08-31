@@ -437,25 +437,44 @@ def _split_inferred_keywords(shape, values):
     kwargs = {}
     n = len(values)
 
+    # The leftmost :ALLOW-OTHER-KEYS pair governs (CLHS 3.4.1.4.1). For a
+    # wildcard callee it also decides CLHS 3.5.1.5's invalid-name question
+    # below, so it must be found before any pair is judged -- which is why
+    # this scan now runs for wildcards too and steps through *symbol* pairs,
+    # not just keyword ones.
     allow_other_keys = False
     saw_marker = False
     j = shape.num_required
-    while j < n and not shape.wildcard:
+    while j < n:
         v = values[j]
-        if isinstance(v, lisptype.lispKeyword) and j + 1 < n:
-            if v.name == 'ALLOW-OTHER-KEYS':
-                allow_other_keys = lisptype.is_truthy(values[j + 1])
-                saw_marker = True
-                break
-            j += 2
-            continue
-        break
+        if not isinstance(v, (lisptype.lispKeyword, lisptype.LispSymbol)):
+            break
+        if j + 1 >= n:
+            break
+        if _keyword_region_name(v) == 'ALLOW-OTHER-KEYS':
+            allow_other_keys = lisptype.is_truthy(values[j + 1])
+            saw_marker = True
+            break
+        if not shape.wildcard and not isinstance(v, lisptype.lispKeyword):
+            break
+        j += 2
 
     i = 0
     while i < n:
         value = values[i]
-        if (isinstance(value, lisptype.lispKeyword)
+        if ((isinstance(value, lisptype.lispKeyword)
+             or (shape.wildcard and isinstance(value, lisptype.LispSymbol)))
                 and len(pos_args) >= shape.num_required):
+            if (shape.wildcard and not isinstance(value, lisptype.lispKeyword)
+                    and not (allow_other_keys or saw_marker)):
+                # CLHS 3.5.1.5: a pair name that is not a symbol in the
+                # KEYWORD package is invalid unless the call carries a
+                # true-valued :allow-other-keys (the callee's own
+                # &allow-other-keys is not visible to a lambda list whose
+                # keys are inferred). `write-to-string.3` passes a gensym
+                # name and is legal only because of its :allow-other-keys t.
+                raise lisptype.LispProgramError(
+                    f"{value.name!r} is not a valid keyword argument name")
             py_key = value.name.lower().replace('-', '_')
             # A `**kwargs` callee cannot be validated from outside -- its own
             # keyword set is invisible to signature introspection -- so every

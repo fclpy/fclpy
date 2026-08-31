@@ -620,6 +620,78 @@ def random_state_p(object):
     return lisptype.lisp_bool(isinstance(object, RandomState))
 
 
+@_registry.cl_function('%MAKE-RANDOM-STATE-FROM-DATA')
+def make_random_state_from_data(data):
+    """Rebuild a random state from its readable printed representation.
+
+    CLHS 22.1.3.10: the syntax is implementation-dependent, but reading the
+    printed form must construct a copy "as if the copy had been made by
+    make-random-state". The form this implementation prints is
+
+        #.(FCLPY-INTERNAL::%MAKE-RANDOM-STATE-FROM-DATA '(version state gauss))
+
+    and it deliberately does *not* go through MAKE-RANDOM-STATE: that
+    function's argument is a random-state designator (NIL, T, or a
+    random-state) and MAKE-RANDOM-STATE.ERROR.4 requires every other object
+    -- a data vector included -- to signal a TYPE-ERROR, so a seed argument
+    there would trade one green test for another.
+
+    `data` is the object the reader produced from the quoted vector: a
+    version integer, the generator's internal state as a sequence of
+    integers, and the saved gaussian tail (NIL when there is none) -- the
+    exact tuple Python's `random.Random.getstate` returns and `setstate`
+    consumes.
+    """
+    if isinstance(data, lisptype.lispCons) or _is_nil(data):
+        from .sequence_protocol import list_elements
+        items = [] if _is_nil(data) else list_elements(data, dotted='error')
+    elif isinstance(data, (list, tuple)):
+        items = list(data)
+    else:
+        from .arrays import array_elements
+        items = list(array_elements(data))
+
+    if len(items) < 2:
+        raise lisptype.LispTypeError(
+            "%MAKE-RANDOM-STATE-FROM-DATA: malformed state data: {data!r}",
+            expected_type="(CONS (MEMBER 3) (CONS SEQUENCE T))",
+            actual_value=data)
+    version, internal = items[0], items[1]
+    gauss = items[2] if len(items) > 2 else None
+
+    if isinstance(internal, (list, tuple)):
+        internal_values = list(internal)
+    elif isinstance(internal, lisptype.lispCons) or _is_nil(internal):
+        from .sequence_protocol import list_elements
+        internal_values = [] if _is_nil(internal) else list_elements(
+            internal, dotted='error')
+    else:
+        from .arrays import array_elements
+        internal_values = list(array_elements(internal))
+
+    try:
+        state_tuple = (
+            int(version),
+            tuple(int(v) for v in internal_values),
+            None if _is_nil(gauss) else gauss,
+        )
+        rs = RandomState()
+        rs.setstate(state_tuple)
+    except (TypeError, ValueError) as exc:
+        raise lisptype.LispTypeError(
+            f"%MAKE-RANDOM-STATE-FROM-DATA: not a valid random state: {exc}",
+            expected_type="(CONS INTEGER (CONS SEQUENCE T))",
+            actual_value=data)
+    return rs
+
+
+def _is_nil(value):
+    """True for any of NIL's Python spellings (None, the singleton, symbol)."""
+    if value is None or value is lisptype.NIL:
+        return True
+    return (isinstance(value, lisptype.LispSymbol) and value.name == 'NIL')
+
+
 @_registry.cl_function('RATIONAL-SAFELY')
 def rational_safely(x):
     """Rational a floating point number, limiting the exponent.

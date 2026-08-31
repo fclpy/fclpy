@@ -1411,18 +1411,26 @@ def _write_hash_table(value, ctx):
 def _write_random_state(value, ctx):
     """Print a random state, readably if possible.
 
-    CLHS does not specify a readable syntax for random states, but the ANSI
-    test suite expects them to be printable and readable. We represent them
-    as quoted tuples that can be used as the seed argument to MAKE-RANDOM-STATE.
+    CLHS 22.1.3.10 specifies no syntax but requires that reading the printed
+    form construct a copy "as if the copy had been made by make-random-state".
+    The readable form is therefore the data-vector form through
+    `%MAKE-RANDOM-STATE-FROM-DATA` (see that function for why it cannot be
+    MAKE-RANDOM-STATE itself: its argument is a random-state designator, and
+    MAKE-RANDOM-STATE.ERROR.4 requires every other object to signal
+    TYPE-ERROR). The form is package-qualified so it reads the same from
+    whatever *PACKAGE* the reader has, `with-standard-io-syntax`'s CL-USER
+    included.
     """
     # Under readably, try to make it readable
     if ctx.readably:
         try:
             state = value.getstate()
-            # state is a tuple of (index, tuple-of-values)
-            # Write as: #.(MAKE-RANDOM-STATE '(state-tuple...))
+            # Python's `random.Random.getstate` tuple: (version, the
+            # generator's internal state, the saved gaussian tail or None).
+            # Printed as a vector, read back as one.
             state_form = _write(list(state), ctx, 1)
-            return f"#.(MAKE-RANDOM-STATE '{state_form})"
+            return ("#.(FCLPY-INTERNAL::%MAKE-RANDOM-STATE-FROM-DATA '"
+                    + state_form + ")")
         except (AttributeError, TypeError, ValueError):
             # Fallback if we can't get the state
             pass
