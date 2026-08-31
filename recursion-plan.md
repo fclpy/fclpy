@@ -364,3 +364,241 @@ the catch-all at `evaluation_core.py:1599` as a Lisp value.
   (the ladder calls `_eval_logic` directly); they exist only as the
   `evaluation.py` export surface. The second MACROEXPAND-1 implementation
   (`misc_packages`, recorded in its docstring as standing-rule debt) remains.
+
+## Step 4 IS required after all — measured, then IMPLEMENTED 2026-08-31 (second session)
+
+**Status: Step 4 landed for self tail calls. A residual remains and is now
+Step 6 (below).** Read this section for the diagnosis; the outcome is under
+"Step 4 implemented" and the open work under "Step 6".
+
+Step 4 (the tail-call trampoline) was closed above as "not needed: the
+narrower mechanisms carried every failing test." That conclusion was drawn
+from runs under `scripts/run_ansi.py`, which raises the recursion limit to
+60000. **Under the default limit — which is what `run_all_tests.py` uses, and
+`run_all_tests.py` is the scoreboard — it is still required.** The measurements
+below are all at the default limit.
+
+### What actually happens now
+
+A bare `run_all_tests.py` **aborts the whole run** after 131 seconds, at test
+5484 of 21908:
+
+```
+COMPLETENESS: total=21908 passed=5470 failed=14 accounted=5484 missing=16424
+COMPLETENESS: MISMATCH
+Error loading file '...ansi-test\doit.lsp': Stack overflow calling NOTNOT:
+Lisp recursion exceeded the available stack
+```
+
+**This is the regression, and it is not "a test started failing."** The
+failing test, `COPY-TREE.2`, was *already failing* before this work — it is in
+the 2026-08-31 07:32 full run's failure list (verified by extracting that
+list from the archived log, `ansi_results/snapshots/2026-08-31-run1-amended/`;
+note that snapshot's `failed.txt` is the *amended* 62-entry file and cannot be
+used for this — the 13:50 targeted merges ran under the deep stack and mark
+COPY-TREE.2 passing). What changed is the **blast radius**:
+
+| | before Step 5 | after Step 5 |
+|---|---|---|
+| stack exhausted | `RecursionError` | `STORAGE-CONDITION` signalled |
+| how it surfaces | wrapped into an `Error` *value* | a real condition |
+| RT's reaction | records the test as failed | **declines it** — RT guards on `error`, and `STORAGE-CONDITION` is a `SERIOUS-CONDITION`, not an `ERROR` |
+| run | continues | **aborts out of `(load "doit.lsp")`** |
+
+Step 5 is *correct* (CLHS puts stack exhaustion under `STORAGE-CONDITION`);
+it simply made a pre-existing overflow fatal instead of local.
+
+### The mechanism, measured
+
+`check-cons-copy` (`auxiliary/cons-aux.lsp:56`) — **test-suite code, not
+editable** — recurses on **car and cdr**:
+
+```lisp
+(defun check-cons-copy (x y)
+  (cond
+   ((consp x)
+    (and (consp y)
+         (not (eqt x y))
+         (check-cons-copy (car x) (car y))
+         (check-cons-copy (cdr x) (cdr y))))   ; <-- TAIL POSITION
+   ((eqt x y) t)
+   (t nil)))
+```
+
+So its depth is the **list length**, not the tree depth. `COPY-TREE.2` walks
+`*universe*`, whose length is **700**.
+
+Measured at the default limit (probe: monkeypatch `_enter_lisp_call`, record
+the Lisp-name chain at peak Python depth):
+
+- peak Python depth **747** against a budget of `getrecursionlimit() - 250` = **750**
+- peak chain length **119**, composition: `DO-TESTS, DO-ENTRIES, DO-ENTRY, %DO,`
+  then **113 × `CHECK-CONS-COPY`**, then `EQT`, `NOTNOT`
+- **~6 Python frames per Lisp level** (steady, measured level by level)
+- baseline before any user call: **6 frames** — harness overhead is *not* a factor
+- `check-cons-copy` on a flat list: **120 elements OK, 200 overflows**
+- `COPY-TREE.1` (the name the log prints last) is **fine** — its tree is ~8
+  conses; verified passing in isolation, tree component by tree component. The
+  log's last-printed name is not the failing test.
+
+700 levels × 6 frames ≈ 4200 frames. **No frame-shaving fits that under 1000**
+— at 1 frame per level it would still be 700 plus baseline. Step 3's approach
+is exhausted here.
+
+### Why Step 4 fixes it
+
+The `(check-cons-copy (cdr x) (cdr y))` call is the **last form of the `AND`**,
+which is the last form of the `COND` clause, which is the function body's
+tail — a genuine tail call. Eliminating it turns the 700-deep cdr recursion
+into a **loop**, leaving only the *car* recursion, which is bounded by tree
+depth (tiny for real data). `COPY-TREE.2` then **passes** rather than failing
+more gracefully — which is the right target: fclpy signalling
+`STORAGE-CONDITION` on a 700-deep tail recursion is a conformance failure
+either way, since a conforming implementation does not run out of stack there.
+
+**It covers `check-scaffold-copy` but NOT `make-scaffold-copy`** — an earlier
+draft of this section claimed both, and that was wrong. Check the shapes:
+
+```lisp
+(defun check-scaffold-copy (x xcopy)          ; cons-aux.lsp:31
+  (and (eq x (scaffold-node xcopy))
+       (or (not (consp x))
+           (and (check-scaffold-copy (car x) (scaffold-car xcopy))
+                (check-scaffold-copy (cdr x) (scaffold-cdr xcopy))))))
+                                              ; ^ last operand of AND, of OR,
+                                              ;   of AND -> TAIL. Step 4 helps.
+
+(defun make-scaffold-copy (x)                 ; cons-aux.lsp:20
+  (if (consp x)
+      (make-scaffold :node x
+                     :car (make-scaffold-copy (car x))
+                     :cdr (make-scaffold-copy (cdr x)))
+      ...))                                   ; ^ ARGUMENT position. No
+                                              ;   tail-call transform applies.
+```
+
+`make-scaffold-copy` is therefore the residual, and it is what Step 6 exists
+for.
+
+### Step 4 implemented — measured outcome
+
+`TailCall` (`evaluation_core.py`) + `tail_target` threaded into the tail
+subforms of `IF`, `COND`, `AND`/`OR` and `PROGN`, unwound by a `while` loop in
+`make_ordinary_function.call`. Measured at the default limit, against HEAD with
+an *identical* probe (the "197" recorded in the earlier Outcome section is not
+reproducible and was measured some other way — HEAD measures 149):
+
+| | HEAD | after Step 4 |
+|---|---|---|
+| max **non-tail** depth | 149 | **149** (unchanged) |
+| max **tail** depth | 186 | **unbounded** (200 000 verified) |
+
+- `cons/copy-tree.lsp` **8/8 at the default limit**, COPY-TREE.2 included.
+- `cons` + `data-and-control-flow` + `eval-and-compile`: **3628/3628**, 0 unaccounted.
+- pytest **2097 passed, 3 xfailed**; `duplicates.py --baseline` clean.
+- `tests/test_recursion_depth.py` added, pinning all of the above at the
+  default limit.
+
+Two design decisions worth keeping:
+
+- **Self tail calls only, not a general trampoline.** A marker is produced only
+  when the callee *is* the closure already on the stack waiting to unwind it
+  (`func is tail_target`), so it can never escape. A general marker would have
+  to travel out through FUNCALL, APPLY and every builtin taking a function
+  designator (SORT's predicate, REMOVE-IF's test, the MAP\* family); one that
+  forgot to unwind it would return the marker as a wrong *value* rather than
+  crashing. Mutual tail recursion (f→g→f) stays an ordinary call: it costs
+  frames but cannot produce a wrong answer.
+- **Not threaded into LET/LET\*/BLOCK/CATCH/TAGBODY/UNWIND-PROTECT/WHEN/UNLESS.**
+  For the binding forms because a dynamic binding must still be live while the
+  callee runs — `(let ((*x* 1)) (f))` is tail position for the *value* but not
+  for the dynamic environment. For the rest simply to limit surface: an
+  unthreaded form produces no marker, so omitting one is safe, never wrong.
+  The implicit block *is* threaded (every DEFUN has one, so excluding it would
+  mean Step 4 never fires for a named function); sound because the block's
+  extent genuinely ends when the tail call is taken.
+
+### Step 6 — explicit continuation stack for argument evaluation (OPEN)
+
+**The complete solution, per the maintainer's direction: audit the evaluator's
+recursive descent and convert every depth-proportional host-stack path into an
+explicit continuation stack or trampoline.** `STORAGE-CONDITION` stays as the
+condition for genuine implementation-resource exhaustion — it is *not* to be
+downgraded to an `ERROR` to make RT swallow it. (RT guards each test with
+`handler-bind ((error ...))` only — rt.lsp:291 — and `storage-condition` is a
+`SERIOUS-CONDITION`, not an `ERROR`; ansi-test additionally **pins** its class
+precedence list in three places, `conditions/condition.lsp:36`,
+`types-and-classes/class-precedence-lists.lsp:76` and
+`auxiliary/ansi-aux.lsp:606`, so making it an `ERROR` subtype is not available
+even as a shortcut.)
+
+**Frame census of one non-tail level** (measured; probe recorded in the session
+log). Baseline below the outermost activation is only 3 frames, so depth is
+`~750 / frames-per-level`:
+
+| # | frame | role |
+|---|---|---|
+| 1 | `eval` :1160 | dispatches IF → calls `eval_if` |
+| 2 | `eval_if` :144 | evaluates chosen branch → calls `eval` |
+| 3 | `eval` :1648 | evaluating an **argument** → calls `eval` |
+| 4 | `eval` :1676 | `func(*eval_args)` → calls `call` |
+| 5 | `call` :1860 | evaluates body form → calls `eval` |
+
+**5 frames/level → 149 levels.** Targets, in order:
+
+1. **Resolve IF chains in `eval`'s own frame** (collapses 1+2+3 into one
+   frame): a small pre-dispatch loop that only rewrites `form`, so the 740-line
+   ladder needs no re-indentation. Expected 5 → 3, depth ≈ 250.
+2. **Explicit continuation stack for argument evaluation** (removes frame 3
+   for nested calls): a work stack of pending
+   `(func, args_so_far, remaining_arg_forms, env)` records, looping in one
+   `eval` frame. Expected 3 → 2, depth ≈ 375 — which clears the 334 the suite
+   demands.
+
+**Invariants the conversion must preserve** (each is observable, and each has
+ansi-test coverage):
+
+- **left-to-right argument evaluation** — `SETF.ORDER.*`, `*.ORDER.1` tests
+  throughout;
+- **multiple values** — an argument is a single-value context and reduces to
+  its primary (`lisptype.primary_value`), while a tail position passes all
+  values through;
+- **dynamic bindings** — a pending continuation must not outlive the
+  `BindingFrame` whose bindings its remaining subforms will read;
+- **handlers and restarts** — `signal_condition` walks `state.handler_stack`
+  *at the signal point*, before unwinding, so a continuation record must not
+  move the signal point relative to the establishing forms;
+- **non-local exits** — `ReturnFromException` / `ThrowException` /
+  `GoException` must still traverse the work stack and unwind its pending
+  records; a `finally` that pops the stack is not enough if it does not also
+  discard records belonging to the abandoned branch.
+
+**Regression test already in place:**
+`tests/test_recursion_depth.py::TestNonTailRecursionDepth::test_non_tail_recursion_at_334_levels`
+is `xfail(strict=True)` with this step named as the reason — it will fail
+loudly the moment Step 6 makes it pass, which is the signal to delete the
+marker.
+
+### Two process defects found alongside it (neither fixed)
+
+1. **The watchdog resets its own timer, so its hard stop can never fire.**
+   `watchdog.arm(warn_after=120, kill_after=900)` measures time without
+   *output*; its own 120 s warning prints an all-threads traceback dump to
+   stderr, which counts as output. Every warning is therefore followed
+   immediately by `RESOLVED: progress resumed`, observing its own dump. A
+   genuine wedge would hang forever while printing reassuring lines every two
+   minutes. Fix: exclude the watchdog's own writes from the progress signal.
+2. **A slow region that reads as a wedge.** Around the `TYPEP.n` tests the log
+   can sit unchanged ~10 minutes inside
+   `typespec` `intersect`/`_parse_compound`/`type_contains` under the random
+   type tests (219 iterations in 120 s). It resolves on its own. Not a hang;
+   don't kill a run for it.
+
+### Rejected approach (do not re-propose)
+
+Running the full suite through a wrapper that raises the recursion limit (a
+`scripts/run_full_suite.py` calling `run_with_deep_stack`) was implemented and
+**rejected by the maintainer**: the suite is to be driven by raw Lisp through
+`run_all_tests.py`, unmodified, which is *why* that file is not to be changed.
+A bigger stack hides the defect rather than fixing it; the interpreter must
+complete `doit.lsp` at the default limit. The wrapper has been deleted.

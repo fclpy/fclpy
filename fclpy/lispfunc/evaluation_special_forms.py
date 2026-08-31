@@ -103,7 +103,7 @@ def _extract_tail_symbol_from_rest(rest_param):
 
     return None
 
-def eval_if(form, env):
+def eval_if(form, env, *, tail_target=None):
     """Evaluate IF special form.
 
     **A chain of IFs through the else branch is evaluated in this frame**, not
@@ -131,7 +131,7 @@ def eval_if(form, env):
 
         test_result = eval(test_form, env)
         if lisptype.is_truthy(test_result):
-            return eval(then_form, env)
+            return eval(then_form, env, tail_target=tail_target)
         if else_form is None:
             return None
         # The else of an IF is very often another IF -- step into it in this
@@ -141,7 +141,7 @@ def eval_if(form, env):
             if isinstance(op, lisptype.LispSymbol) and op.name == 'IF':
                 current = else_form
                 continue
-        return eval(else_form, env)
+        return eval(else_form, env, tail_target=tail_target)
 
 
 def eval_setq(form, env):
@@ -1753,7 +1753,8 @@ def make_ordinary_function(lambda_list, body, env, block_name=None, name=None):
         display_name = 'anonymous function'
 
     def call(*call_args):
-        from .evaluation_core import _enter_lisp_call, _leave_lisp_call, ConditionException
+        from .evaluation_core import (_enter_lisp_call, _leave_lisp_call,
+                                      ConditionException, TailCall)
         if _enter_lisp_call(display_name):
             # CLHS STORAGE-CONDITION, signalled while Python stack remains
             # (recursion-plan.md Step 5) -- not a RecursionError later.
@@ -1763,60 +1764,123 @@ def make_ordinary_function(lambda_list, body, env, block_name=None, name=None):
                             f"Lisp recursion exceeded the available stack"),
                 recoverable=False)
         try:
-            call_args = tuple(_canonicalize_nil_symbol(a) for a in call_args)
+            # recursion-plan.md Step 4: the self tail-call trampoline. A call
+            # to *this* closure from the body's tail position comes back from
+            # `eval` as a `TailCall` marker instead of consuming another ~6
+            # Python frames per level; the parameters are re-bound from it and
+            # the body runs again in *this* frame. A self-recursive Lisp
+            # function therefore costs O(1) Python stack, which is what lets
+            # ansi-test's own spine-recursive helpers finish at the default
+            # recursion limit -- `check-cons-copy` (auxiliary/cons-aux.lsp)
+            # recurses on the cdr spine, so its depth is the *list length*:
+            # 700 for COPY-TREE.2's `*universe*`, ~4200 Python frames before.
+            #
+            # The loop is written out here rather than in a `_call_once`
+            # helper, because such a helper costs one Python frame per
+            # activation and would buy unbounded *tail* depth at the price of
+            # *non-tail* depth (measured: 197 -> 124 levels). Every frame this
+            # closure holds is multiplied by the recursion depth of the
+            # program being run, so the trampoline has to be free.
+            while True:
+                call_args = tuple(_canonicalize_nil_symbol(a)
+                                  for a in call_args)
 
-            _check_ordinary_arity(parsed, call_args, display_name)
+                _check_ordinary_arity(parsed, call_args, display_name)
 
-            func_env = lisptype.Environment(env)
-            frame = BindingFrame(func_env, body=declaration_body,
-                                 bound_vars=parameters,
-                                 defer_free_declarations=True)
-            try:
-                for index, param in enumerate(required_params):
-                    frame.bind(param, call_args[index])
+                func_env = lisptype.Environment(env)
+                frame = BindingFrame(func_env, body=declaration_body,
+                                     bound_vars=parameters,
+                                     defer_free_declarations=True)
+                try:
+                    for index, param in enumerate(required_params):
+                        frame.bind(param, call_args[index])
 
-                _bind_ordinary_lambda_list_tail(
-                    parsed, call_args, len(required_params), func_env, eval, frame)
+                    _bind_ordinary_lambda_list_tail(
+                        parsed, call_args, len(required_params), func_env,
+                        eval, frame)
 
-                if environment_param is not None:
-                    frame.bind(environment_param, env)
+                    if environment_param is not None:
+                        frame.bind(environment_param, env)
 
-                frame.install_free_declarations()
+                    frame.install_free_declarations()
 
-                # The body loop runs directly in this frame -- no `run_body`
-                # thunk, and the implicit block via `_implicit_block_frame`,
-                # whose `with` holds no frame while the body runs. Going
-                # through `_run_with_nil_block(run_body, ...)` here cost two
-                # held frames per level of Lisp recursion (~8 Python frames
-                # per level, capping default-limit recursion at ~140 levels --
-                # recursion-plan.md Step 3); every level this closure saves is
-                # multiplied by the recursion depth of the program being run.
-                if block_name is None:
-                    result = lisptype.NIL
-                    current = forms
-                    while _consp_internal(current):
-                        result = eval(car(current), func_env)
-                        current = cdr(current)
+                    # The body loop runs directly in this frame -- no
+                    # `run_body` thunk, and the implicit block via
+                    # `_implicit_block_frame`, whose `with` holds no frame
+                    # while the body runs. Going through
+                    # `_run_with_nil_block(run_body, ...)` here cost two held
+                    # frames per level of Lisp recursion (~8 Python frames per
+                    # level, capping default-limit recursion at ~140 levels --
+                    # recursion-plan.md Step 3).
+                    #
+                    # The body's *last* form is evaluated with
+                    # `tail_target=call`, so a self call there answers a
+                    # `TailCall` for the loop above instead of recursing.
+                    # Earlier body forms are not in tail position and get no
+                    # target. The implicit block does not prevent this, and
+                    # that is the case that matters -- every DEFUN has one, so
+                    # excluding it would mean Step 4 never fires for a named
+                    # function. It is sound because the block's extent
+                    # genuinely ends when the tail call is taken: `with blk`
+                    # exits normally as the marker is returned, this
+                    # activation's `frame.unwind()` runs, and the next
+                    # activation pushes a *fresh* block frame. RETURN-FROM
+                    # resolves by frame identity (M7), so a closure made
+                    # during activation N and called during N+1 sees N's frame
+                    # as out of extent and gets a CONTROL-ERROR -- correct,
+                    # because N has returned. That is what a tail call means.
+                    if block_name is None:
+                        result = lisptype.NIL
+                        current = forms
+                        while _consp_internal(current):
+                            rest = cdr(current)
+                            if _consp_internal(rest):
+                                result = eval(car(current), func_env)
+                            else:
+                                result = eval(car(current), func_env,
+                                              tail_target=call)
+                            current = rest
+                    else:
+                        # The implicit block's frame is registered on
+                        # `func_env` only here, after the parameters are
+                        # bound, so the body forms (and closures they define)
+                        # resolve a RETURN-FROM to it through the lexical
+                        # chain -- while an &aux/&key init form, evaluated in
+                        # `func_env` *before* this registration, sees no block
+                        # and its RETURN-FROM leaves the function (FLET.6).
+                        blk = _implicit_block_frame(block_name, func_env)
+                        with blk:
+                            result = lisptype.NIL
+                            current = forms
+                            while _consp_internal(current):
+                                rest = cdr(current)
+                                if _consp_internal(rest):
+                                    result = eval(car(current), func_env)
+                                else:
+                                    result = eval(car(current), func_env,
+                                                  tail_target=call)
+                                current = rest
+                        if blk.caught:
+                            result = blk.value
+                finally:
+                    # Unwinds *before* the next activation binds, which is the
+                    # order a real tail call gives. Note the arguments were
+                    # already evaluated at the call site, while this
+                    # activation's bindings were still live, and the marker
+                    # carries values -- so nothing is read after this point.
+                    frame.unwind()
+
+                if type(result) is not TailCall:
                     return result
-
-                # The implicit block's frame is registered on `func_env` only
-                # here, after the parameters are bound, so the body forms (and
-                # closures they define) resolve a RETURN-FROM to it through the
-                # lexical chain -- while an &aux/&key init form, evaluated in
-                # `func_env` *before* this registration, sees no block and its
-                # RETURN-FROM leaves the function (CLHS FLET.6).
-                blk = _implicit_block_frame(block_name, func_env)
-                with blk:
-                    result = lisptype.NIL
-                    current = forms
-                    while _consp_internal(current):
-                        result = eval(car(current), func_env)
-                        current = cdr(current)
-                if blk.caught:
-                    return blk.value
-                return result
-            finally:
-                frame.unwind()
+                if result.kwargs:
+                    # A keyword argument reaching here would have to be
+                    # re-split against the lambda list. `eval` only emits a
+                    # marker for a call it has already split into positionals,
+                    # so this is unreachable -- loudly, because silently
+                    # dropping them would be a wrong value, not a crash.
+                    raise lisptype.LispError(
+                        "internal: TailCall carried keyword arguments")
+                call_args = result.args
         finally:
             _leave_lisp_call()
 

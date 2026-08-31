@@ -81,6 +81,38 @@ def _leave_lisp_call():
     _LISP_CALL_DEPTH -= 1
 
 
+class TailCall:
+    """A self tail call, deferred so the closure can loop instead of recursing.
+
+    recursion-plan.md Step 4. `eval` produces one of these *only* when its
+    `tail_target` argument is the very closure whose body it is evaluating in
+    tail position -- so a marker can never be produced unless that closure has
+    declared it will unwind one. `make_ordinary_function.call` is the only
+    consumer: it re-binds its parameters from `args` and loops in its own
+    Python frame, which is what makes a self-recursive Lisp function cost O(1)
+    stack instead of ~6 Python frames per level.
+
+    Why *self* calls only, and not a general trampoline: a general marker would
+    have to travel out through every caller of a Lisp function -- FUNCALL,
+    APPLY, and every builtin that takes a function designator (SORT's
+    predicate, REMOVE-IF's test, the MAP* family, ...). Any one of those that
+    forgot to unwind it would hand the marker back as a *value*, which is a
+    wrong answer rather than a crash. Restricting production to the case where
+    the consumer is already on the stack means the marker cannot escape the
+    closure that made it, so no such audit is needed.
+
+    A mutual tail call (f -> g -> f) is therefore left as an ordinary call.
+    That is a deliberate limit, not an oversight: it costs frames but cannot
+    produce a wrong value.
+    """
+
+    __slots__ = ('args', 'kwargs')
+
+    def __init__(self, args, kwargs):
+        self.args = args
+        self.kwargs = kwargs
+
+
 def is_arity_mismatch_message(error_str):
     """True if a Python `TypeError` string names a call-arity problem.
 
@@ -987,10 +1019,25 @@ def eval_function(*args):
     return eval(form, None)
 
 
-def eval(form, env=None):
+def eval(form, env=None, *, tail_target=None):
     """Internal evaluation function - evaluates a Lisp form in the given environment.
 
     This is the internal workhorse function. User code should call the EVAL function above.
+
+    `tail_target` (keyword-only, recursion-plan.md Step 4) is the closure whose
+    body this form is the tail of, or None. When it is set and this form turns
+    out to be a call to *that same* closure, a `TailCall` marker is returned
+    instead of making the call, and the closure loops -- see `TailCall`. It is
+    threaded onward only into subforms that are genuinely in tail position
+    **and establish no bindings and no unwind action**: IF's branches, COND's
+    clause bodies, AND/OR's last operand, PROGN/WHEN/UNLESS's last body form.
+
+    It is deliberately *not* threaded into LET/LET*/BLOCK/CATCH/TAGBODY/
+    UNWIND-PROTECT. A dynamic binding must still be in effect while the callee
+    runs -- in `(let ((*x* 1)) (f))` the binding of *x* is live during `f`, so
+    turning that into a loop that first unwinds the frame would be observably
+    wrong. Tail position for the *value* is not the same as tail position for
+    the dynamic environment.
     """
     # Import special form handlers lazily to avoid circular imports
     from .evaluation_special_forms import (
@@ -1110,7 +1157,7 @@ def eval(form, env=None):
             if operator.name == 'QUOTE':
                 return car(args)
             elif operator.name == 'IF':
-                return eval_if(form, env)
+                return eval_if(form, env, tail_target=tail_target)
             elif operator.name == 'FUNCTION':
                 # (FUNCTION name) - look up the function
                 args = cdr(form)
@@ -1178,7 +1225,7 @@ def eval(form, env=None):
             elif operator.name == 'SETQ':
                 return eval_setq(form, env)
             elif operator.name == 'PROGN':
-                return eval_progn(form, env)
+                return eval_progn(form, env, tail_target=tail_target)
             elif operator.name == 'COND':
                 # Dispatched to its evaluator, not through the macro
                 # pipeline. COND is a CLHS macro, but its expansion is a
@@ -1193,15 +1240,15 @@ def eval(form, env=None):
                 # MACROEXPAND/MACRO-FUNCTION. A MACROLET shadowing one of
                 # these names is bypassed here, exactly as it is for the
                 # special operators above.
-                return eval_cond(form, env)
+                return eval_cond(form, env, tail_target=tail_target)
             elif operator.name == 'AND':
                 # `_eval_logic` directly, not through eval_and/eval_or: those
                 # are one-line delegations, and the extra frame sits on the
                 # stack for every level of Lisp recursion through a user
                 # function whose test is an AND/OR chain.
-                return _eval_logic(cdr(form), env, 'AND')
+                return _eval_logic(cdr(form), env, 'AND', tail_target=tail_target)
             elif operator.name == 'OR':
-                return _eval_logic(cdr(form), env, 'OR')
+                return _eval_logic(cdr(form), env, 'OR', tail_target=tail_target)
             elif operator.name == 'WHEN':
                 return eval_when(form, env)
             elif operator.name == 'UNLESS':
@@ -1606,6 +1653,20 @@ def eval(form, env=None):
         # FUNCALL so an indirect call recognizes keywords the same way a
         # direct one does.
         eval_args, kwargs = split_keyword_args(func, eval_args)
+
+        # recursion-plan.md Step 4: a self tail call becomes a loop in the
+        # closure's own frame rather than another ~6 Python frames. Produced
+        # only when the closure being called *is* the one that declared it
+        # would unwind a marker (`tail_target`), so the marker cannot escape
+        # to a caller that would treat it as a value -- see `TailCall`.
+        #
+        # This is what makes ansi-test's own helpers finish at the default
+        # recursion limit: `check-cons-copy` (auxiliary/cons-aux.lsp) recurses
+        # on the cdr spine in tail position, so its depth is the *list length*
+        # -- 700 for COPY-TREE.2's `*universe*`, ~4200 Python frames before
+        # this.
+        if tail_target is not None and func is tail_target:
+            return TailCall(eval_args, kwargs)
 
         # Call function with exception handling
         try:

@@ -501,8 +501,13 @@ def eval_eval_when(form, env):
         return lisptype.NIL
 
 
-def eval_cond(form, env):
-    """Evaluate COND special form."""
+def eval_cond(form, env, *, tail_target=None):
+    """Evaluate COND special form.
+
+    The selected clause's **last** form is in tail position, so `tail_target`
+    (recursion-plan.md Step 4) is threaded into it and nowhere else -- not the
+    tests, not the earlier body forms.
+    """
     from .evaluation_core import eval
     
     clauses = cdr(form)
@@ -526,8 +531,13 @@ def eval_cond(form, env):
                     return _primary_value(test_value)
                 result = lisptype.NIL
                 while _consp_internal(forms):
-                    result = eval(car(forms), env)
-                    forms = cdr(forms)
+                    rest = cdr(forms)
+                    if _consp_internal(rest):
+                        result = eval(car(forms), env)
+                    else:
+                        result = eval(car(forms), env,
+                                      tail_target=tail_target)
+                    forms = rest
                 return result
 
         clauses = cdr(clauses)
@@ -859,7 +869,7 @@ def eval_ctypecase(form, env):
     return _typecase_dispatch(form, env, exhaustive=True, correctable=True, form_name="CTYPECASE")
 
 
-def eval_and(form, env):
+def eval_and(form, env, *, tail_target=None):
     """Evaluate AND special form (CLHS 5.1).
 
     CLHS: "If [a form] is the last form, AND returns the values returned by
@@ -871,20 +881,20 @@ def eval_and(form, env):
     truthiness, including the last, discarded the last form's real
     value(s) whenever its primary value happened to be NIL.
     """
-    return _eval_logic(cdr(form), env, 'AND')
+    return _eval_logic(cdr(form), env, 'AND', tail_target=tail_target)
 
 
-def eval_or(form, env):
+def eval_or(form, env, *, tail_target=None):
     """Evaluate OR special form (CLHS 5.1).
 
     Same last-form exception as AND: the last form's value(s) are returned
     exactly, whatever they are, rather than being reduced to NIL when its
     primary value is falsy.
     """
-    return _eval_logic(cdr(form), env, 'OR')
+    return _eval_logic(cdr(form), env, 'OR', tail_target=tail_target)
 
 
-def _eval_logic(args, env, pol):
+def _eval_logic(args, env, pol, *, tail_target=None):
     """Evaluate an AND/OR operand chain, one frame for the whole chain.
 
     Two things used to cost two Python frames per nesting level *per level of
@@ -916,9 +926,12 @@ def _eval_logic(args, env, pol):
             if isinstance(op, lisptype.LispSymbol) and (op.name == 'AND' or op.name == 'OR'):
                 pol, args = op.name, cdr(current)
                 continue
-        result = eval(current, env)
         if not _consp_internal(rest):
-            return result
+            # The last operand's value is the chain's value: tail position
+            # (recursion-plan.md Step 4). This is the shape that matters --
+            # `check-cons-copy`'s self call is the last operand of its AND.
+            return eval(current, env, tail_target=tail_target)
+        result = eval(current, env)
         if pol == 'AND':
             if not lisptype.is_truthy(result):
                 return lisptype.NIL
@@ -932,13 +945,17 @@ def _eval_logic(args, env, pol):
         args = rest
 
 
-def eval_progn(form, env):
+def eval_progn(form, env, *, tail_target=None):
     """Evaluate PROGN special form.
 
     CLHS: "If no forms are supplied, (progn) returns nil." The initial value is
     `lisptype.NIL`, not Python `None` -- those are distinct objects here (plan.md
     Finding G), and returning `None` leaked a Python value out as the value of a
     Lisp form.
+
+    PROGN establishes no bindings and has no unwind action, so its **last**
+    form is in tail position for both the value and the dynamic environment --
+    `tail_target` (recursion-plan.md Step 4) is threaded into it.
     """
     from .evaluation_core import eval
 
@@ -946,8 +963,12 @@ def eval_progn(form, env):
     result = lisptype.NIL
 
     while _consp_internal(args):
-        result = eval(car(args), env)
-        args = cdr(args)
+        rest = cdr(args)
+        if _consp_internal(rest):
+            result = eval(car(args), env)
+        else:
+            result = eval(car(args), env, tail_target=tail_target)
+        args = rest
 
     return result
 
