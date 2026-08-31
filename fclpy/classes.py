@@ -1975,7 +1975,13 @@ _BUILTIN_CLASS_TABLE = {
     'SYMBOL': (['T'], 'BUILT-IN-CLASS'),
     'KEYWORD': (['SYMBOL'], 'BUILT-IN-CLASS'),
     'NULL': (['SYMBOL', 'LIST'], 'BUILT-IN-CLASS'),
-    'NIL': (['T'], 'BUILT-IN-CLASS'),
+    # There is deliberately no class named NIL: CLHS 4.2.3 lists nil as an
+    # atomic *type specifier* (the empty type), never as a class name --
+    # `(find-class nil)` names no class, and ansi-test's
+    # all-exported-cl-class-names-are-valid collects every external symbol a
+    # class is registered under that is not in *cl-all-type-symbols*, NIL
+    # among them. The empty type is decided in `typespec.py` (`bottom()`),
+    # which never consults this table for it.
     'ATOM': (['T'], 'BUILT-IN-CLASS'),
     # -- sequences and arrays --
     'SEQUENCE': (['T'], 'BUILT-IN-CLASS'),
