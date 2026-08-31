@@ -1804,9 +1804,10 @@ def ensure_generic_function(function_name, *options):
     import fclpy.state as _state
     global_env = _state.current_environment
     if global_env is not None:
-        while global_env.parent is not None:
-            global_env = global_env.parent
-        global_env.add_function(_function_spec_to_key(function_name), gf)
+        from .binding import root_environment
+        from .misc_macros import install_function_binding
+        install_function_binding(_function_spec_to_key(function_name), gf,
+                                 root_environment(global_env))
 
     return gf
 

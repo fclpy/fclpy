@@ -666,7 +666,11 @@ class lispCons(lispList):
         values = []
         values.append("(")
         values.append("NIL" if self.car == None else str(self.car))
-        cdr = self.cdr
+        # The tail is normalised *before* the loop, exactly as __repr__ does:
+        # `lispNull != None` is identity-true, so letting the singleton in
+        # made every ONE-element list print "(X . NIL)" through str() while
+        # repr() said "(X)" -- one object, two printed contents.
+        cdr = self.cdr if type(self.cdr) is not lispNull else None
         while cdr != None:
             values.append(" ")
             if type(cdr) is lispCons:

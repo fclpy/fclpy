@@ -325,17 +325,19 @@ def _define_slot_accessors(lisp_class, slot_defs, definition_env):
         # second copy -- ansi-test's slot-unbound.lsp calls readers directly
         # (sunb-a, sunb-b) and requires SLOT-UNBOUND to fire through them.
         from fclpy.lispfunc.misc_clos import slot_value
+        from fclpy.lispfunc.misc_macros import install_function_binding
         gf = classes.ensure_generic_function(gf_name)
         classes.add_method(gf, [lisp_class], lambda instance: slot_value(instance, slot_name))
-        global_env.add_function(_binding_symbol(gf_name), gf)
+        install_function_binding(_binding_symbol(gf_name), gf, global_env)
 
     def _bind_writer(gf_name, slot_name):
         from fclpy.lispfunc.misc_clos import set_slot_value
+        from fclpy.lispfunc.misc_macros import install_function_binding
         gf = classes.ensure_generic_function(gf_name)
         classes.add_method(
             gf, [None, lisp_class],
             lambda new_value, instance: set_slot_value(new_value, instance, slot_name))
-        global_env.add_function(_binding_symbol(gf_name), gf)
+        install_function_binding(_binding_symbol(gf_name), gf, global_env)
 
     for slot_def in slot_defs:
         slot_name = slot_def.name

@@ -6117,10 +6117,8 @@ def eval_defgeneric(form, env):
         # replaces them, while methods added by DEFMETHOD/ADD-METHOD stay.
         next(m for m in gf.methods if m.function is method_fn).initial_method = True
 
-    global_env = env
-    while global_env.parent is not None:
-        global_env = global_env.parent
-    global_env.add_function(func_name, gf)
+    from .misc_macros import install_function_binding
+    install_function_binding(func_name, gf, root_environment(env))
 
     # CLHS 7.7: "new-generic -- The result is the generic function object."
     # This used to return func_name (a symbol), which is what DEFUN/DEFCLASS
@@ -6196,10 +6194,9 @@ def eval_defmethod(form, env):
     if method_doc:
         new_method.documentation = str(method_doc)
 
-    global_env = env
-    while global_env.parent is not None:
-        global_env = global_env.parent
-    global_env.add_function(_function_spec_to_key(func_name), gf)
+    from .misc_macros import install_function_binding
+    install_function_binding(_function_spec_to_key(func_name), gf,
+                             root_environment(env))
 
     # CLHS 7.6.2: "new-method -- The result is the new method object."
     # Same defect as DEFGENERIC above: this returned func_name, so no

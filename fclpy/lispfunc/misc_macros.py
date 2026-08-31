@@ -1651,8 +1651,46 @@ def dribble(file=None):
 
 
 @_registry.cl_function('DISASSEMBLE')
-def disassemble(object):
-    """Disassemble compiled code."""
+def disassemble(fn, **kwargs):
+    """DISASSEMBLE (CLHS 25.1.2): disassemble the code of `fn`.
+
+    What a disassembly *says* is implementation-defined -- CLHS prescribes
+    nothing about the output, and this implementation has no native code to
+    show -- but the argument is not. `fn` is an *extended function
+    designator*: a function, a symbol (fbound or not -- the designator type
+    is `(or function symbol (cons (eql setf) (cons symbol null)))`), or a
+    `(setf symbol)` name; anything else is a TYPE-ERROR, which is all
+    `disassemble.error.3` measures. A `lambda expression` is accepted too
+    (`disassemble.3` passes `'(lambda (x y) ...)`) -- the same "evaluates to
+    itself as a function" rule FUNCALL gives it -- while any other cons
+    (`(a b)`, whose head is not LAMBDA or SETF) stays a TYPE-ERROR. A
+    `Method` object is deliberately *not* a function here (no `__call__`,
+    like every other implementation) and is rejected with the rest.
+    `**kwargs` is the lambda list's `&allow-other-keys`, so the keyword
+    arguments CLHS permits are accepted.
+    """
+    from .evaluation_core import _consp_internal, cdr as _cdr, car as _car
+    from .core import _null_internal
+
+    def _is_setf_name(form):
+        return (_consp_internal(form)
+                and lisptype.is_symbol(_car(form))
+                and _car(form).name == 'SETF'
+                and _consp_internal(_cdr(form))
+                and lisptype.is_symbol(_car(_cdr(form)))
+                and _null_internal(_cdr(_cdr(form))))
+
+    def _is_lambda_expression(form):
+        return (_consp_internal(form)
+                and lisptype.is_symbol(_car(form))
+                and _car(form).name == 'LAMBDA')
+
+    if not (callable(fn) or lisptype.is_symbol(fn) or _is_setf_name(fn)
+            or _is_lambda_expression(fn)):
+        raise lisptype.LispTypeError(
+            f"DISASSEMBLE: {fn} is not an extended function designator",
+            expected_type='(OR FUNCTION SYMBOL (CONS (EQL SETF) (CONS SYMBOL NULL)))',
+            actual_value=fn)
     return None
 
 
@@ -1790,6 +1828,29 @@ def _trace_one(spec, env):
     _TRACED[key.name] = {'spec': spec, 'target': target, 'key': key}
     global_env.add_function(key, _make_trace_wrapper(key.name, spec))
     return True
+
+
+def install_function_binding(key, fn, global_env):
+    """Bind `fn` at `key` in `global_env`, preserving a TRACE wrapper around
+    this same `fn`.
+
+    The gf installers (DEFGENERIC, DEFMETHOD, DEFCLASS's :reader/:writer
+    methods, ENSURE-GENERIC-FUNCTION) all re-bind the name to the generic
+    function object they got from `ensure_generic_function` -- which is the
+    *same* object every time, the one the generic-function registry keys by
+    name. While the name is traced, that object is reachable only *through*
+    the trace wrapper (`_make_trace_wrapper`, whose `functools.wraps` sets
+    `__wrapped__` to the target), so rebinding the raw gf silently
+    un-traced the name: a DEFMETHOD after TRACE still added the method, the
+    call still dispatched, and nothing ever reached `*TRACE-OUTPUT*`
+    (`trace.14`). A wrapper around something *else* -- the function was
+    redefined while traced -- is still replaced here, and `_untrace_one`'s
+    `__wrapped__` guard leaves that newer definition alone on untrace.
+    """
+    existing = global_env.find_func(key)
+    if existing is not None and getattr(existing, '__wrapped__', None) is fn:
+        return
+    global_env.add_function(key, fn)
 
 
 def _untrace_one(key_name, env):
