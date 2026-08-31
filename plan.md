@@ -2893,3 +2893,30 @@ rather than discovering these one crash at a time.
 Read it when you want the record of *why* a mechanism is the shape it is —
 including the entries that record a diagnosis being wrong, which is the part
 that stops the same wrong diagnosis being made twice.
+
+## HANDOFF — 2026-08-31 session end (orchestrated run, passed to next agent)
+
+### Verified and committed this session (all gates green at landing)
+- **Cluster A (M7 core)**: BLOCK/RETURN-FROM/TAGBODY-GO resolve by **frame identity**, not name — `BlockFrame`/`TagbodyFrame` in `evaluation_control_flow.py`, wired through `_run_with_nil_block` (7 call sites) and `make_ordinary_function`/`_make_method_function`. BLOCK.10 GOOD; out-of-extent return → CONTROL-ERROR. **M7's "no identity objects" deviation is closed.**
+- **Cluster B**: `_keyplace_form` splice fix — STORE-VALUE restarts evaluate the store form instead of calling it as a function (CCASE.31/CTYPECASE.12).
+- **Cluster C/C2 (printer)**: `format` to NIL returns LispString (17 format-conditional failures); `LispString.__contains__` substring semantics; PRINC/PRIN1 bind `*print-readably*` nil (X3J13 PRINC-READABLY); `#\U+XXXX` printed for unnamed chars; NAME-CHAR inverts U+XXXX; rank-1 CHARACTER/NIL arrays print as strings; zero-dim arrays signal PRINT-NOT-READABLE when `#nA` cannot round-trip; `#:` prefix for dead-home symbols. print-characters 11/11, print-strings 16/16, print-array 67/67.
+- **Cluster D/G**: EQUALP — general arrays (any rank, dimensions, row-major) and structure-class instances (same class + slot-wise, via `metaclass_name == 'STRUCTURE-CLASS'`) now compare; EQUALP.7/.16, SETF-APPLY.2, make-array +4.
+- **Cluster E**: variables keyed by **symbol identity** (`_same_variable` in lisptype_extended.py, BindingFrame rekeyed) with a documented both-uninterned fallback; FUNCALL of a macro/special-operator name signals UNDEFINED-FUNCTION with `:name` (coerce_to_function). LET.5/LET*.5, FUNCALL.ERROR.1-3.
+- **Cluster F**: `(SETF MACRO-FUNCTION)` place — 2-arg place form handled in `get_setf_expansion`; setter is one home (`_fclpy_setf_macro_function`, root env only); **eval_defun/eval_defmacro no longer install into the lexical env** (macro-function.10's shadowing). macro-function.lsp 17/17.
+- **Lead**: FUNCTION-LAMBDA-EXPRESSION returns 3 values in CLHS order (was a Python tuple, wrong slots); `/` of a float complex with zero imag keeps float parts (numbers `/.8` — the `(exp (log most-positive-double-float))` spurious-signal + None-return fix is in math_advanced.py EXP); dispatch cache in classes.py (`compute_applicable_methods` memoized on arg classes + method-set signature; EQL/typep-fallback dispatches never cached) — dispatch left the profile; comparison.py: dead duplicate vector branch removed, TYPEP path no longer swallows DEFTYPE-arity signals (`except (ConditionException, ReturnFromException, ThrowException, GoException): raise` — Finding K).
+- **Cluster H (reader, in HEAD)**: READTABLE-CASE via `convert_case_chars` (readtable.py:75, one home); `#\U+XXXX` token accepted (readtable.py:1143-1155).
+
+### UNCOMMITTED in the worktree (for the next agent to verify + fold)
+- `evaluation_loops_conditionals.py` — worker-2's LOOP engine (AND-joined for-as groups, WHILE/UNTIL source-order positions, FINALLY (RETURN x), for-being-package → PACKAGE-ERROR) **plus the lead's `validate_loop_form`** (CLHS 6.1.1.7 expansion-time duplicate check, registered in standard_macros.py's LOOP expander; last edit converts the signal to ERROR semantics via signal_error_object — **needs RT verification next run**). iteration was 839/843 before the Group A completion; target 843/843.
+- `standard_macros.py` — the LOOP expander registration (validates, then defers to eval_loop unchanged).
+- `utilities_functions.py` / `utilities_system.py` — worker-3's COERCE (rational→complex stays the real) and one of user-homedir-pathname/truename; **worker-3's stand-down report was pending at handoff** — verify with `run_ansi.py types-and-classes/coerce.lsp environment/user-homedir-pathname.lsp files/truename.lsp`.
+
+### run_all_tests.py — per user decision, UNCHANGED (reverted to original)
+The 2026-08-31 full run wedged after NSET-DIFFERENCE.13: default ~1000-frame recursion limit + deep doit.lsp load chain + ~100-deep recursive DO-RANDOM-* helpers → RecursionError recorded as test values (NINTERSECTION.12, UNION.24, NUNION.24, SET-DIFFERENCE.13, NSET-DIFFERENCE.13), then a 100%-CPU no-output stall in RT's failure printing. run_ansi.py's `run_with_deep_stack` (60000 frames + big thread stack) is why targeted runs never reproduce it. A deep-stack wrapper for run_all_tests.py was written and **reverted at the user's direction**; the next agent should re-propose it (or an equivalent outer launcher) before the next full run. The unbounded-loop half of the user's request — stack exhaustion must SIGNAL (STORAGE-CONDITION), never hang — was assigned to worker-1 (Cluster L) and was **not finished at handoff**; its repro scripts were tmp_clusterL_repro.py/tmp_L_out.txt (deleted or present as untracked).
+
+### Known open items for the next run (re-cluster from the live checklist)
+- VALUES.20/21 (nested SETF (VALUES) place); WITH-STANDARD-IO-SYNTAX.1; LOOP Group A RT verification (above); PRINT.SYMBOL.RANDOM residuals were fixed by Cluster K (31/31); COERCE residual status per worker-3 handoff.
+- M8: raise-site sweep (hundreds of `lisptype.LispError` raises across modules still bypass signaling — one `_run_handlers_on_unwind` site remains in HANDLER-BIND); DEFINE-CONDITION 426/426 clean.
+- M3 residual: macro-lambda-list binder PROGRAM-ERRORs landed (Cluster I); DEFTYPE-arity signals visible on SUBTYPEP path, fixed for TYPEP path (comparison.py Finding K) — re-verify.
+- Larger milestones untouched: M11 (exact COMPLEX), M1 (packages), M6 leftovers, M10 printer/FORMAT leftovers (C2), the `except Exception`-style Finding-K sweep across other modules.
+- Stale stashes may be dropped: `mid-run snapshot` (stash@{0}) and `pre-checklist-update` (stash@{1}) — both superseded by committed checkpoints.
