@@ -746,6 +746,22 @@ class ConsBulk:
     def finite_elements(self):
         return [] if not self.rects else None
 
+    def is_definitely_nonempty(self):
+        """Does some rectangle certainly hold a cons?
+
+        A rectangle (a, d) is inhabited when *some* cons exists with car in a
+        and cdr in d -- which needs both components to be certainly
+        non-empty. Pruning on `is_definitely_empty` alone (the constructor's
+        rule) keeps rectangles whose components are merely *possibly*
+        inhabited, so "no rects" is the only emptiness this class can prove
+        on its own; ansi-test subtypep.cons.44 builds a difference out of
+        rectangles with `(satisfies ...)` components, which are exactly the
+        possibly-inhabited kind, and requires SUBTYPEP to answer unknown
+        rather than certainly-empty."""
+        return any(_component(a).is_definitely_nonempty()
+                   and _component(d).is_definitely_nonempty()
+                   for (a, d) in self.rects)
+
 
 # ---------------------------------------------------------------------------
 # Arrays
@@ -1414,6 +1430,19 @@ def _object_sort(obj):
 # SortSet -- a bulk region with finite EQL-keyed adjustments
 # ---------------------------------------------------------------------------
 
+def _bulk_definitely_nonempty(bulk):
+    """Is this bulk certainly inhabited?
+
+    Every bulk except ConsBulk decides emptiness exactly (`is_empty` is
+    interval/cell arithmetic with no "unknown" answer), so for them
+    certainly-inhabited is just not-empty. ConsBulk carries its own answer,
+    because its rectangles are pruned on *possible* inhabitance only."""
+    fn = getattr(bulk, 'is_definitely_nonempty', None)
+    if fn is not None:
+        return fn()
+    return not bulk.is_empty()
+
+
 class SortSet:
     """`(bulk \\ removed) u extra`, maintained so that `extra` is outside the
     bulk and `removed` inside it.
@@ -1452,6 +1481,26 @@ class SortSet:
         if finite is None:
             return False
         return all(self.removed.contains(x) for x in finite)
+
+    def is_definitely_nonempty(self):
+        """The mirror of `is_empty` for decisions that must not guess.
+
+        A cons bulk whose rectangles depend on opaque components is neither
+        certainly empty nor certainly inhabited, and reporting the latter is
+        how SUBTYPEP once answered a certain NIL for subtypep.cons.44's
+        random-predicate types -- the one answer CLHS 4.3.4 forbids there."""
+        if self.extra:
+            return True
+        if not _bulk_definitely_nonempty(self.bulk):
+            return False
+        if not self.removed:
+            return True
+        finite = self.bulk.finite_elements()
+        if finite is None:
+            # an infinite inhabited bulk minus finitely many points stays
+            # inhabited
+            return True
+        return any(not self.removed.contains(x) for x in finite)
 
     def contains(self, obj):
         if self.extra.contains(obj):
@@ -1531,6 +1580,11 @@ class Region:
 
     def is_empty(self):
         return not self.sets
+
+    def is_definitely_nonempty(self):
+        # sorts are disjoint, so the region is inhabited as soon as one
+        # sort's slice certainly is
+        return any(ss.is_definitely_nonempty() for ss in self.sets.values())
 
     def union(self, other):
         return Region({s: self.get(s).union(other.get(s)) for s in ALL_SORTS})
@@ -1622,7 +1676,7 @@ class Conjunct:
         return False
 
     def is_definitely_nonempty(self):
-        if self.region.is_empty():
+        if not self.region.is_definitely_nonempty():
             return False
         if not self.pos and not self.neg:
             return True
