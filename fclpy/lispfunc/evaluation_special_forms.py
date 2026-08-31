@@ -4230,21 +4230,38 @@ def _fclpy_setf_nth_element(idx, seq, value):
         return value
 
 
-def _fclpy_setf_sequence_element(seq, idx, value):
+def _check_sequence_place_index(seq, idx, what):
+    """The index rule for the CHAR/SCHAR/ELT places, shared by both faces of
+    the place. A valid index is non-negative and below the sequence's
+    *active* length (`seq_length`, so a fill pointer bounds it exactly as
+    the ELT getter is). Checked *before* any write: the raw `seq[idx] =
+    value` this replaced let Python's `IndexError` surface as the value of
+    the form -- not a TYPE-ERROR (ELT-V.11, ELT-ADJ-ARRAY.10) -- and
+    `LispArray.__setitem__` wraps negatives Python-style, so
+    `(setf (elt v -100) d)` addressed a wrapped slot instead of signalling
+    (ELT-ADJ-ARRAY.11)."""
+    from .sequence_protocol import seq_length
+    length = seq_length(seq, what)
+    if idx < 0 or idx >= length:
+        raise lisptype.LispTypeError(
+            f"{what}: index {idx} is out of bounds for a sequence of length "
+            f"{length}",
+            expected_type=f"index in [0,{length})", actual_value=idx)
+    return length
+
+
+def _fclpy_setf_sequence_element(seq, idx, value, what='ELT'):
     """Set element at index in a sequence (for CHAR/SCHAR/ELT)."""
+    idx = int(idx)
+    _check_sequence_place_index(seq, idx, what)
     if _consp_internal(seq):
         cell = seq
-        for _ in range(int(idx)):
-            if not _consp_internal(cell):
-                raise lisptype.LispError("sequence place: index out of bounds")
+        for _ in range(idx):
             cell = cdr(cell)
-        if not _consp_internal(cell):
-            raise lisptype.LispError("sequence place: index out of bounds")
         cell.car = value
         return value
-    else:
-        seq[int(idx)] = value
-        return value
+    seq[idx] = value
+    return value
 
 
 def _fclpy_setf_fdefinition(name, value):
@@ -4575,7 +4592,10 @@ def get_setf_expansion(place, env):
     # CHAR, SCHAR, ELT - sequence element access
     if op_name in ('CHAR', 'SCHAR', 'ELT') and len(place_args) == 2:
         temp0, temp1, store = _gensym_fn(), _gensym_fn(), _gensym_fn()
-        store_form = _setf_form('PROGN', _setf_form('%FCLPY-SETF-SEQUENCE-ELEMENT', temp0, temp1, store), store)
+        store_form = _setf_form('PROGN',
+                                _setf_form('%FCLPY-SETF-SEQUENCE-ELEMENT', temp0, temp1, store,
+                                           _setf_form('QUOTE', op_name)),
+                                store)
         return [temp0, temp1], list(place_args), [store], store_form, _setf_form(op, temp0, temp1)
 
     # FDEFINITION - function definition
@@ -4957,14 +4977,11 @@ def _place_accessor(place_form, env):
         if op_name in ('CHAR', 'SCHAR', 'ELT') and _consp_internal(place_args) and _consp_internal(cdr(place_args)):
             seq = eval(car(place_args), env)
             idx = eval(car(cdr(place_args)), env)
+            _check_sequence_place_index(seq, idx, op_name)
             if _consp_internal(seq):
                 cell = seq
                 for _ in range(idx):
-                    if not _consp_internal(cell):
-                        raise lisptype.LispError(f"{op_name} place: index out of bounds")
                     cell = cdr(cell)
-                if not _consp_internal(cell):
-                    raise lisptype.LispError(f"{op_name} place: index out of bounds")
                 return (lambda: cell.car, lambda v: _setattr_return(cell, 'car', v))
             # CLHS 13.1.4: CHAR/SCHAR yield a CHARACTER, not a 1-char
             # string. `LispString.__getitem__` returns a Python `str`
