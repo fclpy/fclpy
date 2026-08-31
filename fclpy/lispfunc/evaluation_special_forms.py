@@ -4230,18 +4230,31 @@ def _fclpy_setf_nth_element(idx, seq, value):
         return value
 
 
-def _check_sequence_place_index(seq, idx, what):
-    """The index rule for the CHAR/SCHAR/ELT places, shared by both faces of
-    the place. A valid index is non-negative and below the sequence's
-    *active* length (`seq_length`, so a fill pointer bounds it exactly as
-    the ELT getter is). Checked *before* any write: the raw `seq[idx] =
-    value` this replaced let Python's `IndexError` surface as the value of
-    the form -- not a TYPE-ERROR (ELT-V.11, ELT-ADJ-ARRAY.10) -- and
-    `LispArray.__setitem__` wraps negatives Python-style, so
-    `(setf (elt v -100) d)` addressed a wrapped slot instead of signalling
-    (ELT-ADJ-ARRAY.11)."""
+def _sequence_place_bound(seq, what):
+    """The index bound for the CHAR/SCHAR/ELT places, shared by both faces
+    of the place. ELT is a *sequence* accessor (CLHS 17.3) and is bounded by
+    the active length -- `seq_length`, so a fill pointer bounds it exactly as
+    the ELT getter is. CHAR/SCHAR are *array* accessors (CLHS 15.1.1) and
+    are **not** affected by the fill pointer: they may address every element
+    up to the array total size, which is what makes CHAR.8's
+    `(setf (char s 5))` on a size-6 string with fill pointer 4 legal.
+    Checked *before* any write: the raw `seq[idx] = value` this replaced let
+    Python's `IndexError` surface as the value of the form -- not a
+    TYPE-ERROR (ELT-V.11, ELT-ADJ-ARRAY.10) -- and `LispArray.__setitem__`
+    wraps negatives Python-style, so `(setf (elt v -100) d)` addressed a
+    wrapped slot instead of signalling (ELT-ADJ-ARRAY.11)."""
     from .sequence_protocol import seq_length
-    length = seq_length(seq, what)
+    if what == 'ELT':
+        return seq_length(seq, what)
+    if isinstance(seq, lisptype.LispString):
+        return len(seq._data)
+    if isinstance(seq, lisptype.LispArray):
+        return seq.total_size
+    return seq_length(seq, what)
+
+
+def _check_sequence_place_index(seq, idx, what):
+    length = _sequence_place_bound(seq, what)
     if idx < 0 or idx >= length:
         raise lisptype.LispTypeError(
             f"{what}: index {idx} is out of bounds for a sequence of length "

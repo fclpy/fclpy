@@ -101,25 +101,23 @@ def sqrt(x):
     return _irrational(math.sqrt, cmath.sqrt, x)
 
 def _check_float_overflow(result, base, power=None):
-    """Check if result overflows/underflows for base's float type.
+    """Check if result overflows the float range.
 
-    CLHS 12.1.4.1: EXPT must signal FLOATING-POINT-OVERFLOW or
-    FLOATING-POINT-UNDERFLOW when the mathematical result is too large or
-    too small for the float type of the base.
+    CLHS 12.1.4.1: EXPT must signal FLOATING-POINT-OVERFLOW when the
+    mathematical result is too large for the float type of the base.
 
     All CL float subtypes (short, single, double, long) share Python's
-    float, so the *double* range is the one hard boundary: Python has
-    already raised OverflowError for anything beyond it, and a finite
-    result is representable. The short/single range is checked only when
-    the power is an exact *integer* -- that is the regime a CL with
-    distinct float subtypes computes by repeated multiplication in the
-    base's own format, and `expt.error.4`-`.11` pin the signals it must
-    produce (`(expt most-positive-single-float 2)` overflows single even
-    though 1.2e77 is a fine double). A non-integral power is computed
-    through exp/log in the widest format, so only the double range bounds
-    it: the eager check there made format.e.1/.2's own
-    `(expt (coerce 10 type) e)` forms signal on results the tests require
-    back as values.
+    float and -- since the float *limit constants* were aligned with that
+    one representation (see `lispenv._FLOAT_LIMITS`) -- one range, so the
+    *double* range is the only boundary: Python has already raised
+    OverflowError for anything beyond it, and a finite result is
+    representable in every format. This function used to also bound
+    integer powers by the IEEE single range (`expt.error.4`/`.5` needed
+    the signal and `1.16e77` is a fine double); that boundary moved into
+    the constants themselves -- `(expt most-positive-single-float 2)`
+    now overflows because the constant is the double max -- and the eager
+    check here would have wrongly signalled for legitimate results like
+    `(expt 1.0d8 30)`.
     """
     from fclpy.lispfunc.evaluation_conditions import signal_condition
 
@@ -128,25 +126,6 @@ def _check_float_overflow(result, base, power=None):
     if abs(result) > sys.float_info.max:
         signal_condition(lisptype.FloatingPointOverflow(
             f"EXPT: result overflows the range of the float type"))
-        return
-
-    if not (isinstance(power, int) and not isinstance(power, bool)):
-        return
-
-    # Short/single float range
-    short_max = 3.4028235e+38
-    short_min = 1.4e-45
-
-    if abs(result) > short_max:
-        signal_condition(lisptype.FloatingPointOverflow(
-            f"EXPT: result overflows the range of the float type"))
-        return
-
-    # Underflow below the single range (but not a true zero -- the zero
-    # case is handled by the caller's explicit underflow branch).
-    if result != 0.0 and abs(result) < short_min:
-        signal_condition(lisptype.FloatingPointUnderflow(
-            f"EXPT: result underflows the range of the float type"))
         return
 
 
@@ -365,17 +344,9 @@ def expt(base, power):
 
 
 def _signal_float_overflow(base):
-    """Signal FLOATING-POINT-OVERFLOW for EXPT based on base's float type."""
+    """Signal FLOATING-POINT-OVERFLOW for EXPT."""
     from fclpy.lispfunc.evaluation_conditions import signal_condition
-    
-    if isinstance(base, float):
-        if abs(base) > 3.4028235e+38:
-            # This is a double/long float
-            pass  # Python already overflowed for this
-        else:
-            # This is a short/single float - overflowed at ~3.4e+38 range
-            pass
-    
+
     signal_condition(lisptype.FloatingPointOverflow(
         f"EXPT: result overflows the range of the float type"))
 
@@ -547,127 +518,15 @@ def pi_fn():
     """Return pi."""
     return math.pi
 
-# Floating-point limit constants
-@_registry.cl_function('LEAST-POSITIVE-DOUBLE-FLOAT')
-def least_positive_double_float():
-    """Least positive double float."""
-    return sys.float_info.min
-
-@_registry.cl_function('LEAST-NEGATIVE-DOUBLE-FLOAT')
-def least_negative_double_float():
-    """Least negative double float."""
-    return -sys.float_info.min
-
-@_registry.cl_function('MOST-POSITIVE-DOUBLE-FLOAT')
-def most_positive_double_float():
-    """Most positive double float."""
-    return sys.float_info.max
-
-@_registry.cl_function('MOST-NEGATIVE-DOUBLE-FLOAT')
-def most_negative_double_float():
-    """Most negative double float."""
-    return -sys.float_info.max
-
-@_registry.cl_function('LEAST-POSITIVE-SHORT-FLOAT')
-def least_positive_short_float():
-    """Least positive short float."""
-    return sys.float_info.min
-
-@_registry.cl_function('LEAST-NEGATIVE-SHORT-FLOAT')
-def least_negative_short_float():
-    """Least negative short float."""
-    return -sys.float_info.min
-
-@_registry.cl_function('MOST-POSITIVE-SHORT-FLOAT')
-def most_positive_short_float():
-    """Most positive short float."""
-    return sys.float_info.max
-
-@_registry.cl_function('MOST-NEGATIVE-SHORT-FLOAT')
-def most_negative_short_float():
-    """Most negative short float."""
-    return -sys.float_info.max
-
-@_registry.cl_function('LEAST-POSITIVE-SINGLE-FLOAT')
-def least_positive_single_float():
-    """Least positive single float."""
-    return sys.float_info.min
-
-@_registry.cl_function('LEAST-NEGATIVE-SINGLE-FLOAT')
-def least_negative_single_float():
-    """Least negative single float."""
-    return -sys.float_info.min
-
-@_registry.cl_function('MOST-POSITIVE-SINGLE-FLOAT')
-def most_positive_single_float():
-    """Most positive single float."""
-    return sys.float_info.max
-
-@_registry.cl_function('MOST-NEGATIVE-SINGLE-FLOAT')
-def most_negative_single_float():
-    """Most negative single float."""
-    return -sys.float_info.max
-
-@_registry.cl_function('LEAST-POSITIVE-LONG-FLOAT')
-def least_positive_long_float():
-    """Least positive long float."""
-    return sys.float_info.min
-
-@_registry.cl_function('LEAST-NEGATIVE-LONG-FLOAT')
-def least_negative_long_float():
-    """Least negative long float."""
-    return -sys.float_info.min
-
-@_registry.cl_function('MOST-POSITIVE-LONG-FLOAT')
-def most_positive_long_float():
-    """Most positive long float."""
-    return sys.float_info.max
-
-@_registry.cl_function('MOST-NEGATIVE-LONG-FLOAT')
-def most_negative_long_float():
-    """Most negative long float."""
-    return -sys.float_info.max
-
-# Normalized floating-point limit constants
-@_registry.cl_function('LEAST-POSITIVE-NORMALIZED-DOUBLE-FLOAT')
-def least_positive_normalized_double_float():
-    """LEAST-POSITIVE-NORMALIZED-DOUBLE-FLOAT."""
-    return sys.float_info.min
-
-@_registry.cl_function('LEAST-NEGATIVE-NORMALIZED-DOUBLE-FLOAT')
-def least_negative_normalized_double_float():
-    """LEAST-NEGATIVE-NORMALIZED-DOUBLE-FLOAT."""
-    return -sys.float_info.min
-
-@_registry.cl_function('LEAST-POSITIVE-NORMALIZED-LONG-FLOAT')
-def least_positive_normalized_long_float():
-    """LEAST-POSITIVE-NORMALIZED-LONG-FLOAT."""
-    return sys.float_info.min
-
-@_registry.cl_function('LEAST-NEGATIVE-NORMALIZED-LONG-FLOAT')
-def least_negative_normalized_long_float():
-    """LEAST-NEGATIVE-NORMALIZED-LONG-FLOAT."""
-    return -sys.float_info.min
-
-@_registry.cl_function('LEAST-POSITIVE-NORMALIZED-SHORT-FLOAT')
-def least_positive_normalized_short_float():
-    """LEAST-POSITIVE-NORMALIZED-SHORT-FLOAT."""
-    return sys.float_info.min
-
-@_registry.cl_function('LEAST-NEGATIVE-NORMALIZED-SHORT-FLOAT')
-def least_negative_normalized_short_float():
-    """LEAST-NEGATIVE-NORMALIZED-SHORT-FLOAT."""
-    return -sys.float_info.min
-
-@_registry.cl_function('LEAST-POSITIVE-NORMALIZED-SINGLE-FLOAT')
-def least_positive_normalized_single_float():
-    """LEAST-POSITIVE-NORMALIZED-SINGLE-FLOAT."""
-    return sys.float_info.min
-
-@_registry.cl_function('LEAST-NEGATIVE-NORMALIZED-SINGLE-FLOAT')
-def least_negative_normalized_single_float():
-    """LEAST-NEGATIVE-NORMALIZED-SINGLE-FLOAT."""
-    return -sys.float_info.min
+# The most/least-positive/negative-*-float family is *not* here: those are
+# constant *variables* (CLHS 12.1.4), not functions, and their one home is
+# `lispenv.STANDARD_CONSTANTS` -- the same rule the epsilons below record.
+# Sixteen of them used to also be registered here as zero-argument
+# `cl_function`s, a second home whose values disagreed with the constants'
+# (SHORT/SINGLE answered the double limits while the variables carried the
+# IEEE single ones), and which made `(fboundp 'most-positive-single-float)`
+# true for a symbol CLHS makes a variable. The eight LEAST-*-NORMALIZED-*
+# registrations were the same duplicate class and went with them.
 
 # The eight float epsilons are **constants**, not functions (CLHS 12.1.4),
 # and their one home is `lispenv.STANDARD_CONSTANTS` -- see the note by
@@ -686,18 +545,4 @@ __all__ = [
     'decode_float', 'integer_decode_float', 'scale_float', 'float_fn',
     'float_digits', 'float_precision', 'float_radix', 'float_sign',
     'pi_fn',
-    'least_positive_double_float', 'least_negative_double_float',
-    'most_positive_double_float', 'most_negative_double_float',
-    'least_positive_short_float', 'least_negative_short_float',
-    'most_positive_short_float', 'most_negative_short_float',
-    'least_positive_single_float', 'least_negative_single_float',
-    'most_positive_single_float', 'most_negative_single_float',
-    'least_positive_long_float', 'least_negative_long_float',
-    'most_positive_long_float', 'most_negative_long_float',
-    'least_positive_normalized_double_float', 'least_negative_normalized_double_float',
-    'least_positive_normalized_long_float', 'least_negative_normalized_long_float',
-    'least_positive_normalized_short_float', 'least_negative_normalized_short_float',
-    'least_positive_normalized_single_float', 'least_negative_normalized_single_float',
-    
-    
 ]

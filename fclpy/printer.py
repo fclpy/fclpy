@@ -784,8 +784,11 @@ def _write_string(value, ctx):
 # ---------------------------------------------------------------------------
 
 #: Characters that force a symbol name to be printed inside ``|...|``, because
-#: the reader would otherwise give them syntactic meaning.
-_SYMBOL_ESCAPE_CHARS = set('()\'"`,;|\\#')
+#: the reader would otherwise give them syntactic meaning. ``:`` is one of
+#: them -- an unescaped colon in a token is a package marker, so
+#: `(write (make-symbol ":") :readably t)` printed ``#::`` and the round trip
+#: died in the reader (`read-symbol.10`); escaped as ``#:|:|`` it reads back.
+_SYMBOL_ESCAPE_CHARS = set('()\'"`,;|\\#:')
 
 
 def _readtable_case():

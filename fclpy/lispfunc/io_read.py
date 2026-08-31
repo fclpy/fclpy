@@ -665,6 +665,19 @@ def set_syntax_from_char(to_char, from_char, to_readtable=_rt._OMITTED,
         # convention when copied to the new character -- the same adapter
         # SET-MACRO-CHARACTER installs.
         function = _rt._as_internal_caller(function)
+        # A *built-in* reader is a bound method of the table it came from,
+        # and every one reads its sub-expressions through `self` --
+        # `self._read_subform`, `self._backquote_depth`, ... So the comma
+        # function copied to `target` must be bound to the *target*: the
+        # backquote depth `_comma_reader` consults lives on the readtable
+        # instance (CLHS 2.4.3), and a copy that still bound to the source
+        # table answered the source's counter -- 0 -- so
+        # `(set-syntax-from-char c #\,)` made `` `cx `` signal
+        # "comma outside a backquoted form" for every character c
+        # (`set-syntax-from-char.comma`). This is `copy()`'s `_rebind`
+        # rule, and a function borrowed from some *third* table is carried
+        # across untouched exactly as there.
+        function = source._rebind(function, target)
     target.set_syntax_type(to_c, syntax, function)
     # A dispatch macro character carries its sub-character table with it;
     # otherwise `(set-syntax-from-char c #\#)` would make `c` dispatch and

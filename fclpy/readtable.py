@@ -428,6 +428,22 @@ class Readtable:
         # disagree about the same character.
         self._syntax_types.pop(char, None)
 
+    def _whitespace_p(self, char: str) -> bool:
+        """Whether `char` is whitespace *in this readtable* (CLHS 2.1.4).
+
+        The reader's every "is this skippable whitespace" decision goes
+        through here rather than Python's `str.isspace()`, because syntax is
+        a readtable property: `(set-syntax-from-char #\\space #\\,)` makes
+        Space a terminating macro character, which is then *not* whitespace
+        in that table and must dispatch to its macro function
+        (`set-syntax-from-char.comma`). For the standard readtable this
+        answers exactly the six CLHS whitespace characters, which is what the
+        hardcoded `isspace()` calls this replaced answered too -- the only
+        observable difference is a non-standard character outside both sets,
+        which is a constituent per CLHS 2.1.4.
+        """
+        return self.syntax_type(char) == SYNTAX_WHITESPACE
+
     def syntax_type(self, char: str) -> str:
         """The syntax type of `char` in this readtable (CLHS 2.1.4).
 
@@ -681,11 +697,11 @@ class Readtable:
         suppressed = read_suppressed()
 
         while True:
-            # Skip whitespace
+            # Skip whitespace -- *this table's* (`_whitespace_p`)
             c = stream.read_char()
             if not c:
                 raise EOFError("EOF during list read")
-            if c.isspace():
+            if self._whitespace_p(c):
                 continue
             if c == ')':
                 break
@@ -707,7 +723,7 @@ class Readtable:
                             "a second dot token after the dotted tail")
                     # Skip whitespace after the dot
                     c = stream.read_char()
-                    while c and c.isspace():
+                    while c and self._whitespace_p(c):
                         c = stream.read_char()
                     if not c:
                         raise _reader_error("EOF after the dot token")
@@ -716,7 +732,7 @@ class Readtable:
                     dotted_tail = self._read_subform(stream)
                     # After the tail, we expect either whitespace and ) or just )
                     c = stream.read_char()
-                    while c and c.isspace():
+                    while c and self._whitespace_p(c):
                         c = stream.read_char()
                     if c != ')':
                         raise _reader_error(f"Expected ) after dotted tail, got {c}")
@@ -759,9 +775,11 @@ class Readtable:
         The dot token is deliberately *not* checked here: it comes back as
         `DOT_MARKER` for the list reader to consume as the dotted-pair dot.
         """
-        # Skip whitespace
+        # Skip whitespace -- *this table's* whitespace: a character
+        # SET-SYNTAX-FROM-CHAR made a macro character is not whitespace here
+        # (`_whitespace_p`).
         c = stream.read_char()
-        while c and c.isspace():
+        while c and self._whitespace_p(c):
             c = stream.read_char()
 
         if not c:
@@ -893,7 +911,7 @@ class Readtable:
             c = stream.read_char()
             if not c:
                 break
-            if c.isspace():
+            if self._whitespace_p(c):
                 # CLHS 2.2 step 8: ordinary READ consumes the one whitespace
                 # character that terminates the token; READ-PRESERVING-
                 # WHITESPACE leaves it for whatever reads the stream next.
@@ -1381,11 +1399,11 @@ class Readtable:
         suppressed = read_suppressed()
         result = []
         while True:
-            # Skip whitespace
+            # Skip whitespace -- *this table's* (`_whitespace_p`)
             c = stream.read_char()
             if not c:
                 raise EOFError("EOF in vector literal")
-            if c.isspace():
+            if self._whitespace_p(c):
                 continue
             if c == ')':
                 break
@@ -1620,7 +1638,7 @@ class Readtable:
             c = stream.read_char()
             if not c:
                 raise EOFError("EOF after #C")
-            if not c.isspace():
+            if not self._whitespace_p(c):
                 break
 
         # Expect opening paren
@@ -1642,7 +1660,7 @@ class Readtable:
             c = stream.read_char()
             if not c:
                 raise EOFError("EOF in #C(...)")
-            if c.isspace():
+            if self._whitespace_p(c):
                 continue
             if c == ')':
                 break

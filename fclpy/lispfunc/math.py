@@ -34,18 +34,8 @@ __all__ = [
     'decode_float', 'integer_decode_float', 'scale_float', 'float_fn',
     'float_digits', 'float_precision', 'float_radix', 'float_sign',
     'pi_fn',
-    'least_positive_double_float', 'least_negative_double_float',
-    'most_positive_double_float', 'most_negative_double_float',
-    'least_positive_short_float', 'least_negative_short_float',
-    'most_positive_short_float', 'most_negative_short_float',
-    'least_positive_single_float', 'least_negative_single_float',
-    'most_positive_single_float', 'most_negative_single_float',
-    'least_positive_long_float', 'least_negative_long_float',
-    'most_positive_long_float', 'most_negative_long_float',
-    'least_positive_normalized_double_float', 'least_negative_normalized_double_float',
-    'least_positive_normalized_long_float', 'least_negative_normalized_long_float',
-    'least_positive_normalized_short_float', 'least_negative_normalized_short_float',
-    'least_positive_normalized_single_float', 'least_negative_normalized_single_float',
-    
-    
+    # The most/least-positive/negative-*-float family (normalized included)
+    # is deliberately absent: they are constant *variables* whose one home is
+    # `lispenv.STANDARD_CONSTANTS`, not functions -- see the note by `pi_fn`
+    # in math_advanced.py.
 ]

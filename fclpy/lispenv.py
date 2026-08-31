@@ -413,19 +413,19 @@ def setup_standard_environment():
     from fclpy.lispfunc.utilities_system import INTERNAL_TIME_UNITS_PER_SECOND
     from fclpy.lispfunc.binding import proclaim_constant
 
-    # Python's float *is* an IEEE double, so the short/single pair and the
-    # long/double pair each name one representation here. The single-float
-    # values are the true IEEE single limits rather than the double ones,
-    # because `(typep x 'single-float)` and the printer both read them.
-    _SINGLE_LIMITS = (
-        ('MOST-POSITIVE-{}-FLOAT', 3.4028235e+38),
-        ('LEAST-POSITIVE-{}-FLOAT', 1.4e-45),
-        ('LEAST-POSITIVE-NORMALIZED-{}-FLOAT', 1.17549435e-38),
-        ('MOST-NEGATIVE-{}-FLOAT', -3.4028235e+38),
-        ('LEAST-NEGATIVE-{}-FLOAT', -1.4e-45),
-        ('LEAST-NEGATIVE-NORMALIZED-{}-FLOAT', -1.17549435e-38),
-    )
-    _DOUBLE_LIMITS = (
+    # Python's float *is* an IEEE double, so all four CL float formats name
+    # one representation here -- and therefore **one range**. The SHORT/SINGLE
+    # entries used to carry the true IEEE single limits, but that described a
+    # range the arithmetic does not have: `exp`, `expt` and `+` all compute in
+    # double and happily answer values between 3.4e38 and 1.79e308, so
+    # `exp.error.4/.5/.8/.9`'s `(exp (+ (log most-positive-short-float) 100))`
+    # returned 9.1e81 where the test requires a signal, and the *lattice* had
+    # already given the game away -- `typespec` answers (T T) for
+    # `(subtypep 'single-float 'double-float)`, and mutually-subtype types
+    # cannot have different bounds. The epsilons below make the same argument
+    # for precision. CLISP ships exactly this model (one float format, four
+    # names), and `subtypep-float.lsp`'s conditional tests adapt to it.
+    _FLOAT_LIMITS = (
         ('MOST-POSITIVE-{}-FLOAT', 1.7976931348623157e+308),
         ('LEAST-POSITIVE-{}-FLOAT', 5e-324),
         ('LEAST-POSITIVE-NORMALIZED-{}-FLOAT', 2.2250738585072014e-308),
@@ -510,13 +510,10 @@ def setup_standard_environment():
         ('BOOLE-XOR', 8), ('BOOLE-EQV', 9), ('BOOLE-NAND', 10), ('BOOLE-NOR', 11),
         ('BOOLE-ANDC1', 12), ('BOOLE-ANDC2', 13), ('BOOLE-ORC1', 14), ('BOOLE-ORC2', 15),
     ]
-    for _precision, _limits in (('SHORT', _SINGLE_LIMITS),
-                                ('SINGLE', _SINGLE_LIMITS),
-                                ('DOUBLE', _DOUBLE_LIMITS),
-                                ('LONG', _DOUBLE_LIMITS)):
-        # The epsilons are the same for all four formats -- see the note by
-        # `_EPSILON_LIMITS`: one arithmetic, one epsilon.
-        for _template, _value in tuple(_limits) + _EPSILON_LIMITS:
+    for _precision in ('SHORT', 'SINGLE', 'DOUBLE', 'LONG'):
+        # The limits and the epsilons are the same for all four formats --
+        # see the notes above: one arithmetic, one representation, one range.
+        for _template, _value in tuple(_FLOAT_LIMITS) + _EPSILON_LIMITS:
             STANDARD_CONSTANTS.append((_template.format(_precision), _value))
 
     for _name, _value in STANDARD_CONSTANTS:
