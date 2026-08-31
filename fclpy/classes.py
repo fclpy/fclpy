@@ -514,10 +514,14 @@ def resolve_class_designator(spec: Any) -> Any:
     binding with the bare GenericFunction object -- see plan.md's CLOS
     consolidation notes -- bypassing the Python wrapper from then on).
     """
-    if isinstance(spec, LispSymbol):
-        cls = find_class(spec.name)
+    if isinstance(spec, LispSymbol) or isinstance(spec, NIL.__class__):
+        # Any symbol spelling, NIL's included: the class named NIL is the
+        # NULL class (CLHS 4.2), and `resolve_class_designator` is a
+        # designator resolver, so it must not reject the canonical NIL
+        # object the way `find_class_fn` used to.
+        cls = find_class(getattr(spec, 'name', None) or 'NIL')
         if cls is None:
-            raise NameError(f"Class not found: {spec.name}")
+            raise NameError(f"Class not found: {getattr(spec, 'name', None) or 'NIL'}")
         return cls
     if isinstance(spec, str):
         cls = find_class(spec)

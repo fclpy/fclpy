@@ -150,6 +150,14 @@ def _type_name(spec):
     """The name a type-specifier atom denotes, upper-cased, or None."""
     if isinstance(spec, lisptype.LispSymbol):
         return spec.name.upper()
+    if isinstance(spec, lisptype.lispNull) or spec is None:
+        # NIL in its non-LispSymbol spellings names the type NIL (and the
+        # class NULL carries the `lispNull` singleton as its name symbol,
+        # since COMMON-LISP's "NIL" entry *is* the canonical NIL object), so
+        # it resolves through the atomic 'NIL' entry like any other symbol
+        # spelling -- `_parse_atomic('NIL')` is bottom(), which is what the
+        # interned LispSymbol spelling always answered.
+        return 'NIL'
     if isinstance(spec, lisptype.LispString):
         return str(spec).upper()
     if isinstance(spec, str):

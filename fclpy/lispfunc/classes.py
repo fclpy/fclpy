@@ -478,8 +478,14 @@ def find_class_fn(name, errorp=True, environment=None):
     Returns the class named by symbol. If errorp is true (default) and no
     class is found, signals an error. Otherwise returns NIL.
     """
-    if isinstance(name, lisptype.LispSymbol):
-        name = name.name
+    if lisptype.is_symbol(name):
+        # Any symbol spelling resolves by name -- including NIL, which
+        # reaches Python as `None` or the `lispNull` singleton as well as a
+        # LispSymbol. The class named NIL is the NULL class (CLHS 4.2), and
+        # `all-classes-are-type-equivalent-to-their-names` walks
+        # COMMON-LISP's external symbols (NIL among them) straight into
+        # `(find-class sym nil)`.
+        name = getattr(name, 'name', None) or 'NIL'
     elif not isinstance(name, str):
         raise TypeError(f"Class name must be symbol, got {name}")
 
