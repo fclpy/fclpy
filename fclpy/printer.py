@@ -998,6 +998,24 @@ def _accessible_in(symbol, package):
     return found is symbol and status is not None
 
 
+def _bool_atom_name(name, ctx):
+    """Print the name of the canonical ``NIL`` or ``T`` object.
+
+    These two symbols used to be short-circuited straight to
+    ``_apply_print_case`` -- a copy of the escape logic that forgot the
+    number-syntax half of it. CLHS 22.1.3.3's escape rule is about the
+    *name*: with printer escaping enabled and ``*PRINT-BASE*`` >= 24, the
+    names NIL and T are potential-number syntax (2.3.1.1), bare ``NIL``
+    reads back as the integer #24rNIL under *READ-BASE* 24 (2.3.4), and
+    ``randomly-check-readability`` draws exactly that. Routing them through
+    the same ``_name_needs_escaping`` check every other symbol goes through
+    is the fix; the bars preserve the name, which is never case-converted.
+    """
+    if ctx.escape and _name_needs_escaping(name, ctx):
+        return '|' + name + '|'
+    return _apply_print_case(name, ctx)
+
+
 def _write_symbol(value, ctx):
     """Print a symbol, with package prefix and case conversion under escape.
 
@@ -1007,7 +1025,7 @@ def _write_symbol(value, ctx):
     """
     if value is lisptype.T or (isinstance(value, LispSymbol) and value.name == 'T'
                                and getattr(value, 'package', None) is lisptype.COMMON_LISP_PACKAGE):
-        return _apply_print_case('T', ctx)
+        return _bool_atom_name('T', ctx)
 
     name = value.name
     if not ctx.escape:
@@ -1426,15 +1444,17 @@ def _write(value, ctx, depth):
         """
         return prefix + s
 
-    # NIL, in each of the forms it takes.
+    # NIL, in each of the forms it takes. These are the canonical booleans,
+    # not just symbols named NIL/T -- but the printed *name* still obeys the
+    # symbol escape rule (see `_bool_atom_name`).
     if value is None or value is lisptype.NIL or isinstance(value, lispNull):
-        return _emit(_apply_print_case('NIL', ctx))
+        return _emit(_bool_atom_name('NIL', ctx))
     if value is lisptype.T:
-        return _emit(_apply_print_case('T', ctx))
+        return _emit(_bool_atom_name('T', ctx))
     if value is True:
-        return _emit(_apply_print_case('T', ctx))
+        return _emit(_bool_atom_name('T', ctx))
     if value is False:
-        return _emit(_apply_print_case('NIL', ctx))
+        return _emit(_bool_atom_name('NIL', ctx))
 
     if isinstance(value, lispKeyword):
         return _emit(_write_symbol(value, ctx))
