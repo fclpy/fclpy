@@ -185,15 +185,23 @@ class TestTypeOf:
     """Test TYPE-OF function."""
     
     def test_typeof_integers(self):
-        """Test TYPE-OF for integers."""
+        """Test TYPE-OF for integers.
+
+        The answer must be a recognizable subtype of every built-in type the
+        integer belongs to (CLHS TYPE-OF 1.a, ansi-test type-of.1) -- which
+        for a positive fixnum always includes both FIXNUM and UNSIGNED-BYTE,
+        so no single symbol can answer (FIXNUM is not a subtype of
+        UNSIGNED-BYTE) and the answer is a compound type, exactly as SBCL
+        answers (unsigned-byte 62).
+        """
         result = lispfunc.type_of(42)
-        assert isinstance(result, lisptype.LispSymbol)
-        assert result.name == 'INTEGER'
-        
+        assert isinstance(result, lisptype.lispCons)
+        assert result.car.name == 'UNSIGNED-BYTE'
+
         result = lispfunc.type_of(0)
         assert isinstance(result, lisptype.LispSymbol)
         assert result.name == 'BIT'
-        
+
         result = lispfunc.type_of(1)
         assert isinstance(result, lisptype.LispSymbol)
         assert result.name == 'BIT'
@@ -205,14 +213,23 @@ class TestTypeOf:
         assert result.name == 'SINGLE-FLOAT'
     
     def test_typeof_strings(self):
-        """Test TYPE-OF for strings."""
+        """Test TYPE-OF for strings.
+
+        The answer must be a recognizable subtype of every built-in type
+        TYPEP says the string belongs to (CLHS TYPE-OF 1.a, ansi-test
+        type-of.1): fclpy's TYPEP answers T to simple-base-string,
+        base-string, simple-string and simple-array for both representations,
+        and SIMPLE-BASE-STRING is a subtype of all of them -- while STRING is
+        a subtype of none of the simple ones and a Python str is never a
+        CHARACTER (`(typep "a" 'character)` is NIL).
+        """
         result = lispfunc.type_of('hello')
         assert isinstance(result, lisptype.LispSymbol)
-        assert result.name == 'STRING'
-        
+        assert result.name == 'SIMPLE-BASE-STRING'
+
         result = lispfunc.type_of('a')
         assert isinstance(result, lisptype.LispSymbol)
-        assert result.name == 'CHARACTER'
+        assert result.name == 'SIMPLE-BASE-STRING'
     
     def test_typeof_symbols(self):
         """Test TYPE-OF for symbols."""

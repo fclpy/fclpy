@@ -1030,30 +1030,22 @@ def _representation_name_of(obj: Any) -> Optional[str]:
         # `_init_builtin_classes` registers, so CLASS-OF answers a real class
         # and method dispatch on METHOD/STANDARD-METHOD specializers ranks.
         return 'STANDARD-METHOD'
-    from fclpy.lispfunc import streams as _streams
-    for cls, name in _STREAM_CLASS_NAMES:
-        pycls = getattr(_streams, cls, None)
-        if isinstance(pycls, type) and isinstance(obj, pycls):
+    # Streams go through `streams.stream_type_matches`, the one home of
+    # "which STREAM type is this", so CLASS-OF cannot disagree with TYPEP.
+    # It answers FILE-STREAM for a bare `Stream` that is not one of the
+    # composite/string subclasses -- which is what OPEN returns for a file
+    # (and for :direction :probe) -- while the per-class table this replaced
+    # had no entry between STRING-STREAM and STREAM, so a file stream's
+    # CLASS-OF answered STREAM: FILE-STREAM-CPL's dispatch on the
+    # class-precedence-list-foo generic function found no FILE-STREAM
+    # method, and TYPE-OF.1 collected the object against FILE-STREAM.
+    from fclpy.lispfunc.streams import stream_type_matches
+    for name in ('TWO-WAY-STREAM', 'ECHO-STREAM', 'CONCATENATED-STREAM',
+                 'BROADCAST-STREAM', 'SYNONYM-STREAM', 'STRING-STREAM',
+                 'FILE-STREAM', 'STREAM'):
+        if stream_type_matches(obj, name):
             return name
     return None
-
-
-# streams.py's Python stream classes -> their CLHS 21.2 class names, most
-# specific first. (The module cannot be imported eagerly here: it lives
-# above classes.py in the bootstrap's import order.) The base `Stream` is
-# last: `*standard-output*` and friends are bare `Stream` instances, and
-# with no entry for them CLASS-OF answered the T class.
-_STREAM_CLASS_NAMES = (
-    ('StringInputStream', 'STRING-STREAM'),
-    ('StringOutputStream', 'STRING-STREAM'),
-    ('FillPointerOutputStream', 'STRING-STREAM'),
-    ('TwoWayStream', 'TWO-WAY-STREAM'),
-    ('EchoStream', 'ECHO-STREAM'),
-    ('ConcatenatedStream', 'CONCATENATED-STREAM'),
-    ('BroadcastStream', 'BROADCAST-STREAM'),
-    ('SynonymStream', 'SYNONYM-STREAM'),
-    ('Stream', 'STREAM'),
-)
 
 
 _condition_python_class_names: Dict[int, str] = {}

@@ -947,7 +947,19 @@ def type_of(object):
 
     # Check for user-defined instances first
     if isinstance(object, classes.LispInstance):
-        return object.lisp_class.name
+        cls = object.lisp_class
+        name = cls.name
+        # The class's *proper name* is the answer only when it is a symbol
+        # and the class is still the one FIND-CLASS resolves it to. ansi-test
+        # type-of.8 sets `(class-name class) => nil` and type-of.9 does
+        # `(setf (find-class name) nil)`; in both, `(type-of (make-instance
+        # class))` must be EQ to the CLASS OBJECT itself -- returning a
+        # Python None (or a name the registry no longer resolves) answered
+        # NIL instead of the class.
+        if (isinstance(name, lisptype.LispSymbol)
+                and classes.find_class(name) is cls):
+            return name
+        return cls
 
     # An array that records an element type, a rank or a fill pointer has a
     # *compound* type (CLHS 4.2.3): `(simple-array bit (5))`, not the bare
@@ -972,37 +984,91 @@ def type_of(object):
         return lisptype.LispSymbol('NULL')
     elif consp(object) == lisptype.T:
         return lisptype.LispSymbol('CONS')
+    elif object is lisptype.T:
+        # BOOLEAN, not SYMBOL: `(typep t 'boolean)` is T (BOOLEAN is
+        # (member nil t)) and TYPE-OF.1 requires the answer to be a subtype
+        # of BOOLEAN, which SYMBOL is not. BOOLEAN is still a subtype of
+        # SYMBOL, so nothing the T object belonged to is lost. An
+        # *uninterned* symbol named T stays SYMBOL below -- it is not eql to
+        # the boolean T and `(typep '#:t 'boolean)` is NIL.
+        return lisptype.LispSymbol('BOOLEAN')
     elif isinstance(object, lisptype.lispKeyword):
         return lisptype.LispSymbol('KEYWORD')
     elif isinstance(object, lisptype.LispSymbol):
         return lisptype.LispSymbol('SYMBOL')
     elif isinstance(object, lisptype.Character):
+        # A standard character answers the most specific *named* type TYPEP
+        # puts it in: STANDARD-CHAR is a subtype of BASE-CHAR and CHARACTER
+        # (*subtype-table* rows `(standard-char base-char)`), so it is a
+        # subtype of every built-in type a standard char belongs to, which
+        # bare CHARACTER is not -- CHARACTER is not a subtype of
+        # STANDARD-CHAR, and TYPE-OF.1 collected #\a and friends against it.
+        # Non-standard characters keep CHARACTER: only CHARACTER contains
+        # them.
+        from .characters import standard_char_p
+        if standard_char_p(object) == lisptype.T:
+            return lisptype.LispSymbol('STANDARD-CHAR')
         return lisptype.LispSymbol('CHARACTER')
+    elif isinstance(object, bool):
+        # Python bools should never surface as Lisp values, but a stray one
+        # is an int below -- guard it so it cannot masquerade as an integer
+        # type.
+        return lisptype.LispSymbol('SYMBOL')
     elif isinstance(object, int):
-        # Common Lisp often returns very specific integer types for small integers
-        # e.g. 0 or 1 may be represented as BIT in some implementations. Return
-        # a more specific type when possible.
-        try:
-            val = int(object)
-        except Exception:
-            return lisptype.LispSymbol('INTEGER')
-        if val in (0, 1):
+        # CLHS TYPE-OF 1.a (ansi-test type-of.1, the strict reading): the
+        # answer must be a recognizable subtype of *every* built-in type the
+        # object is an element of. For an integer that set always includes
+        # FIXNUM (or BIGNUM) and, for a positive value, UNSIGNED-BYTE -- and
+        # no single symbol is a subtype of both (FIXNUM is not a subtype of
+        # UNSIGNED-BYTE: it has negatives), so every implementation answers a
+        # *compound* type here.
+        from .sequence_protocol import make_lisp_list
+        from fclpy.typespec import MOST_POSITIVE_FIXNUM, MOST_NEGATIVE_FIXNUM
+        intern = lisptype.COMMON_LISP_PACKAGE.intern
+        if object == 0 or object == 1:
+            # BIT = (unsigned-byte 1): already the tightest named type, and
+            # a subtype of FIXNUM and UNSIGNED-BYTE both.
             return lisptype.LispSymbol('BIT')
-        return lisptype.LispSymbol('INTEGER')
+        if object > MOST_POSITIVE_FIXNUM or object < MOST_NEGATIVE_FIXNUM:
+            # A bignum: (integer x x) is a subtype of BIGNUM (both endpoints
+            # are bignums), of UNSIGNED-BYTE when x is positive, and of
+            # SIGNED-BYTE/INTEGER/RATIONAL/REAL/NUMBER always.
+            return make_lisp_list([intern('INTEGER'), object, object])
+        if object > 0:
+            # (unsigned-byte 63) spans every positive fixnum, so it is a
+            # subtype of FIXNUM and of UNSIGNED-BYTE both.
+            return make_lisp_list([intern('UNSIGNED-BYTE'), 63])
+        # A negative fixnum: (signed-byte 64) is exactly the fixnum range.
+        return make_lisp_list([intern('SIGNED-BYTE'), 64])
     elif isinstance(object, float):
         return lisptype.LispSymbol('SINGLE-FLOAT')
+    elif isinstance(object, Fraction):
+        # A ratio is a Python `Fraction` here -- neither `int` nor `float` --
+        # so it fell through the whole ladder to T, and TYPE-OF.4 collected
+        # every ratio: `(subtypep* t (class-of 1/3))` is (nil t). RATIO is
+        # what `(class-of 1/3)` answers, so the two agree.
+        return lisptype.LispSymbol('RATIO')
     elif isinstance(object, complex):
         return lisptype.LispSymbol('COMPLEX')
     elif isinstance(object, str):
-        if len(object) == 1:
-            return lisptype.LispSymbol('CHARACTER')
-        else:
-            return lisptype.LispSymbol('STRING')
+        # Both string representations answer the same type: fclpy's own TYPEP
+        # says (typep "abc" 'simple-base-string) is T for each of them, and
+        # TYPE-OF.1 requires (type-of x) to be a subtype of every built-in
+        # type TYPEP says x belongs to -- STRING is not a subtype of
+        # BASE-STRING/SIMPLE-* (a fill-pointered or extended string is
+        # neither), which is exactly what that test collected. The old
+        # single-character special case answered CHARACTER for "a", which
+        # TYPEP contradicts: `(typep "a" 'character)` is NIL.
+        return lisptype.LispSymbol('SIMPLE-BASE-STRING')
     elif isinstance(object, lisptype.LispString):
         # LispString is the Lisp representation of a STRING, distinct from Python str
-        return lisptype.LispSymbol('STRING')
+        return lisptype.LispSymbol('SIMPLE-BASE-STRING')
     elif isinstance(object, (list, tuple)):
-        return lisptype.LispSymbol('VECTOR')
+        # A Python list/tuple is a *simple general vector* here (plan.md
+        # Finding M): TYPEP answers T to simple-vector and simple-array for
+        # it, and VECTOR is a subtype of neither, so TYPE-OF.1 collected
+        # every one of them.
+        return lisptype.LispSymbol('SIMPLE-VECTOR')
     elif isinstance(object, classes.Method):
         # Checked ahead of the general `callable(object)` branch below: a
         # Method is not itself callable (only CALL-METHOD/standard
@@ -1027,7 +1093,14 @@ def type_of(object):
         # mismatch.
         return lisptype.LispSymbol('PACKAGE')
     elif callable(object):
-        return lisptype.LispSymbol('FUNCTION')
+        # Every function representation this interpreter has is a
+        # COMPILED-FUNCTION as far as its own TYPEP is concerned -- builtin
+        # wrappers, compiled lambdas and plain closures alike all answer T to
+        # `(typep f 'compiled-function)` -- and TYPE-OF.1 requires the type-of
+        # answer to be a subtype of each of those. Bare FUNCTION is not a
+        # subtype of COMPILED-FUNCTION, so it was collected for every element
+        # of *universe*'s *functions*.
+        return lisptype.LispSymbol('COMPILED-FUNCTION')
     else:
         # Final fallback: check representation families that CLASS-OF knows
         # about but TYPE-OF had no branch for (streams, hash tables,
@@ -1069,27 +1142,19 @@ def type_of(object):
                 return lisptype.LispSymbol('RANDOM-STATE')
         except Exception:
             pass
-        # Check stream types
-        from fclpy.lispfunc import streams as _streams
-        _STREAM_CLASS_NAMES = (
-            ('StringInputStream', 'STRING-STREAM'),
-            ('StringOutputStream', 'STRING-STREAM'),
-            ('FillPointerOutputStream', 'STRING-STREAM'),
-            ('TwoWayStream', 'TWO-WAY-STREAM'),
-            ('EchoStream', 'ECHO-STREAM'),
-            ('ConcatenatedStream', 'CONCATENATED-STREAM'),
-            ('BroadcastStream', 'BROADCAST-STREAM'),
-            ('SynonymStream', 'SYNONYM-STREAM'),
-            # The base class last: `*standard-output*` and friends are bare
-            # `Stream` instances, and with no entry for it `(type-of
-            # *standard-output*)` answered T -- which `CLASS-OF` then followed
-            # to the T class, and every STREAM-specializer dispatch on a
-            # console stream ranked against the wrong class.
-            ('Stream', 'STREAM'),
-        )
-        for cls_name, type_name in _STREAM_CLASS_NAMES:
-            pycls = getattr(_streams, cls_name, None)
-            if isinstance(pycls, type) and isinstance(object, pycls):
+        # Check stream types -- through `streams.stream_type_matches`, the one
+        # home of "which STREAM type is this", so TYPE-OF cannot disagree
+        # with TYPEP. That function answers FILE-STREAM for a bare `Stream`
+        # that is not one of the composite/string subclasses -- which is what
+        # OPEN returns for a file (and for :direction :probe) -- while the
+        # per-class table this replaced had no entry between STRING-STREAM
+        # and STREAM, so a file stream answered STREAM and TYPE-OF.1
+        # collected it against FILE-STREAM, which TYPEP has always said.
+        from fclpy.lispfunc.streams import stream_type_matches
+        for type_name in ('TWO-WAY-STREAM', 'ECHO-STREAM', 'CONCATENATED-STREAM',
+                          'BROADCAST-STREAM', 'SYNONYM-STREAM', 'STRING-STREAM',
+                          'FILE-STREAM', 'STREAM'):
+            if stream_type_matches(object, type_name):
                 return lisptype.LispSymbol(type_name)
         # Check condition types
         try:
@@ -1101,7 +1166,10 @@ def type_of(object):
                 for cond_name in _CONDITION_NAMES_MOST_SPECIFIC_FIRST:
                     pycls = _condition_class_for_name(cond_name)
                     if isinstance(pycls, type) and isinstance(object, pycls):
-                        return lisptype.LispSymbol(cond_name)
+                        # The *interned* symbol: type-of.5 asks `(eq x
+                        # (type-of (make-condition x)))`, and a fresh
+                        # LispSymbol of the same name is a different object.
+                        return lisptype.COMMON_LISP_PACKAGE.intern(cond_name)
         except Exception:
             pass
         return lisptype.T
