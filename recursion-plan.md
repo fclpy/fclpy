@@ -260,8 +260,8 @@ the catch-all at `evaluation_core.py:1599` as a Lisp value.
 1. Per-step targeted runs (`run_ansi.py <group> --update-checklist`).
 2. A **default-limit reproduction harness** for the 11 tests (runs the
    failing forms under `eval_string` with no deep-stack wrapper) — this is
-   the acceptance test each step must move; keep it as a throwaway script in
-   `C:\Users\Windows\AppData\Local\Temp\opencode`, not in the repo.
+   the acceptance test each step must move; keep it as a throwaway script
+   outside the repo (a local scratch/temp directory), never committed.
 3. `pipenv run python scripts/gate.py` after every step (pytest +
    duplicates baseline + checklist baseline; never clear a failure with
    `--save-baseline`).
