@@ -11,35 +11,44 @@ which a hard test gets quietly reclassified. **Zero failures is necessary but
 not sufficient** — ansi-test does not exercise everything, so a known defect it
 happens to miss is still a defect (plan.md §5, and the final gate in §7).
 
-> **Current status.** Last full run **2026-08-22**: `COMPLETENESS: OK`,
-> 22132/22132 accounted, 0 missing, 0 extra, **19703 passing (89.0%)**,
-> 2429 failing, ~125 minutes. `docs/ansi_checklist.md` is regenerated from it
-> and carries no merge amendments. (History: 08-18 77.2%; 08-16 66.8%;
-> 08-15 52.2%; first complete run 08-12 40.7% in ~7.5 hours.)
+> **Current status.** Last full run **2026-09-01** (`run_all_tests.log` /
+> `run_all_tests.err`): **21907/21908 passing (99.995%), 1 failing** —
+> `TYPEP.19`, the sole entry left in `types-and-classes/` (1 failing of 545,
+> 99.8%). Every other directory is at **100%**: `docs/ansi_checklist.md`,
+> regenerated from this run, lists nothing else.
 >
-> **Six files regressed** against the 08-18 baseline and the baseline was
-> deliberately not refreshed — `scripts/gate.py` will report them until they
-> are fixed or accepted in writing. That is intended; see plan.md §7.
-> `system-construction` and `auxiliary` are at 100%, `pathnames` 99.5%,
-> `arrays` and `cons` 98.9%. The worst *rates* — `structures` 32.2%,
-> `hash-tables` 55.7%, `environment` 57.8% — each have one named cause, and
-> two of the three are duplicate registrations, not missing features.
+> **That run reported `COMPLETENESS: MISMATCH`, not `OK` — read that
+> literally, don't round it off.** Its own last line:
+> `REGISTERED-TEST-COUNT-SHRANK: 21908 now, 21910 in the previous run
+> (ansi_results/all.txt) -- 2 test(s) stopped registering`. A test that
+> silently stops registering with RT is worse than one that fails: it drops
+> out of every count on this page without ever appearing as a failure, which
+> is exactly the gap "zero failures is necessary but not sufficient" warns
+> about below. **Find which two tests stopped registering and why before
+> treating this run as clean** — that is open work, not a footnote.
 >
-> **The mode has changed, and this is the most important thing on this page.**
-> Crashes stopped being the constraint on 08-12; *clusters* stopped being the
-> constraint around 08-22. The evidence, from the live checklist: the median
-> failing file has **3** failures, 217 of 363 failing files have ≤3, the single
-> largest failing file is **3.6%** of the remainder, and only **20 files still
-> fail 100%** (132 tests, down from 49 files / 493 tests on 08-16). Work the
-> checklist **file by file** now — see plan.md §2's "Working mode". Keep the
-> old discipline *inside* each file (smallest reproduction, fix the mechanism,
-> check what else moved), and keep looking for a shared mechanism when one
-> surfaces on its own; just stop *assuming* one is there before you look.
-> The last big one found this way was the ordinary lambda list (2026-08-22):
-> 79 failures across four files in three directories, because FLET/LABELS,
-> LAMBDA and DEFUN each had their own binder.
+> This is a large jump from the status this page carried for months (89.0%
+> passing / 2429 failing, 2026-08-22): the intervening work closed the
+> ordinary-lambda-list cluster (FLET/LABELS/LAMBDA/DEFUN sharing one binder),
+> the recursion cluster (`recursion-plan.md` — a self tail-call trampoline
+> and an explicit argument-evaluation stack took max non-tail depth from 149
+> to 372 frames and made tail recursion unbounded), every CLHS macro becoming
+> a real macro (M4) and SETF/PSETF becoming real expansions through one place
+> protocol (M5, both 2026-08-30), the reader's dead second implementation
+> (`fclpy/reader.py`, ~480 unused lines the unit tests had been certifying
+> instead of the live reader — deleted 2026-09-01), and a full pass over the
+> `symbols` cluster. Run-by-run detail is in plan.md §1 and
+> `docs/changelog.md`; treat plan.md's Tier 1/2 cluster lists and any cluster
+> failure counts elsewhere in that file as history — they were written
+> against a much larger failure count and no longer reflect what's failing.
+> **The project is no longer in cluster-repair mode.** With effectively one
+> real failure and one registration anomaly left, work now is single-test
+> diagnosis (`TYPEP.19`, the two vanished registrations), not cluster
+> hunting — though the underlying lesson (fix the mechanism, keep looking for
+> one shared cause before assuming there is one) still applies to whatever
+> those two turn out to be.
 >
-> **Hang detection now lives in `fclpy/watchdog.py`, not in the loop forms.**
+> **Hang detection lives in `fclpy/watchdog.py`, not in the loop forms.**
 > `LoopWatchdog` evaluates its 120s warning and 600s cap inside `tick()`, once
 > per *iteration*, so it cannot see a loop wedged **inside** one iteration —
 > which is how the 08-15 tree sat at 27GB for half an hour with no diagnostic.
@@ -50,15 +59,11 @@ happens to miss is still a defect (plan.md §5, and the final gate in §7).
 > all. Runner output is line-buffered — block buffering once left the log ~30
 > minutes behind the form actually executing.
 >
-> **`docs/ansi_checklist.md` is the authority for what is failing and where**,
-> and at this stage it is also the *ranking* — read it first. **[plan.md](plan.md)**:
-> read §1 (status), §2 (how to work — including **the duplicate register**,
-> the one place a cluster argument still holds) and §5 (temporary deviations);
-> treat its Tier 1/2 cluster lists as history — they were written against a
-> 12,000-failure suite and their ordering no longer holds, and
-> `docs/changelog.md` is the archive. The checklist is
-> generated — never hand-edit it — and it is kept current *without* a full run
-> by folding targeted runs into it:
+> **`docs/ansi_checklist.md` is the authority for what is failing and
+> where** — read it first. **[plan.md](plan.md)**: read §1 (status) and §5
+> (temporary deviations); `docs/changelog.md` is the archive. The checklist
+> is generated — never hand-edit it — and it is kept current *without* a
+> full run by folding targeted runs into it:
 >
 > ```powershell
 > pipenv run python scripts/run_ansi.py <group> --update-checklist
@@ -515,8 +520,10 @@ happens to miss is still a defect (plan.md §5, and the final gate in §7).
   *ancestor count*, and `_init_builtin_classes` makes every built-in class a
   direct subclass of `T`, so `INTEGER`, `RATIONAL` and `NUMBER` are all
   equally specific and only the (stable) definition order separates them.
-  Note also that `classes.py` still defines `_init_builtin_classes` **twice**;
-  the second definition wins and the first is dead (standing rule 3).
+  Note also that `classes.py` still defines module-level `find_class`
+  **twice** (the first, at `:510`, is dead); `scripts/duplicates.py` tracks
+  it, along with `CALL-NEXT-METHOD`/`CLASS-OF`/`FIND-CLASS` each being
+  registered from both `classes.py` and `misc_clos.py` (standing rule 3).
 - **Pathnames and file operations**: `lispfunc/pathnames.py` owns
   **`resolve_filespec`, the one place a pathname designator becomes an OS
   path** — including CLHS's third designator case, "a stream associated with a
@@ -609,9 +616,11 @@ name and is usually 2–30 seconds:
    The duplicates check is the only automatic guard on the defect class that
    has cost this project the most: `registry.cl_function` ends in
    `function_registry[name] = entry`, so a second implementation of an
-   operator wins or loses on *import order*, silently. There are 22 such
-   operators today — deleting one side of a pair is some of the cheapest
-   remaining work in the suite (plan.md §2, "The duplicate register").
+   operator wins or loses on *import order*, silently. Down to 3 such
+   operators today (`CALL-NEXT-METHOD`, `CLASS-OF`, `FIND-CLASS`, all
+   `fclpy/classes.py` vs. `lispfunc/misc_clos.py`) from 22 — deleting one
+   side of a pair is some of the cheapest remaining work (plan.md §2, "The
+   duplicate register").
    **Never clear a gate failure with `--save-baseline`.** Both baselines are
    committed so that changing one shows up in `git diff` as the reviewable
    event it is; see plan.md, "Ways to fake compliance".
@@ -654,12 +663,12 @@ name and is usually 2–30 seconds:
 ### If the suite stops completing
 
 Crashes have not been the constraint since 2026-08-12, but if a full run dies
-partway, **REPAIR.md** is the step-by-step SOP for that case: find the crashing
-test (the one *after* the last name printed in `run_all_tests.log`, confirmed
-by the traceback in `run_all_tests.err`, with `doit.log` to disambiguate
-execution order), isolate it with `run_do_test.py`, fix the root cause, and
-re-run. Prefer reader fixes over evaluator hacks when the input syntax is the
-real problem.
+partway: the crashing test is the one *after* the last name printed in
+`run_all_tests.log`, confirmed by the traceback in `run_all_tests.err`, with
+`doit.log` to disambiguate execution order. Isolate it with `run_do_test.py`,
+fix the root cause, and re-run the full suite to confirm the crash is gone
+and nothing else broke. Prefer reader fixes over evaluator hacks when the
+input syntax is the real problem.
 
 ### The one thing a targeted run cannot verify
 
@@ -816,7 +825,4 @@ pipenv run python -c "import sys; sys.path.insert(0,'.'); from fclpy import lisp
 
 - `plan.md` — current status snapshot and pointers; the front door for "what's
   the state of this project".
-- `plans/ansi_test_plan.md` — original bootstrap plan; now mostly historical,
-  check it only for its few remaining open items.
-- `REPAIR.md` — the authoritative crash-repair SOP referenced above.
 - `docs/ansi_targets.txt` / `scripts/coverage.py` — ANSI symbol coverage tracking.
