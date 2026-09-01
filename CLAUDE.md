@@ -11,21 +11,27 @@ which a hard test gets quietly reclassified. **Zero failures is necessary but
 not sufficient** — ansi-test does not exercise everything, so a known defect it
 happens to miss is still a defect (plan.md §5, and the final gate in §7).
 
-> **Current status.** Last full run **2026-09-01** (`run_all_tests.log` /
-> `run_all_tests.err`): **21907/21908 passing (99.995%), 1 failing** —
-> `TYPEP.19`, the sole entry left in `types-and-classes/` (1 failing of 545,
-> 99.8%). Every other directory is at **100%**: `docs/ansi_checklist.md`,
-> regenerated from this run, lists nothing else.
+> **Current status.** Last full run **2026-09-02** (`run_all_tests.log` /
+> `run_all_tests.err`): **21908/21908 passing, 0 failing.**
+> `COMPLETENESS: total=21908 passed=21908 failed=0 accounted=21908 missing=0
+> extra=0` / `COMPLETENESS: OK` — a complete, clean run, not a merged index.
+> `docs/ansi_checklist.md`, regenerated from it, lists 0 failing tests across
+> 0 files.
 >
-> **That run reported `COMPLETENESS: MISMATCH`, not `OK` — read that
-> literally, don't round it off.** Its own last line:
-> `REGISTERED-TEST-COUNT-SHRANK: 21908 now, 21910 in the previous run
-> (ansi_results/all.txt) -- 2 test(s) stopped registering`. A test that
-> silently stops registering with RT is worse than one that fails: it drops
-> out of every count on this page without ever appearing as a failure, which
-> is exactly the gap "zero failures is necessary but not sufficient" warns
-> about below. **Find which two tests stopped registering and why before
-> treating this run as clean** — that is open work, not a footnote.
+> **This does not mean the work is over — read it as "no known defect right
+> now," not "nothing left to find."** `types-and-classes/typep.lsp`'s
+> `TYPEP.19` was the sole failure as of the previous full run (2026-09-01,
+> 21907/21908) and passed here; it is a **randomized stress test**
+> (`typep.19-fn`, 1000 iterations of `(random 1.0)`-generated `(AND
+> CHARACTER (MEMBER ...))` types checked against `AND`/`MEMBER` semantics),
+> the same class of non-determinism plan.md already documents for
+> `FORMAT.E.26`. A randomized test passing once is not proof its previous
+> failure was noise rather than a real, rarely-triggered edge case in the
+> type lattice — treat it as unconfirmed rather than closed, and see plan.md
+> §1/§5 before declaring it resolved. The prior run's registration anomaly
+> (`REGISTERED-TEST-COUNT-SHRANK: 21908 now, 21910 in the previous run`) did
+> not recur here (`accounted=21908 missing=0 extra=0`), which is evidence
+> against it but not the same as having found its cause.
 >
 > This is a large jump from the status this page carried for months (89.0%
 > passing / 2429 failing, 2026-08-22): the intervening work closed the
@@ -36,17 +42,25 @@ happens to miss is still a defect (plan.md §5, and the final gate in §7).
 > a real macro (M4) and SETF/PSETF becoming real expansions through one place
 > protocol (M5, both 2026-08-30), the reader's dead second implementation
 > (`fclpy/reader.py`, ~480 unused lines the unit tests had been certifying
-> instead of the live reader — deleted 2026-09-01), and a full pass over the
-> `symbols` cluster. Run-by-run detail is in plan.md §1 and
-> `docs/changelog.md`; treat plan.md's Tier 1/2 cluster lists and any cluster
-> failure counts elsewhere in that file as history — they were written
-> against a much larger failure count and no longer reflect what's failing.
-> **The project is no longer in cluster-repair mode.** With effectively one
-> real failure and one registration anomaly left, work now is single-test
-> diagnosis (`TYPEP.19`, the two vanished registrations), not cluster
-> hunting — though the underlying lesson (fix the mechanism, keep looking for
-> one shared cause before assuming there is one) still applies to whatever
-> those two turn out to be.
+> instead of the live reader — deleted 2026-09-01), a full pass over the
+> `symbols` cluster, FORMAT's `~&`/FRESH-LINE column-tracking gap (plan.md
+> C2), and a LOOP expansion-time pre-check bug where an `AND` anywhere after
+> the first `FOR` clause — even deep inside an unrelated `WHEN ... DO ...
+> AND DO ...` chain — was mistaken for a FOR-subclause continuation and
+> mis-claimed the token after it (`DO`) as a bound variable name (found via
+> `uiop:parse-define-package-form`, which repeats that shape six times).
+> Run-by-run detail is in plan.md §1 and `docs/changelog.md`; treat plan.md's
+> Tier 1/2 cluster lists and any cluster failure counts elsewhere in that
+> file as history — they were written against a much larger failure count
+> and no longer reflect what's failing.
+> **The project is no longer in cluster-repair mode.** With ansi-test
+> reporting zero known failures, work now is: confirming `TYPEP.19`'s
+> randomized coverage genuinely has no edge case (rerun it standalone,
+> several times, outside the full suite), watching for the registration
+> anomaly to recur, and the two other things ansi-test cannot see at all —
+> plan.md §5's temporary deviations and the final compliance gate's broader
+> checks (implementation-defined choices actually documented, no
+> `*FEATURES*`-flag evasions, etc.).
 >
 > **Hang detection lives in `fclpy/watchdog.py`, not in the loop forms.**
 > `LoopWatchdog` evaluates its 120s warning and 600s cap inside `tick()`, once
