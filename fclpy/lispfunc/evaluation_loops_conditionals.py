@@ -248,11 +248,28 @@ def validate_loop_form(form):
                 i += 1
             continue
         if uname == 'WITH':
+            in_for_group = False
             i += 1
             if i < n:
                 _claim(tokens[i])
                 i += 1
             continue
+        if uname is not None and uname in LOOP_CLAUSE_KEYWORDS:
+            # Any other recognized clause keyword (DO/DOING, WHEN/IF/UNLESS,
+            # RETURN, an accumulation, WHILE/UNTIL/REPEAT, INITIALLY/FINALLY)
+            # ends the FOR clause's own AND-subclause chain. CLHS 6.1.3's AND
+            # -- joining selectable-clauses like `:do`/`:when` to each other,
+            # e.g. `:append args :into use :and :do (setf use-p t)` -- is a
+            # different AND from 6.1.2.1's, which joins FOR-subclauses
+            # (`for i from 1 and j = 0`). Leaving `in_for_group` set past the
+            # FOR clause it belongs to made every *later* `:and :do ...` in
+            # the same LOOP claim DO as if it were a bound variable name --
+            # the second such occurrence then collided with the first and
+            # signalled "LOOP binds DO twice" for a form that never bound a
+            # variable named DO at all (found via `uiop:parse-define-package-
+            # form`'s `:when kw :append ... :into x :and :do ...` chain,
+            # which repeats the pattern six times).
+            in_for_group = False
         i += 1
 
 
