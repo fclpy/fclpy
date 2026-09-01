@@ -59,7 +59,30 @@ def check_completeness(env):
     print('COMPLETENESS: total=%d passed=%d failed=%d accounted=%d missing=%d extra=%d'
           % (total, len(passed_names), len(failed_names), len(accounted_set), len(missing), len(extra)))
 
-    ok = not missing and not extra
+    # The check above is purely *internal*: it proves every registered test was
+    # accounted for, not that everything got registered. Two ways a whole
+    # directory can go missing without it noticing, both closed here.
+    #
+    # (a) A top-level form that failed to evaluate. `runtime.load_and_evaluate_file`
+    #     absorbs those and continues, so the `deftest` forms after it in that
+    #     file never register. See runtime.LOAD_ERRORS.
+    load_errors = list(getattr(runtime, 'LOAD_ERRORS', ()))
+
+    # (b) The registered total silently shrinking for any other reason. The
+    #     previous full run's entry list is right here on disk, so compare
+    #     against it -- *before* it gets overwritten below. Growth is fine (new
+    #     tests); a drop means tests that used to register no longer do.
+    results_dir = os.path.join(REPO_ROOT, 'ansi_results')
+    previous_total = None
+    previous_path = os.path.join(results_dir, 'all.txt')
+    try:
+        with open(previous_path) as handle:
+            previous_total = len([line for line in handle.read().split('\n') if line.strip()])
+    except (OSError, ValueError):
+        previous_total = None
+    shrank = (previous_total is not None and total < previous_total)
+
+    ok = not missing and not extra and not load_errors and not shrank
     if ok:
         print('COMPLETENESS: OK')
     else:
@@ -68,8 +91,14 @@ def check_completeness(env):
             print('MISSING-ENTRY: %s' % name)
         for name in extra:
             print('EXTRA-ACCOUNTED-NAME: %s' % name)
+        for filename, index, description in load_errors:
+            print('DROPPED-TOP-LEVEL-FORM: %s (expression %s): %s'
+                  % (filename, index, description))
+        if shrank:
+            print('REGISTERED-TEST-COUNT-SHRANK: %d now, %d in the previous run '
+                  '(ansi_results/all.txt) -- %d test(s) stopped registering'
+                  % (total, previous_total, previous_total - total))
 
-    results_dir = os.path.join(REPO_ROOT, 'ansi_results')
     os.makedirs(results_dir, exist_ok=True)
     with open(os.path.join(results_dir, 'all.txt'), 'w') as f:
         f.write('\n'.join(entry_names) + '\n')

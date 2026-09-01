@@ -5,6 +5,7 @@ import fclpy.state as state
 from fclpy.lisptype import LispSymbol, lispCons as cons, NIL, T
 from fclpy.lispfunc.evaluation import eval
 from fclpy.lispfunc.core import car, cdr
+from fclpy.lispfunc.evaluation_core import ConditionException
 from fclpy.lispenv import setup_standard_environment
 
 
@@ -129,12 +130,26 @@ class TestUnwindProtect:
         assert env.find_variable(c2_var) is T
 
     def test_unwind_protect_exception_preserves_cleanup(self, env):
-        """Uncaught exception should still run cleanup before re-raising."""
-        # This is a complex case - Python exception handling
-        # For now, just document this behavior
-        # In a full implementation, UNWIND-PROTECT would catch any exception,
-        # run cleanup, and re-raise
-        pass
+        """An error in the protected form runs cleanup and still propagates.
+
+        CLHS 5.2: UNWIND-PROTECT's cleanup runs however the protected form
+        exits, and a condition it does not handle keeps unwinding afterwards.
+        Both halves are asserted, because each without the other is a
+        different bug: swallowing the condition would make the form answer a
+        value it should never answer, and propagating without running cleanup
+        would skip the cleanup UNWIND-PROTECT exists to guarantee.
+        """
+        cleanup_var = ls('CLEANUP-RAN')
+        env.set_variable(cleanup_var, NIL)
+
+        cleanup = cons(ls('SETQ'), cons(cleanup_var, cons(T, NIL)))
+        protected = cons(ls('ERROR'), cons("boom", NIL))
+        form = cons(ls('UNWIND-PROTECT'), cons(protected, cons(cleanup, NIL)))
+
+        with pytest.raises(ConditionException):
+            eval(form, env)
+
+        assert env.find_variable(cleanup_var) is T
 
 
 class TestBasicCleanup:

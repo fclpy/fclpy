@@ -5319,10 +5319,21 @@ def rename_file(filespec, new_name):
     CLHS 20.2 says the components new-name does not supply come from the
     file, and `rename-file.5` renames one logical pathname to another and
     requires the defaulted name back as a logical pathname. The merge is
-    MERGE-PATHNAMES' job and is delegated to it; the OS-side target of the
-    `os.replace` is a separate merge over the *resolved* paths, which is
-    what makes `(rename-file "a/b.txt" "c")` land in `a/` and keep the type
-    (rename-file.3).
+    MERGE-PATHNAMES' job and is delegated to it.
+
+    **The file is renamed to the name this returns.** There is one merged
+    name and it is resolved once, because the two used to be computed
+    independently and disagreed: the OS-side target was
+    `merge_pathnames(pathname_from_namestring(resolve_filespec(new_name)),
+    old_path)`, and `resolve_filespec` resolves a *relative* new-name against
+    `*DEFAULT-PATHNAME-DEFAULTS*` before the merge ever runs -- so its first
+    argument arrived already absolute, and MERGE-PATHNAMES fills in only
+    *missing* components, so the file being renamed could no longer supply its
+    directory. `(rename-file "some/dir/f.txt" (make-pathname :name "g"))`
+    therefore moved the file into `*DEFAULT-PATHNAME-DEFAULTS*` while
+    returning, and reporting as the new truename, a name in `some/dir/`
+    (rename-file.3: `(probe-file defaulted-new-name)` was NIL for a rename
+    that had just "succeeded").
     """
     import os
     from fclpy.lispfunc.pathnames import (
@@ -5335,20 +5346,19 @@ def rename_file(filespec, new_name):
             pathname_from_namestring(old_path), "RENAME-FILE: file not found: " + old_path)
 
     old_truename = pathname_from_os_path(os.path.realpath(old_path))
-    # The *returned* defaulted new name is merged in pathname space, on the
-    # untranslated designators -- CLHS 20.2 says new-name is merged with the
-    # pathname of the file, not with its OS translation, and rename-file.5
-    # renames one logical pathname to another and requires the defaulted
-    # name back as a LOGICAL pathname. The OS-side target of the rename is
-    # still computed from the resolved paths, which is what keeps a relative
-    # new-name landing next to the file being renamed.
+    # The defaulted new name is merged in pathname space, on the untranslated
+    # designators -- CLHS 20.2 says new-name is merged with the pathname of the
+    # file, not with its OS translation, and rename-file.5 renames one logical
+    # pathname to another and requires the defaulted name back as a LOGICAL
+    # pathname.
     from fclpy.lispfunc.pathnames import _coerce_pathname_designator
     defaulted_new_name = merge_pathnames(
         _coerce_pathname_designator(new_name, 'RENAME-FILE'),
         _coerce_pathname_designator(filespec, 'RENAME-FILE'))
-    new_path = merge_pathnames(
-        pathname_from_namestring(resolve_filespec(new_name)),
-        pathname_from_namestring(old_path)).namestring()
+    # ...and the file goes to exactly that name, resolved once through the one
+    # designator-to-OS-path resolver. See the docstring: resolving `new_name`
+    # itself instead put the file somewhere the returned name did not name.
+    new_path = resolve_filespec(defaulted_new_name)
 
     try:
         os.replace(old_path, new_path)

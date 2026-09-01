@@ -356,13 +356,29 @@ class LispInstance:
 
 class ClassRegistry:
     """Global registry of defined classes."""
-    
+
     def __init__(self):
         self._classes: Dict[str, LispClass] = {}
-    
+        # Bumped by every mutation below, so a cache derived from the class
+        # population can tell that it went stale. The population size is *not*
+        # a sufficient fingerprint: `register_class` overwrites the entry for a
+        # name, so redefining a class replaces the object while leaving the
+        # count -- and every cell key for a CLOS class is `('CLOS', id(cls))`
+        # (typespec._cell_key), so the replacement is a different cell. A
+        # size-keyed cache therefore kept serving the cells of the *old* class
+        # object after a DEFCLASS re-run. `unregister_class_as` has the
+        # complementary problem in the other direction.
+        self._generation: int = 0
+
+    @property
+    def generation(self) -> int:
+        """An O(1) fingerprint of the class population, for cache keys."""
+        return self._generation
+
     def register_class(self, cls: LispClass) -> LispClass:
         """Register a class in the registry."""
         self._classes[cls.name_string] = cls
+        self._generation += 1
         return cls
 
     def invalidate_cpl_caches(self) -> None:
@@ -387,6 +403,7 @@ class ClassRegistry:
         exactly that case).
         """
         self._classes[name] = cls
+        self._generation += 1
         return cls
 
     def find_class(self, name: str) -> Optional[LispClass]:
@@ -400,6 +417,7 @@ class ClassRegistry:
         already true either way.
         """
         self._classes.pop(name, None)
+        self._generation += 1
 
     def get_class_or_error(self, name: str) -> LispClass:
         """Find a class by name or raise error."""
@@ -945,6 +963,8 @@ def class_of(obj: Any) -> LispClass:
     SIMPLE-STRING and friends are types without one) to the nearest
     standardized class that contains them.
     """
+    if not _DISPATCH_DEPS_LOADED:
+        _load_dispatch_deps()
     if isinstance(obj, LispInstance):
         return obj.lisp_class
     # A class object is an instance of its metaclass (CLHS 4.3.7): the
@@ -978,7 +998,6 @@ def class_of(obj: Any) -> LispClass:
     # array of bits is a BIT-VECTOR, of characters a STRING, any other
     # rank-1 array a VECTOR, and a multi-dimensional array an ARRAY.
     if _is_lisp_array(obj):
-        from fclpy.lispfunc import arrays as _arrays
         try:
             element = _arrays.element_type_of(obj)
             rank = _arrays.array_rank_of(obj)
@@ -995,14 +1014,11 @@ def class_of(obj: Any) -> LispClass:
         return find_class('STRING') or find_class('T')
     # `type_of` has no branch for Python rationals (they are not `int` and
     # not `float`), so a ratio would otherwise fall through to T.
-    from fractions import Fraction as _Fraction
     if isinstance(obj, _Fraction):
         return find_class('RATIO') or find_class('T')
     name = _representation_name_of(obj)
     if name is not None:
         return find_class(name) or find_class('T')
-    from fclpy.lispfunc.comparison import type_of as _type_of
-    from fclpy.lispfunc.core import _consp_internal, car as _car
     result = _type_of(obj)
     if _consp_internal(result):
         result = _car(result)
@@ -1011,14 +1027,55 @@ def class_of(obj: Any) -> LispClass:
         or find_class('T')
 
 
+_DISPATCH_DEPS_LOADED = False
+
+
+def _load_dispatch_deps():
+    """Bind this module's cross-module dependencies as globals, once.
+
+    Every one of these modules imports `classes`, so none of them can be
+    imported at module level here. They were therefore imported *inside* the
+    dispatch functions -- `class_of` alone ran four `from ... import`
+    statements per call, `_representation_name_of` five, and the one-line
+    helpers `_is_lisp_array`/`_lisp_string_class`/`_arg_is_array` one each --
+    which put Python's `_handle_fromlist` on the hot path of every CLOS
+    dispatch and every CLASS-OF in the implementation.
+
+    Deferred to first use, so the import graph is unchanged; the bound objects
+    are module-level functions and classes that are never rebound afterwards.
+    """
+    global _DISPATCH_DEPS_LOADED
+    global _arrays, _Fraction, _type_of, _consp_internal, _car
+    global _is_array_fn, _LispString, _is_hash_table, _Readtable
+    global _RandomState, _stream_type_matches, _eql_fn, _typep_fn
+    from fclpy.lispfunc import arrays as _arrays
+    from fractions import Fraction as _Fraction
+    from fclpy.lispfunc.comparison import (
+        type_of as _type_of, eql as _eql_fn, typep as _typep_fn)
+    from fclpy.lispfunc.core import _consp_internal, car as _car
+    from fclpy.lispfunc.arrays import is_array as _is_array_fn
+    from fclpy import lisptype as _lt
+    from fclpy.lispfunc.misc_hashtables import is_hash_table as _is_hash_table
+    from fclpy.readtable import Readtable as _Readtable
+    from fclpy.lispfunc.streams import stream_type_matches as _stream_type_matches
+    _LispString = getattr(_lt, 'LispString', ())
+    try:
+        from fclpy.lispfunc.utilities_system import RandomState as _RandomState
+    except Exception:
+        _RandomState = ()
+    _DISPATCH_DEPS_LOADED = True
+
+
 def _is_lisp_array(obj: Any) -> bool:
-    from fclpy.lispfunc.arrays import is_array
-    return bool(is_array(obj))
+    if not _DISPATCH_DEPS_LOADED:
+        _load_dispatch_deps()
+    return bool(_is_array_fn(obj))
 
 
 def _lisp_string_class():
-    from fclpy import lisptype
-    return getattr(lisptype, 'LispString', ())
+    if not _DISPATCH_DEPS_LOADED:
+        _load_dispatch_deps()
+    return _LispString
 
 
 def _representation_name_of(obj: Any) -> Optional[str]:
@@ -1026,21 +1083,17 @@ def _representation_name_of(obj: Any) -> Optional[str]:
     `type_of` does not classify (streams, hash tables, pathnames, ...) --
     the same families CLHS 4.2 gives classes to, and the ones method
     dispatch on a STREAM/HASH-TABLE/... specializer needs ranked."""
-    from fclpy.lispfunc.misc_hashtables import is_hash_table
-    if is_hash_table(obj):
+    if not _DISPATCH_DEPS_LOADED:
+        _load_dispatch_deps()
+    if _is_hash_table(obj):
         return 'HASH-TABLE'
     from fclpy import lisptype
     if isinstance(obj, getattr(lisptype, 'Pathname', ())):
         return 'LOGICAL-PATHNAME' if getattr(obj, 'logical', False) else 'PATHNAME'
-    from fclpy.readtable import Readtable
-    if isinstance(obj, Readtable):
+    if isinstance(obj, _Readtable):
         return 'READTABLE'
-    try:
-        from fclpy.lispfunc.utilities_system import RandomState
-        if isinstance(obj, RandomState):
-            return 'RANDOM-STATE'
-    except Exception:
-        pass
+    if _RandomState and isinstance(obj, _RandomState):
+        return 'RANDOM-STATE'
     if isinstance(obj, Method):
         # A DEFMETHOD product is a STANDARD-METHOD (CLHS 7.6.2) -- the class
         # `_init_builtin_classes` registers, so CLASS-OF answers a real class
@@ -1055,7 +1108,7 @@ def _representation_name_of(obj: Any) -> Optional[str]:
     # CLASS-OF answered STREAM: FILE-STREAM-CPL's dispatch on the
     # class-precedence-list-foo generic function found no FILE-STREAM
     # method, and TYPE-OF.1 collected the object against FILE-STREAM.
-    from fclpy.lispfunc.streams import stream_type_matches
+    stream_type_matches = _stream_type_matches
     for name in ('TWO-WAY-STREAM', 'ECHO-STREAM', 'CONCATENATED-STREAM',
                  'BROADCAST-STREAM', 'SYNONYM-STREAM', 'STRING-STREAM',
                  'FILE-STREAM', 'STREAM'):
@@ -1117,9 +1170,10 @@ def _arg_matches_specializer(arg: Any, spec: Any) -> bool:
     global _SPECIALIZER_MATCH_USED_TYPEP
     if spec is None:
         return True
+    if not _DISPATCH_DEPS_LOADED:
+        _load_dispatch_deps()
     if isinstance(spec, EqlSpecializer):
-        from fclpy.lispfunc.comparison import eql as _eql
-        return _eql(arg, spec.value) is T
+        return _eql_fn(arg, spec.value) is T
     if isinstance(spec, LispClass):
         if isinstance(arg, LispInstance):
             return _is_instance_of(arg, spec)
@@ -1149,25 +1203,23 @@ def _arg_matches_specializer(arg: Any, spec: Any) -> bool:
         # per-object and never memoized -- and dispatches that consult
         # TYPEP at all are never stored in the effective-method cache
         # (the _SPECIALIZER_MATCH_USED_TYPEP flag).
-        from fclpy.lispfunc.comparison import typep as _typep
         if _arg_is_array(arg):
             _SPECIALIZER_MATCH_USED_TYPEP = True
-            return _typep(arg, spec.name) is T
+            return _typep_fn(arg, spec.name) is T
         memo_key = (id(arg_class), id(spec))
         try:
             answer = _TYPEP_FALLBACK_MEMO[memo_key]
         except KeyError:
             _SPECIALIZER_MATCH_USED_TYPEP = True
-            answer = _typep(arg, spec.name) is T
+            answer = _typep_fn(arg, spec.name) is T
             _TYPEP_FALLBACK_MEMO[memo_key] = answer
         return answer
     # A specializer symbol that named no modeled LispClass at all (a CLHS
     # type this codebase has no class object for): still ask TYPEP, so any
     # type name is usable as a specializer, not only the ones in
     # _init_builtin_classes's list. Value-dependent like the fallback above.
-    from fclpy.lispfunc.comparison import typep as _typep
     _SPECIALIZER_MATCH_USED_TYPEP = True
-    return _typep(arg, spec) is T
+    return _typep_fn(arg, spec) is T
 
 
 def _matches_specializers(args: List[Any], specializers: List[Any]) -> bool:
@@ -1346,19 +1398,33 @@ _TYPEP_FALLBACK_MEMO: Dict[tuple, bool] = {}
 def _arg_is_array(obj: Any) -> bool:
     """Is `obj` an array in the arrays-module sense (any representation)?"""
     try:
-        from fclpy.lispfunc.arrays import is_array as _is_array
-        return bool(_is_array(obj))
+        if not _DISPATCH_DEPS_LOADED:
+            _load_dispatch_deps()
+        return bool(_is_array_fn(obj))
     except Exception:
         return False
 
 
 def _methods_signature(gf: "GenericFunction") -> tuple:
-    """Identity sequence of the generic function's method objects -- the
-    cache's validity stamp. Every mutation (add, remove, congruent
-    replacement, wholesale reassignment -- wherever it happens, including
-    paths outside add_method/remove_method) changes at least one id, so a
-    stale entry can never be hit."""
-    return tuple(map(id, gf.methods))
+    """The cache's validity stamp: everything the cached answer depends on
+    besides the argument classes.
+
+    The identity sequence of the method objects covers every mutation of the
+    method set (add, remove, congruent replacement, wholesale reassignment --
+    wherever it happens, including paths outside add_method/remove_method),
+    since each changes at least one id.
+
+    `argument_precedence_order` is in the stamp because
+    `compute_applicable_methods` *sorts* by it, and it can be reassigned
+    without the method set changing at all: ENSURE-GENERIC-FUNCTION with
+    `:argument-precedence-order` on an existing generic function does exactly
+    that, and ansi-test's ensure-generic-function.8 then calls the same
+    argument classes again and requires the new order (it asks for `(1 2 1)`
+    where the old order gives `(2 2 1)`). With only the method ids in the
+    stamp, that call hit a stale entry ordered by the superseded precedence."""
+    order = gf.argument_precedence_order
+    return (tuple(map(id, gf.methods)),
+            tuple(order) if order is not None else None)
 
 
 def _dispatch_key(args: List[Any]) -> tuple:
@@ -1411,17 +1477,29 @@ def compute_applicable_methods(gf: GenericFunction, args: List[Any]) -> List[Met
         # AttributeError surface as the form's value (standing rule 2).
         raise LispProgramError(
             f"COMPUTE-APPLICABLE-METHODS: {gf!r} is not a generic function")
+    # The key is computed whether or not a cache exists yet, which is what
+    # makes the cache below reachable at all. It used to be computed only
+    # `if cache is not None` -- and the cache attribute is created *only* by
+    # `_maybe_store_dispatch`, which returns before creating it when
+    # `key is None`. So on the first call the missing cache forced key=None,
+    # key=None made the store a no-op, the attribute was never created, and
+    # every later call took the same branch: the memo this docstring describes
+    # never held a single entry, and every dispatch ran the full specializer
+    # match. That is most of the cost of CLOS-heavy Lisp code here --
+    # `class_of` is re-derived per (argument, candidate method) pair inside
+    # `_arg_matches_specializer`, so ansi-test's `is-similar*` over a 100-node
+    # tree (print-backquote.lsp's PRINT.BACKQUOTE.RANDOM.14) paid it ~12 times
+    # per argument per node and could not finish 500 iterations inside LOOP's
+    # 600s cap.
+    try:
+        key = _dispatch_key(args)
+    except Exception:
+        key = None
     cache = getattr(gf, _DISPATCH_CACHE_ATTR, None)
-    key = None
-    if cache is not None:
-        try:
-            key = _dispatch_key(args)
-        except Exception:
-            key = None
-        if key is not None:
-            entry = cache.get((key, _methods_signature(gf)))
-            if entry is not None:
-                return entry
+    if cache is not None and key is not None:
+        entry = cache.get((key, _methods_signature(gf)))
+        if entry is not None:
+            return entry
     global _SPECIALIZER_MATCH_USED_TYPEP
     _SPECIALIZER_MATCH_USED_TYPEP = False
     applicable = [m for m in gf.methods if _matches_specializers(args, m.specializers)]

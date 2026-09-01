@@ -1257,6 +1257,29 @@ def truename(pathname):
     if not os.path.exists(path_str):
         return signal_file_error(pathname, f"TRUENAME: file not found: {path_str}")
     if translated is not None:
+        # The translation supplies the canonical *spelling* (see above); the OS
+        # supplies the canonical *location*, and a truename needs both. A
+        # translation is free to leave the device unspecified -- universe.lsp
+        # builds the CLTEST host's from `(pathname-directory (truename
+        # (make-pathname)))`, and on Windows the drive letter is the `:device`,
+        # not a directory component, so it is simply absent from the result.
+        # Returning that verbatim made TRUENAME answer a *drive-less*
+        # `/Users/.../foo.out` for a file COMPILE-FILE had just reported at
+        # `C:/Users/.../foo.out`, so compile-file.18's
+        # `(equalpt (namestring (truename target)) (namestring output-truename))`
+        # compared two spellings of the same file and found them different.
+        if translated.device is None or translated.device is lisptype.NIL:
+            try:
+                real_device = pathname_from_namestring(
+                    os.path.realpath(path_str)).device
+            except (OSError, ValueError):
+                real_device = None
+            if real_device is not None and real_device is not lisptype.NIL:
+                return Pathname(
+                    host=translated.host, device=real_device,
+                    directory=translated.directory, name=translated.name,
+                    type=translated.type, version=translated.version,
+                    logical=translated.logical)
         return translated
     try:
         return pathname_from_os_path(os.path.realpath(path_str))

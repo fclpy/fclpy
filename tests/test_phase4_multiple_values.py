@@ -352,14 +352,20 @@ class TestMultipleValuesInLet:
             )
         )
         result = eval(let_form, env)
-        
-        # In single-value context, first value (1) is used
-        # This depends on how we handle MultipleValues in LET
-        # For now, we expect the MultipleValues object or its first value
-        if isinstance(result, MultipleValues):
-            assert result.get_primary() == 1
-        else:
-            assert result == 1 or isinstance(result, MultipleValues)
+
+        # CLHS 3.1.2.1 / 5.1.1: a LET init form is a single-value context, so X
+        # is bound to the primary value and nothing else survives -- the form
+        # answers exactly 1.
+        #
+        # This asserted `result == 1 or isinstance(result, MultipleValues)`,
+        # i.e. it accepted both of two mutually exclusive outcomes (a collapsed
+        # value *or* an un-collapsed MultipleValues) and so could not fail if
+        # the collapse regressed. Only one of them is the ANSI answer, and the
+        # test has to say which.
+        assert not isinstance(result, MultipleValues), (
+            "a LET init form is a single-value context: X must be bound to the "
+            "primary value, not to a MultipleValues object")
+        assert result == 1
 
 
 if __name__ == '__main__':

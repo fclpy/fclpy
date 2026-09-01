@@ -1151,14 +1151,46 @@ def _condition_cells():
     return classes
 
 
+_clos_classes_cache = None
+_clos_classes_cache_key = None
+
+
 def _clos_classes():
+    """Every CLOS class in the registry, deduplicated by *identity*.
+
+    Two things here, and both were costing whole minutes of the suite.
+
+    Dedup is by `id`, which is the identity notion `_cell_key` (above) already
+    establishes for a CLOS class. `LispClass` is a `@dataclass`, so the
+    `value not in found` this replaces ran the generated *field-wise* `__eq__`
+    -- which compares `direct_superclasses`, i.e. recurses into other classes
+    -- against every class found so far. That asked the wrong question (two
+    distinct classes with equal fields are still two classes, and the cell key
+    says so) and it was quadratic in the class population: 4.1M `__eq__` calls,
+    half the runtime, on a profile of ansi-test's TYPE-OF.1.
+
+    Memoized on `_class_population_key()` -- the key `_all_class_cells` already
+    uses, not a second invalidation scheme -- because `_class_cone` calls this
+    once per *string* node in the cone it walks, so one SUBTYPEP over the class
+    sort reached it hundreds of times. The cache holds the list, so the objects
+    stay alive and their `id`s stay valid for as long as the keys derived from
+    them do.
+    """
+    global _clos_classes_cache, _clos_classes_cache_key
+    key = _class_population_key()
+    if _clos_classes_cache is not None and _clos_classes_cache_key == key:
+        return _clos_classes_cache
     from fclpy import classes as _classes
     found = []
+    seen = set()
     registry = getattr(getattr(_classes, '_class_registry', None), '_classes', None)
     if isinstance(registry, dict):
         for value in registry.values():
-            if isinstance(value, _classes.LispClass) and value not in found:
+            if isinstance(value, _classes.LispClass) and id(value) not in seen:
+                seen.add(id(value))
                 found.append(value)
+    _clos_classes_cache = found
+    _clos_classes_cache_key = key
     return found
 
 
@@ -1214,11 +1246,23 @@ def _class_population_key():
         conditions = 0
     try:
         from fclpy import classes as _classes
-        registry = getattr(getattr(_classes, '_class_registry', None), '_classes', None)
-        clos = len(registry) if isinstance(registry, dict) else 0
+        registry = getattr(_classes, '_class_registry', None)
+        # The registry's own mutation counter, not `len(self._classes)`: a
+        # DEFCLASS re-run *overwrites* the entry for that name, so the count is
+        # unchanged while the class object -- and hence its `('CLOS', id(cls))`
+        # cell -- is new. Keyed on the size alone, this cache went on serving
+        # the old object's cells after every class redefinition.
+        clos = getattr(registry, 'generation', None)
+        if clos is None:
+            classes_dict = getattr(registry, '_classes', None)
+            clos = len(classes_dict) if isinstance(classes_dict, dict) else 0
     except Exception:
         clos = 0
     return (conditions, clos)
+
+
+_class_cone_cache = {}
+_class_cone_cache_key = None
 
 
 def _class_cone(node):
@@ -1227,7 +1271,36 @@ def _class_cone(node):
     This is what makes class subtyping work in all three of the class
     representations that coexist here (plan.md Finding L): a built-in name, a
     Python condition class, and a CLOS `LispClass`.
+
+    Memoized on `_class_population_key()`, like `_clos_classes` and
+    `_all_class_cells`: the answer is a pure function of the node and the class
+    population, and every named class type reaches it -- for a *string* node it
+    walks `_CLASS_PARENTS`, recursively cones every child, and then scans the
+    linearized superclasses of every CLOS class, which was the single largest
+    remaining cost in a TYPE-OF.1 profile once the `__eq__` storm in
+    `_clos_classes` was gone. A `frozenset` is returned so that a caller cannot
+    mutate the cached answer; `CellBulk` copies it into one anyway.
     """
+    global _class_cone_cache, _class_cone_cache_key
+    population = _class_population_key()
+    if _class_cone_cache_key != population:
+        _class_cone_cache = {}
+        _class_cone_cache_key = population
+    memo_key = _cell_key(node)
+    try:
+        cached = _class_cone_cache.get(memo_key)
+    except TypeError:
+        cached = None
+        memo_key = None
+    if cached is not None:
+        return cached
+    cone = frozenset(_class_cone_uncached(node))
+    if memo_key is not None:
+        _class_cone_cache[memo_key] = cone
+    return cone
+
+
+def _class_cone_uncached(node):
     cells = set()
     if isinstance(node, str):
         cells.add(node)

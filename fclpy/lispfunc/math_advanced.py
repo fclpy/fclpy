@@ -74,10 +74,27 @@ def exp(x):
             signal_error_object(lisptype.FloatingPointOverflow(
                 "EXP: result overflows the range of the float type"))
             return
-        # Underflow: math.exp silently answers 0.0 below the double range's
-        # edge (log(min) ~ -744.44 for IEEE 754 doubles); that is a genuine
-        # floating-point-underflow for every float subtype fclpy models.
-        if x < math.log(sys.float_info.min):
+        # Underflow is read off the *result*, not predicted from `x`:
+        # `math.exp` answers 0.0 exactly when the true value falls below the
+        # smallest representable float, and `exp(x)` is never mathematically
+        # zero for finite `x`, so a zero result *is* the underflow -- with no
+        # threshold to get wrong, and no way to misclassify a denormal, which
+        # is nonzero by construction.
+        #
+        # The bound this replaces, `x < math.log(sys.float_info.min)`, used the
+        # smallest **normalized** double (2.2e-308, log ~= -708.4) where the
+        # representable floor is the smallest **denormal** (5e-324, log ~=
+        # -744.44 -- the figure the comment above already named, and what
+        # `(log least-positive-double-float)` answers). Every result between
+        # those two bounds is a perfectly representable denormal, so
+        # `(exp (log least-positive-double-float))` signalled an underflow for
+        # a value it had just been handed, and FORMAT.E.26 -- which draws a
+        # random float across the whole range, bottom included -- failed
+        # whenever the draw landed there.
+        #
+        # `exp(-inf)` is 0.0 as a *mathematical* result rather than an
+        # underflow, so it is excluded.
+        if result == 0.0 and not math.isinf(x):
             signal_error_object(lisptype.FloatingPointUnderflow(
                 "EXP: result underflows the range of the float type"))
             return

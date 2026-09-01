@@ -27,6 +27,39 @@ def setup_reader_macros():
     # This function is kept for backward compatibility but is no longer needed
     pass
 
+
+# Every top-level form `load_and_evaluate_file` failed to evaluate, as
+# (filename, expression index, description) triples.
+#
+# This exists because both of that function's error handlers *absorb* the
+# failure and keep going -- the inner one moves to the next top-level form, the
+# outer one abandons the file and answers NIL. `doit.lsp` is a sequence of
+# `(load "<dir>/load.lsp")` calls, so an absorbed failure mid-directory means
+# the rest of that directory's `deftest` forms never register in RT's
+# `*entries*`, while every other directory loads normally. `check_completeness`
+# in run_all_tests.py only checks that every entry in `*entries*` ended up
+# passed or failed -- an *internal* consistency check -- so a run that quietly
+# lost a whole directory still printed `COMPLETENESS: OK`, just with a smaller
+# total. That is the one guarantee CLAUDE.md leans on ("COMPLETENESS: OK =>
+# nothing was skipped"), and without this list it was not true.
+#
+# Note the absorption is not limited to raw Python exceptions: the inner
+# handler deliberately re-raises a `ConditionException` (a real Lisp
+# condition), and because `ConditionException` subclasses `Exception` the outer
+# handler then catches *that* too. So a genuine Lisp error in a directory's
+# load.lsp was absorbed just as silently.
+#
+# The handlers are left absorbing on purpose -- one bad directory should not
+# cost the information the other twenty-two would have produced -- but a run
+# that dropped anything can no longer report success. Callers that want the
+# old lenient behaviour are unaffected; they simply never look at this list.
+LOAD_ERRORS = []
+
+
+def reset_load_errors():
+    """Clear the recorded load failures (call before a fresh load sequence)."""
+    del LOAD_ERRORS[:]
+
 def load_and_evaluate_file(filename, environment=None, verbose=False, timing=False):
     """Load and evaluate a Lisp file.
     
@@ -162,6 +195,10 @@ def load_and_evaluate_file(filename, environment=None, verbose=False, timing=Fal
                 except Exception:
                     expr_preview = ""
 
+                # Recorded so the run cannot report success having skipped
+                # this form -- see LOAD_ERRORS above.
+                LOAD_ERRORS.append((filename, expr_count, f"{type(e).__name__}: {e}"))
+
                 print(f"  Error evaluating expression {expr_count} in {filename}: {e}{expr_preview}")
 
                 # Print a traceback when explicitly requested (or in verbose mode).
@@ -174,9 +211,15 @@ def load_and_evaluate_file(filename, environment=None, verbose=False, timing=Fal
         return lisptype.T
         
     except FileNotFoundError:
+        LOAD_ERRORS.append((filename, -1, "FileNotFoundError: file not found"))
         print(f"Error: File '{filename}' not found")
         return lisptype.NIL
     except Exception as e:
+        # This catches the inner handler's deliberate re-raise of a
+        # ConditionException as well (it subclasses Exception), so a real Lisp
+        # condition raised by a top-level form lands here and abandons the rest
+        # of the file. Recorded for the same reason as above.
+        LOAD_ERRORS.append((filename, -1, f"{type(e).__name__}: {e}"))
         print(f"Error loading file '{filename}': {e}")
         if verbose:
             traceback.print_exc()

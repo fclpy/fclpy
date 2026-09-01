@@ -1113,6 +1113,67 @@ def eval_function(*args):
     return eval(form, None)
 
 
+_EVAL_HANDLERS_LOADED = False
+
+# The special-form handlers `eval` dispatches to, grouped by defining module.
+# `eval` referenced these as *locals* established by five
+# `from ... import (...)` statements at the top of its body -- i.e. some forty
+# names re-imported on every single evaluation.
+_EVAL_HANDLER_NAMES = (
+    ('evaluation_special_forms', (
+        'eval_if', 'eval_setq', 'eval_macroexpand_1',
+        'eval_macro_function', 'eval_lambda', 'eval_declare', 'eval_declaim',
+        'eval_call_method', 'eval_make_method',
+    )),
+    ('evaluation_control_flow', (
+        'eval_block', 'eval_return_from', 'eval_catch', 'eval_throw',
+        'eval_unwind_protect', 'eval_tagbody', 'eval_go',
+    )),
+    ('evaluation_loops_conditionals', (
+        'eval_cond', 'eval_case', 'eval_ccase', 'eval_and', 'eval_or',
+        'eval_progn', 'eval_locally', 'eval_let', 'eval_letstar',
+        'eval_quasiquote', 'eval_eval_when',
+        'eval_flet', 'eval_labels', 'eval_time',
+        'eval_ecase', 'eval_typecase', 'eval_etypecase', 'eval_ctypecase',
+        'eval_when', 'eval_unless', '_eval_logic',
+    )),
+    ('utilities_functions', ('eval_progv',)),
+    ('evaluation_conditions', (
+        'eval_signal', 'eval_error', 'eval_cerror', 'eval_warn',
+        'eval_invoke_restart', 'eval_abort',
+        'eval_multiple_value_call', 'eval_multiple_value_prog1',
+    )),
+)
+
+
+def _load_eval_handlers():
+    """Bind the special-form handlers as module globals, once.
+
+    These cannot be imported at module level -- every one of those modules
+    imports this one back, which is what the "lazily to avoid circular
+    imports" note in `eval` was about. But importing them *inside* `eval`
+    paid for that circularity on every evaluation: `eval` runs ~88k times per
+    iteration of ansi-test's PRINT.BACKQUOTE.RANDOM.14, and Python's
+    `_handle_fromlist` (with the `parent`/`rpartition` module-path walk it
+    does per name) came to ~494k calls and ~7% of the profile -- pure
+    overhead, since after the first call the modules are already in
+    `sys.modules` and these names are plain module-level `def`s that never get
+    rebound.
+
+    Deferred to the first *call* rather than to import time, so the import
+    graph is unchanged: by the time any form is evaluated, every one of these
+    modules is fully initialised.
+    """
+    global _EVAL_HANDLERS_LOADED
+    import importlib
+    g = globals()
+    for module_name, names in _EVAL_HANDLER_NAMES:
+        module = importlib.import_module('.' + module_name, __package__)
+        for name in names:
+            g[name] = getattr(module, name)
+    _EVAL_HANDLERS_LOADED = True
+
+
 def eval(form, env=None, *, tail_target=None):
     """Internal evaluation function - evaluates a Lisp form in the given environment.
 
@@ -1133,31 +1194,12 @@ def eval(form, env=None, *, tail_target=None):
     wrong. Tail position for the *value* is not the same as tail position for
     the dynamic environment.
     """
-    # Import special form handlers lazily to avoid circular imports
-    from .evaluation_special_forms import (
-        eval_if, eval_setq, eval_macroexpand_1,
-        eval_macro_function, eval_lambda, eval_declare, eval_declaim,
-        eval_call_method, eval_make_method,
-    )
-    from .evaluation_control_flow import (
-        eval_block, eval_return_from, eval_catch, eval_throw,
-        eval_unwind_protect, eval_tagbody, eval_go
-    )
-    from .evaluation_loops_conditionals import (
-        eval_cond, eval_case, eval_ccase, eval_and, eval_or,
-        eval_progn, eval_locally, eval_let, eval_letstar, eval_quasiquote,
-        eval_eval_when,
-        eval_flet, eval_labels, eval_time,
-        eval_ecase, eval_typecase, eval_etypecase, eval_ctypecase,
-        eval_when, eval_unless, _eval_logic,
-    )
-    from .utilities_functions import eval_progv
-    from .evaluation_conditions import (
-        eval_signal, eval_error, eval_cerror, eval_warn,
-        eval_invoke_restart, eval_abort,
-        eval_multiple_value_call, eval_multiple_value_prog1,
-    )
-    
+    # The special-form handlers are module globals, bound on the first call by
+    # `_load_eval_handlers` (see there for why they cannot be module-level
+    # imports, and what re-importing them per call was costing).
+    if not _EVAL_HANDLERS_LOADED:
+        _load_eval_handlers()
+
     env = resolve_environment(env)
 
     # recursion-plan.md Step 6, target 1: resolve a chain of IF forms in *this*

@@ -2068,26 +2068,36 @@ Correct to work per-test, **but only after Tiers 1–2**:
 ### Known non-ANSI assertions in the *unit* suite
 
 A unit test that asserts a bug makes fixing the bug look like a regression.
-Verified by execution:
 
-| expression | fclpy | ANSI | pinned by |
+**All three rows this table used to carry are resolved** (re-verified by
+execution 2026-09-01), and per the rule below a resolved row leaves the table
+rather than lingering as a stale accusation:
+
+| expression | now answers | ANSI | resolved by |
 |---|---|---|---|
-| `(gethash 1.0 h)`, key `1` | `ONE` | `NIL` — `(eql 1 1.0)` is false | `test_phase5_task7_hashtables.py:136` |
-| `(hash-table-test h)` | `"<FUNCTION EQUAL AT 0x…>"` | the **symbol** `EQUAL` | `:249` |
-| `(find 3 '(1 2 3 4 5) :test #'>)` | `4` | `1` — called as `(funcall test item element)` | `test_phase5_task2_sequence_functions.py:50` |
+| ~~`(gethash 1.0 h)`, key `1`~~ | `NIL` | `NIL` — `(eql 1 1.0)` is false | the 2026-08-24 hash-table repair; the old `test_phase5_task7_hashtables.py` is gone and `tests/test_hash_tables.py` asserts the ANSI answer |
+| ~~`(hash-table-test h)`~~ | the symbol `EQUAL` | the **symbol** `EQUAL` | same commit — `test_hash_table_test_answers_a_symbol` |
+| ~~`(find 3 '(1 2 3 4 5) :test #'>)`~~ | `1` | `1` — called as `(funcall test item element)` | `tests/test_phase5_task2_sequence_functions.py`, now citing CLHS 17.2.1 |
 
-Also: **`lisptype.is_truthy(False)` is `True`** — any Python `False` reaching a
-Lisp conditional is silently *true*. A live landmine. And tests that cannot fail
-(`test_phase3_unwind_protect.py:131`, `test_phase4_multiple_values.py:330`) occupy
-the place real coverage should be.
+The two **tests that could not fail** are also closed (2026-09-01):
+`test_phase3_unwind_protect.py`'s `test_unwind_protect_exception_preserves_cleanup`
+was a bare `pass` and now asserts both halves of CLHS 5.2 (the cleanup runs *and*
+the condition keeps unwinding); `test_phase4_multiple_values.py`'s
+`test_let_with_multiple_values` accepted *either* a collapsed value or an
+un-collapsed `MultipleValues` — two mutually exclusive outcomes, so it could not
+catch a regression between them — and now pins the single-value-context answer
+(CLHS 3.1.2.1).
+
+**Still open:** **`lisptype.is_truthy(False)` is `True`** — any Python `False`
+reaching a Lisp conditional is silently *true*. A live landmine, disclosed in
+[§5](#5-known-temporary-deviations) and owned by M2.
 
 > **These are audit items, not trivia**, and
 > [the final compliance gate](#half-two--the-known-non-compliance-audit)
 > requires them closed. A unit test that asserts a bug is how a known defect
 > survives to the end: fixing the bug shows up as a broken test, so it gets
-> deferred. Each of the three is either corrected or explicitly renamed and
-> documented as a test of *non-ANSI* behaviour. `is_truthy(False)` belongs in
-> [§5](#5-known-temporary-deviations) until it is fixed — it already is.
+> deferred. Each is either corrected or explicitly renamed and documented as a
+> test of *non-ANSI* behaviour.
 
 ---
 
