@@ -13,12 +13,6 @@ but not sufficient — see [CLAUDE.md](CLAUDE.md) for what that means in practic
 
 ## Status
 
-**Last full ANSI conformance run (2026-09-01): 21907/21908 tests passing
-(99.995%)** — one known failing test (`TYPEP.19`) and one open anomaly (two
-tests that stopped registering with the harness between runs; see
-[CLAUDE.md](CLAUDE.md) for detail). Every ANSI test-suite directory except
-`types-and-classes` is at 100%.
-
 The interpreter includes a full reader and printer (readtables, `#`-dispatch,
 pretty-printing, `FORMAT`), the evaluator and special forms, a macro system
 where every CLHS-specified macro is a real macro (`MACRO-FUNCTION` and
