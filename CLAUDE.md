@@ -115,9 +115,11 @@ happens to miss is still a defect (plan.md §5, and the final gate in §7).
   ~90s+ before it prints a result — don't assume a run has hung just because
   nothing has printed yet; give it at least 2 minutes. The full ANSI suite via
   `run_all_tests.py` takes **on the order of 2 hours** end to end — the
-  latest full run (2026-09-01) measured ~124 minutes; 2026-08-31 (the first
-  run measured at CPython's bare default recursion limit, no
-  stack-raising wrapper — see plan.md §1) took 172 minutes. Earlier figures
+  latest full run (2026-09-02, the zero-failure run above) measured ~124.8
+  minutes (`3744633/500` seconds of real time); 2026-09-01 measured ~124
+  minutes; 2026-08-31 (the first run measured at CPython's bare default
+  recursion limit, no stack-raising wrapper — see plan.md §1) took 172
+  minutes. Earlier figures
   (~86 min at 08-18, 113 min at 08-16) predate that change and are not
   comparable to it. The number has moved in both directions for real
   reasons — up when a LOOP fix made a test actually call the function under
