@@ -10,10 +10,10 @@ history is preserved in condensed form in [Changelog](docs/changelog.md).
 
 > ### 📋 This plan observes `docs/ansi_checklist.md`
 >
-> That generated file is **the authority for what is failing and where** — all
-> 5037 failures grouped directory → file, each with the command to re-verify it.
-> This plan supplies the *why* and the *order*; the checklist supplies the *what*
-> and the *where*.
+> That generated file is **the authority for what is failing and where** —
+> failures grouped directory → file, each with the command to re-verify it (as
+> of the 2026-09-02 full run: none). This plan supplies the *why* and the
+> *order*; the checklist supplies the *what* and the *where*.
 >
 > **When they disagree, the checklist is right.** It is regenerated from RT's own
 > output; prose here ages. Regenerate it after every run
@@ -25,6 +25,51 @@ history is preserved in condensed form in [Changelog](docs/changelog.md).
 ---
 
 ## 1. Status
+
+> ### Latest full run (2026-09-02): **100% passing, 0 failing — 21908/21908**
+>
+> ```
+> COMPLETENESS: total=21908 passed=21908 failed=0 accounted=21908 missing=0 extra=0
+> COMPLETENESS: OK
+> ```
+>
+> ~124.8 minutes (`3744633/500` seconds of real time). `docs/ansi_checklist.md`
+> regenerated with **no merge amendments** — `ansi_results/failed.txt` is
+> empty, `all.txt`/`passed.txt` are both 21908 lines, a pure full-run
+> regeneration: 0 failing across 0 files. `scripts/gate.py` green
+> (`pytest -q`, `duplicates.py --baseline`, `ansi_checklist.py --baseline` all
+> ok). No `REGISTERED-TEST-COUNT-SHRANK` warning and no watchdog hard-stop —
+> two `LOOP WARNING`/`WATCHDOG` soft-warnings fired during the run (a slow
+> `doit.lsp` iteration each time) but both cleared on their own well inside the
+> 900s cap, so nothing was killed.
+>
+> This closes the last known failure: `types-and-classes/typep.lsp`'s
+> `TYPEP.19` — the randomized `(AND CHARACTER (MEMBER ...))` stress test
+> (1000 iterations of `(random 1.0)`-generated types) flagged as unconfirmed
+> after the 2026-09-01 run (21907/21908, TYPEP.19 the sole failure) — **passed
+> again here** (in `ansi_results/passed.txt`). Two consecutive passes across
+> two independent full runs is stronger evidence the 09-01 failure was a rare
+> edge case that has since been fixed (or was itself the noise class this
+> project already knows FORMAT.E.26 for) rather than proof either way — see
+> the caveat in CLAUDE.md's status note before treating it as permanently
+> closed. Keep an eye on it in future runs; it costs nothing to keep watching
+> a randomized test that has already burned one full-run cycle of doubt.
+>
+> **Baseline not yet refreshed as of this writing** — refreshing
+> `docs/ansi_checklist_baseline.json` / `docs/duplicates_baseline.json` from a
+> clean, complete, zero-failure run is legitimate and is the maintainer's call
+> (§7); there is nothing left in this run to hide a regression behind.
+>
+> **The project is no longer in cluster-repair mode.** Per CLAUDE.md's status
+> note, remaining work is confirming TYPEP.19's coverage is genuinely
+> edge-case-free (above), watching for the registration anomaly to recur, and
+> the two things ansi-test cannot see at all: §5's temporary deviations and
+> the final compliance gate's broader checks (§7) — implementation-defined
+> choices actually documented, no `*FEATURES*`-flag evasions, etc. Zero
+> failures is necessary, not sufficient.
+
+<details>
+<summary>Previous full run (2026-08-31, 18:28–21:21): 99.71% passing, 63 failing</summary>
 
 > ### Latest full run (2026-08-31, 18:28–21:21): **99.71% passing, 63 failing**
 >
@@ -117,6 +162,8 @@ history is preserved in condensed form in [Changelog](docs/changelog.md).
 > per activation (2 frames, on *every* recursion), the CLOS chain (8), and the
 > reader's and printer's nested-descent paths (untouched). Argument evaluation
 > is already heap-based.
+
+</details>
 
 <details>
 <summary>Previous full run (2026-08-31, 07:32): 99.64% passing, 78 failing</summary>

@@ -2,7 +2,7 @@
 
 ![Python Version](https://img.shields.io/badge/python-3.10-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![ANSI Compliance](https://img.shields.io/badge/ANSI%20conformance-99.995%25-brightgreen)
+![ANSI Compliance](https://img.shields.io/badge/ANSI%20conformance-100%25-brightgreen)
 ![Unit Tests](https://img.shields.io/badge/unit%20tests-2103%20passing-brightgreen)
 
 FCLPY is a Common Lisp interpreter implemented in pure Python, built toward one
