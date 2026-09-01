@@ -161,7 +161,7 @@ expected-failure exemptions; one shared implementation per operator).
 ## License
 
 MIT License — see [LICENSE.txt](LICENSE.txt) for details.
-Copyright (c) 2019-2025 Ralph Ritoch.
+Copyright (c) 2019-2026 Ralph Ritoch.
 
 ## Compatibility
 
