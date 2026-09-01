@@ -1,39 +1,40 @@
-# FCLPY - A Common Lisp Interpreter in Python
+# FCLPY — A Common Lisp Interpreter in Python
 
-![Python Version](https://img.shields.io/badge/python-3.7%2B-blue)
+![Python Version](https://img.shields.io/badge/python-3.10-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Tests](https://img.shields.io/badge/tests-54%2F54%20passing-brightgreen)
+![ANSI Compliance](https://img.shields.io/badge/ANSI%20conformance-99.995%25-brightgreen)
+![Unit Tests](https://img.shields.io/badge/unit%20tests-2103%20passing-brightgreen)
 
-FCLPY is a Common Lisp interpreter implemented in Python. It provides a complete Lisp environment with an interactive REPL, file evaluation, and a clean API for embedding Lisp functionality into Python applications.
+FCLPY is a Common Lisp interpreter implemented in pure Python, built toward one
+goal: **full ANSI Common Lisp compliance**. It is measured against the real
+ANSI test suite ([`ansi-test`](https://gitlab.common-lisp.net/ansi-test/ansi-test)),
+not a curated subset, and the project treats "the suite passes" as necessary
+but not sufficient — see [CLAUDE.md](CLAUDE.md) for what that means in practice.
 
-## Features
+## Status
 
-### 🚀 **Complete Lisp Implementation**
-- **Arithmetic Operations**: `+`, `-`, `*`, `/`, `=`, `<`, `>`, `<=`, `>=`
-- **List Operations**: `car`, `cdr`, `cons`, `list`, `append`, `reverse`
-- **Logic Functions**: `not`, `and`, `or`
-- **Predicates**: `atom`, `null`, `eq`, `equal`, `symbolp`, `numberp`, `stringp`
-- **Special Forms**: `quote`, `if`, `setq`, `let`, `defun`, `lambda`
+The interpreter includes a full reader and printer (readtables, `#`-dispatch,
+pretty-printing, `FORMAT`), the evaluator and special forms, a macro system
+where every CLHS-specified macro is a real macro (`MACRO-FUNCTION` and
+`MACROEXPAND` work on all of them), `SETF`/`PSETF` and the generalized-place
+protocol, `LOOP`, the condition/restart system (`HANDLER-BIND`,
+`HANDLER-CASE`, `RESTART-CASE`, ...), CLOS (`DEFCLASS`, `DEFGENERIC`,
+`DEFMETHOD`, method combination), hash tables, the sequence and array
+protocols, packages, pathnames, and streams.
 
-### 💻 **Interactive REPL**
-- Command-line interface similar to CLISP
-- Interactive Read-Eval-Print Loop
-- Built-in help system and debugging commands
-- Support for multi-line expressions
-
-### 📁 **File Evaluation**
-- Load and evaluate Lisp files
-- Silent loading (standard Lisp behavior)
-- Verbose mode for debugging
-- Proper error handling and reporting
-
-### 🔧 **Python Integration**
-- Clean API for embedding in Python projects
-- Programmatic REPL control
-- Function evaluation from Python
-- Environment management
+- **[`docs/ansi_checklist.md`](docs/ansi_checklist.md)** — generated, authoritative list of what's still failing and where.
+- **[`plan.md`](plan.md)** — current status and the mechanism-by-mechanism plan.
+- **[`docs/changelog.md`](docs/changelog.md)** — history of how compliance got here.
+- **[`CLAUDE.md`](CLAUDE.md)** — architecture map and the development loop, for anyone (human or agent) working on the implementation.
 
 ## Installation
+
+### Using Pipenv (recommended for development)
+```bash
+git clone https://github.com/fclpy/fclpy.git
+cd fclpy
+pipenv install --dev
+```
 
 ### From Source
 ```bash
@@ -42,306 +43,128 @@ cd fclpy
 pip install -e .
 ```
 
-### Using Pipenv (Development)
-```bash
-git clone https://github.com/fclpy/fclpy.git
-cd fclpy
-pipenv install
-pipenv shell
-```
+Requires Python 3.10. The interpreter itself has no external dependencies.
 
 ## Quick Start
 
-### Command Line Usage
-
-#### Start Interactive REPL
+### Interactive REPL
 ```bash
-fclpy
+pipenv run python run.py
 ```
-
-#### Run a Lisp File
-```bash
-fclpy script.lisp
-```
-
-#### Run with Verbose Output
-```bash
-fclpy -v script.lisp
-```
-
-#### Run Tests
-```bash
-fclpy --test
-```
-
-### Example Lisp Session
 ```lisp
 FCLPY> (+ 1 2 3)
 6
-FCLPY> (defun square (x) (* x x))
-SQUARE
-FCLPY> (square 5)
-25
-FCLPY> (car '(a b c))
-A
-FCLPY> (cons 'first '(second third))
-(FIRST SECOND THIRD)
+FCLPY> (loop for i from 1 to 5 collect (* i i))
+(1 4 9 16 25)
+FCLPY> (format nil "~{~A~^, ~}" '(1 2 3))
+1, 2, 3
+FCLPY> (defclass point () ((x :initarg :x :accessor point-x)
+                            (y :initarg :y :accessor point-y)))
+#<STANDARD-CLASS POINT>
+FCLPY> (point-x (make-instance 'point :x 3 :y 4))
+3
 ```
 
-## Python API
+### Run a Lisp File
+```bash
+pipenv run python run.py script.lisp
+```
 
-### Basic Usage
+### Command-Line Options
+```
+run.py [options] [files...]
+
+  -i, --interactive   Enter REPL after processing files
+  -q, --quiet         Suppress startup messages
+  -v, --verbose       Verbose output
+  -t, --timing        Show timing information
+  -E ENCODING         File encoding (default: utf-8)
+  --version           Show version number
+```
+`-norc` and `-ansi` are accepted for `clisp` compatibility but are currently
+no-ops.
+
+If the package is installed (`pip install -e .`), the same interface is also
+available as the `fclpy` console script.
+
+### Python API
 ```python
 from fclpy import runtime, lispenv
 
-# Initialize Lisp environment
-lispenv.setup_standard_environment()
-
-# Start interactive REPL
-runtime.repl()
-```
-
-### Load and Evaluate Files
-```python
-from fclpy import runtime, lispenv
-
-# Set up environment
 lispenv.setup_standard_environment()
 env = lispenv.current_environment
 
-# Load a Lisp file
-success = runtime.load_and_evaluate_file("my_script.lisp", env)
-```
-
-### Custom REPL
-```python
-from fclpy.runtime import FclpyREPL
-
-# Create custom REPL
-repl = FclpyREPL(quiet=True, verbose=False)
-repl.run()
-```
-
-## Language Support
-
-### Data Types
-- **Numbers**: Integers and floating-point
-- **Strings**: Double-quoted strings with escape sequences
-- **Symbols**: Case-insensitive identifiers
-- **Lists**: Linked lists using cons cells
-- **Booleans**: `T` (true) and `NIL` (false/empty list)
-
-### Special Forms
-```lisp
-;; Variable assignment
-(setq x 42)
-
-;; Conditional expressions
-(if (> x 0) 'positive 'negative)
-
-;; Function definition
-(defun factorial (n)
-  (if (<= n 1)
-      1
-      (* n (factorial (- n 1)))))
-
-;; Local bindings
-(let ((x 10) (y 20))
-  (+ x y))
-
-;; Lambda expressions
-((lambda (x) (* x x)) 5)
-```
-
-### Built-in Functions
-```lisp
-;; Arithmetic
-(+ 1 2 3 4)         ; => 10
-(* 2 3 4)           ; => 24
-(- 10 3)            ; => 7
-(/ 15 3)            ; => 5
-
-;; Comparisons
-(= 5 5)             ; => T
-(< 3 7)             ; => T
-(<= 5 5)            ; => T
-
-;; List operations
-(cons 1 '(2 3))     ; => (1 2 3)
-(car '(a b c))      ; => A
-(cdr '(a b c))      ; => (B C)
-(list 1 2 3)        ; => (1 2 3)
-
-;; Predicates
-(atom 'x)           ; => T
-(null '())          ; => T
-(symbolp 'hello)    ; => T
-(numberp 42)        ; => T
-```
-
-## Command Line Options
-
-FCLPY supports many CLISP-compatible command-line options:
-
-```bash
-fclpy [options] [files...]
-
-Options:
-  -h, --help              Show help message
-  -i, --interactive       Enter REPL after processing files
-  -q, --quiet            Suppress startup messages
-  -v, --verbose          Verbose output
-  --test                 Run comprehensive tests
-  --version              Show version number
-  -E ENCODING            File encoding (default: utf-8)
-  -norc                  Do not load init file
-  -ansi                  ANSI Common Lisp mode
-```
-
-## Examples
-
-### Example 1: Simple Calculator
-```lisp
-;; calculator.lisp
-(defun add (a b) (+ a b))
-(defun multiply (a b) (* a b))
-(defun square (x) (* x x))
-
-(square (add 3 4))  ; => 49
-```
-
-### Example 2: List Processing
-```lisp
-;; lists.lisp
-(defun length (lst)
-  (if (null lst)
-      0
-      (+ 1 (length (cdr lst)))))
-
-(defun reverse-list (lst)
-  (if (null lst)
-      '()
-      (append (reverse-list (cdr lst)) (list (car lst)))))
-
-(length '(a b c d))        ; => 4
-(reverse-list '(1 2 3))    ; => (3 2 1)
-```
-
-### Example 3: Recursive Functions
-```lisp
-;; recursion.lisp
-(defun factorial (n)
-  (if (<= n 1)
-      1
-      (* n (factorial (- n 1)))))
-
-(defun fibonacci (n)
-  (if (<= n 2)
-      1
-      (+ (fibonacci (- n 1)) (fibonacci (- n 2)))))
-
-(factorial 5)    ; => 120
-(fibonacci 7)    ; => 13
+runtime.load_and_evaluate_file("my_script.lisp", env)
+runtime.repl()
 ```
 
 ## Testing
 
-FCLPY includes a comprehensive test suite with 54 tests covering all major functionality:
+FCLPY has two separate test layers:
 
+**Unit tests** (`tests/`) — fast regression coverage for individual
+functions, forms, and internal mechanisms:
 ```bash
-# Run all tests
-fclpy --test
-
-# Run tests with verbose output
-fclpy -v --test
+pipenv run pytest -q
 ```
 
-Test categories:
-- Function name mapping
-- Arithmetic operations
-- Basic evaluation
-- Special forms
-- Environment management
-- Metacircular readiness
+**ANSI conformance** — the actual compliance measurement, run against the
+[`ansi-test`](https://gitlab.common-lisp.net/ansi-test/ansi-test) suite
+checked out as a sibling directory (`../ansi-test`). A full run takes on the
+order of 2 hours, so day-to-day development uses a targeted runner instead:
+```bash
+# One directory or file, in seconds:
+pipenv run python scripts/run_ansi.py packages
+pipenv run python scripts/run_ansi.py numbers/deposit-field.lsp
 
-## Development
+# The full suite (~2 hours) — moves the official scoreboard:
+pipenv run python run_all_tests.py
+```
+See [CLAUDE.md](CLAUDE.md)'s "development loop" for how these fit together.
 
-### Project Structure
+## Project Structure
+
 ```
 fclpy/
-├── fclpy/                 # Core interpreter package
-│   ├── __init__.py       # Package initialization
-│   ├── runtime.py        # Main runtime and REPL
-│   ├── lispenv.py        # Environment management
-│   ├── lispfunc.py       # Function implementations
-│   ├── lispreader.py     # S-expression reader
-│   └── lisptype.py       # Data type definitions
-├── run.py                # CLI entry point
-├── test_comprehensive.py # Test suite
-├── setup.py              # Package setup
-└── README.md             # This file
+├── fclpy/                  # Core interpreter package
+│   ├── lispfunc/           # Evaluator, special forms, registry, all builtins
+│   ├── classes.py          # CLOS object model
+│   ├── typespec.py         # Type specifiers / SUBTYPEP / TYPEP lattice
+│   ├── readtable.py        # Reader macro characters, #-dispatch, syntax types
+│   ├── lispreader.py       # Token → form reader
+│   ├── tokenizer.py        # Character-level tokenizer
+│   ├── lisptype.py         # Core data types (symbols, cons, conditions, ...)
+│   ├── lispenv.py          # Standard environment bootstrap
+│   └── runtime.py          # REPL and file evaluation
+├── tests/                  # Unit test suite (pytest)
+├── scripts/                # Development tooling (run_ansi.py, gate.py, ...)
+├── docs/                   # Generated checklist, changelog, reference docs
+├── run.py                  # CLI entry point
+├── run_all_tests.py        # Full ANSI suite runner
+├── plan.md                 # Compliance plan and status
+└── CLAUDE.md               # Architecture map and contributor guide
 ```
 
-### Contributing
+## Contributing
+
+Read [CLAUDE.md](CLAUDE.md) first — it documents the architecture, the
+development loop (how a fix gets made and verified without a 2-hour full
+run), and the project's standing rules (fix the mechanism, not the test; no
+expected-failure exemptions; one shared implementation per operator).
 
 1. Fork the repository
 2. Create a feature branch
-3. Make your changes
-4. Run the test suite: `fclpy --test`
+3. Make your change and verify it per CLAUDE.md's development loop
+4. `pipenv run python scripts/gate.py` — the cheap regression gate
 5. Submit a pull request
-
-### Running Tests
-```bash
-# Run comprehensive test suite
-python run.py --test
-
-# Run with verbose output
-python run.py -v --test
-```
 
 ## License
 
-MIT License - see LICENSE file for details.
+MIT License — see [LICENSE.txt](LICENSE.txt) for details.
+Copyright (c) 2019-2025 Ralph Ritoch.
 
 ## Compatibility
 
-- **Python**: 3.7+
+- **Python**: 3.10
 - **Operating Systems**: Windows, macOS, Linux
 - **Dependencies**: None (pure Python implementation)
-
-## Roadmap
-
-### Current Status ✅
-- [x] Complete Lisp interpreter
-- [x] Interactive REPL
-- [x] File evaluation
-- [x] Comprehensive test suite
-- [x] Python API
-- [x] CLI interface
-
-### Future Enhancements 🚧
-- [ ] Macro system
-- [ ] Package system
-- [ ] Error handling improvements
-- [ ] Performance optimizations
-- [ ] Additional built-in functions
-- [ ] Documentation improvements
-
-## Examples and Learning
-
-FCLPY is perfect for:
-- Learning Lisp programming
-- Teaching interpreter implementation
-- Embedding Lisp in Python applications
-- Rapid prototyping of symbolic computation
-- Educational projects
-
-## Support
-
-- **Issues**: [GitHub Issues](https://github.com/fclpy/fclpy/issues)
-- **Documentation**: [Wiki](https://github.com/fclpy/fclpy/wiki)
-- **Source**: [GitHub Repository](https://github.com/fclpy/fclpy)
-
----
-
-**FCLPY** - Bringing the power of Lisp to Python! 🚀

@@ -1,0 +1,1124 @@
+"""Package operations and macro expansion."""
+
+import fclpy.lisptype as lisptype
+import fclpy.state as state
+from fclpy.lispfunc import registry as _registry
+import logging
+
+logger = logging.getLogger(__name__)
+
+def _parse_keyword_args(args):
+    """Parse Lisp-style keyword arguments into Python dict.
+    
+    Converts (value1 :key1 val1 :key2 val2 ...) into
+    {'key1': val1, 'key2': val2, ...}
+    """
+    result = {}
+    positional = []
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        # Check if this is a keyword argument
+        is_keyword = False
+        key = None
+        if isinstance(arg, lisptype.lispKeyword):
+            is_keyword = True
+            key = arg.name.lower()
+        elif isinstance(arg, lisptype.LispSymbol) and arg.name.startswith(':'):
+            is_keyword = True
+            key = arg.name[1:].lower()
+        
+        if is_keyword and key and i + 1 < len(args):
+            result[key] = args[i + 1]
+            i += 2
+        else:
+            positional.append(arg)
+            i += 1
+
+    return positional, result
+
+
+def _as_list(x):
+    """Normalize a Lisp designator-or-list argument into a Python list.
+
+    Many package operators (`USE-PACKAGE`, `EXPORT`, `SHADOW`, ...) accept
+    either a single designator or a list of them (CLHS "list of X or X").
+    This was previously a 4-line `isinstance` block copy-pasted at every call
+    site; a single shared helper means a shape one copy forgot (e.g. NIL
+    itself, which is also a `lispCons`-less empty list) cannot silently
+    diverge between operators.
+    """
+    if x is None or x is lisptype.NIL:
+        return []
+    if isinstance(x, lisptype.lispCons):
+        return list(x)
+    if isinstance(x, (list, tuple)):
+        return list(x)
+    return [x]
+
+
+def _lisp_list(items):
+    """Build a proper Lisp list (`lispCons` chain, NIL when empty).
+
+    Every package accessor that answers "a list of ..." (`PACKAGE-NICKNAMES`,
+    `PACKAGE-USE-LIST`, `PACKAGE-USED-BY-LIST`, `PACKAGE-SHADOWING-SYMBOLS`,
+    `LIST-ALL-PACKAGES`, ...) used to return a bare Python `list`. A Python
+    `list` is a *vector* in this implementation (plan.md Finding M), so
+    `(equal (package-nicknames p) nil)` compared an empty vector to NIL and
+    `(equal (package-use-list p) (list pkg))` compared a vector to a cons --
+    both structurally false regardless of the packages under test, which is
+    why nearly every assertion in make-package.lsp/defpackage.lsp failed.
+    """
+    result = lisptype.NIL
+    for item in reversed(list(items)):
+        result = lisptype.lispCons(item, result)
+    return result
+
+
+def _designator_to_string(x):
+    """Resolve a string designator to plain text (CLHS "string designator").
+
+    A string designator is a string, a symbol (its name), or a character
+    (a length-1 string) -- and the ANSI package tests also exercise every
+    specialized character-array shape (fill-pointered, adjustable, displaced)
+    as a package/nickname/symbol name. This is the one place that decides,
+    replacing the `isinstance(x, lispKeyword) ... elif LispSymbol ... else
+    str(x)` block that was previously copy-pasted in `MAKE-PACKAGE` and again
+    (differently) in `evaluation_core.py`'s `DEFPACKAGE` handling.
+    """
+    from .comparison import _string_characters
+    s = _string_characters(x)
+    if s is not None:
+        return s
+    if isinstance(x, (lisptype.lispKeyword, lisptype.LispSymbol)):
+        n = x.name
+        # A reader-produced |...|-escaped name keeps its pipes in `.name`
+        # (SYMBOL-NAME strips them for the same reason); without this an
+        # uninterned designator like `#:|TEST1|` produced "|TEST1|" instead
+        # of "TEST1" and every comparison against the plain string failed.
+        if isinstance(n, str) and n.startswith('|') and n.endswith('|') and len(n) >= 2:
+            n = n[1:-1]
+        return n
+    if isinstance(x, lisptype.Character):
+        return x.char
+    from . import arrays as _arrays
+    if _arrays.is_array(x) and _arrays.array_rank_of(x) == 1:
+        chars = []
+        for e in _arrays.array_elements(x):
+            if isinstance(e, lisptype.Character):
+                chars.append(e.char)
+            elif isinstance(e, str) and len(e) == 1:
+                chars.append(e)
+            else:
+                return str(x)
+        return ''.join(chars)
+    return str(x)
+
+
+def coerce_to_package(designator, default=None):
+    """Resolve a package designator to a Package (CLHS 11.1.1.1).
+
+    A designator is a package, a string, a symbol, or a character; NIL (or an
+    omitted argument) means `default`, which itself defaults to the value of
+    `*PACKAGE*`. An unknown name is a PACKAGE-ERROR, not None: returning None
+    made every caller invent its own "and if it wasn't found" branch, and the
+    ones that swallowed it (`except Exception: pkg = None`) turned a misspelled
+    package name into an empty iteration instead of an error.
+    """
+    if isinstance(designator, lisptype.Package):
+        return designator
+    if designator is None or designator is lisptype.NIL:
+        if default is not None:
+            return coerce_to_package(default)
+        return state.current_package_value()
+    name = _designator_to_string(designator)
+    pkg = lisptype.find_package(name)
+    if pkg is None:
+        raise lisptype.LispError(f'Package not found: {name}')
+    return pkg
+
+
+def all_packages():
+    """Every package that currently exists, as a Python list -- the one enumerator.
+
+    `state.packages` is *not* the package registry: COMMON-LISP,
+    COMMON-LISP-USER and KEYWORD are module-level constants in
+    `lisptype_extended`, and `find_package` special-cases their names before it
+    consults `state.packages` at all. So a caller that enumerated
+    `state.packages` saw only the packages a program had created -- which is
+    why `LIST-ALL-PACKAGES` omitted the three packages every program uses, and
+    why `(apropos-list "CAR")` with no package argument could not find CL:CAR
+    while `(apropos-list "CAR" "CL")` found it.
+
+    One enumerator, so a *lookup* and an *enumeration* cannot disagree about
+    which packages exist. Deduplicated by identity, since `state.packages` is
+    keyed by name *and* nickname and holds the same object under several keys.
+    """
+    found = {}
+    for pkg in (lisptype.COMMON_LISP_PACKAGE,
+                lisptype.COMMON_LISP_USER_PACKAGE,
+                lisptype.KEYWORD_PACKAGE):
+        found[id(pkg)] = pkg
+    for pkg in list((getattr(state, 'packages', None) or {}).values()):
+        if isinstance(pkg, lisptype.Package):
+            found[id(pkg)] = pkg
+    return list(found.values())
+
+
+def package_symbols(package, kind):
+    """The symbols of `package` that `kind` names, as a Python list.
+
+    `kind` is one of 'symbols' (every symbol *accessible* in the package:
+    its own, plus the external symbols of the packages it uses),
+    'present-symbols' (its own, whether exported or not) or
+    'external-symbols' (the ones it exports) -- the three sets CLHS 6.1.2.1.7
+    gives LOOP's for-as-package clause and DO-SYMBOLS / DO-EXTERNAL-SYMBOLS.
+
+    One enumerator for all of them, because the interesting part is a detail
+    each open-coded copy got differently: `use_packages` holds package *names*
+    as well as `Package` objects (see `Package.intern`), so a copy that reads
+    `used.external_symbols` off a string gets the empty set and silently drops
+    every inherited symbol. `external_symbols` is likewise a set of names in
+    some packages and of symbol objects in others.
+    """
+    pkg = coerce_to_package(package)
+
+    if kind == 'external-symbols':
+        return _externals_of(pkg)
+
+    present = list(pkg.symbols.values())
+    if kind == 'present-symbols':
+        return present
+    if kind != 'symbols':
+        raise ValueError(f'unknown package symbol set: {kind!r}')
+
+    # Accessible = present + inherited externals, without duplicates. Identity
+    # is the right key: an inherited symbol *is* the used package's symbol.
+    # A **present symbol shadows every inherited symbol of the same name**
+    # (CLHS 11.1.2.1 -- that is what SHADOW and SHADOWING-IMPORT do), so the
+    # inherited candidates are filtered *by name* against `pkg.symbols` and
+    # not merely deduplicated by identity: `do-symbols.4`/`.5`'s DS3 has both
+    # DS1:A shadowing-imported and DS2:A inherited-external, and only DS1:A
+    # is accessible.
+    seen = {id(s) for s in present}
+    present_names = set(pkg.symbols.keys())
+    accessible = list(present)
+    for used in list(getattr(pkg, 'use_list', ()) or ()):
+        used_pkg = lisptype.find_package(used) if isinstance(used, str) else used
+        if used_pkg is None:
+            continue
+        for sym in _externals_of(used_pkg):
+            name = getattr(sym, 'name', None)
+            if isinstance(name, str) and name in present_names:
+                continue
+            if id(sym) not in seen:
+                seen.add(id(sym))
+                accessible.append(sym)
+    return accessible
+
+
+def _externals_of(p):
+    """The symbol objects `p` exports (shared by the two enumerators)."""
+    result = []
+    for item in list(getattr(p, 'external_symbols', ()) or ()):
+        sym = item if isinstance(item, lisptype.LispSymbol) else p.symbols.get(item)
+        if sym is not None:
+            result.append(sym)
+    return result
+
+
+def inherited_symbols(package):
+    """The symbols `package` inherits from the packages it uses.
+
+    Each is reported with its *home* package, which is what
+    WITH-PACKAGE-ITERATOR's third value must be for an :INHERITED symbol -- and
+    what `with-package-iterator.12`-`.14` check via FIND-SYMBOL on that home.
+    Duplicated by identity: a symbol external in two used packages is visited
+    once.
+
+    A name with a *present* symbol in `package` is skipped: a present symbol
+    shadows the inherited one (CLHS 11.1.2.1), so the inherited symbol of that
+    name is not accessible at all -- `find-symbol` answers the present symbol,
+    and reporting the inherited one would contradict it.
+    """
+    pkg = coerce_to_package(package)
+    seen = set()
+    present_names = set(pkg.symbols.keys())
+    result = []
+    for used in list(getattr(pkg, 'use_list', ()) or ()):
+        used_pkg = lisptype.find_package(used) if isinstance(used, str) else used
+        if used_pkg is None:
+            continue
+        for sym in _externals_of(used_pkg):
+            name = getattr(sym, 'name', None)
+            if isinstance(name, str) and name in present_names:
+                continue
+            if id(sym) not in seen:
+                seen.add(id(sym))
+                result.append((sym, used_pkg))
+    return result
+
+
+# ---------------------------------------------------------------------------
+# WITH-PACKAGE-ITERATOR (CLHS 11.2)
+# ---------------------------------------------------------------------------
+
+class _PackageIterator:
+    """The state behind one WITH-PACKAGE-ITERATOR expansion.
+
+    The symbol list is a *snapshot* taken when the iterator is made: CLHS
+    11.2 leaves the effect of package mutation during iteration unspecified,
+    and a snapshot is what MAPHASH's and WITH-HASH-TABLE-ITERATOR's
+    traversals already are for the same reason.
+    """
+
+    __slots__ = ('_symbols', '_index')
+
+    def __init__(self, packages, symbol_types):
+        seen = set()
+        symbols = []
+        for pkg in packages:
+            for kind in symbol_types:
+                if kind == 'INHERITED':
+                    for sym, _home in inherited_symbols(pkg):
+                        if id(sym) not in seen:
+                            seen.add(id(sym))
+                            # The third value is the package *in which* the
+                            # symbol was found (CLHS 11.2 "the package from
+                            # which the symbol was obtained"), and the aux
+                            # harness pins that reading: it checks
+                            # `(find-symbol name pkg)` against the reported
+                            # access type, which only agrees when an
+                            # :INHERITED symbol is reported against the
+                            # package being searched -- there FIND-SYMBOL
+                            # answers :INHERITED; against the home it
+                            # answers :EXTERNAL.
+                            symbols.append((sym, kind, pkg))
+                elif kind == 'EXTERNAL':
+                    for sym in _externals_of(pkg):
+                        if id(sym) not in seen:
+                            seen.add(id(sym))
+                            symbols.append((sym, kind, pkg))
+                else:  # INTERNAL: present but NOT exported (CLHS 11.2)
+                    # external_symbols might contain symbol names (strings) or symbol objects
+                    # Normalize to a set of names for comparison
+                    exported_set = set()
+                    for item in (getattr(pkg, 'external_symbols', ()) or ()):
+                        if isinstance(item, str):
+                            exported_set.add(item)
+                        elif hasattr(item, 'name'):
+                            exported_set.add(item.name)
+                        else:
+                            exported_set.add(str(item))
+
+                    for sym in package_symbols(pkg, 'present-symbols'):
+                        name = sym.name if hasattr(sym, 'name') else str(sym)
+                        if name in exported_set:
+                            continue
+                        if id(sym) not in seen:
+                            seen.add(id(sym))
+                            symbols.append((sym, kind, pkg))
+        self._symbols = symbols
+        self._index = 0
+
+    def next(self):
+        if self._index >= len(self._symbols):
+            return lisptype.MultipleValues(lisptype.NIL)
+        sym, access, pkg = self._symbols[self._index]
+        self._index += 1
+        return lisptype.MultipleValues(
+            lisptype.T, sym, lisptype.intern_keyword(access), pkg)
+
+
+@_registry.cl_function('%MAKE-PACKAGE-ITERATOR')
+def make_package_iterator(packages, symbol_types):
+    """The iterator WITH-PACKAGE-ITERATOR binds.
+
+    ``%``-prefixed because it is the macro's runtime rather than an ANSI
+    operator. `packages` is a Lisp list of package designators; each is
+    resolved through `coerce_to_package` (CLHS 11.1.1.1), so an unknown name
+    is a PACKAGE-ERROR rather than a silently empty iteration.
+    """
+    resolved = [coerce_to_package(p) for p in _as_list(packages)]
+    kinds = []
+    current = symbol_types
+    while isinstance(current, lisptype.lispCons):
+        item = current.car
+        if isinstance(item, (lisptype.lispKeyword, lisptype.LispSymbol)):
+            kinds.append(str(item.name).upper())
+        else:
+            raise lisptype.LispTypeError(
+                f"WITH-PACKAGE-ITERATOR: {item!r} is not a symbol type",
+                expected_type='SYMBOL', actual_value=item)
+        current = current.cdr
+    # CLHS 11.2: symbol-types must name at least one of the three access
+    # kinds -- `(with-package-iterator (x pkg))` with none is a PROGRAM-ERROR
+    # (`with-package-iterator.11`), not a silently empty iteration.
+    # `:internal` is tolerated beyond the standard three because the suite's
+    # own harness (`package-aux.lsp`'s `with-package-iterator-internal`) asks
+    # for present symbols under that spelling, and every implementation
+    # answers it.
+    if not kinds:
+        raise lisptype.LispProgramError(
+            "WITH-PACKAGE-ITERATOR: at least one symbol type is required")
+    for kind in kinds:
+        if kind not in ('SYMBOL', 'EXTERNAL', 'INHERITED', 'INTERNAL'):
+            raise lisptype.LispProgramError(
+                f"WITH-PACKAGE-ITERATOR: {kind!r} is not one of "
+                f":SYMBOL, :EXTERNAL, :INHERITED")
+    return _PackageIterator(resolved, kinds)
+
+
+@_registry.cl_function('%PACKAGE-ITERATOR-NEXT')
+def package_iterator_next(iterator):
+    """One step of the iterator: ``(values more-p symbol access-type package)``."""
+    if not isinstance(iterator, _PackageIterator):
+        raise lisptype.LispTypeError(
+            f"WITH-PACKAGE-ITERATOR: {iterator!r} is not an iterator",
+            expected_type='PACKAGE-ITERATOR', actual_value=iterator)
+    return iterator.next()
+
+
+# --- Package operations (advanced) ---
+_MAKE_PACKAGE_KEYS = {'nicknames', 'use'}
+
+
+@_registry.cl_function('MAKE-PACKAGE')
+def make_package(*args):
+    """Create a new package (CLHS `MAKE-PACKAGE`).
+
+    (make-package package-name &key nicknames use)
+
+    Per CLHS 11.2, if a package with the same name (or any of the
+    requested nicknames) already exists, MAKE-PACKAGE signals a
+    *correctable* PACKAGE-ERROR whose `:package` slot is the existing
+    package, with an implicit CONTINUE restart that returns the existing
+    package unchanged if invoked. `make-package.error.1`/`.2`/`.3`/`.4`
+    exercise exactly this with `handle-non-abort-restart`, which checks
+    for any non-`abort` restart on the signaled condition.
+
+    The previous implementation called `lisptype.make_package(name)`,
+    which silently returns the existing package for an already-taken
+    name; the test's `success` expected value is never reached and
+    MAKE-PACKAGE loses its only error path.
+    """
+    if not args:
+        raise lisptype.LispProgramError(
+            "MAKE-PACKAGE: wrong number of arguments (got 0, expected at least 1)")
+
+    name_arg = args[0]
+    remaining_args = args[1:] if len(args) > 1 else []
+    positional, kwargs = _parse_keyword_args(remaining_args)
+    if positional:
+        raise lisptype.LispProgramError(
+            f"MAKE-PACKAGE: malformed keyword arguments {positional!r}")
+    allow_other_keys = lisptype.is_truthy(kwargs.get('allow-other-keys', lisptype.NIL))
+    unknown = set(kwargs) - _MAKE_PACKAGE_KEYS - {'allow-other-keys'}
+    if unknown and not allow_other_keys:
+        raise lisptype.LispProgramError(
+            f"MAKE-PACKAGE: unrecognized keyword argument(s) {sorted(unknown)!r}")
+
+    name = _designator_to_string(name_arg)
+    nicknames = [_designator_to_string(n) for n in _as_list(kwargs.get('nicknames'))]
+    use_list = []
+    for item in _as_list(kwargs.get('use')):
+        use_list.append(item.name if isinstance(item, lisptype.Package) else _designator_to_string(item))
+
+    # CLHS 11.2 "package already exists" / "nickname already denotes an
+    # existing package": signal a *correctable* PACKAGE-ERROR (the
+    # standard's mechanism for letting the user delete the existing
+    # package or rename the new one) with an implicit CONTINUE restart
+    # bound to the condition. `handle-non-abort-restart` checks for any
+    # non-`abort` restart on the signaled condition, and CERROR's
+    # CONTINUE is exactly that.
+    existing = lisptype.find_package(name)
+    if existing is not None and not getattr(existing, '_deleted', False):
+        from .evaluation_conditions import _signal_cerror_object
+        condition = lisptype.PackageError(
+            package=existing,
+            message=f"MAKE-PACKAGE: a package named {name!r} already exists")
+        return _signal_cerror_object(
+            condition, continue_format="Delete existing package")
+    for nick in nicknames:
+        nick_existing = lisptype.find_package(nick)
+        if nick_existing is not None and not getattr(nick_existing, '_deleted', False):
+            from .evaluation_conditions import _signal_cerror_object
+            condition = lisptype.PackageError(
+                package=nick_existing,
+                message=f"MAKE-PACKAGE: a package named {nick!r} already exists as a nickname")
+            return _signal_cerror_object(
+                condition, continue_format="Delete existing package")
+
+    # Create the package
+    pkg = lisptype.make_package(name)
+
+    # Store nicknames if provided
+    if nicknames:
+        pkg.nick_names = nicknames  # Use nick_names to match Package class
+
+    # Add USE'd packages
+    for use_pkg_name in use_list:
+        use_pkg = lisptype.find_package(use_pkg_name)
+        if use_pkg and use_pkg not in pkg.use_packages:
+            pkg.use_packages.append(use_pkg)
+    
+    return pkg
+
+
+@_registry.cl_function('PACKAGE-NAME')
+def package_name(package):
+    """Get package name (CLHS 11.2).
+
+    Returns NIL if the package has been deleted.
+    Raises TYPE-ERROR if the argument is not a valid package designator.
+    """
+    # Check if it's a package object
+    if isinstance(package, lisptype.Package):
+        pkg = package
+    elif package is None or package is lisptype.NIL:
+        # NIL means current package
+        pkg = state.current_package_value()
+    else:
+        # Try to interpret as a string designator
+        try:
+            name_str = _designator_to_string(package)
+            pkg = lisptype.find_package(name_str)
+            if pkg is None:
+                raise lisptype.LispTypeError(
+                    f"PACKAGE-NAME: {package!r} is not a valid package designator",
+                    expected_type='PACKAGE', actual_value=package)
+        except (AttributeError, TypeError):
+            raise lisptype.LispTypeError(
+                f"PACKAGE-NAME: {package!r} is not a valid package designator",
+                expected_type='PACKAGE', actual_value=package)
+
+    # After DELETE-PACKAGE, the package is marked as deleted
+    if getattr(pkg, '_deleted', False):
+        return lisptype.NIL
+    return lisptype.LispString(pkg.name)
+
+
+@_registry.cl_function('PACKAGE-NICKNAMES')
+def package_nicknames(package):
+    """Get package nicknames (CLHS 11.2).
+
+    Raises TYPE-ERROR if the argument is not a valid package designator.
+    """
+    # Check if it's a package object
+    if isinstance(package, lisptype.Package):
+        pkg = package
+    elif package is None or package is lisptype.NIL:
+        # NIL means current package
+        pkg = state.current_package_value()
+    else:
+        # Try to interpret as a string designator
+        try:
+            name_str = _designator_to_string(package)
+            pkg = lisptype.find_package(name_str)
+            if pkg is None:
+                raise lisptype.LispTypeError(
+                    f"PACKAGE-NICKNAMES: {package!r} is not a valid package designator",
+                    expected_type='PACKAGE', actual_value=package)
+        except (AttributeError, TypeError):
+            raise lisptype.LispTypeError(
+                f"PACKAGE-NICKNAMES: {package!r} is not a valid package designator",
+                expected_type='PACKAGE', actual_value=package)
+
+    # Package class uses `nick_names`; accept either for compatibility
+    names = getattr(pkg, 'nick_names', None) or getattr(pkg, 'nicknames', [])
+    return _lisp_list(lisptype.LispString(n) for n in names)
+
+
+@_registry.cl_function('RENAME-PACKAGE')
+def rename_package(package, new_name, new_nicknames=None):
+    """Rename a package (CLHS 11.2).
+
+    Changes the package's name and nicknames in the global registry.
+    Returns the package object.
+    """
+    pkg = coerce_to_package(package)
+    new_name_str = _designator_to_string(new_name)
+
+    # Remove old entries from registry
+    old_name = pkg.name
+    if old_name in state.packages and state.packages[old_name] is pkg:
+        del state.packages[old_name]
+    for nick in getattr(pkg, 'nick_names', []):
+        if nick in state.packages and state.packages[nick] is pkg:
+            del state.packages[nick]
+
+    # Update package name
+    pkg.name = new_name_str
+
+    # Update nicknames
+    new_nicks = []
+    if new_nicknames is not None:
+        for nick_designator in _as_list(new_nicknames):
+            new_nicks.append(_designator_to_string(nick_designator))
+    pkg.nick_names = new_nicks
+
+    # Add new entries to registry
+    state.packages[new_name_str] = pkg
+    for nick in new_nicks:
+        state.packages[nick] = pkg
+
+    return pkg
+
+
+@_registry.cl_function('PACKAGE-USE-LIST')
+def package_use_list(package):
+    """Get packages this package uses."""
+    pkg = coerce_to_package(package)
+    return _lisp_list(pkg.use_list)
+
+
+@_registry.cl_function('PACKAGE-USED-BY-LIST')
+def package_used_by_list(package):
+    """Get packages that use this package."""
+    pkg = coerce_to_package(package)
+    used_by = []
+    for p in list({id(p): p for p in state.packages.values()}.values()):
+        if pkg in getattr(p, 'use_list', []):
+            used_by.append(p)
+    return _lisp_list(used_by)
+
+
+@_registry.cl_function('PACKAGE-SHADOWING-SYMBOLS')
+def package_shadowing_symbols(package):
+    """Get shadowing symbols in package."""
+    pkg = coerce_to_package(package)
+    syms = []
+    for name in getattr(pkg, 'shadowing_symbols', set()):
+        s = pkg.symbols.get(name)
+        if s is not None:
+            syms.append(s)
+    return _lisp_list(syms)
+
+
+@_registry.cl_function('PACKAGE-EXTERNAL-SYMBOLS')
+def package_external_symbols(package):
+    """Get external symbols in package.
+
+    Returns a list of symbols that are exported from the package.
+    """
+    pkg = coerce_to_package(package)
+    syms = []
+    external_names = getattr(pkg, 'external_symbols', set())
+    for name in external_names:
+        s = pkg.symbols.get(name)
+        if s is not None:
+            syms.append(s)
+    return _lisp_list(syms)
+
+
+@_registry.cl_function('PACKAGE-INTERNAL-SYMBOLS')
+def package_internal_symbols(package):
+    """Get internal (non-exported) symbols in package.
+
+    Returns a list of symbols that are in the package but not exported.
+    """
+    pkg = coerce_to_package(package)
+    syms = []
+    external_names = getattr(pkg, 'external_symbols', set())
+    for name, sym in pkg.symbols.items():
+        if name not in external_names:
+            syms.append(sym)
+    return _lisp_list(syms)
+
+
+@_registry.cl_function('LIST-ALL-PACKAGES')
+def list_all_packages():
+    """LIST-ALL-PACKAGES (CLHS 11.2) -- every package, through `all_packages`.
+
+    It used to read `state.packages` directly and so omitted COMMON-LISP,
+    COMMON-LISP-USER and KEYWORD; see `all_packages`.
+    """
+    return _lisp_list(all_packages())
+
+
+@_registry.cl_function('UNINTERN')
+def unintern(symbol, package=None):
+    """Remove symbol from package (CLHS 11.2).
+
+    If the symbol is present in the package (as either an internal,
+    external, or shadowing symbol), UNINTERN removes it and returns T.
+    If successful, the symbol's home package becomes NIL (unless it's
+    inherited from a used package, in which case the package is unchanged).
+    If the symbol is not found in the package, returns NIL.
+
+    Signals a PACKAGE-ERROR if uninterning the symbol would create a name
+    conflict: if the symbol exists in multiple used packages with external
+    visibility and no other shadowing symbol would resolve the conflict.
+    """
+    name = _designator_to_string(symbol)
+    pkg = coerce_to_package(package)
+    name = name.upper()
+    if name in pkg.symbols:
+        # Get the actual symbol object for updating its package
+        sym = pkg.symbols[name]
+
+        # Check for name conflicts (CLHS 11.2: "package consistency")
+        # When uninterning a shadowing symbol that shadows inherited symbols,
+        # check if there are multiple different symbols with the same name
+        # in the inheritance chain. If so, signal an error because removing
+        # the shadowing symbol would create ambiguity.
+        if name in getattr(pkg, 'shadowing_symbols', set()):
+            # Find all external symbols with this name in used packages
+            # Track by symbol identity to detect conflicts
+            # Note: We exclude the symbol we're uninterning (sym)
+            symbols_by_id = {}
+            seen_packages = set()
+            sym_id_to_exclude = id(sym)  # Don't count the symbol being uninterned
+
+            for used_pkg in getattr(pkg, 'use_packages', []):
+                used_pkg_obj = (
+                    lisptype.find_package(used_pkg)
+                    if isinstance(used_pkg, str)
+                    else used_pkg
+                )
+                if used_pkg_obj is None:
+                    continue
+
+                # Skip if we've already processed this package
+                # (in case use_packages has duplicates)
+                pkg_id = id(used_pkg_obj)
+                if pkg_id in seen_packages:
+                    continue
+                seen_packages.add(pkg_id)
+
+                # Check if this used package exports the symbol
+                if name in getattr(used_pkg_obj, 'external_symbols', set()):
+                    found_sym = used_pkg_obj.symbols.get(name)
+                    if found_sym is not None:
+                        found_sym_id = id(found_sym)
+                        # Skip the symbol we're uninterning itself
+                        if found_sym_id == sym_id_to_exclude:
+                            continue
+                        if found_sym_id not in symbols_by_id:
+                            symbols_by_id[found_sym_id] = found_sym
+
+            # If there are multiple different symbols, signal an error
+            # (but only if there's actual conflict - different symbols)
+            if len(symbols_by_id) > 1:
+                from .evaluation_conditions import signal_error_object
+                condition = lisptype.PackageError(
+                    message=f"Uninterning {name} from {pkg.name} would create "
+                    f"a name conflict (multiple symbols with same name in use list)")
+                return signal_error_object(condition)
+
+        del pkg.symbols[name]
+        pkg.external_symbols.discard(name)
+        pkg.shadowing_symbols.discard(name)
+        # Clear the symbol's home package only if its home IS this package
+        # (CLHS 11.1: "the symbol becomes uninterned"). If the symbol is
+        # inherited from a used package, its package attribute stays unchanged.
+        if isinstance(sym, lisptype.LispSymbol) and sym.package is pkg:
+            sym.package = None
+        return lisptype.T
+    return lisptype.NIL
+
+
+@_registry.cl_function('UNEXPORT')
+def unexport(symbols, package=None):
+    """UNEXPORT symbols from a package (CLHS 11.2).
+
+    Each symbol must be **accessible** in the package: one that is not is a
+    PACKAGE-ERROR carrying the package on its `package` slot
+    (`unexport.5` unexports from a fresh `:use nil` package). A symbol that
+    is present but not exported is left alone (`unexport.6`), and
+    unexporting an inherited symbol is a no-op -- it was never in
+    `external_symbols` to begin with.
+    """
+    pkg = coerce_to_package(package)
+    from .evaluation_conditions import signal_error_object
+    for s in _as_list(symbols):
+        if lisptype.is_symbol(s):
+            name = s.name
+            found, _status = pkg.find_symbol(name)
+            if found is None or found is not s:
+                condition = lisptype.PackageError(
+                    package=pkg,
+                    message=(f"UNEXPORT: the symbol {name} is not "
+                             f"accessible in package {pkg.name}"))
+                signal_error_object(condition)
+                return lisptype.NIL
+        else:
+            name = _designator_to_string(s)
+            found, _status = pkg.find_symbol(name)
+            if found is None:
+                condition = lisptype.PackageError(
+                    package=pkg,
+                    message=(f"UNEXPORT: no symbol named {name} is "
+                             f"accessible in package {pkg.name}"))
+                signal_error_object(condition)
+                return lisptype.NIL
+        pkg.external_symbols.discard(name.upper())
+        pkg.external_symbols.discard(name)
+    return lisptype.T
+
+
+@_registry.cl_function('SHADOWING-IMPORT')
+def shadowing_import(symbols, package=None):
+    """Shadowing-import symbols into a package (CLHS 11.3).
+
+    Unlike `SHADOW`, the arguments here are already the actual symbols to be
+    made present in `package` (typically fetched from another package with
+    `FIND-SYMBOL`) -- the given symbol object itself becomes accessible, it
+    is not copied or re-interned under a fresh identity, and it is marked as
+    a shadowing symbol so it takes precedence over anything `package` would
+    otherwise inherit through `USE-PACKAGE`.
+    """
+    pkg = coerce_to_package(package)
+    for sym in _as_list(symbols):
+        name = sym.name if hasattr(sym, 'name') else _designator_to_string(sym)
+        pkg.symbols[name] = sym
+        pkg.shadowing_symbols.add(name)
+    return lisptype.T
+
+
+@_registry.cl_function('SHADOW')
+def shadow(symbols, package=None):
+    """Create shadowing symbols in a package (CLHS 11.3).
+
+    Unlike `SHADOWING-IMPORT`, the arguments are string designators: if a
+    symbol of that name is already present (not merely inherited) in
+    `package`, it is simply marked as shadowing; otherwise a *new* symbol is
+    interned directly into `package`, deliberately not the one `package`
+    would inherit via its use-list, and then marked as shadowing.
+    """
+    pkg = coerce_to_package(package)
+    for designator in _as_list(symbols):
+        name = _designator_to_string(designator)
+        existing = pkg.symbols.get(name)
+        if existing is None:
+            existing = lisptype.LispSymbol(name, package=pkg)
+            pkg.symbols[name] = existing
+        pkg.shadowing_symbols.add(name)
+    return lisptype.T
+
+
+@_registry.cl_function('USE-PACKAGE')
+def use_package(packages, package=None):
+    """Install packages into use-list."""
+    target = coerce_to_package(package)
+    for p in _as_list(packages):
+        pkgobj = p if isinstance(p, lisptype.Package) else lisptype.find_package(_designator_to_string(p))
+        if pkgobj is None:
+            pkgobj = lisptype.make_package(_designator_to_string(p))
+        if pkgobj not in target.use_packages:
+            target.use_packages.append(pkgobj)
+    return lisptype.T
+
+
+@_registry.cl_function('UNUSE-PACKAGE')
+def unuse_package(packages, package=None):
+    """Remove packages from use-list."""
+    target = coerce_to_package(package)
+    for p in _as_list(packages):
+        pkgobj = p if isinstance(p, lisptype.Package) else lisptype.find_package(_designator_to_string(p))
+        if pkgobj in target.use_packages:
+            target.use_packages.remove(pkgobj)
+    return lisptype.T
+
+
+@_registry.cl_function('DELETE-PACKAGE')
+def delete_package(package):
+    """Delete a package (CLHS 11.2).
+
+    Removes the package from the global package registry, from other packages'
+    use-lists, and clears the package's name to mark it as deleted.
+    Returns T if deleted, NIL if already deleted (when given a package object).
+    Signals a *correctable* PACKAGE-ERROR if a package designator does not
+    resolve to a known package -- the `continue` restart is what
+    `delete-package.5`/`delete-package.6` test for via
+    `set-difference (compute-restarts c) outer-restarts`.
+    """
+    if isinstance(package, lisptype.Package):
+        pkg = package
+    else:
+        designator_str = _designator_to_string(package)
+        pkg = lisptype.find_package(designator_str)
+
+    if pkg is None:
+        # CLHS 11.2's "no such package" case for DELETE-PACKAGE is a
+        # correctable PACKAGE-ERROR. CERROR is the operator the spec
+        # uses; we hand the same helper its condition, so the implicit
+        # CONTINUE restart is associated with the condition and
+        # `compute-restarts` reports it.
+        from .evaluation_conditions import _signal_cerror_object
+        condition = lisptype.PackageError(
+            message=f"DELETE-PACKAGE: no package named {designator_str!r}")
+        condition.package = package
+        return _signal_cerror_object(
+            condition, continue_format="Delete anyway")
+
+    # If the package has already been deleted
+    if getattr(pkg, '_deleted', False):
+        # Return NIL without error (package was already deleted)
+        return lisptype.NIL
+
+    # Remove any entries in state.packages that point to this package
+    keys_to_remove = [k for k, v in list(state.packages.items()) if v is pkg]
+    for k in keys_to_remove:
+        try:
+            del state.packages[k]
+        except Exception:
+            pass
+
+    # Remove from other packages' use lists (supporting different attribute names)
+    for p in list(state.packages.values()):
+        try:
+            if hasattr(p, 'use_packages') and pkg in getattr(p, 'use_packages'):
+                getattr(p, 'use_packages').remove(pkg)
+        except Exception:
+            pass
+        try:
+            if hasattr(p, 'use_list') and pkg in getattr(p, 'use_list'):
+                getattr(p, 'use_list').remove(pkg)
+        except Exception:
+            pass
+
+    # Mark the package as deleted by adding a marker attribute
+    # (we can't set name to None because other code iterates over it)
+    pkg._deleted = True
+
+    return lisptype.T
+
+
+# --- Macro expansion ---
+def _direct_macroexpand_1(form, environment):
+    """Direct, eval-free macro expansion of form in environment.
+
+    Returns (expanded_form, did_expand).  Unlike eval_macroexpand_1 this
+    function never wraps the form in a cons cell, so it is safe to call
+    with forms that are themselves quoted lists such as (QUOTE FOO).
+    """
+    from .evaluation_core import (_consp_internal, ReturnFromException,
+                                  ThrowException, GoException,
+                                  ConditionException)
+    from .core import car as _car, cdr as _cdr
+
+    # CLHS 3.8: a *symbol* that names a symbol-macro also expands, not only
+    # a cons-shaped macro call. `(symbol-macrolet ((a b)) (macroexpand 'a))`
+    # must answer B; this was missing entirely, so `MACROLET.13`/`.14`
+    # (which probe exactly this from inside a MACROLET body) passed the
+    # ordinary-macro half of CLHS 3.8 and silently skipped the symbol-macro
+    # half.
+    if isinstance(form, lisptype.LispSymbol) and environment is not None:
+        expansion = environment.get_symbol_macro(form)
+        if expansion is not None:
+            return expansion, True
+
+    # Only cons cells can be macro call forms
+    if not _consp_internal(form):
+        return form, False
+
+    operator = _car(form)
+    if not isinstance(operator, lisptype.LispSymbol):
+        return form, False
+
+    # Need an environment to look up macros. CLHS 3.8: the environment
+    # argument of MACROEXPAND/MACROEXPAND-1 defaults to nil, which is the
+    # *null lexical environment* -- the global environment's bindings are
+    # visible in it, not "no environment at all". Treating nil as "cannot
+    # look up" made every `(macroexpand '(loop ...))` through the *function*
+    # (the path ansi-test's SIGNALS-ERROR takes: LOOP.4.7/.4.8,
+    # LOOP.5.ERROR.3/.4) report "not a macro call" and never run the
+    # expander, while the special-operator path (which uses the current
+    # lexical env) expanded fine -- the two MACROEXPAND-1s disagreeing.
+    if environment is None:
+        import fclpy.state as _state
+        from .binding import root_environment as _root_environment
+        base = _state.current_environment
+        if base is not None:
+            environment = _root_environment(base)
+    if environment is None:
+        return form, False
+
+    try:
+        macro_func = environment.find_func(operator)
+    except Exception:
+        return form, False
+
+    if not macro_func or not callable(macro_func):
+        return form, False
+    if not getattr(macro_func, '__is_macro__', False):
+        return form, False
+
+    # Collect raw (unevaluated) arguments
+    args_list = []
+    current = _cdr(form)
+    while _consp_internal(current):
+        args_list.append(_car(current))
+        current = _cdr(current)
+
+    try:
+        expects_whole = getattr(macro_func, '__expects_whole__', False)
+        expects_env = getattr(macro_func, '__expects_environment__', False)
+
+        call_args = []
+        if expects_whole:
+            call_args.append(form)
+        call_args.extend(args_list)
+        if expects_env:
+            call_args.append(environment)
+
+        # A macro's expansion is one form -- the same single-value rule
+        # `evaluation_core.eval`'s own macro dispatch already applies
+        # (see its comment). This one call site was missed: an expander
+        # whose body ends in a multiple-valued call (this module's own
+        # `macroexpand`, as of CLHS 3.8's two-value fix, is exactly such a
+        # call -- `EXPAND-IN-CURRENT-ENV` in ansi-test's aux file is
+        # `(defmacro expand-in-current-env (form &environment env)
+        # (macroexpand form env))`) left the raw `MultipleValues` wrapper as
+        # "the expansion", which is not a cons/symbol and made
+        # `GET-SETF-EXPANSION` -- the caller for every place-macro lookup --
+        # answer "not a valid place" for it (`incf.22`/`decf.22`).
+        expanded = lisptype.primary_value(macro_func(*call_args))
+        return expanded, True
+    except (ReturnFromException, ThrowException, GoException, ConditionException):
+        # A control transfer is not an expansion failure -- it is the program
+        # transferring control, and it must reach the frame that established
+        # its target. Catching it here turned an invoked restart into "this
+        # form does not expand" and lost the transfer entirely (plan.md
+        # Finding K's defect class); `RestartCaseTransfer` and
+        # `HandlerCaseTransfer` are `ThrowException` subclasses precisely so
+        # a pass-through tuple like this one covers them.
+        #
+        # A ConditionException is likewise the *program's* error, not an
+        # expansion failure: LOOP's expansion-time duplicate-variable
+        # PROGRAM-ERROR (CLHS 6.1.1.7; LOOP.4.7/.4.8, LOOP.5.ERROR.3/.4)
+        # signals through the conditions system from inside the expander, and
+        # the blanket catch below used to swallow it and report "this was not
+        # a macro call" -- the same defect `eval_macroexpand_1`'s blanket
+        # catch was removed for.
+        raise
+    except Exception:
+        logger.error(f"[_direct_macroexpand_1] error expanding {operator}", exc_info=True)
+        return form, False
+
+
+def macro_expansion_evaluates(form, environment):
+    """True when macroexpanding FORM would *run* it rather than rewrite it.
+
+    Kept as the one predicate inspection sites consult before expanding a
+    form to look at its shape. The `standard_macros._reuse_definer` family
+    (LOOP, DO/DOLIST/DOTIMES, RESTART-CASE, HANDLER-CASE, DEFSTRUCT, the
+    DEF* definers, SETF/PSETF/DEFPACKAGE) used to expand by *running* the
+    form and quoting the result -- the purity compromise plan.md finding 12
+    records, which made every shape-inspecting caller execute the program
+    (RESTART-CASE evaluated its protected form twice). That family now
+    expands to a pure `(%FCLPY-DEFERRED-EXPANSION ...)` form that defers
+    the worker to evaluation time, so this predicate answers False for all
+    of them; it remains here for any future macro whose expander is not
+    pure, so an inspection site has something to ask instead of being
+    silently wrong.
+    """
+    from .evaluation_core import _consp_internal
+    from .core import car as _car
+
+    if not _consp_internal(form):
+        return False
+    operator = _car(form)
+    if not isinstance(operator, lisptype.LispSymbol) or environment is None:
+        return False
+    try:
+        macro_func = environment.find_func(operator)
+    except Exception:
+        return False
+    if not macro_func or not getattr(macro_func, '__is_macro__', False):
+        return False
+    return bool(getattr(macro_func, '__runs_body__', False))
+
+
+@_registry.cl_function('MACROEXPAND')
+def macroexpand(form, environment=None):
+    """MACROEXPAND (CLHS 3.8): expand until the form is no longer a macro call.
+
+    Returns **two** values -- the expansion and whether *any* expansion
+    happened -- which is the half that was missing. `expanded-p` is true if
+    the loop ran at least once, not whether the final pass expanded, so
+    `(macroexpand '(some-macro))` reports T even though it necessarily stops
+    on a non-macro form.
+    """
+    prev = form
+    ever_expanded = False
+    while True:
+        expanded, did_expand = _direct_macroexpand_1(prev, environment)
+        if not did_expand:
+            return lisptype.MultipleValues(
+                prev, lisptype.T if ever_expanded else lisptype.NIL)
+        ever_expanded = True
+        prev = expanded
+
+
+@_registry.cl_function('MACROEXPAND-1')
+def macroexpand_1(form, environment=None):
+    """MACROEXPAND-1 (CLHS 3.8): expand one level, as two values.
+
+    Note this is a *second* implementation of MACROEXPAND-1 --
+    `evaluation_special_forms.eval_macroexpand_1` is the one the evaluator's
+    own dispatch reaches for a direct call, and this one is what FUNCALL and
+    APPLY reach (standing rule 3; recorded rather than silently left to
+    diverge again). Both must answer the same two values.
+    """
+    expanded, did = _direct_macroexpand_1(form, environment)
+    return lisptype.MultipleValues(expanded,
+                                   lisptype.T if did else lisptype.NIL)
+
+
+@_registry.cl_function('PACKAGE-ERROR-PACKAGE')
+def package_error_package(condition):
+    """PACKAGE-ERROR-PACKAGE (CLHS 9.1.5): the :PACKAGE initarg of a
+    PACKAGE-ERROR condition, returned *unchanged* -- namestring, symbol,
+    character, or package object, whatever was given.
+
+    `package-error-package.1` passes a string ("CL"), `.2` a package,
+    `.3` an escaped-symbol designator (`'#:|CL|`), and `.4` a character
+    (`#\\A`); in every case the value is whatever MAKE-CONDITION's
+    `:package` initarg was given, not coerced to a package. ANSI requires
+    this for the same reason FILE-ERROR-PATHNAME does (CLHS's reader of a
+    slot, not a coercion): the suite passes strings back to FIND-PACKAGE
+    in `.1`/`.3`/`.4` and a package object in `.2`, and the round trip
+    is the property under test.
+
+    The `PackageError` class stores the slot in its `_slots` dict
+    (one per ANSI :initarg name); reading it back returns the
+    original designator. The previous version, when it was missing,
+    left `package-error-package` unbound, so every test of this
+    accessor called a function that did not exist and failed
+    with `UndefinedFunction` rather than a numeric test result.
+    """
+    if not isinstance(condition, lisptype.PackageError):
+        # CLHS 9.1.5: PACKAGE-ERROR-PACKAGE requires a PACKAGE-ERROR
+        # condition; anything else is a TYPE-ERROR (a wrong-type
+        # argument). Without this check a non-package-error argument
+        # would slip through to `_slots.get('package')` and answer
+        # NIL, which is the wrong *value* (not a wrong-type signal)
+        # for `package-error-package.error.*`.
+        raise lisptype.LispTypeError(
+            f"PACKAGE-ERROR-PACKAGE: {condition!r} is not a PACKAGE-ERROR",
+            expected_type='PACKAGE-ERROR', actual_value=condition)
+    return condition._slots.get('package')
+
+
+__all__ = [
+    'make_package',
+    'package_name',
+    'package_nicknames',
+    'rename_package',
+    'package_use_list',
+    'package_used_by_list',
+    'package_shadowing_symbols',
+    'list_all_packages',
+    'unintern',
+    'unexport',
+    'delete_package',
+    'shadowing_import',
+    'shadow',
+    'use_package',
+    'unuse_package',
+    'macroexpand',
+    'macroexpand_1',
+    'package_error_package',
+]

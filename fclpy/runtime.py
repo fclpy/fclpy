@@ -18,80 +18,111 @@ import fclpy.lisptype as lisptype
 import fclpy.lispfunc as lispfunc
 import fclpy.lispreader as lispreader
 from fclpy import lispenv
+from fclpy.readtable import get_current_readtable
+from fclpy.lispfunc.evaluation_core import ThrowException, ConditionException
 
 def setup_reader_macros():
     """Set up basic reader macros for parsing."""
-    def left_paren_reader(char, stream):
-        """Read a list starting with ("""
-        result = []
-        reader = lispreader.LispReader(lispfunc.get_macro_character, stream)
-        
-        while True:
-            # Skip whitespace
-            c = stream.read_char()
-            while c and c in [' ', '\t', '\n', '\r']:
-                c = stream.read_char()
-            
-            if not c:
-                raise Exception("Unexpected EOF in list")
-            elif c == ')':
-                break
-            else:
-                stream.unread_char(c)
-                item = reader.read_1()
-                if item is not None:
-                    result.append(item)
-        
-        # Convert Python list to Lisp cons structure
-        lisp_list = lisptype.NIL
-        for item in reversed(result):
-            lisp_list = lisptype.lispCons(item, lisp_list)
-        
-        return lisp_list
-    
-    def right_paren_reader(char, stream):
-        """Handle right paren - should not be called directly"""
-        raise Exception("Unexpected )")
-    
-    def quote_reader(char, stream):
-        """Read a quoted expression"""
-        reader = lispreader.LispReader(lispfunc.get_macro_character, stream)
-        expr = reader.read_1()
-        # Create proper cons structure for (quote expr)
-        quote_symbol = lisptype.LispSymbol("QUOTE")
-        quoted_list = lisptype.lispCons(expr, lisptype.NIL)
-        return lisptype.lispCons(quote_symbol, quoted_list)
-    
-    def semicolon_reader(char, stream):
-        """Read a comment - skip to end of line"""
-        while True:
-            c = stream.read_char()
-            if not c or c == '\n':
-                break
-        # Return nothing, effectively skipping the comment
-        reader = lispreader.LispReader(lispfunc.get_macro_character, stream)
-        return reader.read_1()
-    
-    # Set up the reader macros
-    lispfunc.set_dispatch_macro_character('(', left_paren_reader)
-    lispfunc.set_dispatch_macro_character(')', right_paren_reader)
-    lispfunc.set_dispatch_macro_character("'", quote_reader)
-    lispfunc.set_dispatch_macro_character(';', semicolon_reader)
+    # Reader macros are now handled by the centralized readtable
+    # This function is kept for backward compatibility but is no longer needed
+    pass
 
-def load_and_evaluate_file(filename, environment=None, verbose=False):
-    """Load and evaluate a Lisp file."""
+
+# Every top-level form `load_and_evaluate_file` failed to evaluate, as
+# (filename, expression index, description) triples.
+#
+# This exists because both of that function's error handlers *absorb* the
+# failure and keep going -- the inner one moves to the next top-level form, the
+# outer one abandons the file and answers NIL. `doit.lsp` is a sequence of
+# `(load "<dir>/load.lsp")` calls, so an absorbed failure mid-directory means
+# the rest of that directory's `deftest` forms never register in RT's
+# `*entries*`, while every other directory loads normally. `check_completeness`
+# in run_all_tests.py only checks that every entry in `*entries*` ended up
+# passed or failed -- an *internal* consistency check -- so a run that quietly
+# lost a whole directory still printed `COMPLETENESS: OK`, just with a smaller
+# total. That is the one guarantee CLAUDE.md leans on ("COMPLETENESS: OK =>
+# nothing was skipped"), and without this list it was not true.
+#
+# Note the absorption is not limited to raw Python exceptions: the inner
+# handler deliberately re-raises a `ConditionException` (a real Lisp
+# condition), and because `ConditionException` subclasses `Exception` the outer
+# handler then catches *that* too. So a genuine Lisp error in a directory's
+# load.lsp was absorbed just as silently.
+#
+# The handlers are left absorbing on purpose -- one bad directory should not
+# cost the information the other twenty-two would have produced -- but a run
+# that dropped anything can no longer report success. Callers that want the
+# old lenient behaviour are unaffected; they simply never look at this list.
+LOAD_ERRORS = []
+
+
+def reset_load_errors():
+    """Clear the recorded load failures (call before a fresh load sequence)."""
+    del LOAD_ERRORS[:]
+
+def load_and_evaluate_file(filename, environment=None, verbose=False, timing=False):
+    """Load and evaluate a Lisp file.
+    
+    Args:
+        filename: Path to the Lisp file
+        environment: Environment to use (default: current environment)
+        verbose: Print detailed progress info
+        timing: Print timing information for performance debugging
+    """
+    import os
+    import time
+    from fclpy.lispfunc.pathnames import pathname_from_os_path
+
+    start_time = time.time()
+
     if environment is None:
+        # Ensure standard environment is set up
+        lispenv.setup_standard_environment()
         environment = lispenv.current_environment
+
+    # Set *LOAD-TRUENAME* and *LOAD-PATHNAME* for this file
+    abs_path = os.path.abspath(filename)
+    pathname_obj = pathname_from_os_path(abs_path)
+    
+    load_truename_sym = lisptype.COMMON_LISP_PACKAGE.intern_symbol('*LOAD-TRUENAME*')
+    load_pathname_sym = lisptype.COMMON_LISP_PACKAGE.intern_symbol('*LOAD-PATHNAME*')
+    
+    old_truename = environment.find_variable(load_truename_sym)
+    old_pathname = environment.find_variable(load_pathname_sym)
     
     try:
-        if verbose:
-            print(f"Loading file: {filename}")
+        # Set load variables for this file
+        environment.set_variable(load_truename_sym, pathname_obj)
+        environment.set_variable(load_pathname_sym, pathname_obj)
         
+        if verbose or timing:
+            print(f"[{time.time() - start_time:.3f}s] Loading file: {filename}")
+        
+        # CLHS 24.1: LOAD *binds* *PACKAGE* for the extent of the file, so an
+        # IN-PACKAGE inside the file is undone when the file finishes.
+        #
+        # This used to restore the package only when it had been None on entry,
+        # which meant a *nested* load leaked its IN-PACKAGE into the rest of the
+        # enclosing file. `init.lsp` is exactly that shape: its second top-level
+        # form loads gclload1.lsp, whose `(in-package :cl-test)` then stayed
+        # current, so init.lsp's *third* form was read in CL-TEST and
+        # `*ROOT-PATH*` interned as a different symbol from the CL-USER one its
+        # own DEFVAR had bound -- "Unbound variable: *ROOT-PATH*", which aborts
+        # the rest of init.lsp. Global lookup is by symbol *identity*, not name
+        # (CLAUDE.md), so two same-named symbols in two packages are two
+        # variables and the failure looks impossible until you notice the
+        # package changed underneath the reader.
+        import fclpy.state as state
+        old_pkg = getattr(state, 'current_package', None)
+        # Default to COMMON-LISP-USER while loading a file when no package set
+        if old_pkg is None:
+            state.current_package = lisptype.COMMON_LISP_USER_PACKAGE
+
         with open(filename, 'r', encoding='utf-8') as f:
             content = f.read()
         
-        if verbose:
-            print(f"Read {len(content)} characters")
+        if verbose or timing:
+            print(f"[{time.time() - start_time:.3f}s] Read {len(content)} characters")
         
         # Create a stream from the file content
         string_io = io.StringIO(content)
@@ -100,26 +131,44 @@ def load_and_evaluate_file(filename, environment=None, verbose=False):
         # Set up basic reader macros
         setup_reader_macros()
         
-        # Create reader
-        reader = lispreader.LispReader(lispfunc.get_macro_character, stream)
+        # Create reader using centralized readtable
+        readtable = get_current_readtable()
+        reader = lispreader.LispReader(readtable, stream)
         
         results = []
         expr_count = 0
+        last_timing_report = start_time
         
         # Read and evaluate expressions one by one
+        current_expr = None
+
         while True:
             try:
-                expr = reader.read_1()
-                if expr is None:  # EOF
+                expr_start = time.time()
+                current_expr = reader.read_1()
+                if current_expr is None:  # EOF
                     break
                 
                 expr_count += 1
+                read_time = time.time() - expr_start
+                
                 if verbose:
-                    print(f"  Reading expression {expr_count}: {expr}")
+                    print(f"  Reading expression {expr_count}: {current_expr}")
                 
                 # Evaluate the expression
-                result = lispfunc.eval(expr, environment)
+                eval_start = time.time()
+                result = lispfunc.eval(current_expr, environment)
+                eval_time = time.time() - eval_start
                 results.append(result)
+                
+                # Report timing periodically or for slow expressions
+                if timing:
+                    now = time.time()
+                    total_time = read_time + eval_time
+                    # Report if expression took > 0.5s or every 5 seconds
+                    if total_time > 0.5 or (now - last_timing_report) > 5.0:
+                        print(f"[{now - start_time:.3f}s] Expr {expr_count}: read={read_time:.3f}s eval={eval_time:.3f}s")
+                        last_timing_report = now
                 
                 # In standard Lisp, file loading is usually silent
                 # Only show results in verbose mode
@@ -128,28 +177,80 @@ def load_and_evaluate_file(filename, environment=None, verbose=False):
                     
             except EOFError:
                 break
+            except ThrowException as e:
+                # Uncaught THROW - signal a CONTROL-ERROR condition
+                control_error = lisptype.ControlError(message=f"Uncaught THROW {e.tag}")
+                raise ConditionException(control_error, recoverable=False)
+            except ConditionException:
+                # Re-raise Lisp conditions so they can be handled by Lisp code
+                raise
             except Exception as e:
                 if "reader-error" in str(e) or not content.strip():
                     break  # End of file or empty content
-                print(f"  Error evaluating expression {expr_count}: {e}")
-                if verbose:
-                    import traceback
+                # Include filename to make large multi-file loads debuggable.
+                expr_preview = ""
+                try:
+                    if current_expr is not None:
+                        expr_preview = f" | expr={current_expr!r}"
+                except Exception:
+                    expr_preview = ""
+
+                # Recorded so the run cannot report success having skipped
+                # this form -- see LOAD_ERRORS above.
+                LOAD_ERRORS.append((filename, expr_count, f"{type(e).__name__}: {e}"))
+
+                print(f"  Error evaluating expression {expr_count} in {filename}: {e}{expr_preview}")
+
+                # Print a traceback when explicitly requested (or in verbose mode).
+                if verbose or os.environ.get('FCLPY_LOAD_TRACEBACK') == '1':
                     traceback.print_exc()
-        
-        # Don't announce the number of expressions loaded (not standard Lisp behavior)
-        if verbose:
-            print(f"Loaded {expr_count} expressions from {filename}")
-        return True
+        # Final timing report
+        if verbose or timing:
+            elapsed = time.time() - start_time
+            print(f"[{elapsed:.3f}s] Loaded {expr_count} expressions from {filename}")
+        return lisptype.T
         
     except FileNotFoundError:
+        LOAD_ERRORS.append((filename, -1, "FileNotFoundError: file not found"))
         print(f"Error: File '{filename}' not found")
-        return False
+        return lisptype.NIL
     except Exception as e:
+        # This catches the inner handler's deliberate re-raise of a
+        # ConditionException as well (it subclasses Exception), so a real Lisp
+        # condition raised by a top-level form lands here and abandons the rest
+        # of the file. Recorded for the same reason as above.
+        LOAD_ERRORS.append((filename, -1, f"{type(e).__name__}: {e}"))
         print(f"Error loading file '{filename}': {e}")
         if verbose:
-            import traceback
             traceback.print_exc()
-        return False
+        return lisptype.NIL
+    finally:
+        # Restore old values
+        if old_truename is not None:
+            environment.set_variable(load_truename_sym, old_truename)
+        else:
+            environment.set_variable(load_truename_sym, lisptype.NIL)
+        
+        if old_pathname is not None:
+            environment.set_variable(load_pathname_sym, old_pathname)
+        else:
+            environment.set_variable(load_pathname_sym, lisptype.NIL)
+
+        # Unbind *PACKAGE* back to what the caller had (CLHS 24.1). In the
+        # `finally` because a file that dies partway must not leave its
+        # IN-PACKAGE current either -- that would silently redirect interning
+        # for everything loaded afterwards. Both homes are written: the value
+        # cell and `state.current_package`, which the reader consults (see
+        # binding.BindingFrame._mirror_package).
+        try:
+            import fclpy.state as state
+            state.current_package = old_pkg
+            if isinstance(old_pkg, lisptype.Package):
+                package_sym = lisptype.COMMON_LISP_PACKAGE.intern_symbol('*PACKAGE*')
+                environment.set_variable(package_sym, old_pkg)
+        except Exception:
+            pass
+        # Don't return here - let the try block's return value propagate
 
 class FclpyREPL:
     """Interactive Read-Eval-Print Loop for FCLPY."""
@@ -173,23 +274,46 @@ class FclpyREPL:
     def read_input(self):
         """Read a line of input from the user."""
         try:
-            line = input("FCLPY> ").strip()
-            
-            # Handle REPL commands
-            if line.startswith(':'):
-                return self.handle_repl_command(line)
-            
+            line = input("FCLPY> ")
+
+            # Quick command handling (only if they match a known command)
+            if line and line.strip().startswith(':'):
+                cmd = line.lower().strip()
+                if cmd in [':quit', ':q', ':help', ':h', ':env', ':test', ':verbose']:
+                    return self.handle_repl_command(line)
+                # otherwise fall through and treat as a Lisp keyword/expression (e.g. :FOO)
+
             # Handle empty input
-            if not line.strip():
+            if not line or not line.strip():
                 return None
-            
-            # Try to read as Lisp expression using proper reader
-            if line.strip().startswith('(') and line.strip().endswith(')'):
-                # Use full S-expression reader for complex expressions
-                return self.parse_with_reader(line)
-            else:
-                # Use simple parser for literals and simple expressions
-                return self.parse_simple_expression(line)
+
+            # If the input begins an S-expression, attempt to parse it and
+            # continue reading lines when the reader reports an EOF during
+            # list read (i.e. an incomplete multi-line form).
+            if line.lstrip().startswith('('):
+                text = line
+                while True:
+                    try:
+                        return self.parse_with_reader(text)
+                    except Exception as e:
+                        # If parser indicates an EOF/unterminated list, read more
+                        msg = str(e).upper()
+                        if 'EOF' in msg or 'UNTERMINATED' in msg or 'EOF DURING' in msg:
+                            try:
+                                cont = input('......> ')
+                            except EOFError:
+                                print('\nInterrupted during multiline input.')
+                                return None
+                            except KeyboardInterrupt:
+                                print('\nInterrupted during multiline input.')
+                                return None
+                            # Append continuation and loop to try parsing again
+                            text += '\n' + cont
+                            continue
+                        # Other parse errors should bubble up as parse errors
+                        raise
+            # Not an S-expression start, use simple parser for literals or symbols
+            return self.parse_simple_expression(line.strip())
             
         except EOFError:
             print("\nGoodbye!")
@@ -203,7 +327,8 @@ class FclpyREPL:
         try:
             string_io = io.StringIO(text)
             stream = lispreader.LispStream(string_io)
-            reader = lispreader.LispReader(lispfunc.get_macro_character, stream)
+            readtable = get_current_readtable()
+            reader = lispreader.LispReader(readtable, stream)
             return reader.read_1()
         except Exception as e:
             raise Exception(f"Parse error: {e}")
@@ -237,6 +362,9 @@ class FclpyREPL:
             return self.parse_function_call(text)
         else:
             # Assume it's a symbol
+            # Keywords of the form :FOO should be interned as keywords
+            if text.startswith(':'):
+                return lisptype.intern_keyword(text[1:].upper())
             return lisptype.LispSymbol(text.upper())
     
     def parse_function_call(self, text):
@@ -255,7 +383,11 @@ class FclpyREPL:
             elif arg.startswith('"') and arg.endswith('"'):
                 args = lisptype.lispCons(arg[1:-1], args)
             else:
-                args = lisptype.lispCons(lisptype.LispSymbol(arg.upper()), args)
+                # Handle keyword arguments like :FOO
+                if arg.startswith(':'):
+                    args = lisptype.lispCons(lisptype.intern_keyword(arg[1:].upper()), args)
+                else:
+                    args = lisptype.lispCons(lisptype.LispSymbol(arg.upper()), args)
         
         return lisptype.lispCons(func_name, args)
     

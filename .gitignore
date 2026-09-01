@@ -159,3 +159,18 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 work/
+gpt5review.txt
+
+
+*.err
+
+ansi_results/
+.claude/
+
+_probe*.py
+probe_err.txt
+probe_out.txt
+wpi_*.txt
+.opencode/
+
+work/

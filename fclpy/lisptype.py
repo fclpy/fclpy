@@ -1,199 +1,43 @@
+﻿"""
+lisptype - Common Lisp type system (re-exporter).
 
+This module provides backward compatibility by re-exporting all symbols from:
+- lisptype_basic: Core types, symbols, characters, utilities
+- lisptype_extended: Environment, package system, condition system, restarts
 
-class Binding:
-    def __init__(self,symbol,value,next,env=None):
-        self.symbol = symbol
-        self.value = value
-        self.next = next
-        self.env = env
-    def __repr__(self):
-        return repr(self.symbol)
+All existing code importing from lisptype continues to work unchanged.
+"""
 
-py_str_map = [
-    ["_S_STAR_","*"],
-    ["_S_AMP_","&"],
-    ["_S_LT_","<"],
-    ["_S_GT_",">"],
-    ["_S_EQ_",">"],
-    ["_S_PLUS_","+"],
-    ["_S_MINUS_","-"],
-    ["_S_PRINT_","PRINT"],
+# Re-export all symbols from basic and extended modules
+from fclpy.lisptype_basic import *  # noqa: F401, F403
+from fclpy.lisptype_extended import *  # noqa: F401, F403
+
+# Explicit exports for clarity - all public symbols
+__all__ = [
+    # From lisptype_basic
+    'LispNotImplementedError', 'LispTypeError', 'LispError',
+    'LispEndOfFileError', 'LispEnvironmentError', 'LispProgramError',
+    'lispT', 'lispSequence', 'lispList', 'lispNull', 'LispSymbol',
+    'lispKeyword', 'Character', 'LispString', 'lispCons', 'lispConsIterator',
+    'NIL', 'T',
+    'symbol_value', 'set_symbol_value', 'symbol_function',
+    'set_symbol_function', 'symbol_plist', 'set_symbol_plist',
+    'lisp_bool', 'is_truthy', 'is_symbol', 'is_keyword', 'lisp_str', 'lisp_repr',
+    'OMITTED', 'supplied',
+    'MultipleValues', 'primary_value', 'py_str_map',
+    'Binding', 'FunctionBinding', 'SpecialForm',
+    # From lisptype_extended
+    'Environment',
+    'Package', 'KEYWORD_PACKAGE', 'COMMON_LISP_PACKAGE', 'COMMON_LISP_USER_PACKAGE',
+    'FCLPY_INTERNAL_PACKAGE',
+    'make_package', 'find_package', 'intern_symbol', 'intern_keyword',
+    'Condition', 'SimpleCondition', 'SimpleError', 'Warning', 'Error',
+    'TypeError', 'ProgramError', 'ControlError', 'FileError', 'StreamError',
+    'EndOfFile', 'ArithmeticError', 'DivisionByZero',
+    'UndefinedFunction',
+    'UnboundVariable',
+    'FloatingPointInvalidOperation', 'FloatingPointOverflow', 'FloatingPointUnderflow',
+    'Restart',
+    'resolve_environment',
+    'py_str_to_sym'
 ]
-
-
-class SpecialForm:
-    pass
-
-class FunctionBinding:
-    def __init__(self,symbol,value,next):
-        self.symbol = symbol
-        self.value = value
-        self.next = next
-    def __repr__(self):
-        o = self
-        s= []        
-        while o != None:
-            s.append(repr(o.symbol))
-            o = o.next
-        return ",".join(s)
-
-class Environment:
-    def __init__(self, parent=None):
-        self.parent = parent
-        if parent == None:
-            self.function_bindings = None
-            self.variable_bindings = None
-            self.tag_bindings = None
-        else:
-            self.function_bindings = parent.function_bindings
-            self.variable_bindings = parent.variable_bindings
-            self.tag_bindings = parent.tag_bindings
-    def add_function(self, symbol, value):
-        self.function_bindings = FunctionBinding(symbol,value, self.function_bindings)
-    
-    def find_func(self,sym):
-        b = self.function_bindings
-        while b != None:
-            if b.symbol.name == sym.name:
-                return b.value
-            b = b.next
-        return None
-    
-    def add_variable(self, symbol, value):
-        self.variable_bindings = Binding(symbol, value, self.variable_bindings, self)
-    
-    def find_variable(self, sym):
-        b = self.variable_bindings
-        while b != None:
-            if b.symbol.name == sym.name:
-                return b.value
-            b = b.next
-        # If not found in current environment, check parent
-        if self.parent:
-            return self.parent.find_variable(sym)
-        return None
-    
-    def set_variable(self, sym, value):
-        b = self.variable_bindings
-        while b != None:
-            if b.symbol.name == sym.name:
-                b.value = value
-                return value
-            b = b.next
-        # If not found in current environment, check parent
-        if self.parent:
-            return self.parent.set_variable(sym, value)
-        # If not found anywhere, create new binding
-        self.add_variable(sym, value)
-        return value
-
-    def read_module(self, mod):
-        for k,v in mod.__dict__.items():
-            if callable(v) and not k.startswith("__"):
-                self.add_function(py_str_to_sym(k),v)
-    def __repr__(self):
-        return "Environment(function_bindings="+repr(self.function_bindings)+", variable_bindings="+repr(self.variable_bindings)+")"
-
-
-class lispT:
-    pass
-
-class lispSequence(lispT):
-    pass
-
-class lispList(lispSequence):
-    pass
-
-class lispNull(lispList):
-    def __str__(self):
-        return "NIL"
-    def __repr__(self):
-        return "NIL"
-
-NIL = lispNull()
-
-class LispSymbol(lispT):
-    def __init__(self, name):
-        self.name = name
-    def __repr__(self):
-        return self.name
-
-class lispKeyword(LispSymbol):
-    pass
-
-class lispConsIterator:    
-    def __init__(self, cons):
-        self.cons = cons
-    def __iter__(self):
-        return self
-    def __next__(self):
-        if self.cons == None or type(self.cons) is lispNull:
-            raise StopIteration()
-        value = self.cons.car
-        self.cons = self.cons.cdr
-        return value
-    def next(self):
-        return self.__next__()
-
-class lispCons(lispList):
-    def __init__(self,car,cdr=NIL):
-        self.car = car
-        if cdr == None or type(cdr) is lispNull:
-            self.cdr = NIL
-        elif type(cdr) is tuple:
-            cdrlen = len(cdr)
-            if cdrlen == 0:
-                self.cdr = NIL
-            elif cdrlen == 1:
-                self.cdr = lispCons(cdr[0])
-            else:
-                self.cdr = lispCons(cdr[0],cdr[1:])
-        else:
-            self.cdr = cdr
-    def __str__(self):
-        values = []
-        values.append("(")
-        values.append("NIL" if self.car == None else str(self.car))
-        cdr = self.cdr
-        while cdr != None:
-            values.append(" ")
-            if type(cdr) is lispCons:
-                values.append(str(cdr.car))
-                cdr = cdr.cdr if type(cdr.cdr) is not lispNull else None
-
-            else:
-                values.append(". ")
-                values.append(str(cdr))
-                cdr = None            
-        values.append(")")
-        return ''.join(values)
-    
-    def __repr__(self):
-        values = []
-        values.append("(")
-        values.append("NIL" if self.car == None else repr(self.car))
-        cdr = self.cdr if type(self.cdr) is not lispNull else None
-
-        while cdr != None:
-            values.append(" ")
-            if type(cdr) is lispCons:
-                values.append(repr(cdr.car))
-                cdr = cdr.cdr if type(cdr.cdr) is not lispNull else None
-            else:
-                values.append(". ")
-                values.append(repr(cdr))
-                cdr = None
-        values.append(")")
-        return ''.join(values)
-    
-    def __iter__(self):
-        return lispConsIterator(self)
-
-def py_str_to_sym(s):
-  s = s.upper()
-  for p in py_str_map:
-      s = s.replace(*p)
-  return LispSymbol(s)
-
-            
-

@@ -50,6 +50,8 @@ def main():
                        help='Suppress startup messages')
     parser.add_argument('-v', '--verbose', action='store_true',
                        help='Verbose output')
+    parser.add_argument('-t', '--timing', action='store_true',
+                       help='Show timing information for performance debugging')
     parser.add_argument('--test', action='store_true',
                        help='Run comprehensive tests')
     parser.add_argument('--version', action='version', version='FCLPY 1.0')
@@ -78,7 +80,7 @@ def main():
     # Process files if provided
     if args.files:
         for filename in args.files:
-            if not runtime.load_and_evaluate_file(filename, environment, args.verbose):
+            if not runtime.load_and_evaluate_file(filename, environment, args.verbose, args.timing):
                 sys.exit(1)
     
     # Enter REPL if requested or if no files provided

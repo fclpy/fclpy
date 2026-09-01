@@ -1,0 +1,6 @@
+[
+ "function:CALL-NEXT-METHOD",
+ "function:CLASS-OF",
+ "function:FIND-CLASS",
+ "redef:fclpy\\classes.py:find_class"
+]
