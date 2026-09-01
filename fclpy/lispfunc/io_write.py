@@ -3579,8 +3579,10 @@ def _pp_bounded_list_elements(obj):
     the body actually consumes them, `~<...~:>` decomposes its whole list
     argument up front (CLHS 22.3.5.2's "the argument ... becomes a list of
     arguments to be used"), before the body -- and *PRINT-LENGTH* -- ever
-    run. `*PRINT-CIRCLE*` has no shared-structure detector yet (plan.md), so
-    a genuinely circular argument here would otherwise walk forever:
+    run. Under `*PRINT-CIRCLE*` the block goes through
+    `_format_logical_block_items` instead, whose walk terminates the way
+    PPRINT-POP's does; this capped decomposition remains the circle-off
+    path, where a genuinely circular argument would otherwise walk forever:
     `format.logical-block.circle.2`/`.3` hang the whole suite the same way
     plan.md's printer/DIRECTORY incidents did, not merely fail. Capped via
     `itertools.islice` over `list_cells` directly rather than `_pp_list`'s
@@ -3591,6 +3593,156 @@ def _pp_bounded_list_elements(obj):
     from .sequence_protocol import list_cells
     return [cell.car for cell in
             itertools.islice(list_cells(obj, 'FORMAT ~<...~:>', dotted='allow'), _PP_LIST_BUDGET)]
+
+
+class _FormatDotText(str):
+    """A pre-rendered ``. #n#`` / ``...`` fragment riding a `~<...~:>` block's
+    item stream (see `_format_logical_block_items`).
+
+    A `str` subclass so the FORMAT string machinery -- padding, case
+    conversion -- keeps working on it, while the exact type lets the
+    printing directives (~A/~S/~W) tell "user data" from "this fragment"
+    and emit it verbatim instead of re-printing it as data.
+    """
+
+
+def _format_print_arg(val, escape):
+    """~A's/~S's argument print, wrapped in the ambient *PRINT-CIRCLE*
+    labelling an enclosing `~:<...~:>` logical block established (CLHS
+    22.3.5.2: the block's items "are extracted from this list using
+    pprint-pop", whose elements are checked for circularity and sharing as
+    they are printed -- `format.logical-block.circle.1`'s `(x x)` prints
+    `(#1=(0) #1#)`, the second ~A emitting only the `#1#` back-reference).
+
+    Outside such a block the ambient state is `None` and this is exactly
+    `printer.princ_to_string`/`prin1_to_string` -- the same call the
+    handlers made before, so no format output changes when `*PRINT-CIRCLE*`
+    is off. The body print deliberately stays on `printer.write_object`'s
+    path: the ambient table owns the labelling for the whole operation, and
+    a per-call `PrintContext` would run its own `_compute_circle_map` and
+    number any internal sharing from 1, colliding with the ambient labels.
+    """
+    circle = _pp_circle_active()
+    if circle is None or not _pp_is_circle_aggregate(val):
+        if escape:
+            return _printer.prin1_to_string(val)
+        return _printer.princ_to_string(val)
+    label, skip = _pp_circle_label(circle, val)
+    if skip:
+        return label
+    if escape:
+        body = _printer.prin1_to_string(val)
+    else:
+        body = _printer.princ_to_string(val)
+    return label + body
+
+
+def _format_circle_enter(obj):
+    """Establish the ambient *PRINT-CIRCLE* labelling for a `~:<...~:>`
+    logical block's data list (CLHS 22.3.5.2: the argument "is treated in
+    the same way as the list argument to pprint-logical-block, thereby
+    providing automatic support for non-list arguments and the detection of
+    circularity, sharing, and depth abbreviation").
+
+    Returns `(state, label_text, owned, skip)`. `state` is `None` when
+    `*PRINT-CIRCLE*` is off or the argument is not an aggregate -- nothing
+    to track, and the block keeps `_pp_bounded_list_elements`' capped
+    decomposition. This is the pprint path's own `_pp_circle_enter`
+    mechanism, not a second one: the same `_PP_CIRCLE_STATES` stack, the
+    same recording pre-pass (`_pp_circle_visit_prepass`, which stops where
+    the pprint-pop walk stops) and the same `_pp_circle_label` assignment,
+    so label numbers stay consistent whether an object is reached through
+    `WRITE` or through a `~A` in a block body. When a state is already
+    active (a nested block, or a `~A` inside a real PPRINT-LOGICAL-BLOCK)
+    it is *reused*; `owned` says whether this call pushed the entry that
+    the `<` handler must pop in its `finally`.
+
+    `label_text` is the `#n=`/`#n#` the block itself owes before its prefix
+    (its list may be a shared or circular object), and `skip` is true when
+    that object was *already printed* -- the whole block collapses to the
+    `#n#` back-reference, the way `pprint_logical_block_setup`'s skip path
+    does.
+    """
+    if not _printer._true(_printer.resolve_control('*PRINT-CIRCLE*')):
+        return None, '', False, False
+    if not _pp_is_circle_aggregate(obj):
+        return None, '', False, False
+    existing = _PP_CIRCLE_STATES[-1] if _PP_CIRCLE_STATES else None
+    if existing is not None:
+        label_text, skip = _pp_circle_label(existing, obj)
+        return existing, label_text, False, skip
+    if _consp_internal(obj):
+        labels, visits = _pp_circle_visit_prepass(obj)
+    else:
+        labels, visits = _pp_circle_map_compute(obj), None
+    # `depth` is pprint-stack based in `_pp_circle_enter`, whose trim pass
+    # would misread it; a FORMAT block's entry lives exactly for the
+    # handler's try/finally, so -1 keeps the trim from ever popping it.
+    entry = {'map': labels, 'seen': set(), 'depth': -1, 'visits': visits}
+    _PP_CIRCLE_STATES.append(entry)
+    label_text, skip = _pp_circle_label(entry, obj)
+    return entry, label_text, True, skip
+
+
+def _format_logical_block_items(obj, state):
+    """The item stream a `~:<...~:>` logical block's body consumes, walked
+    the way PPRINT-POP walks PPRINT-LOGICAL-BLOCK's list (CLHS 22.3.5.2:
+    elements "are extracted from this list using pprint-pop, thereby
+    providing automatic support for malformed lists, and the detection of
+    circularity, sharing, and length abbreviation").
+
+    `state` is the ambient circle state `_format_circle_enter` pushed. Its
+    `map` -- built by the recording pre-pass `_pp_circle_visit_prepass`,
+    which stops exactly where this walk stops -- assigns every element or
+    tail reached a second time its label number, in encounter order. The
+    walk itself re-derives the *stop*: a position the walk touches twice
+    means PPRINT-POP prints `" . #n#"` -- or `" . "` plus a fresh print of
+    the tail when nothing has printed it yet (`pprint-pop.8`'s
+    unprinted-cycle case) -- and exits, so the fragment rides the item
+    stream as a `_FormatDotText` and the body's `~^` ends the iteration
+    right after it. `*PRINT-LENGTH*`'s `...` truncates the same way, and a
+    dotted atom tail renders as its dot.
+
+    The `printed` set is the labels the walk will *have emitted* by the
+    time it reaches a dot -- the block's own label (already in
+    `state['seen']`) plus every labelled element extracted so far, since
+    the body prints items in extraction order. PPRINT-POP consults the
+    live `seen` instead, because it interleaves with the printing it
+    observes; the reified walk runs before any of it.
+    """
+    labels = state['map']
+    printed = set(state['seen'])
+    reached = set()
+    items = []
+    position = obj
+    count = 0
+    length = _pprint_length()
+    while True:
+        if _null_internal(position):
+            return items
+        if not _consp_internal(position):
+            return items + [_FormatDotText('. ' + _write_object(position))]
+        if length is not None and count >= length:
+            return items + [_FormatDotText('...')]
+        if count > 0 and id(position) in reached:
+            label = labels.get(id(position))
+            if label is not None and label in printed:
+                items.append(_FormatDotText(f'. #{label}#'))
+            else:
+                if label is not None:
+                    printed.add(label)
+                items.append(_FormatDotText('. ' + _write_object(position)))
+            return items
+        reached.add(id(position))
+        element = position.car
+        if _pp_is_circle_aggregate(element):
+            elabel = labels.get(id(element))
+            if elabel is not None:
+                printed.add(elabel)
+            reached.add(id(element))
+        items.append(element)
+        count += 1
+        position = position.cdr
 
 
 #: Depth of `~<...~:>` logical blocks whose bodies are currently being
@@ -3700,7 +3852,12 @@ def _format_directive(control_string, cursor, pos, emitted=None):
         # ~A - Aesthetic: print as PRINC does, i.e. with *PRINT-ESCAPE* nil.
         # `~:A` prints NIL as "()" rather than "NIL" (CLHS 22.3.4.1).
         val = get_arg()
-        if colon_flag and (val is None or val is lisptype.NIL):
+        if isinstance(val, _FormatDotText):
+            # A pre-rendered ". #n#"/"..." fragment from a ~<...~:> logical
+            # block's pprint-pop walk -- printed verbatim, not re-printed
+            # as data (see _format_logical_block_items).
+            result = str(val)
+        elif colon_flag and (val is None or val is lisptype.NIL):
             result = "()"
         else:
             # A function argument prints as the printer prints any other
@@ -3710,16 +3867,18 @@ def _format_directive(control_string, cursor, pos, emitted=None):
             # control-string designator and to `~{~}`'s empty body -- not
             # to ~A's argument -- and it crashed `(format nil "~a" #'cons)`
             # inside `format.b.18`'s mini-universe sweep.
-            result = _printer.princ_to_string(val)
+            result = _format_print_arg(val, escape=False)
         return (_format_pad(result, params, at_flag), pos)
 
     elif directive == 'S':
         # ~S - Standard: print as PRIN1 does, i.e. with *PRINT-ESCAPE* true.
         val = get_arg()
-        if colon_flag and (val is None or val is lisptype.NIL):
+        if isinstance(val, _FormatDotText):
+            result = str(val)
+        elif colon_flag and (val is None or val is lisptype.NIL):
             result = "()"
         else:
-            result = _printer.prin1_to_string(val)
+            result = _format_print_arg(val, escape=True)
         return (_format_pad(result, params, at_flag), pos)
 
 
@@ -3732,6 +3891,8 @@ def _format_directive(control_string, cursor, pos, emitted=None):
         # and printed "~W" literally -- `format.:_.6` builds its whole
         # tabulation out of ~W's.
         val = get_arg()
+        if isinstance(val, _FormatDotText):
+            return (str(val), pos)
         from .binding import dynamic_value, set_dynamic_value
         bindings = []
         if colon_flag:
@@ -4126,6 +4287,15 @@ def _format_directive(control_string, cursor, pos, emitted=None):
         prefix_text = prefix_src if prefix_src is not None else ('(' if colon_flag else '')
         suffix_text = suffix_src if suffix_src is not None else (')' if colon_flag else '')
 
+        # CLHS 22.3.5.2: circularity detection is applied to the block's
+        # *data list* -- the `~:<` argument -- and explicitly not to the
+        # format argument list a top-level `~@<...~:>` receives, so these
+        # stay unset on the at-flag path below.
+        circle_state = None
+        block_label = ''
+        circle_owned = False
+        block_skip = False
+
         if at_flag:
             items = cursor.remaining()
             cursor.idx = len(cursor.args)
@@ -4138,12 +4308,36 @@ def _format_directive(control_string, cursor, pos, emitted=None):
                 # `format.logical-block.8`).
                 escape = _printer._true(_printer.resolve_control('*PRINT-ESCAPE*'))
                 return (_write_object(obj, escape=escape), end_pos)
-            items = _pp_bounded_list_elements(obj)
+            # The block's list argument gets the same circularity/sharing
+            # detection as PPRINT-LOGICAL-BLOCK's ("treated in the same way
+            # as the list argument to pprint-logical-block"). Under
+            # *PRINT-CIRCLE* the walk is PPRINT-POP's, the block's own
+            # label prefixes its output, and the ambient labelling table
+            # lives for exactly this body -- `~A`/`~S`/`~W` inside it
+            # consult it through `_dispatch_print`
+            # (`format.logical-block.circle.1`-`.3`).
+            circle_state, block_label, circle_owned, block_skip = \
+                _format_circle_enter(obj)
+            if circle_state is not None and not block_skip:
+                items = _format_logical_block_items(obj, circle_state)
+            else:
+                items = _pp_bounded_list_elements(obj)
 
         sub_cursor = _FormatCursor(items)
         global _FORMAT_SECTION_DEPTH
         _FORMAT_SECTION_DEPTH += 1
         try:
+            if block_skip:
+                # The block's object was already printed: only the "#n#"
+                # back-reference is output, and the body -- the CLHS
+                # "first, output-suppressed pass" the pprint path models
+                # too -- runs against the throwaway cursor and is
+                # discarded.
+                try:
+                    _format_process_cursor(body_src, sub_cursor)
+                except _FormatEscape:
+                    pass
+                return (block_label, end_pos)
             body_text = _format_process_cursor(body_src, sub_cursor)
         except _FormatEscape as esc:
             # Within the body, ~^ acts like PPRINT-EXIT-IF-LIST-EXHAUSTED:
@@ -4152,6 +4346,12 @@ def _format_directive(control_string, cursor, pos, emitted=None):
             body_text = esc.partial
         finally:
             _FORMAT_SECTION_DEPTH -= 1
+            if circle_owned:
+                # The entry this handler pushed lives exactly for the
+                # body -- the pprint path's `flush_pprint_frame` pops its
+                # own; a leftover depth=-1 entry here would label every
+                # later print against a table whose walk is long over.
+                _PP_CIRCLE_STATES.pop()
 
         # ~:@> -- CLHS 22.3.5.2: "a fill-style conditional newline is
         # automatically inserted after each group of blanks immediately
@@ -4160,8 +4360,12 @@ def _format_directive(control_string, cursor, pos, emitted=None):
         auto_fill = closer_colon and closer_at
         preceding = ''.join(emitted) if emitted else ''
         start_column = _pp_visible_width(preceding.rsplit('\n', 1)[-1])
-        return (_resolve_pretty_body(body_text, start_column, prefix_text,
-                                      suffix_text, per_line, auto_fill),
+        # The block's own `#n=` goes before everything, prefix included --
+        # the same order `pprint_logical_block_setup` emits it in.
+        return (block_label + _resolve_pretty_body(body_text, start_column,
+                                                   prefix_text,
+                                                   suffix_text, per_line,
+                                                   auto_fill),
                 end_pos)
 
     elif directive == '>':
