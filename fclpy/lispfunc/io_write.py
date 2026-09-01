@@ -665,6 +665,31 @@ def _at_line_start(target):
         return text == '' or text.endswith('\n')
     return getattr(target, _AT_LINE_START, True)
 
+
+def _format_seed_colstate(target):
+    """A `_FormatColumn` seeded from `target`'s column -- cheaply.
+
+    This is FORMAT's seed, not FRESH-LINE's: FORMAT calls this on *every*
+    invocation (`format_fn`, and `%FORMATTER`'s returned function), so unlike
+    `_at_line_start` it must not cost more than O(1). `_at_line_start`
+    special-cases `StringOutputStream` by re-reading its whole buffer
+    (`peek_string`, `io.StringIO.getvalue()`) to catch text that reached the
+    stream by some path other than `write_text` -- a correctness nicety
+    FRESH-LINE can afford as an occasional call. FORMAT cannot: every
+    standard output operator (PRINC/PRIN1/WRITE-CHAR/WRITE-STRING/TERPRI/
+    FORMAT itself) already funnels through `write_text`, which stamps
+    `_AT_LINE_START`/`_COLUMN_ATTR` on the stream in O(1) regardless of its
+    type, so reading those attributes directly is accurate for every
+    ordinary program and doesn't turn a `(dotimes (i n) (format s "~A" i))`
+    loop that builds a string of length n into an O(n^2) one by re-scanning
+    the whole accumulated buffer on each of the n calls.
+    """
+    if target is None:
+        return _FormatColumn()
+    return _FormatColumn(getattr(target, _AT_LINE_START, True),
+                          getattr(target, _COLUMN_ATTR, 0))
+
+
 @_registry.cl_function('FINISH-OUTPUT')
 def finish_output(stream=None):
     """FINISH-OUTPUT (CLHS 21.2): ensure `stream`'s output has actually
@@ -3163,11 +3188,19 @@ def _pp_case_convert(text, convert):
 def _pp_visible_width(text):
     """Length of `text` as printed, ignoring any not-yet-resolved sentinels.
 
-    Used only to estimate the column a `~<...~:>` starts at from `emitted`,
-    the same best-effort, control-string-local column `~&` already uses
-    (plan.md's recorded `~&`/FRESH-LINE gap) -- not a claim of a real,
-    stream-wide column.
+    Used to estimate the column a `~<...~:>` starts at from `emitted` (the
+    same best-effort, control-string-local column `~&` used to use --
+    plan.md's recorded `~&`/FRESH-LINE gap -- not a claim of a real,
+    stream-wide column) and, via `_FormatColumn.advance`, on every literal
+    run FORMAT processes. Every sentinel tag starts with `\\x01`, a control
+    character no ordinary printed text contains, so the overwhelmingly
+    common case -- an all-literal run with no pending break/indent/
+    literal-space marker -- skips both regexes rather than paying them per
+    call; `advance` is that per-call site, so this fast path is what keeps a
+    FORMAT-heavy loop from paying regex overhead per character.
     """
+    if '\x01' not in text:
+        return len(text)
     text = _PP_INDENT_RE.sub('', text)
     text = _PP_ANY_SENTINEL_RE.sub('', text)
     return len(text)
@@ -5087,9 +5120,17 @@ def _format_process_cursor(control_string, cursor, colstate=None):
             result.append(_PP_LIT_SPACE_OPEN + literal + _PP_LIT_SPACE_CLOSE)
             colstate.advance(literal)
         else:
-            result.append(c)
-            colstate.advance(c)
-            pos += 1
+            # A run of ordinary literal characters, batched the same way as
+            # the space-run branch above: one `result.append`/`colstate.advance`
+            # for the whole run rather than one Python-level call per
+            # character, which is what a long literal run (or a control
+            # string driven thousands of times in a loop) would otherwise pay.
+            run_start = pos
+            while pos < n and control_string[pos] not in ('~', ' '):
+                pos += 1
+            literal = control_string[run_start:pos]
+            result.append(literal)
+            colstate.advance(literal)
     return ''.join(result)
 
 
@@ -5246,20 +5287,17 @@ def format_fn(destination, control_string, *args):
     # `~&`/`~T` need the real destination stream's column, not just what
     # this one FORMAT call produces -- resolve the same designator
     # `_emit_format_result` below writes to (T means *STANDARD-OUTPUT* here,
-    # CLHS 22.3.1, not *TERMINAL-IO*) and seed `_FormatColumn` from it.
-    # `FORMAT NIL` has no real stream to agree with, so it keeps the old
-    # "assume already fresh" default.
+    # CLHS 22.3.1, not *TERMINAL-IO*) and seed `_FormatColumn` from it, cheaply
+    # (`_format_seed_colstate`, not `_at_line_start` -- this runs on every
+    # FORMAT call). `FORMAT NIL` has no real stream to agree with, so it
+    # keeps the old "assume already fresh" default.
     if destination is True or destination is lisptype.T:
         _seed_target = resolve_output_stream(lisptype.NIL)
     elif destination is None or destination is lisptype.NIL:
         _seed_target = None
     else:
         _seed_target = resolve_output_stream(destination)
-    if _seed_target is None:
-        colstate = _FormatColumn()
-    else:
-        colstate = _FormatColumn(_at_line_start(_seed_target),
-                                  getattr(_seed_target, _COLUMN_ATTR, 0))
+    colstate = _format_seed_colstate(_seed_target)
 
     formatted = _format_process(control_string, args, colstate)
 
@@ -5312,13 +5350,10 @@ def formatter(control_string):
     def format_func(stream, *args):
         # Seed from the real destination's column, same as FORMAT itself --
         # a FORMATTER-returned function is one more way FORMAT output reaches
-        # a stream, and `~&`/`~T` must agree with it there too.
-        _seed_target = resolve_output_stream(stream)
-        if _seed_target is None:
-            colstate = _FormatColumn()
-        else:
-            colstate = _FormatColumn(_at_line_start(_seed_target),
-                                      getattr(_seed_target, _COLUMN_ATTR, 0))
+        # a stream, and `~&`/`~T` must agree with it there too. Cheaply
+        # (`_format_seed_colstate`): this runs on every call, including one
+        # per iteration of a `~{...~}` driven by a FORMATTER function.
+        colstate = _format_seed_colstate(resolve_output_stream(stream))
         # Use internal processor to obtain remaining-args index (tail)
         formatted, consumed = _format_process_with_tail(control_string_str, args, colstate)
         # `_emit_format_result` rather than `write_text`: a formatter called

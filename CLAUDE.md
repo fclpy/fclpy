@@ -100,12 +100,16 @@ happens to miss is still a defect (plan.md §5, and the final gate in §7).
   90 seconds by itself, so even a single isolated test via `run_do_test.py` takes
   ~90s+ before it prints a result — don't assume a run has hung just because
   nothing has printed yet; give it at least 2 minutes. The full ANSI suite via
-  `run_all_tests.py` takes **about 86 minutes** end to end (measured 2026-08-18;
-  113 min at 08-16, ~67 min at 08-15, ~7.5 hours before LOOP got one iteration
-  engine). That figure has moved in *both* directions for real reasons — up
-  when a LOOP fix made `check-type-error` actually call the function under
+  `run_all_tests.py` takes **on the order of 2 hours** end to end — the
+  latest full run (2026-09-01) measured ~124 minutes; 2026-08-31 (the first
+  run measured at CPython's bare default recursion limit, no
+  stack-raising wrapper — see plan.md §1) took 172 minutes. Earlier figures
+  (~86 min at 08-18, 113 min at 08-16) predate that change and are not
+  comparable to it. The number has moved in both directions for real
+  reasons — up when a LOOP fix made a test actually call the function under
   test, down when the printer stopped burning minutes and gigabytes on
-  circular structure — so treat it as a measurement, not a constant.
+  circular structure, up again when a run started measuring under stricter
+  host limits — so treat it as a measurement, not a constant.
   **`scripts/run_ansi.py` is the development loop, not this:** a single group
   is usually 2–30s, though a few are far
   slower because one form in them burns the 600s LOOP cap. **Do not conclude a
@@ -139,9 +143,11 @@ happens to miss is still a defect (plan.md §5, and the final gate in §7).
   `Readtable.readtable_case()` answers a Python string (`'UPCASE'`) for the
   reader and printer, while the Lisp `READTABLE-CASE` answers the *keyword* —
   `case_keyword`/`case_from_designator` are the only two places that convert.
-  **Still absent:** there is no character *syntax type* model, so
-  `SET-SYNTAX-FROM-CHAR` is a stub, and `_read_symbol` upcases unconditionally
-  rather than consulting `readtable-case`.
+  **`Readtable.syntax_type`/`set_syntax_type` is the character syntax-type
+  model** (`readtable.py`), so `SET-SYNTAX-FROM-CHAR` (`io_read.py`) is a
+  real operation rather than the stub it used to be, and `readtable-case` is
+  applied per unescaped character (`lispreader.read_10`'s `_convert_case`),
+  not upcased unconditionally.
 - **`WITH-STANDARD-IO-SYNTAX`** is a `cl_macro` in
   `evaluation_special_forms.py` expanding to the `LET` of CLHS 23.4's
   twenty-one bindings — *not* a `cl_function`, which would evaluate its body
@@ -516,10 +522,11 @@ happens to miss is still a defect (plan.md §5, and the final gate in §7).
     would make them expandable outside the one context CLHS defines them
     in. Do not "fix" this by converting them without first giving
     `DEFINE-METHOD-COMBINATION` a real local-macro environment.
-  Still absent: a real class precedence list. `_specificity_key` orders by
-  *ancestor count*, and `_init_builtin_classes` makes every built-in class a
-  direct subclass of `T`, so `INTEGER`, `RATIONAL` and `NUMBER` are all
-  equally specific and only the (stable) definition order separates them.
+  **`LispClass.get_linearized_superclasses` is a real class precedence list**
+  (`_topological_cpl`, CLHS 4.3.5.1's topological sort), not an ancestor
+  count, and `_init_builtin_classes` wires the real CLHS 4.2 superclass
+  edges from `_BUILTIN_CLASS_TABLE` rather than making every built-in class
+  a direct subclass of `T`.
   Note also that `classes.py` still defines module-level `find_class`
   **twice** (the first, at `:510`, is dead); `scripts/duplicates.py` tracks
   it, along with `CALL-NEXT-METHOD`/`CLASS-OF`/`FIND-CLASS` each being
@@ -535,11 +542,10 @@ happens to miss is still a defect (plan.md §5, and the final gate in §7).
   the `LISP_CWD` candidate unconditionally where the others took it only if it
   existed — so OPEN and PROBE-FILE could resolve one relative name to two
   different files. It always returns a path, existing or not, so a caller can
-  *name* a missing file. **`Pathname` is still a namestring wrapper, not a
-  component record**, so `MAKE-PATHNAME`/`MERGE-PATHNAMES`/`DIRECTORY` cannot
-  compose components: `(directory (make-pathname :version :wild :defaults p))`
-  answers no files, which is what gates most of `files/` and `pathnames/`
-  (plan.md C11).
+  *name* a missing file. **`Pathname` is a component record**
+  (`host`/`device`/`directory`/`name`/`type`/`version`/`logical`), not a
+  namestring wrapper, so `MAKE-PATHNAME`/`MERGE-PATHNAMES`/`DIRECTORY` do
+  compose components; `files/` and `pathnames/` are both at 100%.
 - **`LOAD` and `COMPILE-FILE`** live together in `lispfunc/misc_macros.py`
   because they are the same operation read from two ends — both read a file
   form by form with `*PACKAGE*` and `*READTABLE*` bound through
@@ -586,7 +592,7 @@ happens to miss is still a defect (plan.md §5, and the final gate in §7).
 
 ## The development loop
 
-**Never start with `run_all_tests.py`.** It is ~86 minutes, it moves the
+**Never start with `run_all_tests.py`.** It is on the order of 2 hours, it moves the
 official scoreboard and nothing else, and it is not how a fix is verified. The
 loop is `scripts/run_ansi.py`, which loads only the harness plus the files you
 name and is usually 2–30 seconds:
@@ -650,7 +656,7 @@ name and is usually 2–30 seconds:
    - Worth it after a change with wide blast radius (a binder, the printer,
      the reader, the type lattice) even when step 6 looked clean.
 
-   Otherwise, don't. It is ~86 minutes.
+   Otherwise, don't. It is on the order of 2 hours.
 
 ### Rules for this loop
 1. One mechanism at a time — fix it, verify it, move on. Don't batch unrelated
@@ -808,13 +814,15 @@ pipenv run python -c "import sys; sys.path.insert(0,'.'); from fclpy import lisp
   (`except (ReturnFromException, ThrowException, GoException)` in
   `evaluation_core.py`'s APPLY/FUNCALL and the special forms), or the one site
   you miss silently converts a control transfer into an error — plan.md
-  Finding K's defect class. Prefer subclassing an existing one, as
-  `HandlerCaseTransfer` subclasses `ThrowException`, so the existing tuples
-  cover it. **`lisptype.RestartException` does *not* subclass any of them and is
-  in none of those tuples** — `funcall` wraps it into a condition, which is why
-  a handler still cannot invoke a restart (confirmed, see plan.md's Discovered
-  issues). Note also that `lisptype.Error` extends `BaseException`, not
-  `Exception`, so `except Exception` does not catch a directly-raised one.
+  Finding K's defect class. **Prefer subclassing an existing one** rather than
+  adding a new member to every tuple by hand: `HandlerCaseTransfer` and
+  `RestartCaseTransfer` (a RESTART-CASE-invoked restart's non-local exit back
+  to the establishing form, CLHS 9.2) both subclass `ThrowException`, so the
+  existing tuples cover them automatically. `RestartCaseTransfer` replaced an
+  earlier `RestartException` that did *not* subclass any of them — the same
+  defect class, fixed by subclassing instead of chasing every call site. Note
+  also that `lisptype.Error` extends `BaseException`, not `Exception`, so
+  `except Exception` does not catch a directly-raised one.
 - `merge-pathnames` must tell apart "defaults names a file" (use its parent
   directory) from "defaults names a directory" (use as-is); getting this backward
   makes `LOAD` resolve relative paths to the wrong place.
