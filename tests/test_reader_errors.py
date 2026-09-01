@@ -1,314 +1,233 @@
 """
-Tests for reader error handling.
+Tests for reader error handling -- against the reader the implementation uses.
 
-Tests that appropriate exceptions are raised for malformed input.
+These tests read through `fclpy.tokenizer` -> `fclpy.lispreader` ->
+`fclpy.readtable`, the path every form the interpreter evaluates goes through
+(CLAUDE.md's architecture map).
 
-WARNING -- these tests exercise `fclpy.reader`, which is NOT the reader the
-implementation uses. The live reader is `fclpy.tokenizer` -> `fclpy.lispreader`
--> `fclpy.readtable` (see CLAUDE.md's architecture map); `fclpy.reader` is a
-separate ~480-line implementation that no module under `fclpy/` imports -- only
-four test files do (this one, test_printer.py, test_reader_and_packages.py,
-test_roundtrip.py). So ~177 tests here cover a dead duplicate while the real
-reader goes untested at the unit level, and the two disagree on conformance:
-`fclpy.reader` splits "123abc" into 123, the real reader correctly returns the
-symbol |123ABC|. Repointing these at the live reader (or retiring the duplicate)
-is tracked in plan.md; until then, treat green here as evidence about dead code.
+They previously imported `fclpy.reader`, a separate ~480-line reader that no
+module under `fclpy/` imported (deleted 2026-09-01), so they measured dead code
+while the real reader went untested at the unit level -- and the two disagree on conformance: the dead
+one splits "123abc" into the integer 123 and "1.2.3" into the float 1.2, while
+the live reader correctly answers the symbols |123ABC| and |1.2.3|. Two tests
+were therefore parked as `xfail(strict=True)` describing a defect the shipping
+reader does not have.
+
+The live reader reports failure two ways, and the distinction is the ANSI one
+(CLHS 23.1 / `READ`):
+
+* input that ends in the middle of an object -> `EOFError`
+* input that is malformed -> `ReaderErrorSignal`
 """
 
 import pytest
+
+from conftest import read, read_all
+from fclpy.lispreader import ReaderErrorSignal
 from fclpy.lisptype import LispSymbol
-from fclpy.reader import (
-    Reader, read, read_all,
-    ReaderError, UnexpectedEOF, UnbalancedParen, InvalidNumber
-)
 
 
-class TestUnexpectedEOFErrors:
-    """Test UnexpectedEOF exceptions."""
-    
+class TestEndOfFileErrors:
+    """Input that ends in the middle of an object signals EOF."""
+
     def test_eof_in_list(self):
-        """Test EOF while reading list."""
-        with pytest.raises(UnexpectedEOF):
+        with pytest.raises(EOFError):
             read("(a b c")
-    
+
     def test_eof_in_nested_list(self):
-        """Test EOF in nested list."""
-        with pytest.raises(UnexpectedEOF):
+        with pytest.raises(EOFError):
             read("(a (b c)")
-    
+
     def test_eof_in_string(self):
-        """Test EOF while reading string."""
-        with pytest.raises(UnexpectedEOF):
+        with pytest.raises(EOFError):
             read('"unclosed string')
-    
+
     def test_eof_in_vector(self):
-        """Test EOF while reading vector."""
-        with pytest.raises(UnexpectedEOF):
+        with pytest.raises(EOFError):
             read("#(1 2 3")
-    
-    def test_eof_empty_input(self):
-        """Test EOF on empty input."""
-        with pytest.raises(UnexpectedEOF):
-            read("")
-    
-    def test_eof_whitespace_only(self):
-        """Test EOF on whitespace-only input."""
-        with pytest.raises(UnexpectedEOF):
-            read("   \n  \t  ")
-    
+
     def test_eof_in_block_comment(self):
-        """Test EOF in unclosed block comment."""
-        with pytest.raises(UnexpectedEOF):
+        with pytest.raises(EOFError):
             read("#|unclosed comment")
 
+    def test_empty_input_is_not_a_partial_object(self):
+        """Empty input ends cleanly rather than mid-object.
 
-class TestUnbalancedParenErrors:
-    """Test UnbalancedParen exceptions."""
-    
+        `read_1` answers None, which is what lets `read_all` and the LOAD/
+        COMPILE-FILE form loops stop; it is not the ANSI `READ` boundary, where
+        `(read s)` on empty input signals END-OF-FILE and `(read s nil :eof)`
+        answers :eof. That distinction is tested at the Lisp level.
+        """
+        assert read("") is None
+
+    def test_whitespace_only_input_is_not_a_partial_object(self):
+        assert read("   \n  \t  ") is None
+
+
+class TestMalformedSyntaxErrors:
+    """Malformed input signals a reader error."""
+
     def test_extra_closing_paren(self):
-        """Test extra closing parenthesis."""
-        with pytest.raises(UnbalancedParen):
+        with pytest.raises(ReaderErrorSignal):
             read(")")
-    
-    def test_extra_closing_paren_in_list(self):
-        """Test extra closing paren after valid list."""
-        # read() reads just one object, so this will read (a b c) successfully
-        # The extra ) would be a second read_all issue
-        result = read("(a b c)")
-        assert result is not None  # Just reads the list, ignores extra )
-    
-    def test_multiple_extra_closing_parens(self):
-        """Test multiple extra closing parens."""
-        with pytest.raises(UnbalancedParen):
-            read(")")
-    
-    def test_unbalanced_in_middle(self):
-        """Test unbalanced parens in middle of expression."""
-        # read() reads first object (a ), then ignores the rest
-        result = read("(a ) b)")
-        assert result is not None  # Reads the first list
+
+    def test_closing_paren_before_any_object(self):
+        with pytest.raises(ReaderErrorSignal):
+            read(") (a b c")
+
+    def test_reads_one_object_and_leaves_the_rest(self):
+        """`read` consumes one object; a later stray `)` is not its problem."""
+        assert str(read("(a b c)")) == "(A B C)"
+
+    def test_stops_at_the_first_complete_object(self):
+        assert str(read("(a ) b)")) == "(A)"
 
 
 class TestDottedListErrors:
-    """Test errors in dotted list syntax."""
-    
+    """Errors in dotted-list syntax."""
+
     def test_dot_at_start(self):
-        """Test dot at start of list."""
-        with pytest.raises(ReaderError):
+        with pytest.raises(ReaderErrorSignal):
             read("(. a)")
-    
+
     def test_dot_missing_tail(self):
-        """Test dot without tail."""
-        with pytest.raises(ReaderError):
+        with pytest.raises(ReaderErrorSignal):
             read("(a b .)")
-    
+
     def test_dot_outside_list(self):
-        """Test bare dot outside list."""
-        with pytest.raises(ReaderError):
+        with pytest.raises(ReaderErrorSignal):
             read(".")
 
+    def test_two_dots_in_one_list(self):
+        with pytest.raises(ReaderErrorSignal):
+            read("(a . b . c)")
 
-class TestInvalidNumberErrors:
-    """Test handling of invalid numbers."""
-    
-    # CLHS 2.3.1: token accumulation stops only at whitespace or a terminating
-    # macro character, so "123abc" and "1.2.3" are each ONE token. Neither is a
-    # potential number (CLHS 2.3.1.1 -- "abc" is three adjacent letters, so they
-    # are not number markers), so both are read as symbols. A reader must never
-    # split a token at a digit/letter boundary.
-    #
-    # These two tests previously asserted the opposite: that "123abc" reads as
-    # the integer 123. The other one asserted `result is not None or result is
-    # None`, a tautology that could not fail. Both now state the ANSI answer and
-    # are marked xfail(strict) against `fclpy.reader`, so they will start failing
-    # -- loudly, as unexpected passes -- the moment that module is fixed or
-    # retired, instead of certifying the bug as correct.
-    #
-    # NOTE: the *real* reader (fclpy.tokenizer -> fclpy.lispreader), the one the
-    # ANSI suite runs through, already gets both of these right: it returns the
-    # symbols |123ABC| and |1.2.3|. `fclpy.reader` is a separate 480-line
-    # implementation that no production code imports -- see the note at the top
-    # of this file.
+    def test_valid_dotted_list(self):
+        assert str(read("(a b c . d)")) == "(A B C . D)"
 
-    @pytest.mark.xfail(strict=True,
-                       reason="fclpy.reader splits '1.2.3' into the float 1.2; "
-                              "ANSI reads it as the symbol |1.2.3|")
-    def test_invalid_float_format(self):
-        """"1.2.3" is a single token and reads as a symbol, not a float."""
-        result = read("1.2.3")
-        assert isinstance(result, LispSymbol)
-        assert result.name == "1.2.3"
 
-    @pytest.mark.xfail(strict=True,
-                       reason="fclpy.reader splits '123abc' into the integer 123; "
-                              "ANSI reads it as the symbol |123ABC|")
-    def test_number_with_invalid_suffix(self):
-        """"123abc" is a single token and reads as a symbol, not an integer."""
+class TestTokenAccumulation:
+    """A token ends only at whitespace or a terminating macro character.
+
+    CLHS 2.3.1: token accumulation does not stop at a digit/letter boundary, so
+    "123abc" and "1.2.3" are each ONE token and a reader must never split one
+    into a number plus a remainder.
+    """
+
+    def test_letters_after_digits_read_as_one_symbol(self):
+        """"123abc" is not a potential number, so it is a symbol.
+
+        CLHS 2.3.1.1: a letter may act as a number marker, but "no letter that
+        is adjacent to another letter may ever be treated as a number marker" --
+        a, b and c are mutually adjacent, so the token contains letters that are
+        not number markers and is not a potential number. |123ABC| is required.
+        """
         result = read("123abc")
         assert isinstance(result, LispSymbol)
         assert result.name == "123ABC"
 
+    def test_multiple_decimal_points_read_as_one_token(self):
+        """"1.2.3" must not be split into the float 1.2 plus ".3".
+
+        Unlike "123abc" this token *is* a potential number (digits and decimal
+        points only -- CLHS 2.3.1.1 lists `3.1.2.6` as an example), so it is a
+        *reserved token* whose interpretation is implementation-dependent and
+        for which CLHS explicitly permits signalling a reader-error. A symbol is
+        this implementation's choice; what is not permitted, and what is
+        asserted here, is consuming only part of the token.
+        """
+        result = read("1.2.3")
+        assert isinstance(result, LispSymbol)
+        assert result.name == "1.2.3"
+
+    def test_potential_numbers_that_are_not_numbers(self):
+        """CLHS 2.3.1.1's own examples of potential numbers that are not
+        numbers: each is one token, never split."""
+        for text, name in (("1b5000", "1B5000"),
+                           ("12/25/83", "12/25/83"),
+                           ("3.1.2.6", "3.1.2.6")):
+            result = read(text)
+            assert isinstance(result, LispSymbol), text
+            assert result.name == name
+
 
 class TestErrorMessages:
-    """Test that error messages are informative."""
-    
+    """A failure carries a message."""
+
     def test_eof_error_has_message(self):
-        """Test that UnexpectedEOF has a message."""
-        try:
+        with pytest.raises(EOFError) as info:
             read("(a b c")
-        except UnexpectedEOF as e:
-            assert str(e)  # Has some message
-    
-    def test_unbalanced_error_has_message(self):
-        """Test that UnbalancedParen has a message."""
-        try:
-            read(")")
-        except UnbalancedParen as e:
-            assert str(e)
-    
+        assert str(info.value)
+
     def test_reader_error_has_message(self):
-        """Test that ReaderError has a message."""
-        try:
+        with pytest.raises(ReaderErrorSignal) as info:
             read("(. a)")
-        except ReaderError as e:
-            assert str(e)
+        assert str(info.value)
 
 
 class TestRecoveryScenarios:
-    """Test reader behavior in error scenarios."""
-    
+    """The reader is usable after a failure."""
+
     def test_read_after_error(self):
-        """Test that reader can be used after an error."""
-        reader = Reader()
-        
-        # First read fails
-        with pytest.raises(UnexpectedEOF):
-            reader.read("(a b c")
-        
-        # Second read should work
-        result = reader.read("42")
-        assert result == 42
-    
-    def test_read_all_with_error(self):
-        """Test read_all behavior with error."""
-        # read_all should raise on first error
-        with pytest.raises(UnexpectedEOF):
+        with pytest.raises(EOFError):
+            read("(a b c")
+        assert read("42") == 42
+
+    def test_read_all_propagates_a_partial_final_object(self):
+        with pytest.raises(EOFError):
             read_all("1 2 (a b c")
+
+    def test_read_all_reads_every_object(self):
+        assert [str(x) for x in read_all("1 2 3")] == ["1", "2", "3"]
 
 
 class TestComplexErrorScenarios:
-    """Test complex error scenarios."""
-    
+    """Failures inside nested and dispatched syntax."""
+
     def test_nested_list_with_unclosed_inner(self):
-        """Test nested list where inner list is unclosed."""
-        with pytest.raises(UnexpectedEOF):
+        with pytest.raises(EOFError):
             read("(a (b c d) (e f g")
-    
-    def test_multiple_errors_first_wins(self):
-        """Test that first error is reported."""
-        with pytest.raises(UnbalancedParen):
-            read(") (a b c")  # First character is error
-    
+
     def test_quoted_form_with_eof(self):
-        """Test quoted form with EOF."""
-        with pytest.raises(UnexpectedEOF):
+        with pytest.raises(EOFError):
             read("'(a b c")
-    
-    def test_vector_with_eof(self):
-        """Test vector literal with EOF."""
-        with pytest.raises(UnexpectedEOF):
-            read("#(1 2 3")
-    
+
     def test_function_quote_with_eof(self):
-        """Test function quote with EOF."""
-        with pytest.raises(UnexpectedEOF):
+        with pytest.raises(EOFError):
             read("#'(lambda (x)")
 
-
-class TestErrorTypes:
-    """Test specific error type hierarchy."""
-    
-    def test_unexpected_eof_is_reader_error(self):
-        """Test that UnexpectedEOF is a ReaderError."""
-        try:
-            read("(a b c")
-        except ReaderError:
-            pass  # Caught as ReaderError
-        except Exception:
-            pytest.fail("UnexpectedEOF not caught as ReaderError")
-    
-    def test_unbalanced_paren_is_reader_error(self):
-        """Test that UnbalancedParen is a ReaderError."""
-        try:
-            read(")")
-        except ReaderError:
-            pass  # Caught as ReaderError
-        except Exception:
-            pytest.fail("UnbalancedParen not caught as ReaderError")
-    
-    def test_catch_all_reader_errors(self):
-        """Test catching all ReaderError types."""
-        error_inputs = [
-            "(a b c",        # UnexpectedEOF
-            ")",             # UnbalancedParen
-            "(. a)",         # ReaderError
-        ]
-        
-        for input_str in error_inputs:
-            with pytest.raises(ReaderError):
-                read(input_str)
-
-
-class TestErrorEdgeCases:
-    """Test edge cases in error handling."""
-    
-    def test_multiple_dots_in_list(self):
-        """Test multiple dots in dotted list."""
-        with pytest.raises(ReaderError):
-            read("(a . b . c)")
-    
     def test_deeply_nested_with_unclosed(self):
-        """Test deeply nested structure with unclosed paren."""
-        with pytest.raises(UnexpectedEOF):
+        with pytest.raises(EOFError):
             read("(a (b (c (d (e f")
-    
+
     def test_comment_in_unclosed_list(self):
-        """Test unclosed list with comment."""
-        with pytest.raises(UnexpectedEOF):
+        with pytest.raises(EOFError):
             read("(a b ; comment\nc d")
-    
+
     def test_string_in_unclosed_list(self):
-        """Test unclosed list with string."""
-        with pytest.raises(UnexpectedEOF):
+        with pytest.raises(EOFError):
             read('(a "string" b')
 
 
 class TestValidInputNotErroring:
-    """Test that valid input doesn't raise errors."""
-    
+    """Valid input reads to the expected object."""
+
     def test_complex_valid_expression(self):
-        """Test complex valid expression doesn't error."""
-        result = read('(defun foo (x y) (+ x y))')
-        assert result is not None
-    
+        assert str(read("(defun foo (x y) (+ x y))")) == "(DEFUN FOO (X Y) (+ X Y))"
+
     def test_deeply_nested_valid(self):
-        """Test deeply nested valid structure."""
-        result = read("(a (b (c (d (e f)))))")
-        assert result is not None
-    
+        assert str(read("(a (b (c (d (e f)))))")) == "(A (B (C (D (E F)))))"
+
     def test_mixed_valid(self):
-        """Test mixed valid elements."""
         result = read('(1 "string" :keyword foo #\\A #(1 2 3))')
         assert result is not None
-    
-    def test_dotted_list_valid(self):
-        """Test valid dotted list."""
-        result = read("(a b c . d)")
-        assert result is not None
-    
-    def test_quoted_valid(self):
-        """Test valid quoted forms."""
-        result1 = read("'foo")
-        result2 = read("`(a ,b)")
-        result3 = read("#'foo")
-        assert all(r is not None for r in [result1, result2, result3])
+        assert str(result).startswith("(1 string :KEYWORD FOO ")
+
+    def test_quote_reader_macro(self):
+        assert str(read("'foo")) == "(QUOTE FOO)"
+
+    def test_backquote_reader_macro(self):
+        assert str(read("`(a ,b)")) == "(QUASIQUOTE (A (UNQUOTE B)))"
+
+    def test_function_reader_macro(self):
+        assert str(read("#'foo")) == "(FUNCTION FOO)"

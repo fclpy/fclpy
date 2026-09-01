@@ -447,17 +447,19 @@ class TestFormatDirectivesUseThePrinter:
         """
         assert ev(f'(format nil {control})') == expected
 
-    @pytest.mark.xfail(strict=True, reason=(
-        "`~&` knows only the column within its own control string, because "
-        "FORMAT builds its whole output as a string before writing it to the "
-        "stream. So a `~&` that is the first thing in a control string cannot "
-        "see that the stream is already mid-line, and emits nothing where "
-        "FRESH-LINE correctly emits a newline. Fixing it means threading the "
-        "stream's column into FORMAT's directive engine through all eleven "
-        "nested `_format_process_cursor` call sites -- FORMAT's engine, plan.md "
-        "C2, not the printer. Recorded in plan.md section 5."))
     def test_fresh_line_and_tilde_ampersand_agree(self):
-        """`~&` and FRESH-LINE are one operation and must give one answer."""
+        """`~&` and FRESH-LINE are one operation and must give one answer.
+
+        `~&` used to know only the column within its own control string,
+        because FORMAT built its whole output as a string before writing it
+        to the stream -- so a `~&` that was the first thing in a control
+        string could not see that the stream was already mid-line, and
+        emitted nothing where FRESH-LINE correctly emitted a newline. Fixed
+        by threading the stream's real column into FORMAT's directive engine
+        (`_FormatColumn`, `io_write.py`) through every nested
+        `_format_process_cursor` call site, seeded from the destination
+        stream before FORMAT builds any output (plan.md C2).
+        """
         via_format = ev('(with-output-to-string (*standard-output*) '
                         '(princ "a") (format t "~&"))')
         via_function = ev('(with-output-to-string (*standard-output*) '

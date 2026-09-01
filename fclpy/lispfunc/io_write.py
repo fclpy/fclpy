@@ -2012,6 +2012,48 @@ class _FormatCursor:
         return len(self.args) - self.idx
 
 
+class _FormatColumn:
+    """The destination stream's real column, threaded through every nested
+    `_format_process_cursor` frame of one top-level FORMAT/FORMATTER call.
+
+    `~&` used to read only `emitted`, the chunks *that one frame* had
+    produced -- so each nested construct (`~<...~>`, `~[...~]`, `~(...~)`,
+    `~{...~}`, `~?`) started its sub-call with an empty `emitted` and could
+    not see text an enclosing clause had already emitted, still less what
+    the destination stream already held before this FORMAT call began. That
+    is the gap `test_fresh_line_and_tilde_ampersand_agree` names: `(princ
+    "a")` then `(format t "~&")` on the same stream must agree with
+    FRESH-LINE, and FRESH-LINE looks at the stream, not at a FORMAT-local
+    buffer (plan.md C2). One instance is created per top-level call, seeded
+    from the real stream via `_at_line_start`/`_COLUMN_ATTR`, and every frame
+    advances the *same* instance -- unlike `_FormatCursor`, which some
+    constructs (`~{...~}` per item, plain `~?`) deliberately give a fresh
+    instance for independent argument scope, column state is never scoped to
+    an argument list and so is always shared.
+
+    `~T`/`~<...~:;...~>` keep reading `_current_column(emitted)` rather than
+    this: their body-local reset is what gives `~:T`/`~:@T` (PPRINT-TAB's
+    :section forms) a column measured from the enclosing logical block's own
+    body start rather than the stream's absolute column, which is correct
+    per CLHS 22.2.1 -- not the same gap, and not this fix's target.
+    """
+    __slots__ = ('at_line_start', 'column')
+
+    def __init__(self, at_line_start=True, column=0):
+        self.at_line_start = at_line_start
+        self.column = column
+
+    def advance(self, text):
+        if not text:
+            return
+        nl = text.rfind('\n')
+        if nl == -1:
+            self.column += _pp_visible_width(text)
+        else:
+            self.column = _pp_visible_width(text[nl + 1:])
+        self.at_line_start = text.endswith('\n')
+
+
 class _FormatEscape(Exception):
     """Raised by `~^` to terminate the enclosing iteration or control string.
 
@@ -3764,7 +3806,7 @@ def _in_pretty_section():
     return _printer._true(_printer.resolve_control('*PRINT-PRETTY*'))
 
 
-def _format_directive(control_string, cursor, pos, emitted=None):
+def _format_directive(control_string, cursor, pos, emitted=None, colstate=None):
     """Process a single format directive starting at pos (after ~).
 
     Consumes arguments from `cursor` (a _FormatCursor), mutating it in
@@ -4015,15 +4057,20 @@ def _format_directive(control_string, cursor, pos, emitted=None):
         # ~n& - a fresh line, then n-1 further newlines (CLHS 22.3.1.3).
         #
         # It used to emit n newlines unconditionally, with the comment "we
-        # don't track column". The column within this control string is exactly
-        # what has been emitted so far, so `~&` is a fresh line for the same
-        # reason FRESH-LINE is: emit one only if the output does not already
-        # end at a line boundary. `~0&` emits nothing at all.
+        # don't track column". `~&` is a fresh line for the same reason
+        # FRESH-LINE is: emit one only if the output does not already end at
+        # a line boundary -- and "the output" means the real destination
+        # stream (`colstate`, seeded from it and advanced by every nested
+        # clause), not just what this control string has produced so far.
+        # Reading only `emitted` -- empty at the very start of a control
+        # string, and again at the start of every nested `~[...~]`/`~<...~>`/
+        # `~(...~)`/`~{...~}` clause -- is what made `(princ "a") (format t
+        # "~&")` disagree with `(princ "a") (fresh-line)` (plan.md C2).
+        # `~0&` emits nothing at all.
         count = _format_repeat_count(params)
         if count <= 0:
             return ('', pos)
-        preceding = ''.join(emitted) if emitted else ''
-        needs_fresh_line = preceding != '' and not preceding.endswith('\n')
+        needs_fresh_line = colstate is not None and not colstate.at_line_start
         return ('\n' * (count - 1 + int(needs_fresh_line)), pos)
 
     elif directive == '~':
@@ -4091,13 +4138,13 @@ def _format_directive(control_string, cursor, pos, emitted=None):
                 # consumes from the same cursor, and only what it actually uses
                 # is unavailable to directives that follow the ~? in the outer
                 # control string.
-                result = _format_process_cursor(str(fmt_str) if fmt_str else '', cursor)
+                result = _format_process_cursor(str(fmt_str) if fmt_str else '', cursor, colstate)
             else:
                 # ~? without @ takes its own separate argument list - not the
                 # outer cursor - so it gets a fresh, independent cursor.
                 fmt_args = get_arg()
                 sub_cursor = _FormatCursor(_format_args_list(fmt_args))
-                result = _format_process_cursor(str(fmt_str) if fmt_str else '', sub_cursor)
+                result = _format_process_cursor(str(fmt_str) if fmt_str else '', sub_cursor, colstate)
         except _FormatEscape as esc:
             if esc.terminate_outer:
                 raise
@@ -4211,7 +4258,7 @@ def _format_directive(control_string, cursor, pos, emitted=None):
             escaped = False
             for seg in segments:
                 try:
-                    texts.append(_pp_strip_lit_space(_format_process_cursor(seg, cursor)))
+                    texts.append(_pp_strip_lit_space(_format_process_cursor(seg, cursor, colstate)))
                 except _FormatEscape:
                     # CLHS 22.3.6.2: a `~^` inside a segment terminates the
                     # whole justification, and the segment it appears in is
@@ -4334,11 +4381,11 @@ def _format_directive(control_string, cursor, pos, emitted=None):
                 # too -- runs against the throwaway cursor and is
                 # discarded.
                 try:
-                    _format_process_cursor(body_src, sub_cursor)
+                    _format_process_cursor(body_src, sub_cursor, colstate)
                 except _FormatEscape:
                     pass
                 return (block_label, end_pos)
-            body_text = _format_process_cursor(body_src, sub_cursor)
+            body_text = _format_process_cursor(body_src, sub_cursor, colstate)
         except _FormatEscape as esc:
             # Within the body, ~^ acts like PPRINT-EXIT-IF-LIST-EXHAUSTED:
             # it ends the body, not the whole enclosing control string
@@ -4428,7 +4475,7 @@ def _format_directive(control_string, cursor, pos, emitted=None):
             convert = _ansi_lower
 
         try:
-            inner_result = _format_process_cursor(inner, cursor)
+            inner_result = _format_process_cursor(inner, cursor, colstate)
         except _FormatEscape as esc:
             # CLHS 22.3.9.2: a `~^` inside a `~(` terminates the case
             # conversion, but "all the commands up to the ~^ are properly
@@ -4526,16 +4573,16 @@ def _format_directive(control_string, cursor, pos, emitted=None):
             if val is lisptype.T:
                 is_true = True
             if is_true:
-                result = _format_process_cursor(clauses[1] if len(clauses) > 1 else '', cursor)
+                result = _format_process_cursor(clauses[1] if len(clauses) > 1 else '', cursor, colstate)
             else:
-                result = _format_process_cursor(clauses[0] if clauses else '', cursor)
+                result = _format_process_cursor(clauses[0] if clauses else '', cursor, colstate)
         elif at_flag:
             # ~@[ test ~] - if arg is non-nil, process with arg, else skip
             val = get_arg()
             if val is not None and val is not lisptype.NIL and val is not False:
                 # Put the value back; the clause consumes it itself.
                 cursor.idx -= 1
-                result = _format_process_cursor(clauses[0] if clauses else '', cursor)
+                result = _format_process_cursor(clauses[0] if clauses else '', cursor, colstate)
             else:
                 result = ''
         else:
@@ -4553,9 +4600,9 @@ def _format_directive(control_string, cursor, pos, emitted=None):
             else:
                 idx = _lisp_number(get_arg(), -1)
             if 0 <= idx < len(clauses):
-                result = _format_process_cursor(clauses[idx], cursor)
+                result = _format_process_cursor(clauses[idx], cursor, colstate)
             elif default_clause is not None and default_clause < len(clauses):
-                result = _format_process_cursor(clauses[default_clause], cursor)
+                result = _format_process_cursor(clauses[default_clause], cursor, colstate)
             else:
                 result = ''
 
@@ -4747,7 +4794,7 @@ def _format_directive(control_string, cursor, pos, emitted=None):
                     sub_cursor = _FormatCursor(_format_args_list(item),
                                                last_item=(item_index == last_index))
                     try:
-                        result_parts.append(_format_process_cursor(inner, sub_cursor))
+                        result_parts.append(_format_process_cursor(inner, sub_cursor, colstate))
                     except _FormatEscape as esc:
                         # CLHS 22.3.9.2: inside ~:{...~}, a plain ~^ ends only
                         # the current sublist's pass, while ~:^ ends the whole
@@ -4824,7 +4871,7 @@ def _format_directive(control_string, cursor, pos, emitted=None):
                     continue
                 sub_cursor = _FormatCursor(item_list)
                 try:
-                    result_parts.append(_format_process_cursor(inner, sub_cursor))
+                    result_parts.append(_format_process_cursor(inner, sub_cursor, colstate))
                 except _FormatEscape as esc:
                     result_parts.append(esc.partial)
                     # The escaping pass may have consumed some items before
@@ -4984,7 +5031,7 @@ def _format_directive(control_string, cursor, pos, emitted=None):
         return ('~' + directive, pos)
 
 
-def _format_process_cursor(control_string, cursor):
+def _format_process_cursor(control_string, cursor, colstate=None):
     """Process a format control string, consuming arguments from `cursor`.
 
     This is the shared core: passing the *same* cursor into a nested call
@@ -4993,7 +5040,19 @@ def _format_process_cursor(control_string, cursor):
     string - the structural fix for FORMAT's argument-cursor model. Passing
     a *fresh* cursor (used per-item by ~{...~}, and by plain ~?) gives a
     nested control string its own independent argument scope, per CLHS.
+
+    `colstate`, unlike the cursor, is always the *same* `_FormatColumn`
+    instance across every nested call of one top-level FORMAT: it tracks the
+    destination stream's real column, not an argument scope, so every
+    literal character and directive result advances it here as soon as it is
+    produced -- the one place all of a control string's output (nested
+    clauses included) passes through, which is what lets `~&`/`~T` see
+    column state an enclosing clause (or a call before this FORMAT) already
+    established. A caller that has no real stream context (`FORMAT NIL`, or
+    any call that predates this parameter) gets a fresh throwaway instance.
     """
+    if colstate is None:
+        colstate = _FormatColumn()
     result = []
     pos = 0
     n = len(control_string)
@@ -5003,7 +5062,7 @@ def _format_process_cursor(control_string, cursor):
             pos += 1
             try:
                 output, pos = _format_directive(control_string, cursor, pos,
-                                               emitted=result)
+                                               emitted=result, colstate=colstate)
             except _FormatEscape as esc:
                 # `~^` abandons the rest of *this* control string but keeps
                 # what it already produced (CLHS 22.3.9.2). Each frame
@@ -5012,6 +5071,7 @@ def _format_process_cursor(control_string, cursor):
                 esc.partial = ''.join(result) + esc.partial
                 raise
             result.append(output)
+            colstate.advance(output)
         elif c == ' ':
             # Bracket a run of *literal* control-string spaces so a
             # `~<...~:@>` enclosing this text can later tell them apart from
@@ -5023,17 +5083,19 @@ def _format_process_cursor(control_string, cursor):
             run_start = pos
             while pos < n and control_string[pos] == ' ':
                 pos += 1
-            result.append(_PP_LIT_SPACE_OPEN + control_string[run_start:pos]
-                           + _PP_LIT_SPACE_CLOSE)
+            literal = control_string[run_start:pos]
+            result.append(_PP_LIT_SPACE_OPEN + literal + _PP_LIT_SPACE_CLOSE)
+            colstate.advance(literal)
         else:
             result.append(c)
+            colstate.advance(c)
             pos += 1
     return ''.join(result)
 
 
-def _format_process(control_string, args):
+def _format_process(control_string, args, colstate=None):
     """Process a format control string with arguments (fresh cursor)."""
-    return _format_process_with_tail(control_string, args)[0]
+    return _format_process_with_tail(control_string, args, colstate)[0]
 
 
 def _pp_resolve_bare_breaks(text):
@@ -5086,7 +5148,7 @@ def _emit_format_result(formatted, stream):
     write_text(formatted, stream)
 
 
-def _format_process_with_tail(control_string, args):
+def _format_process_with_tail(control_string, args, colstate=None):
     """Like _format_process but also return the number of arguments consumed
     (i.e. the index of the first remaining argument)."""
     # CLHS 22.3.6.2's restrictions are properties of the *control string*, not
@@ -5095,9 +5157,11 @@ def _format_process_with_tail(control_string, args):
     # cannot see whether a `~<...~:;...~>` appears elsewhere in the string.
     _check_justification_conflicts(control_string)
 
+    if colstate is None:
+        colstate = _FormatColumn()
     cursor = _FormatCursor(args)
     try:
-        result = _format_process_cursor(control_string, cursor)
+        result = _format_process_cursor(control_string, cursor, colstate)
     except _FormatEscape as esc:
         # A `~^` outside any iteration terminates the control string itself;
         # this is the outermost frame, so the escape stops here rather than
@@ -5179,7 +5243,25 @@ def format_fn(destination, control_string, *args):
     elif not isinstance(control_string, str):
         control_string = str(control_string)
 
-    formatted = _format_process(control_string, args)
+    # `~&`/`~T` need the real destination stream's column, not just what
+    # this one FORMAT call produces -- resolve the same designator
+    # `_emit_format_result` below writes to (T means *STANDARD-OUTPUT* here,
+    # CLHS 22.3.1, not *TERMINAL-IO*) and seed `_FormatColumn` from it.
+    # `FORMAT NIL` has no real stream to agree with, so it keeps the old
+    # "assume already fresh" default.
+    if destination is True or destination is lisptype.T:
+        _seed_target = resolve_output_stream(lisptype.NIL)
+    elif destination is None or destination is lisptype.NIL:
+        _seed_target = None
+    else:
+        _seed_target = resolve_output_stream(destination)
+    if _seed_target is None:
+        colstate = _FormatColumn()
+    else:
+        colstate = _FormatColumn(_at_line_start(_seed_target),
+                                  getattr(_seed_target, _COLUMN_ATTR, 0))
+
+    formatted = _format_process(control_string, args, colstate)
 
     if destination is True or destination is lisptype.T:
         # FORMAT's `destination` is not a plain stream designator: `t` means
@@ -5228,8 +5310,17 @@ def formatter(control_string):
     control_string_str = str(control_string)
 
     def format_func(stream, *args):
+        # Seed from the real destination's column, same as FORMAT itself --
+        # a FORMATTER-returned function is one more way FORMAT output reaches
+        # a stream, and `~&`/`~T` must agree with it there too.
+        _seed_target = resolve_output_stream(stream)
+        if _seed_target is None:
+            colstate = _FormatColumn()
+        else:
+            colstate = _FormatColumn(_at_line_start(_seed_target),
+                                      getattr(_seed_target, _COLUMN_ATTR, 0))
         # Use internal processor to obtain remaining-args index (tail)
-        formatted, consumed = _format_process_with_tail(control_string_str, args)
+        formatted, consumed = _format_process_with_tail(control_string_str, args, colstate)
         # `_emit_format_result` rather than `write_text`: a formatter called
         # inside a `PPRINT-LOGICAL-BLOCK` body with `~_`/`~I` in its control
         # string must hand its breaks to that block, exactly like FORMAT.

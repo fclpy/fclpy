@@ -7,7 +7,7 @@ equivalent results (at least semantically, if not syntactically identical).
 
 import pytest
 from fclpy import lispenv
-from fclpy.reader import read, read_all
+from conftest import read, read_all
 from fclpy.printer import prin1, princ, print_object
 from fclpy.lisptype import (
     LispSymbol, lispKeyword, Character, lispCons, NIL,
@@ -277,9 +277,15 @@ class TestRoundTripVectors:
     """Round-trip tests for vector literals."""
     
     def test_roundtrip_empty_vector(self):
-        """Test roundtrip of empty vector."""
+        """`#()` reads as an empty vector and prints as `#()`.
+
+        This asserted `printed == "(VECTOR)"`, which was the dead
+        the deleted `fclpy.reader`'s behaviour: it turned the vector literal into a *call*
+        to VECTOR. CLHS 2.4.8.3 makes `#(...)` denote a simple vector, and the
+        printer renders one as `#(...)`, so an empty one round-trips as `#()`.
+        """
         obj, printed, reread = RoundTripTestCase.test_roundtrip("#()")
-        assert printed == "(VECTOR)"
+        assert printed == "#()"
     
     def test_roundtrip_vector_numbers(self):
         """Test roundtrip of vector with numbers."""

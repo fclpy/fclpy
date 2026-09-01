@@ -7,7 +7,7 @@ Tests that objects are printed in proper format and can be read back.
 import pytest
 from fclpy import lispenv
 from fclpy.printer import prin1, princ, print_object
-from fclpy.reader import read
+from conftest import read
 from fclpy.lisptype import (
     LispSymbol, lispKeyword, Character, lispCons, NIL,
     COMMON_LISP_USER_PACKAGE, intern_symbol, intern_keyword

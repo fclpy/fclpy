@@ -1041,7 +1041,23 @@ def _sort_universe_bulk(sort):
     raise AssertionError(sort)
 
 
+# One shared empty `SortSet` and one shared empty bulk per sort. Safe because
+# both are immutable (see `SortSet.empty`); keyed by sort, so at most nine of
+# each ever exist.
+_EMPTY_SORTSET_CACHE = {}
+_EMPTY_BULK_CACHE = {}
+
+
 def _sort_empty_bulk(sort):
+    cached = _EMPTY_BULK_CACHE.get(sort)
+    if cached is not None:
+        return cached
+    bulk = _sort_empty_bulk_uncached(sort)
+    _EMPTY_BULK_CACHE[sort] = bulk
+    return bulk
+
+
+def _sort_empty_bulk_uncached(sort):
     if sort == SORT_INTEGER:
         return IntBulk()
     if sort == SORT_RATIO:
@@ -1553,7 +1569,26 @@ class SortSet:
 
     @staticmethod
     def empty(sort):
-        return SortSet(sort, _sort_empty_bulk(sort))
+        """The empty set of `sort` -- one shared instance per sort.
+
+        A `SortSet` is immutable (every field is assigned only in `__init__`;
+        the bulks hold tuples/frozensets and every operation returns a new
+        object), so the nine empties can be shared exactly as `EMPTY_EQL_SET`
+        already is. They were rebuilt on every miss in `Region.get`, and
+        `__init__` runs two list comprehensions and builds two `EqlSet`s each
+        time: 556k `empty()` calls and 2.4M `EqlSet.__init__`s to answer 468
+        TYPEP calls, in a profile of ansi-test's TYPEP.19.
+
+        Deliberately *not* done for `universe(sort)`: the CLASS sort's universe
+        is the set of classes that currently exist, so caching it would freeze
+        out every later DEFCLASS -- the reason `top()`/`bottom()` are functions
+        and not constants.
+        """
+        cached = _EMPTY_SORTSET_CACHE.get(sort)
+        if cached is None:
+            cached = SortSet(sort, _sort_empty_bulk(sort))
+            _EMPTY_SORTSET_CACHE[sort] = cached
+        return cached
 
     @staticmethod
     def universe(sort):
@@ -1675,14 +1710,28 @@ class Region:
         # sort's slice certainly is
         return any(ss.is_definitely_nonempty() for ss in self.sets.values())
 
+    # These three iterated `ALL_SORTS` -- building a `SortSet` for all nine
+    # sorts, then handing them to `__init__`, which *discards every empty one*
+    # (`if not v.is_empty()`). Since a sort absent from `self.sets` is already
+    # empty by that same convention, the sorts that can contribute to each
+    # result are known up front, and the rest were built only to be thrown
+    # away. Restricting the iteration is pure algebra -- the surviving entries
+    # are identical -- and it is most of the cost of every type operation here:
+    # 36k of these dict comprehensions carried 11.4s of a 12.7s TYPEP.19
+    # profile.
     def union(self, other):
-        return Region({s: self.get(s).union(other.get(s)) for s in ALL_SORTS})
+        # x u y is empty only where both are: iterate the sorts either has.
+        sorts = self.sets.keys() | other.sets.keys()
+        return Region({s: self.get(s).union(other.get(s)) for s in sorts})
 
     def intersect(self, other):
-        return Region({s: self.get(s).intersect(other.get(s)) for s in ALL_SORTS})
+        # empty n x = empty: only sorts *both* have can survive.
+        sorts = self.sets.keys() & other.sets.keys()
+        return Region({s: self.get(s).intersect(other.get(s)) for s in sorts})
 
     def subtract(self, other):
-        return Region({s: self.get(s).subtract(other.get(s)) for s in ALL_SORTS})
+        # empty \ x = empty: only sorts `self` has can survive.
+        return Region({s: self.get(s).subtract(other.get(s)) for s in self.sets})
 
     def complement(self):
         return Region.universe().subtract(self)

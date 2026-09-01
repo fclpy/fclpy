@@ -6,7 +6,8 @@ keywords self-evaluate, and symbol identity is preserved.
 """
 
 import pytest
-from fclpy.reader import Reader, read, read_all, ReaderError, UnexpectedEOF, UnbalancedParen
+from conftest import read, read_all, read_in_package
+from fclpy.lispreader import ReaderErrorSignal
 from fclpy.lisptype import (
     COMMON_LISP_USER_PACKAGE, KEYWORD_PACKAGE, 
     intern_symbol, intern_keyword, LispSymbol, lispKeyword
@@ -76,8 +77,7 @@ class TestSymbolInterning:
     
     def test_symbol_package_location(self):
         """Test that symbols are interned in the correct package."""
-        reader = Reader(package=COMMON_LISP_USER_PACKAGE)
-        result = reader.read("test-symbol")
+        result = read_in_package("test-symbol", COMMON_LISP_USER_PACKAGE)
         assert result.package == COMMON_LISP_USER_PACKAGE
     
     def test_read_same_symbol_multiple_times(self):
@@ -175,12 +175,12 @@ class TestListReading:
     
     def test_unbalanced_paren_unclosed(self):
         """Test that unclosed paren raises error."""
-        with pytest.raises(UnexpectedEOF):
+        with pytest.raises(EOFError):
             read("(a b c")
     
     def test_unbalanced_paren_extra_close(self):
         """Test that extra close paren raises error."""
-        with pytest.raises(UnbalancedParen):
+        with pytest.raises(ReaderErrorSignal):
             read(")")
     
     def test_dotted_list(self):
@@ -209,50 +209,36 @@ class TestVectorReading:
     def test_read_empty_vector(self):
         """Test reading empty vector #()."""
         result = read("#()")
-        from fclpy.lisptype import lispCons, NIL
-        
-        # Vector is (VECTOR)
-        assert isinstance(result, lispCons)
-        assert result.car.name == "VECTOR"
-        assert result.cdr == NIL
-    
+        # CLHS 2.4.8.3: #(...) denotes a simple vector. The dead `fclpy.reader`
+        # turned the literal into a *call* to VECTOR, which is what this
+        # asserted; a Python list is this implementation's simple general
+        # vector (CLAUDE.md's array model).
+        assert isinstance(result, list)
+        assert len(result) == 0
+
     def test_read_vector_with_elements(self):
-        """Test reading vector with elements."""
+        """#(1 2 3) reads as a simple vector of the three elements."""
         result = read("#(1 2 3)")
-        from fclpy.lisptype import lispCons
-        
-        # Should be (VECTOR 1 2 3)
-        assert isinstance(result, lispCons)
-        assert result.car.name == "VECTOR"
-        
-        # Check elements
-        elements = []
-        current = result.cdr
-        while isinstance(current, lispCons):
-            elements.append(current.car)
-            current = current.cdr
-        
-        assert elements == [1, 2, 3]
-    
+        # Not a (VECTOR 1 2 3) call form, which is what the dead reader built.
+        assert isinstance(result, list)
+        assert result == [1, 2, 3]
+
+
     def test_read_vector_with_symbols(self):
-        """Test reading vector with symbol elements."""
+        """#(a b c) reads as a simple vector of the three symbols.
+
+        This walked `result.cdr` expecting the dead reader's (VECTOR a b c)
+        form -- with a `while` loop that never advanced `current`, so it could
+        only ever spin or fail.
+        """
         result = read("#(a b c)")
-        from fclpy.lisptype import lispCons
-        
-        # Extract symbols
-        elements = []
-        current = result.cdr
-        while isinstance(current, lispCons):
-            elements.append(current.car)
-            current = current.cdr
-        
-        assert len(elements) == 3
-        assert all(isinstance(e, LispSymbol) for e in elements)
+        assert isinstance(result, list)
+        assert [s.name for s in result] == ["A", "B", "C"]
 
 
 class TestQuoteVariants:
-    """Test reading different quote forms."""
-    
+    """Test reading the quote reader macros."""
+
     def test_function_quote(self):
         """Test reading #' function quote."""
         result = read("#'foo")
@@ -283,12 +269,13 @@ class TestQuoteVariants:
     
     def test_comma(self):
         """Test reading , unquote."""
-        result = read(",foo")
-        from fclpy.lisptype import lispCons
-        
-        # Should be (UNQUOTE foo)
-        assert isinstance(result, lispCons)
-        assert result.car.name == "UNQUOTE"
+        # CLHS 2.4.6: a comma is only meaningful inside a backquote, and it is
+        # an error for one to appear outside. The live reader signals; the dead
+        # reader built an (UNQUOTE foo) form, which this asserted.
+        with pytest.raises(ReaderErrorSignal):
+            read(",foo")
+        # inside a backquote it is read as the unquote
+        assert str(read("`(a ,foo)")) == "(QUASIQUOTE (A (UNQUOTE FOO)))"
 
 
 class TestReadAll:
@@ -328,15 +315,13 @@ class TestPackageContext:
     
     def test_reader_with_explicit_package(self):
         """Test reader with explicit package."""
-        reader = Reader(package=COMMON_LISP_USER_PACKAGE)
-        result = reader.read("test-symbol")
+        result = read_in_package("test-symbol", COMMON_LISP_USER_PACKAGE)
         
         assert result.package == COMMON_LISP_USER_PACKAGE
     
     def test_keyword_always_in_keyword_package(self):
         """Test that keywords always go to KEYWORD package regardless of reader package."""
-        reader = Reader(package=COMMON_LISP_USER_PACKAGE)
-        result = reader.read(":test")
+        result = read_in_package(":test", COMMON_LISP_USER_PACKAGE)
         
         assert result.package == KEYWORD_PACKAGE
 
@@ -376,15 +361,19 @@ class TestErrorHandling:
     
     def test_unexpected_eof(self):
         """Test that EOF in list raises error."""
-        with pytest.raises(UnexpectedEOF):
+        with pytest.raises(EOFError):
             read("(a b")
     
     def test_unbalanced_paren(self):
         """Test that bare closing paren raises error."""
-        with pytest.raises(UnbalancedParen):
+        with pytest.raises(ReaderErrorSignal):
             read(")")
     
     def test_empty_input(self):
-        """Test that empty input raises error."""
-        with pytest.raises(UnexpectedEOF):
-            read("")
+        """Empty input ends cleanly rather than mid-object.
+
+        `read_1` answers None at a clean end of input, which is what lets
+        `read_all` and the LOAD/COMPILE-FILE form loops terminate. The ANSI
+        boundary -- `(read s)` signalling END-OF-FILE -- is at the Lisp `READ`.
+        """
+        assert read("") is None

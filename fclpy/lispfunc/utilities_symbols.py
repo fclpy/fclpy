@@ -119,7 +119,7 @@ def symbol_value(*args):
 
 @_registry.cl_function('MAKE-SYMBOL')
 def make_symbol(*args):
-    """Create a new uninterned symbol (CLHS 13.1.2.1).
+    r"""Create a new uninterned symbol (CLHS 13.1.2.1).
 
     `(make-symbol name)` returns a freshly allocated, uninterned symbol
     whose name is the given string designator. The new symbol's package
