@@ -8,6 +8,7 @@ import os
 import platform
 import socket
 
+
 class KernelInterface:
     def __init__(self):
         pass
@@ -20,7 +21,6 @@ class KernelInterface:
 
     def os_name(self):
         raise NotImplementedError()
-
 
     def machine_instance(self):
         raise NotImplementedError()
@@ -36,7 +36,6 @@ class KernelInterface:
 
     def software_version(self):
         raise NotImplementedError()
-
 
 
 class DefaultKernel(KernelInterface):
@@ -66,5 +65,6 @@ class DefaultKernel(KernelInterface):
 
     def software_version(self):
         return platform.release()
+
 
 kernel = DefaultKernel()
