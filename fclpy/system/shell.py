@@ -5,6 +5,7 @@ Shell interface and default implementation.
 import os
 import sys
 
+
 class ShellInterface:
 
     def __init__(self):
@@ -25,6 +26,9 @@ class ShellInterface:
     def get_stderr(self):
         raise NotImplementedError()
 
+    def get_startup_cwd(self):
+        raise NotImplementedError()
+
 
 class DefaultShell(ShellInterface):
     def __init__(self):
@@ -32,7 +36,7 @@ class DefaultShell(ShellInterface):
 
     def home(self):
         return os.path.expanduser("~")
-    
+
     def get_env(self, key):
         return os.getenv(key)
 
@@ -44,6 +48,9 @@ class DefaultShell(ShellInterface):
 
     def get_stderr(self):
         return sys.stderr
+
+    def get_startup_cwd(self):
+        return os.getcwd()
 
 
 shell = DefaultShell()
