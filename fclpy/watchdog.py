@@ -47,6 +47,8 @@ import sys
 import threading
 import time
 
+from fclpy.system.shell import shell
+
 # Matches evaluation_loops_conditionals.LOOP_TIMEOUT_WARNING /
 # LOOP_TIMEOUT_ERROR so a hang is described the same way wherever it is
 # caught. These are "seconds without progress", not total runtime -- a full
@@ -88,9 +90,8 @@ def note_progress():
 
 
 def _log(message):
-    print("\n*** WATCHDOG [%s] %s ***" % (time.strftime('%H:%M:%S'), message),
-          file=sys.stderr)
-    sys.stderr.flush()
+    shell.print("\n*** WATCHDOG [%s] %s ***" % (time.strftime('%H:%M:%S'), message),
+                file=shell.get_stderr())
 
 
 def _watch(warn_after, kill_after):

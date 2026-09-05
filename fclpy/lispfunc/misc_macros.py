@@ -138,9 +138,8 @@ def load(filespec, *, verbose=lisptype.OMITTED, print=lisptype.OMITTED,
     CLHS 3.5.1.5 requires (CLAUDE.md, "a builtin's ANSI lambda list is its
     Python signature").
     """
-    import builtins
-    import os
     import fclpy.state as state
+    from fclpy.system.filesystem import fs
     from .pathnames import pathname_from_namestring, pathname_from_os_path, resolve_filespec
     from .streams import Stream
     from .binding import BindingFrame, root_environment, dynamic_value
@@ -175,22 +174,22 @@ def load(filespec, *, verbose=lisptype.OMITTED, print=lisptype.OMITTED,
         # NIL for a string stream, which has none.
         name = getattr(filespec, 'name', None)
         if isinstance(name, str) and name and not name.startswith('<') \
-                and os.path.exists(name):
+                and fs.exists(name):
             pathname_obj = pathname_from_os_path(name)
-            truename_obj = pathname_from_os_path(os.path.realpath(name))
+            truename_obj = pathname_from_os_path(fs.realpath(name))
         else:
             pathname_obj = lisptype.NIL
             truename_obj = lisptype.NIL
         label = name or 'stream'
     else:
         path_str = resolve_filespec(filespec)
-        if not os.path.exists(path_str):
+        if not fs.exists(path_str):
             # A "fasl" this implementation produces is the source file copied
             # (see COMPILE-FILE), so fall back to the source when only it is
             # present -- otherwise `(load (compile-file-pathname f))` from an
             # image that never ran COMPILE-FILE could not work.
             source = path_str[:-5] + '.lsp' if path_str.endswith('.fasl') else None
-            if source and os.path.exists(source):
+            if source and fs.exists(source):
                 path_str = source
             elif (lisptype.supplied(if_does_not_exist)
                   and not lisptype.is_truthy(if_does_not_exist)):
@@ -200,9 +199,9 @@ def load(filespec, *, verbose=lisptype.OMITTED, print=lisptype.OMITTED,
                     pathname_from_namestring(path_str), f"LOAD: file not found: {path_str}")
 
         pathname_obj = pathname_from_os_path(path_str)
-        truename_obj = pathname_from_os_path(os.path.realpath(path_str))
+        truename_obj = pathname_from_os_path(fs.realpath(path_str))
         label = path_str
-        opened_here = builtins.open(path_str, 'r', encoding='utf-8')
+        opened_here = fs.open(path_str, 'r', encoding='utf-8')
         stream = Stream(path_str, opened_here, 'input')
 
     if verbose_p:
@@ -809,12 +808,12 @@ def compile_file_pathname(input_file, *, output_file=None, **kwargs):
     about where a relative name points -- they used to, each carrying its own
     copy of the search.
     """
-    import os
+    from fclpy.system.filesystem import fs
     from .pathnames import pathname_from_namestring, resolve_filespec
 
     if output_file is not None and output_file is not lisptype.NIL:
         return pathname_from_namestring(resolve_filespec(output_file))
-    base = os.path.splitext(resolve_filespec(input_file))[0]
+    base = fs.splitext(resolve_filespec(input_file))[0]
     return pathname_from_namestring(base + COMPILED_FILE_TYPE)
 
 
@@ -844,9 +843,8 @@ def compile_file(input_file, *, output_file=None, verbose=lisptype.OMITTED,
     Returns the three values CLHS specifies: the output truename, `warnings-p`
     and `failure-p`.
     """
-    import builtins
-    import os
     import fclpy.state as state
+    from fclpy.system.filesystem import fs
     from .pathnames import pathname_from_namestring, pathname_from_os_path, resolve_filespec
     from .streams import Stream
     from .binding import BindingFrame, root_environment, dynamic_value
@@ -868,14 +866,14 @@ def compile_file(input_file, *, output_file=None, verbose=lisptype.OMITTED,
         else dynamic_value(_cl('*COMPILE-PRINT*'), lisptype.NIL))
 
     input_path = resolve_filespec(input_file)
-    if not os.path.exists(input_path):
+    if not fs.exists(input_path):
         return signal_file_error(
             pathname_from_namestring(input_path), "COMPILE-FILE: file not found: " + input_path)
 
     if output_file is not None and output_file is not lisptype.NIL:
         output_path = resolve_filespec(output_file)
     else:
-        output_path = os.path.splitext(input_path)[0] + COMPILED_FILE_TYPE
+        output_path = fs.splitext(input_path)[0] + COMPILED_FILE_TYPE
 
     if verbose_p:
         write_text("; compiling " + input_path + "\n")
@@ -887,13 +885,13 @@ def compile_file(input_file, *, output_file=None, verbose=lisptype.OMITTED,
 
     diagnostics = _CompilationDiagnostics()
     frame = BindingFrame(root_environment(env))
-    source = builtins.open(input_path, 'r', encoding='utf-8')
+    source = fs.open(input_path, 'r', encoding='utf-8')
     stream = Stream(input_path, source, 'input')
     printed_forms = []
     try:
         frame.bind(_cl('*COMPILE-FILE-PATHNAME*'), pathname_from_os_path(input_path))
         frame.bind(_cl('*COMPILE-FILE-TRUENAME*'),
-                   pathname_from_os_path(os.path.realpath(input_path)))
+                   pathname_from_os_path(fs.realpath(input_path)))
         current_package = dynamic_value(_cl('*PACKAGE*'))
         if not isinstance(current_package, lisptype.Package):
             current_package = (getattr(state, 'current_package', None)
@@ -936,15 +934,18 @@ def compile_file(input_file, *, output_file=None, verbose=lisptype.OMITTED,
             state.handler_stack.pop()
     finally:
         frame.unwind()
-        source.close()
+        fs.close(source)
 
-    with builtins.open(output_path, 'w', encoding='utf-8') as out:
+    out = fs.open(output_path, 'w', encoding='utf-8')
+    try:
         for text in printed_forms:
-            out.write(text)
-            out.write("\n")
+            fs.write(out, text)
+            fs.write(out, "\n")
+    finally:
+        fs.close(out)
 
     return lisptype.MultipleValues(
-        pathname_from_os_path(os.path.realpath(output_path)),
+        pathname_from_os_path(fs.realpath(output_path)),
         lisptype.lisp_bool(diagnostics.warnings),
         lisptype.lisp_bool(diagnostics.failure))
 
@@ -1709,7 +1710,7 @@ def room(x=lisptype.OMITTED):
     the argument is validated and the same report is printed either way --
     validated rather than ignored, so `(room :bogus)` is not silently accepted.
     """
-    import sys
+    from fclpy.system.kernel import kernel
     from .io_write import write_text
 
     if lisptype.supplied(x):
@@ -1725,8 +1726,8 @@ def room(x=lisptype.OMITTED):
     write_text(
         f"Dynamic space: {len(registry.function_registry)} functions, "
         f"{len(registry.special_registry)} special operators.\n"
-        f"Python implementation: {sys.implementation.name} "
-        f"{'.'.join(str(n) for n in sys.version_info[:3])}.\n",
+        f"Python implementation: {kernel.python_implementation()} "
+        f"{'.'.join(str(n) for n in kernel.python_version())}.\n",
         None)
     return lisptype.MultipleValues()
 

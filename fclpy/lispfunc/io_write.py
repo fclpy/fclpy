@@ -5,6 +5,8 @@ from fractions import Fraction
 from decimal import Decimal, ROUND_HALF_EVEN
 
 import fclpy.lisptype as lisptype
+from fclpy.system.filesystem import fs, SEEK_SET, SEEK_END
+from fclpy.system.shell import shell
 from . import registry as _registry
 from .streams import open_file as open_fn, close_stream as close_fn, open_stream_p
 from .core import _null_internal, _consp_internal, _listp_internal
@@ -119,8 +121,7 @@ def write_text(text, stream=None):
         # Reachable only before the standard environment exists, i.e. during
         # bootstrap. A real gap rather than the normal path, so it is not
         # quietly equivalent to writing to a stream.
-        import sys
-        sys.stdout.write(text)
+        fs.write(shell.get_stdout(), text)
         return
     from .streams import Stream
     if isinstance(target, Stream):
@@ -374,7 +375,7 @@ def write_byte(byte, stream):
             expected_type='STREAM', actual_value=stream)
     value = int(byte)
     data = value.to_bytes(stream.byte_width, 'big', signed=stream.byte_signed)
-    stream.file_obj.write(data)
+    fs.write(stream.file_obj, data)
     return byte
 
 
@@ -5404,21 +5405,20 @@ def delete_file(filespec):
     A file that is not there is a FILE-ERROR, per CLHS -- not NIL, which
     conflated "deleted nothing" with "deleted it".
     """
-    import os
     from fclpy.lispfunc.pathnames import pathname_from_namestring, resolve_filespec
     from fclpy.lispfunc.evaluation_conditions import signal_file_error
 
     path_str = resolve_filespec(filespec)
     try:
-        if os.path.isdir(path_str):
+        if fs.isdir(path_str):
             # CLHS defines DELETE-FILE on files, but the suite's own cleanup
             # (ensure-directories-exist.8) deletes the scratch directories it
             # created; `os.remove` cannot remove a directory on Windows,
             # `os.rmdir` can (an empty one -- a non-empty one still errors,
             # which is the honest failure).
-            os.rmdir(path_str)
+            fs.rmdir(path_str)
         else:
-            os.remove(path_str)
+            fs.delete(path_str)
     except FileNotFoundError:
         return signal_file_error(
             pathname_from_namestring(path_str), "DELETE-FILE: file not found: " + path_str)
@@ -5461,17 +5461,16 @@ def rename_file(filespec, new_name):
     (rename-file.3: `(probe-file defaulted-new-name)` was NIL for a rename
     that had just "succeeded").
     """
-    import os
     from fclpy.lispfunc.pathnames import (
         pathname_from_namestring, pathname_from_os_path, resolve_filespec, merge_pathnames)
     from fclpy.lispfunc.evaluation_conditions import signal_file_error
 
     old_path = resolve_filespec(filespec)
-    if not os.path.exists(old_path):
+    if not fs.exists(old_path):
         return signal_file_error(
             pathname_from_namestring(old_path), "RENAME-FILE: file not found: " + old_path)
 
-    old_truename = pathname_from_os_path(os.path.realpath(old_path))
+    old_truename = pathname_from_os_path(fs.realpath(old_path))
     # The defaulted new name is merged in pathname space, on the untranslated
     # designators -- CLHS 20.2 says new-name is merged with the pathname of the
     # file, not with its OS translation, and rename-file.5 renames one logical
@@ -5487,13 +5486,13 @@ def rename_file(filespec, new_name):
     new_path = resolve_filespec(defaulted_new_name)
 
     try:
-        os.replace(old_path, new_path)
+        fs.replace(old_path, new_path)
     except OSError as error:
         return signal_file_error(
             pathname_from_namestring(old_path), "RENAME-FILE: " + str(error))
 
     return lisptype.MultipleValues(
-        defaulted_new_name, old_truename, pathname_from_os_path(os.path.realpath(new_path)))
+        defaulted_new_name, old_truename, pathname_from_os_path(fs.realpath(new_path)))
 
 
 @_registry.cl_function('FILE-AUTHOR')
@@ -5507,7 +5506,6 @@ def file_author(pathspec):
     there cannot be asked about -- each a FILE-ERROR, not a fabricated
     answer for whatever the designator happened to spell.
     """
-    import os
     from fclpy.lispfunc.pathnames import (
         _coerce_pathname_designator, _error_if_wild, resolve_filespec)
     from fclpy.lispfunc.evaluation_conditions import signal_file_error
@@ -5515,7 +5513,7 @@ def file_author(pathspec):
     pn = _coerce_pathname_designator(pathspec, 'FILE-AUTHOR')
     _error_if_wild(pn, 'FILE-AUTHOR')
     path_str = resolve_filespec(pn)
-    if not os.path.exists(path_str):
+    if not fs.exists(path_str):
         return signal_file_error(
             pn, "FILE-AUTHOR: file not found: " + path_str)
     return "unknown"
@@ -5553,9 +5551,8 @@ def file_length(stream):
         raise lisptype.LispTypeError(
             f"FILE-LENGTH: {stream!r} is not a file-stream",
             expected_type='(OR FILE-STREAM BROADCAST-STREAM)', actual_value=stream)
-    import os
     try:
-        size = os.fstat(stream.file_obj.fileno()).st_size
+        size = fs.file_size(fs.get_file_id(stream.file_obj))
     except (OSError, AttributeError, ValueError):
         return lisptype.NIL
     if stream.binary and stream.byte_width:
@@ -5574,7 +5571,6 @@ def file_position(stream, position=None):
     UNREAD-CHAR pushback is stale the instant the underlying position moves,
     so a successful seek drops it.
     """
-    import os
     from .streams import Stream, BroadcastStream
 
     if isinstance(stream, BroadcastStream):
@@ -5592,27 +5588,27 @@ def file_position(stream, position=None):
     file_obj = stream.file_obj
     if position is None:
         try:
-            return file_obj.tell()
+            return fs.pos(file_obj)
         except (OSError, ValueError):
             return lisptype.NIL
 
     if isinstance(position, (lisptype.lispKeyword, lisptype.LispSymbol)):
         name = position.name.upper()
         if name == 'START':
-            whence, offset = os.SEEK_SET, 0
+            whence, offset = SEEK_SET, 0
         elif name == 'END':
-            whence, offset = os.SEEK_END, 0
+            whence, offset = SEEK_END, 0
         else:
             return lisptype.NIL
     else:
-        whence, offset = os.SEEK_SET, int(position)
+        whence, offset = SEEK_SET, int(position)
 
     try:
-        file_obj.seek(offset, whence)
+        fs.seek(file_obj, offset, whence)
     except (OSError, ValueError):
         return lisptype.NIL
     stream._pending.clear()
-    stream.position = file_obj.tell()
+    stream.position = fs.pos(file_obj)
     return lisptype.T
 
 
@@ -5715,16 +5711,16 @@ def file_error_pathname(condition):
 def y_or_n_p(control_string=None, *args):
     """Ask yes/no question."""
     if control_string:
-        print(control_string.format(*args), end=' ')
-    response = input("(y or n) ").strip().lower()
+        shell.print(control_string.format(*args), end=' ')
+    response = shell.input("(y or n) ").strip().lower()
     return lisptype.lisp_bool(response in ('y', 'yes'))
 
 
 def yes_or_no_p(control_string=None, *args):
     """Ask yes/no question with full words."""
     if control_string:
-        print(control_string.format(*args), end=' ')
-    response = input("(yes or no) ").strip().lower()
+        shell.print(control_string.format(*args), end=' ')
+    response = shell.input("(yes or no) ").strip().lower()
     return lisptype.lisp_bool(response == 'yes')
 
 

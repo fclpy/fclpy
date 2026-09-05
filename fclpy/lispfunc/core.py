@@ -1,6 +1,7 @@
 """Core Lisp data structure functions - cons cells, lists, and basic accessors."""
 
 import fclpy.lisptype as lisptype
+from fclpy.system.kernel import kernel
 from . import registry as _registry
 
 
@@ -626,26 +627,22 @@ def symbol_plist(*args):
 # Final batch - type and special forms
 def most_negative_long_float():
     """Most negative long float."""
-    import sys
-    return -sys.float_info.max
+    return -kernel.float_max()
 
 
 def most_positive_long_float():
     """Most positive long float."""
-    import sys
-    return sys.float_info.max
+    return kernel.float_max()
 
 
 def most_negative_short_float():
     """Most negative short float."""
-    import sys
-    return -sys.float_info.max
+    return -kernel.float_max()
 
 
 def most_positive_short_float():
     """Most positive short float."""
-    import sys
-    return sys.float_info.max
+    return kernel.float_max()
 
 
 def char_control_bit():

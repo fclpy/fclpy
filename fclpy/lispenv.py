@@ -200,7 +200,7 @@ def setup_standard_environment():
         pass
     
     # Initialize special variables for file loading (ANSI CL requirements)
-    import os
+    from fclpy.system.shell import shell
     # *LOAD-TRUENAME* - absolute truename of file being loaded (NIL if not loading)
     load_truename_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*LOAD-TRUENAME*')
     fclpy.lisptype.COMMON_LISP_PACKAGE.export_symbol(load_truename_sym)
@@ -226,11 +226,11 @@ def setup_standard_environment():
     # *DEFAULT-PATHNAME-DEFAULTS* - default pathname for pathname functions
     # Initialize to current directory as a Pathname object, a *directory*
     # (no :name component) -- `pathname_from_os_path` is what tells the two
-    # apart, since `os.getcwd()` carries no trailing separator to parse.
+    # apart, since the startup cwd carries no trailing separator to parse.
     from fclpy.lispfunc.pathnames import pathname_from_os_path
     default_pathname_sym = fclpy.lisptype.COMMON_LISP_PACKAGE.intern_symbol('*DEFAULT-PATHNAME-DEFAULTS*')
     if state.current_environment.find_variable(default_pathname_sym) is None:
-        cwd_pathname = pathname_from_os_path(os.getcwd())
+        cwd_pathname = pathname_from_os_path(shell.get_startup_cwd())
         state.current_environment.add_variable(default_pathname_sym, cwd_pathname)
         
     # *MODULES* - the names of the modules PROVIDE has recorded (CLHS 24.1.5).
@@ -270,12 +270,11 @@ def setup_standard_environment():
     # It also removes a latent `UnboundLocalError`: `stdout_stream` used to be
     # created inside `*STANDARD-OUTPUT*`'s guard, yet the four variables below
     # it referenced that name whether or not the guard had run.
-    import sys
     from fclpy.lispfunc.streams import Stream, TwoWayStream
 
-    stdin_stream = Stream('*STANDARD-INPUT*', sys.stdin, 'input')
-    stdout_stream = Stream('*STANDARD-OUTPUT*', sys.stdout, 'output')
-    stderr_stream = Stream('*ERROR-OUTPUT*', sys.stderr, 'output')
+    stdin_stream = Stream('*STANDARD-INPUT*', shell.get_stdin(), 'input')
+    stdout_stream = Stream('*STANDARD-OUTPUT*', shell.get_stdout(), 'output')
+    stderr_stream = Stream('*ERROR-OUTPUT*', shell.get_stderr(), 'output')
     # *DEBUG-IO*, *QUERY-IO* and *TERMINAL-IO* are bidirectional (CLHS
     # Figure 21-2), not output-only -- `(input-stream-p *terminal-io*)` must
     # be true (make-synonym-stream.4 asks exactly that of a synonym stream
