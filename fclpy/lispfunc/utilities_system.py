@@ -30,15 +30,14 @@ Three properties the model holds, and the reason each is here:
   construction rather than by two matching sign conventions.
 """
 
-import time
-import socket
-import platform
-import os
 import datetime
 from fractions import Fraction
 
 import fclpy.lisptype as lisptype
 from fclpy.lispfunc import registry as _registry
+from fclpy.system.filesystem import fs
+from fclpy.system.kernel import kernel
+from fclpy.system.shell import shell
 
 
 # =====================================================================
@@ -147,7 +146,7 @@ def _daylight_saving_in_effect(second, minute, hour, date, month, year):
     A machine with no daylight-saving rule answers False without consulting
     the OS at all, so `_local_offset_seconds` collapses to `time.timezone`.
     """
-    if not time.daylight:
+    if not kernel.daylight():
         return False
     probe_year = year
     while probe_year < _DST_PROBE_MIN_YEAR:
@@ -155,9 +154,9 @@ def _daylight_saving_in_effect(second, minute, hour, date, month, year):
     while probe_year > _DST_PROBE_MAX_YEAR:
         probe_year -= _GREGORIAN_CYCLE_YEARS
     try:
-        stamp = time.mktime((probe_year, month, date, hour, minute, second,
-                             0, 1, -1))
-        return time.localtime(stamp).tm_isdst > 0
+        stamp = kernel.mktime((probe_year, month, date, hour, minute, second,
+                               0, 1, -1))
+        return kernel.localtime(stamp).tm_isdst > 0
     except (OSError, OverflowError, ValueError):
         # The platform cannot say. Reporting "no daylight saving" is the
         # honest answer for a zone whose rule is unavailable, and it keeps
@@ -173,7 +172,7 @@ def _local_offset_seconds(daylight_p):
     construction. `time.timezone`/`time.altzone` are already seconds west of
     GMT -- the same sign convention CLHS uses for a time zone.
     """
-    return time.altzone if daylight_p else time.timezone
+    return kernel.altzone() if daylight_p else kernel.timezone()
 
 
 def _local_zone_hours(daylight_p):
@@ -274,7 +273,7 @@ def encode_universal_time(second, minute, hour, date, month, year,
 @_registry.cl_function('GET-UNIVERSAL-TIME')
 def get_universal_time():
     """GET-UNIVERSAL-TIME (CLHS 25.1.4.4) -- the current time, GMT-based."""
-    return int(time.time()) + UNIX_EPOCH_UNIVERSAL_TIME
+    return int(kernel.time()) + UNIX_EPOCH_UNIVERSAL_TIME
 
 
 @_registry.cl_function('GET-DECODED-TIME')
@@ -306,13 +305,13 @@ def get_internal_real_time():
     Windows its resolution is coarse enough that an adjustment lands inside a
     single test run.
     """
-    return int(time.monotonic() * INTERNAL_TIME_UNITS_PER_SECOND)
+    return int(kernel.monotonic() * INTERNAL_TIME_UNITS_PER_SECOND)
 
 
 @_registry.cl_function('GET-INTERNAL-RUN-TIME')
 def get_internal_run_time():
     """GET-INTERNAL-RUN-TIME (CLHS 25.1.4.5) -- computation time, monotonic."""
-    return int(time.process_time() * INTERNAL_TIME_UNITS_PER_SECOND)
+    return int(kernel.process_time() * INTERNAL_TIME_UNITS_PER_SECOND)
 
 
 @_registry.cl_function('SLEEP')
@@ -332,7 +331,7 @@ def sleep(seconds):
         raise lisptype.LispTypeError(
             f"SLEEP: seconds must be non-negative: {seconds}",
             expected_type="(REAL 0)", actual_value=seconds)
-    time.sleep(float(seconds))
+    kernel.sleep(float(seconds))
     return lisptype.NIL
 
 
@@ -362,31 +361,31 @@ def lisp_implementation_version():
 @_registry.cl_function('MACHINE-INSTANCE')
 def machine_instance():
     """Get machine instance (hostname)."""
-    return socket.gethostname()
+    return kernel.machine_instance()
 
 
 @_registry.cl_function('MACHINE-TYPE')
 def machine_type():
     """Get machine type (CPU architecture)."""
-    return platform.machine()
+    return kernel.machine_type()
 
 
 @_registry.cl_function('MACHINE-VERSION')
 def machine_version():
     """Get machine version (platform string)."""
-    return platform.platform()
+    return kernel.machine_version()
 
 
 @_registry.cl_function('SOFTWARE-TYPE')
 def software_type():
     """Get software type (operating system)."""
-    return platform.system()
+    return kernel.software_type()
 
 
 @_registry.cl_function('SOFTWARE-VERSION')
 def software_version():
     """Get software version (OS release)."""
-    return platform.release()
+    return kernel.software_version()
 
 
 @_registry.cl_function('SHORT-SITE-NAME')
@@ -418,22 +417,21 @@ def user_homedir_pathname(host=None):
     function."""
     if lisptype.is_truthy(host):
         return lisptype.NIL
-    home = os.path.expanduser("~")
+    home = shell.home()
     if not home.endswith(('/', '\\')):
-        home += os.sep
+        home += fs.get_path_sep()
     from .pathnames import pathname as _coerce_pathname
     return _coerce_pathname(home)
 
 
 def get_env(name):
     """Get environment variable."""
-    return os.environ.get(name)
+    return shell.get_env(name)
 
 
 def exit(code=0):
     """Exit the Lisp system."""
-    import sys
-    sys.exit(code)
+    kernel.exit(code)
 
 
 def quit(code=0):
@@ -463,11 +461,9 @@ class RandomState:
             # Use system entropy - None already does this in Python's Random
             pass
         elif seed is True or seed is lisptype.T:
-            # Create a new random seed using OS entropy + high-res counter
-            import os
-            import time
-            # Use combination of OS random bytes and high-resolution time
-            entropy = os.urandom(16) + str(time.perf_counter_ns()).encode()
+            # Create a new random seed from the kernel's entropy source,
+            # combined with a high-resolution clock reading
+            entropy = kernel.entropy(16) + str(kernel.perf_counter()).encode()
             self._random.seed(entropy)
         elif isinstance(seed, RandomState):
             # Copy state from another RandomState

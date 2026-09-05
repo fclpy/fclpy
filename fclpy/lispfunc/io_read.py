@@ -3,6 +3,7 @@
 import fclpy.lisptype as lisptype
 import fclpy.readtable as _rt
 import fclpy.lispreader as _lispreader
+from fclpy.system.filesystem import fs
 from . import registry as _registry
 from .streams import Stream, resolve_input_stream
 
@@ -253,7 +254,7 @@ def read_byte(stream, eof_error_p=True, eof_value=None):
                 return result
         # Fall back to direct file_obj access
         if target.file_obj:
-            raw = target.file_obj.read(target.byte_width)
+            raw = fs.read(target.file_obj, target.byte_width)
             if raw and len(raw) == target.byte_width:
                 return int.from_bytes(raw, 'big', signed=target.byte_signed)
     if _supplied_true(eof_error_p):

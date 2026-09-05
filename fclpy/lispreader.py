@@ -1,9 +1,10 @@
 
 
-import sys
 import re as _re
 import fclpy.lisptype as lisptype
 import fclpy.numtoken as numtoken
+from fclpy.system.filesystem import fs
+from fclpy.system.shell import shell
 
 
 #: The reader control variables of CLHS Figure 23-1, with their ANSI initial
@@ -111,15 +112,16 @@ class LispStream():
     def read_char(self):
         if len(self.buff) > 0:
             return self.buff.pop()
-        char = self.fh.read(1)
+        char = fs.read(self.fh, 1)
         if char == '':
             self._eof = True
             return None
         return char
+
     def eof(self):
         return self._eof
 
-STDIN = LispStream(sys.stdin)
+STDIN = LispStream(shell.get_stdin())
 
 class LispReader():
 

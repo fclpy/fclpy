@@ -5,6 +5,11 @@ File system interface and default implementation.
 from glob import glob
 import os
 
+# Whence constants for `seek`, re-exported so callers never need `os`.
+SEEK_SET = os.SEEK_SET
+SEEK_CUR = os.SEEK_CUR
+SEEK_END = os.SEEK_END
+
 
 class FileSystemInterface:
     def __init__(self):
@@ -32,6 +37,12 @@ class FileSystemInterface:
         raise NotImplementedError()
 
     def rename(self, old_path, new_path):
+        raise NotImplementedError()
+
+    def replace(self, old_path, new_path):
+        raise NotImplementedError()
+
+    def splitext(self, path):
         raise NotImplementedError()
 
     def open(self, path, mode, encoding=None, newline=None):
@@ -119,6 +130,12 @@ class DefaultFileSystem(FileSystemInterface):
 
     def rename(self, old_path, new_path):
         return os.rename(old_path, new_path)
+
+    def replace(self, old_path, new_path):
+        return os.replace(old_path, new_path)
+
+    def splitext(self, path):
+        return os.path.splitext(path)
 
     def open(self, path, mode, encoding=None, newline=None):
         kwargs = {}

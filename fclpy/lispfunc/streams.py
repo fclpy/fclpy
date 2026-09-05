@@ -1,9 +1,9 @@
 """File and stream I/O for Phase 5 Task 5."""
 
 import io as _io
-import os
-import sys
 import fclpy.lisptype as lisptype
+from fclpy.system.filesystem import fs
+from fclpy.system.shell import shell
 from . import registry as _registry
 
 
@@ -68,7 +68,7 @@ class Stream:
         if self._pending:
             self.position += 1
             return self._pending.pop()
-        char = self.file_obj.read(1)
+        char = fs.read(self.file_obj, 1)
         if char:
             self.position += 1
             return char
@@ -83,7 +83,7 @@ class Stream:
 
         if self._pending:
             return self._pending[-1]
-        char = self.file_obj.read(1)
+        char = fs.read(self.file_obj, 1)
         if char:
             self._pending.append(char)
             return char
@@ -117,11 +117,11 @@ class Stream:
             # exhaustion check used to swallow the first byte of every
             # constituent. Probe with a *relative* seek back instead, which
             # is one byte in every unit system whatever the element width.
-            if self.file_obj.read(1):
-                self.file_obj.seek(-1, 1)
+            if fs.read(self.file_obj, 1):
+                fs.seek(self.file_obj, -1, 1)
                 return True
             return False
-        char = self.file_obj.read(1)
+        char = fs.read(self.file_obj, 1)
         if char:
             self._pending.append(char)
             return True
@@ -155,7 +155,7 @@ class Stream:
             if first == '\n':
                 return ('', False)
             if first == '\r':
-                follow = self.file_obj.read(1)
+                follow = fs.read(self.file_obj, 1)
                 if follow == '\n':
                     self.position += 1
                 elif follow:
@@ -164,7 +164,7 @@ class Stream:
             chars.append(first)
 
         while True:
-            char = self.file_obj.read(1)
+            char = fs.read(self.file_obj, 1)
             if not char:
                 if not chars:
                     return None
@@ -174,7 +174,7 @@ class Stream:
             if char == '\n':
                 return (''.join(chars), False)
             if char == '\r':
-                follow = self.file_obj.read(1)
+                follow = fs.read(self.file_obj, 1)
                 if follow == '\n':
                     self.position += 1
                     return (''.join(chars), False)
@@ -191,9 +191,9 @@ class Stream:
             raise lisptype.LispStreamError(stream=self, message=f"Stream {self.name} is not open for input")
         
         if n is None:
-            text = self.file_obj.read()
+            text = fs.read(self.file_obj)
         else:
-            text = self.file_obj.read(n)
+            text = fs.read(self.file_obj, n)
         
         self.position += len(text)
         return text
@@ -217,7 +217,7 @@ class Stream:
         if self.direction not in ('input', 'io'):
             raise lisptype.LispStreamError(
                 stream=self, message=f"Stream {self.name} is not open for input")
-        raw = self.file_obj.read(self.byte_width)
+        raw = fs.read(self.file_obj, self.byte_width)
         if not raw or len(raw) < self.byte_width:
             return None
         return int.from_bytes(raw, 'big', signed=self.byte_signed)
@@ -232,7 +232,7 @@ class Stream:
         if not isinstance(char, str) or len(char) != 1:
             raise ValueError(f"Expected single character, got {char}")
         
-        self.file_obj.write(char)
+        fs.write(self.file_obj, char)
         self.position += 1
         return char
     
@@ -244,11 +244,11 @@ class Stream:
             raise lisptype.LispStreamError(stream=self, message=f"Stream {self.name} is not open for output")
         
         if isinstance(sequence, str):
-            self.file_obj.write(sequence)
+            fs.write(self.file_obj, sequence)
             self.position += len(sequence)
         elif isinstance(sequence, (list, tuple)):
             text = ''.join(str(c) for c in sequence)
-            self.file_obj.write(text)
+            fs.write(self.file_obj, text)
             self.position += len(text)
         else:
             raise ValueError(f"Cannot write {type(sequence)}")
@@ -262,20 +262,20 @@ class Stream:
         if self.direction not in ('output', 'io'):
             raise lisptype.LispStreamError(stream=self, message=f"Stream {self.name} is not open for output")
         
-        self.file_obj.write(str(line) + '\n')
+        fs.write(self.file_obj, str(line) + '\n')
         self.position += len(str(line)) + 1
         return lisptype.NIL
     
     def flush(self):
         """Flush the stream."""
         if self.open_p and hasattr(self.file_obj, 'flush'):
-            self.file_obj.flush()
+            fs.flush(self.file_obj)
         return lisptype.T
     
     def close(self):
         """Close the stream."""
         if self.open_p:
-            self.file_obj.close()
+            fs.close(self.file_obj)
             self.open_p = False
         return lisptype.T
     
@@ -364,12 +364,12 @@ class _BinaryElementPosition:
         self._width = byte_width
 
     def tell(self):
-        return self._raw.tell() // self._width
+        return fs.pos(self._raw) // self._width
 
     def seek(self, offset, whence=0):
         if whence == 0:
-            return self._raw.seek(offset * self._width)
-        return self._raw.seek(offset, whence)
+            return fs.seek(self._raw, offset * self._width)
+        return fs.seek(self._raw, offset, whence)
 
     def __getattr__(self, name):
         return getattr(self._raw, name)
@@ -502,7 +502,7 @@ def open_file(filename, *, direction='input', element_type='character',
     from fclpy.lispfunc.pathnames import pathname_from_namestring
     from fclpy.lispfunc.evaluation_conditions import signal_file_error
 
-    exists = os.path.exists(filename)
+    exists = fs.exists(filename)
 
     if direction == 'probe':
         # CLHS 21.1: :probe returns a (non-open) stream when the file is
@@ -511,7 +511,7 @@ def open_file(filename, *, direction='input', element_type='character',
         # plus `(not (open-stream-p s))`, which a Lisp boolean can never
         # satisfy because it is not a stream at all.
         if not exists and if_does_not_exist == 'create':
-            open(filename, 'wb' if is_binary else 'w', **open_kwargs).close()
+            fs.close(fs.open(filename, 'wb' if is_binary else 'w', **open_kwargs))
             exists = True
         if not exists:
             if if_does_not_exist == 'error':
@@ -558,11 +558,11 @@ def open_file(filename, *, direction='input', element_type='character',
         elif action in ('rename', 'rename_and_delete'):
             backup = filename + '.bak'
             try:
-                if os.path.exists(backup):
-                    os.remove(backup)
-                os.rename(filename, backup)
+                if fs.exists(backup):
+                    fs.delete(backup)
+                fs.rename(filename, backup)
                 if action == 'rename_and_delete':
-                    os.remove(backup)
+                    fs.delete(backup)
             except OSError as error:
                 return signal_file_error(
                     pathname_from_namestring(filename),
@@ -602,7 +602,7 @@ def open_file(filename, *, direction='input', element_type='character',
     if is_binary:
         mode = mode + 'b'
     try:
-        file_obj = open(filename, mode, **open_kwargs)
+        file_obj = fs.open(filename, mode, **open_kwargs)
     except OSError as error:
         return signal_file_error(
             pathname_from_namestring(filename),
@@ -704,8 +704,7 @@ def flush_output(stream=None):
         NIL
     """
     if stream is None:
-        import sys
-        sys.stdout.flush()
+        fs.flush(shell.get_stdout())
         return lisptype.NIL
     
     if not isinstance(stream, Stream):
@@ -1289,19 +1288,19 @@ class _CompositeFileObject:
         self._output = output_stream
 
     def read(self, *args):
-        return self._input.file_obj.read(*args)
+        return fs.read(self._input.file_obj, *args)
 
     def write(self, data):
-        return self._output.file_obj.write(data)
+        return fs.write(self._output.file_obj, data)
 
     def seek(self, *args):
-        return self._input.file_obj.seek(*args)
+        return fs.seek(self._input.file_obj, *args)
 
     def tell(self):
-        return self._input.file_obj.tell()
+        return fs.pos(self._input.file_obj)
 
     def flush(self):
-        return self._output.file_obj.flush()
+        return fs.flush(self._output.file_obj)
 
     def __getattr__(self, name):
         return getattr(self._input.file_obj, name)

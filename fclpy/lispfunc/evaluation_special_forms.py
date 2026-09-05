@@ -15,7 +15,6 @@ from . import registry as _registry
 from . import arrays as _arrays
 import logging
 import re
-import sys
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +116,6 @@ def eval_if(form, env, *, tail_target=None):
     """
     # Import eval lazily to avoid circular imports
     from .evaluation_core import eval
-    import sys
 
     current = form
     while True:

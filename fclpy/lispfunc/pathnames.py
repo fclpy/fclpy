@@ -21,9 +21,11 @@ two are never confused because their Python types differ. `directory` is
 `int`, or a marker keyword.
 """
 
-import os
 import re
 import fclpy.lisptype as lisptype
+from fclpy.system.filesystem import fs
+from fclpy.system.kernel import kernel
+from fclpy.system.shell import shell
 from . import registry as _registry
 
 
@@ -61,7 +63,7 @@ def _string_text(obj):
 def _norm_str(s):
     """Case-fold a component for comparison, matching the case-insensitive
     Windows file system this implementation runs on."""
-    return s.lower() if isinstance(s, str) and os.name == 'nt' else s
+    return s.lower() if isinstance(s, str) and kernel.os_name() == 'nt' else s
 
 
 # ===== The Pathname object =====
@@ -396,8 +398,8 @@ def pathname_from_os_path(path_str):
     filesystem is only valid for a path already confirmed to exist.
     """
     text = str(path_str)
-    if os.path.isdir(text) and not text.endswith(('/', '\\')):
-        text = text + os.sep
+    if fs.isdir(text) and not text.endswith(('/', '\\')):
+        text = text + fs.get_path_sep()
     return pathname_from_namestring(text)
 
 
@@ -549,33 +551,33 @@ def resolve_filespec(filespec):
         pn = translate_logical_pathname(pn)
     path_str = pn.namestring()
 
-    if os.path.isabs(path_str):
-        return os.path.normpath(path_str)
+    if fs.isabs(path_str):
+        return fs.normpath(path_str)
 
-    lisp_cwd = os.environ.get('LISP_CWD')
+    lisp_cwd = shell.get_env('LISP_CWD')
     if lisp_cwd:
-        candidate = os.path.normpath(os.path.join(lisp_cwd, path_str))
-        if os.path.exists(candidate):
+        candidate = fs.normpath(fs.join(lisp_cwd, path_str))
+        if fs.exists(candidate):
             return candidate
 
     load_truename = dynamic_value(
         lisptype.COMMON_LISP_PACKAGE.intern_symbol('*LOAD-TRUENAME*'))
     if isinstance(load_truename, Pathname):
-        current_dir = os.path.dirname(load_truename.namestring())
+        current_dir = fs.dirname(load_truename.namestring())
         if current_dir:
-            candidate = os.path.normpath(os.path.join(current_dir, path_str))
-            if os.path.exists(candidate):
+            candidate = fs.normpath(fs.join(current_dir, path_str))
+            if fs.exists(candidate):
                 return candidate
 
     defaults = dynamic_value(
         lisptype.COMMON_LISP_PACKAGE.intern_symbol('*DEFAULT-PATHNAME-DEFAULTS*'))
     if isinstance(defaults, Pathname):
         default_path = defaults.namestring()
-        base = default_path if os.path.isdir(default_path) else os.path.dirname(default_path)
+        base = default_path if fs.isdir(default_path) else fs.dirname(default_path)
         if base:
-            return os.path.normpath(os.path.join(base, path_str))
+            return fs.normpath(fs.join(base, path_str))
 
-    return os.path.normpath(path_str)
+    return fs.normpath(path_str)
 
 
 # ===== MAKE-PATHNAME =====
@@ -1211,13 +1213,12 @@ def directory(pathname, **kwargs):
     # one, so cleanup between OPEN.* tests either found nothing or deleted
     # the wrong file.
     path_str = resolve_filespec(pn)
-    import glob
 
     if '*' in path_str or '?' in path_str:
-        matches = glob.glob(path_str)
-    elif os.path.isdir(path_str):
-        matches = [os.path.join(path_str, name) for name in os.listdir(path_str)]
-    elif os.path.isfile(path_str):
+        matches = fs.glob(path_str)
+    elif fs.isdir(path_str):
+        matches = [fs.join(path_str, name) for name in fs.get_dirs(path_str)]
+    elif fs.isfile(path_str):
         # A literal, non-wildcard pathname matches its own file if that file
         # exists (CLHS 20.2) -- including one whose only wild component is
         # :VERSION, which never appears in `path_str` at all because a
@@ -1254,7 +1255,7 @@ def truename(pathname):
     translated = translate_logical_pathname(pathname) \
         if _coerce_pathname_designator(pathname, 'TRUENAME').logical else None
     path_str = resolve_filespec(pathname)
-    if not os.path.exists(path_str):
+    if not fs.exists(path_str):
         return signal_file_error(pathname, f"TRUENAME: file not found: {path_str}")
     if translated is not None:
         # The translation supplies the canonical *spelling* (see above); the OS
@@ -1271,7 +1272,7 @@ def truename(pathname):
         if translated.device is None or translated.device is lisptype.NIL:
             try:
                 real_device = pathname_from_namestring(
-                    os.path.realpath(path_str)).device
+                    fs.realpath(path_str)).device
             except (OSError, ValueError):
                 real_device = None
             if real_device is not None and real_device is not lisptype.NIL:
@@ -1282,7 +1283,7 @@ def truename(pathname):
                     logical=translated.logical)
         return translated
     try:
-        return pathname_from_os_path(os.path.realpath(path_str))
+        return pathname_from_os_path(fs.realpath(path_str))
     except (OSError, ValueError):
         return signal_file_error(
             pathname, f"TRUENAME: cannot resolve pathname: {path_str}")
@@ -1293,8 +1294,8 @@ def probe_file(pathname):
     pn = _coerce_pathname_designator(pathname, 'PROBE-FILE')
     _error_if_wild(pn, 'PROBE-FILE')
     path_str = resolve_filespec(pn)
-    if os.path.exists(path_str) and os.path.isfile(path_str):
-        return pathname_from_os_path(os.path.realpath(path_str))
+    if fs.exists(path_str) and fs.isfile(path_str):
+        return pathname_from_os_path(fs.realpath(path_str))
     return lisptype.NIL
 
 
@@ -1303,8 +1304,8 @@ def file_write_date(pathname):
     pn = _coerce_pathname_designator(pathname, 'FILE-WRITE-DATE')
     _error_if_wild(pn, 'FILE-WRITE-DATE')
     path_str = resolve_filespec(pn)
-    if os.path.exists(path_str):
-        return int(os.path.getmtime(path_str))
+    if fs.exists(path_str):
+        return int(fs.getmtime(path_str))
     return lisptype.NIL
 
 
@@ -1336,11 +1337,11 @@ def ensure_directories_exist(pathspec, **kwargs):
     # `(:relative "scratch")` directory is defined relative to
     # *DEFAULT-PATHNAME-DEFAULTS* (CLHS 19.2.3's merge), and
     # `resolve_filespec` is the one resolver that knows that search.
-    dir_str = os.path.dirname(resolve_filespec(pn))
+    dir_str = fs.dirname(resolve_filespec(pn))
     created = False
-    if dir_str and not os.path.isdir(dir_str):
+    if dir_str and not fs.isdir(dir_str):
         try:
-            os.makedirs(dir_str, exist_ok=True)
+            fs.ensure_dir(dir_str)
         except OSError as error:
             from .evaluation_conditions import signal_file_error
             signal_file_error(

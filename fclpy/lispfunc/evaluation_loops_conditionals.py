@@ -26,8 +26,8 @@ def _list_from(elements):
     return result
 from . import registry as _registry
 from .binding import BindingFrame, body_specials, special_reference
-import time
-import sys
+from fclpy.system.kernel import kernel
+from fclpy.system.shell import shell
 
 # Timeout for loop warning (in seconds) - set to 0 to disable
 LOOP_TIMEOUT_WARNING = 120  # 2 minutes
@@ -367,33 +367,32 @@ class LoopWatchdog:
         # on Windows time() has ~16ms granularity, coarse enough that a tight
         # loop can measure a 0.0s elapsed. The wall clock is only used for the
         # human-readable stamp.
-        self.start_time = time.perf_counter()
+        self.start_time = kernel.perf_counter()
         self.iterations = 0
         self.warned = False
 
     def _stamp(self):
-        return time.strftime('%H:%M:%S', time.localtime())
+        return kernel.strftime('%H:%M:%S', kernel.localtime())
 
     def tick(self):
         """Count one iteration; warn once if slow, abort if past the hard cap."""
         self.iterations += 1
-        elapsed = time.perf_counter() - self.start_time
+        elapsed = kernel.perf_counter() - self.start_time
 
         if LOOP_TIMEOUT_WARNING > 0 and not self.warned and elapsed > LOOP_TIMEOUT_WARNING:
             self.warned = True
-            print(f"\n*** {self.kind} WARNING [{self._stamp()}]: running for "
-                  f"{elapsed:.1f}s ({self.iterations} iterations) ***", file=sys.stderr)
+            shell.print(f"\n*** {self.kind} WARNING [{self._stamp()}]: running for "
+                        f"{elapsed:.1f}s ({self.iterations} iterations) ***",
+                        file=shell.get_stderr())
             for line in self.describe():
-                print(f"*** {self.kind}: {line} ***", file=sys.stderr)
-            sys.stderr.flush()
+                shell.print(f"*** {self.kind}: {line} ***", file=shell.get_stderr())
 
         if self.hard_cap > 0 and elapsed > self.hard_cap:
             # Announce on the same stream as the warning before raising: the
             # LispError itself lands in the .log as a test failure, so .err
             # would otherwise show a warning with no outcome.
-            print(f"*** {self.kind} ABORTED [{self._stamp()}]: exceeded {self.hard_cap}s "
-                  f"({self.iterations} iterations) ***", file=sys.stderr)
-            sys.stderr.flush()
+            shell.print(f"*** {self.kind} ABORTED [{self._stamp()}]: exceeded {self.hard_cap}s "
+                        f"({self.iterations} iterations) ***", file=shell.get_stderr())
             raise lisptype.LispError(
                 f"{self.kind} exceeded {self.hard_cap}s ({self.iterations} iterations) "
                 f"without terminating -- aborting instead of hanging. "
@@ -407,11 +406,10 @@ class LoopWatchdog:
         # stay silent. Reported on every exit path, including a non-local exit
         # (RETURN-FROM/THROW/GO), which is how most Lisp loops actually end.
         if self.warned:
-            elapsed = time.perf_counter() - self.start_time
+            elapsed = kernel.perf_counter() - self.start_time
             how = 'RESOLVED' if exc_type is None else f'EXITED via {exc_type.__name__}'
-            print(f"*** {self.kind} {how} [{self._stamp()}]: after {elapsed:.1f}s "
-                  f"({self.iterations} iterations) ***", file=sys.stderr)
-            sys.stderr.flush()
+            shell.print(f"*** {self.kind} {how} [{self._stamp()}]: after {elapsed:.1f}s "
+                        f"({self.iterations} iterations) ***", file=shell.get_stderr())
         return False
 
 
@@ -1520,16 +1518,16 @@ def eval_time(form, env):
 
     form_to_time = car(args)
 
-    start_real = time.perf_counter()
-    start_cpu = time.process_time()
+    start_real = kernel.perf_counter()
+    start_cpu = kernel.process_time()
     try:
         return eval(form_to_time, env)
     finally:
         # In a `finally`, so a non-local exit out of the timed form -- a
         # RETURN-FROM, a THROW, a signalled condition -- still reports. Both
         # clocks are monotonic, so an elapsed time is never negative.
-        real_elapsed = time.perf_counter() - start_real
-        cpu_elapsed = time.process_time() - start_cpu
+        real_elapsed = kernel.perf_counter() - start_real
+        cpu_elapsed = kernel.process_time() - start_cpu
         trace_output = dynamic_value(
             lisptype.COMMON_LISP_PACKAGE.intern_symbol('*TRACE-OUTPUT*'))
         write_text(
