@@ -5,7 +5,6 @@ Entry point for the fclpy command-line interface.
 """
 
 import sys
-import os
 from pathlib import Path
 
 # Ensure the package can be imported

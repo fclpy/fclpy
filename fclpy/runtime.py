@@ -4,8 +4,6 @@ FCLPY Runtime Library
 Core functionality for the FCLPY Lisp interpreter that can be imported by other projects.
 """
 
-import sys
-import os
 import io
 import traceback
 try:
@@ -20,6 +18,9 @@ import fclpy.lispreader as lispreader
 from fclpy import lispenv
 from fclpy.readtable import get_current_readtable
 from fclpy.lispfunc.evaluation_core import ThrowException, ConditionException
+from fclpy.system.filesystem import fs
+from fclpy.system.kernel import kernel
+from fclpy.system.shell import shell
 
 def setup_reader_macros():
     """Set up basic reader macros for parsing."""
@@ -69,11 +70,9 @@ def load_and_evaluate_file(filename, environment=None, verbose=False, timing=Fal
         verbose: Print detailed progress info
         timing: Print timing information for performance debugging
     """
-    import os
-    import time
     from fclpy.lispfunc.pathnames import pathname_from_os_path
 
-    start_time = time.time()
+    start_time = kernel.time()
 
     if environment is None:
         # Ensure standard environment is set up
@@ -81,7 +80,7 @@ def load_and_evaluate_file(filename, environment=None, verbose=False, timing=Fal
         environment = lispenv.current_environment
 
     # Set *LOAD-TRUENAME* and *LOAD-PATHNAME* for this file
-    abs_path = os.path.abspath(filename)
+    abs_path = fs.abspath(filename)
     pathname_obj = pathname_from_os_path(abs_path)
     
     load_truename_sym = lisptype.COMMON_LISP_PACKAGE.intern_symbol('*LOAD-TRUENAME*')
@@ -96,7 +95,7 @@ def load_and_evaluate_file(filename, environment=None, verbose=False, timing=Fal
         environment.set_variable(load_pathname_sym, pathname_obj)
         
         if verbose or timing:
-            print(f"[{time.time() - start_time:.3f}s] Loading file: {filename}")
+            shell.print(f"[{kernel.time() - start_time:.3f}s] Loading file: {filename}")
         
         # CLHS 24.1: LOAD *binds* *PACKAGE* for the extent of the file, so an
         # IN-PACKAGE inside the file is undone when the file finishes.
@@ -118,11 +117,14 @@ def load_and_evaluate_file(filename, environment=None, verbose=False, timing=Fal
         if old_pkg is None:
             state.current_package = lisptype.COMMON_LISP_USER_PACKAGE
 
-        with open(filename, 'r', encoding='utf-8') as f:
-            content = f.read()
-        
+        f = fs.open(filename, 'r', encoding='utf-8')
+        try:
+            content = fs.read(f)
+        finally:
+            fs.close(f)
+
         if verbose or timing:
-            print(f"[{time.time() - start_time:.3f}s] Read {len(content)} characters")
+            shell.print(f"[{kernel.time() - start_time:.3f}s] Read {len(content)} characters")
         
         # Create a stream from the file content
         string_io = io.StringIO(content)
@@ -144,36 +146,36 @@ def load_and_evaluate_file(filename, environment=None, verbose=False, timing=Fal
 
         while True:
             try:
-                expr_start = time.time()
+                expr_start = kernel.time()
                 current_expr = reader.read_1()
                 if current_expr is None:  # EOF
                     break
                 
                 expr_count += 1
-                read_time = time.time() - expr_start
+                read_time = kernel.time() - expr_start
                 
                 if verbose:
-                    print(f"  Reading expression {expr_count}: {current_expr}")
+                    shell.print(f"  Reading expression {expr_count}: {current_expr}")
                 
                 # Evaluate the expression
-                eval_start = time.time()
+                eval_start = kernel.time()
                 result = lispfunc.eval(current_expr, environment)
-                eval_time = time.time() - eval_start
+                eval_time = kernel.time() - eval_start
                 results.append(result)
                 
                 # Report timing periodically or for slow expressions
                 if timing:
-                    now = time.time()
+                    now = kernel.time()
                     total_time = read_time + eval_time
                     # Report if expression took > 0.5s or every 5 seconds
                     if total_time > 0.5 or (now - last_timing_report) > 5.0:
-                        print(f"[{now - start_time:.3f}s] Expr {expr_count}: read={read_time:.3f}s eval={eval_time:.3f}s")
+                        shell.print(f"[{now - start_time:.3f}s] Expr {expr_count}: read={read_time:.3f}s eval={eval_time:.3f}s")
                         last_timing_report = now
                 
                 # In standard Lisp, file loading is usually silent
                 # Only show results in verbose mode
                 if verbose:
-                    print(f"  => {result}")
+                    shell.print(f"  => {result}")
                     
             except EOFError:
                 break
@@ -199,20 +201,20 @@ def load_and_evaluate_file(filename, environment=None, verbose=False, timing=Fal
                 # this form -- see LOAD_ERRORS above.
                 LOAD_ERRORS.append((filename, expr_count, f"{type(e).__name__}: {e}"))
 
-                print(f"  Error evaluating expression {expr_count} in {filename}: {e}{expr_preview}")
+                shell.print(f"  Error evaluating expression {expr_count} in {filename}: {e}{expr_preview}")
 
                 # Print a traceback when explicitly requested (or in verbose mode).
-                if verbose or os.environ.get('FCLPY_LOAD_TRACEBACK') == '1':
-                    traceback.print_exc()
+                if verbose or shell.get_env('FCLPY_LOAD_TRACEBACK') == '1':
+                    traceback.print_exc(file=shell.get_stderr())
         # Final timing report
         if verbose or timing:
-            elapsed = time.time() - start_time
-            print(f"[{elapsed:.3f}s] Loaded {expr_count} expressions from {filename}")
+            elapsed = kernel.time() - start_time
+            shell.print(f"[{elapsed:.3f}s] Loaded {expr_count} expressions from {filename}")
         return lisptype.T
         
     except FileNotFoundError:
         LOAD_ERRORS.append((filename, -1, "FileNotFoundError: file not found"))
-        print(f"Error: File '{filename}' not found")
+        shell.print(f"Error: File '{filename}' not found")
         return lisptype.NIL
     except Exception as e:
         # This catches the inner handler's deliberate re-raise of a
@@ -220,9 +222,9 @@ def load_and_evaluate_file(filename, environment=None, verbose=False, timing=Fal
         # condition raised by a top-level form lands here and abandons the rest
         # of the file. Recorded for the same reason as above.
         LOAD_ERRORS.append((filename, -1, f"{type(e).__name__}: {e}"))
-        print(f"Error loading file '{filename}': {e}")
+        shell.print(f"Error loading file '{filename}': {e}")
         if verbose:
-            traceback.print_exc()
+            traceback.print_exc(file=shell.get_stderr())
         return lisptype.NIL
     finally:
         # Restore old values
@@ -266,15 +268,15 @@ class FclpyREPL:
         setup_reader_macros()
         
         if not quiet:
-            print("FCLPY - A Common Lisp Interpreter")
-            print("Based on Python implementation")
-            print("Type :help for help, :quit to exit")
-            print()
+            shell.print("FCLPY - A Common Lisp Interpreter")
+            shell.print("Based on Python implementation")
+            shell.print("Type :help for help, :quit to exit")
+            shell.print()
     
     def read_input(self):
         """Read a line of input from the user."""
         try:
-            line = input("FCLPY> ")
+            line = shell.input("FCLPY> ")
 
             # Quick command handling (only if they match a known command)
             if line and line.strip().startswith(':'):
@@ -300,12 +302,12 @@ class FclpyREPL:
                         msg = str(e).upper()
                         if 'EOF' in msg or 'UNTERMINATED' in msg or 'EOF DURING' in msg:
                             try:
-                                cont = input('......> ')
+                                cont = shell.input('......> ')
                             except EOFError:
-                                print('\nInterrupted during multiline input.')
+                                shell.print('\nInterrupted during multiline input.')
                                 return None
                             except KeyboardInterrupt:
-                                print('\nInterrupted during multiline input.')
+                                shell.print('\nInterrupted during multiline input.')
                                 return None
                             # Append continuation and loop to try parsing again
                             text += '\n' + cont
@@ -316,10 +318,10 @@ class FclpyREPL:
             return self.parse_simple_expression(line.strip())
             
         except EOFError:
-            print("\nGoodbye!")
+            shell.print("\nGoodbye!")
             return ':quit'
         except KeyboardInterrupt:
-            print("\nInterrupted. Type :quit to exit.")
+            shell.print("\nInterrupted. Type :quit to exit.")
             return None
     
     def parse_with_reader(self, text):
@@ -401,7 +403,7 @@ class FclpyREPL:
             return result
         except Exception as e:
             if self.verbose:
-                traceback.print_exc()
+                traceback.print_exc(file=shell.get_stderr())
             raise e
     
     def handle_repl_command(self, command):
@@ -421,16 +423,16 @@ class FclpyREPL:
             return None
         elif cmd == ':verbose':
             self.verbose = not self.verbose
-            print(f"Verbose mode: {'on' if self.verbose else 'off'}")
+            shell.print(f"Verbose mode: {'on' if self.verbose else 'off'}")
             return None
         else:
-            print(f"Unknown command: {command}")
-            print("Type :help for available commands")
+            shell.print(f"Unknown command: {command}")
+            shell.print("Type :help for available commands")
             return None
     
     def print_help(self):
         """Print REPL help."""
-        print("""
+        shell.print("""
 FCLPY REPL Commands:
   :help, :h     - Show this help
   :quit, :q     - Exit the REPL
@@ -459,15 +461,15 @@ Special Forms:
     
     def print_environment_info(self):
         """Print information about the current environment."""
-        print("Environment Information:")
-        print("- Functions loaded: Available")
-        print("- Primitive operations: 43+ functions")
-        print("- Special forms: QUOTE, IF, SETQ, LET, DEFUN, LAMBDA")
-        print("- Metacircular ready: Yes")
+        shell.print("Environment Information:")
+        shell.print("- Functions loaded: Available")
+        shell.print("- Primitive operations: 43+ functions")
+        shell.print("- Special forms: QUOTE, IF, SETQ, LET, DEFUN, LAMBDA")
+        shell.print("- Metacircular ready: Yes")
     
     def run_simple_test(self):
         """Run a simple test to verify functionality."""
-        print("Running simple test...")
+        shell.print("Running simple test...")
         test_expressions = [
             "(+ 1 2 3)",
             "(* 4 5)", 
@@ -482,15 +484,15 @@ Special Forms:
                 expr = self.parse_with_reader(expr_text) if expr_text.startswith('(') else self.parse_simple_expression(expr_text)
                 result = self.evaluate_expression(expr)
                 if i < 3:  # Skip the nil test for now
-                    print(f"✓ {expr_text} = {result}")
+                    shell.print(f"✓ {expr_text} = {result}")
                 else:
-                    print(f"✗ {expr_text} = {result} (expected T)")
+                    shell.print(f"✗ {expr_text} = {result} (expected T)")
             except Exception as e:
-                print(f"✗ {expr_text} = None (expected {expected_results[i] if i < len(expected_results) else 'unknown'})")
+                shell.print(f"✗ {expr_text} = None (expected {expected_results[i] if i < len(expected_results) else 'unknown'})")
                 if "NIL" in str(e):
-                    print(f"Error: {e}")
+                    shell.print(f"Error: {e}")
         
-        print("Test complete.")
+        shell.print("Test complete.")
     
     def run(self):
         """Run the main REPL loop."""
@@ -505,12 +507,12 @@ Special Forms:
                 
                 # Evaluate and print result
                 result = self.evaluate_expression(expr)
-                print(result)
+                shell.print(result)
                     
             except Exception as e:
                 if self.verbose:
-                    traceback.print_exc()
-                print(f"REPL Error: {e}")
+                    traceback.print_exc(file=shell.get_stderr())
+                shell.print(f"REPL Error: {e}")
 
 def repl(quiet=False, verbose=False):
     """Start an interactive REPL session."""

@@ -242,8 +242,8 @@ def compile_fn(name, definition=None):
     except Exception as e:
         # Compilation failed
         failure_p = lisptype.T
-        import sys
-        print(f"Warning: COMPILE failed: {e}", file=sys.stderr)
+        from fclpy.system.shell import shell
+        shell.print(f"Warning: COMPILE failed: {e}", file=shell.get_stderr())
         warnings_p = lisptype.T
     
     # Return three values as MultipleValues

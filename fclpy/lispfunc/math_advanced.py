@@ -2,9 +2,9 @@
 
 import cmath
 import math
-import sys
 from fractions import Fraction
 import fclpy.lisptype as lisptype
+from fclpy.system.kernel import kernel
 from . import registry as _registry
 
 def _irrational(real_fn, complex_fn, x):
@@ -70,7 +70,7 @@ def exp(x):
         from fclpy.lispfunc.evaluation_conditions import signal_error_object
         # Defensive only: math.exp raises OverflowError before producing an
         # inf, so a finite real result cannot exceed the double range here.
-        if abs(result) > sys.float_info.max:
+        if abs(result) > kernel.float_max():
             signal_error_object(lisptype.FloatingPointOverflow(
                 "EXP: result overflows the range of the float type"))
             return
@@ -140,7 +140,7 @@ def _check_float_overflow(result, base, power=None):
 
     # Overflow beyond even the double range (an inf result escaping from
     # the complex paths without Python raising).
-    if abs(result) > sys.float_info.max:
+    if abs(result) > kernel.float_max():
         signal_condition(lisptype.FloatingPointOverflow(
             f"EXPT: result overflows the range of the float type"))
         return
@@ -350,7 +350,7 @@ def expt(base, power):
         if isinstance(base, float) and base != 0.0:
             from fclpy.lispfunc.evaluation_conditions import signal_condition
             # If base is smaller than sqrt(double_min) and power > 1, it underflows
-            double_min = sys.float_info.min
+            double_min = kernel.float_min()
             underflow_threshold = math.sqrt(double_min)
             if abs(base) < underflow_threshold and isinstance(power, (int, float)) and power > 1:
                 signal_condition(lisptype.FloatingPointUnderflow(
@@ -506,14 +506,14 @@ def float_fn(number, prototype=None):
 def float_digits(float_num):
     """Number of digits in float."""
     if isinstance(float_num, float):
-        return sys.float_info.mant_dig  # 53 for IEEE 754 double
+        return kernel.float_mant_dig()  # 53 for IEEE 754 double
     return 24  # Default for single precision
 
 @_registry.cl_function('FLOAT-PRECISION')
 def float_precision(float_num):
     """Precision of float."""
     if isinstance(float_num, float):
-        return sys.float_info.mant_dig  # Same as float_digits for most cases
+        return kernel.float_mant_dig()  # Same as float_digits for most cases
     return 24  # Default for single precision
 
 @_registry.cl_function('FLOAT-RADIX')
